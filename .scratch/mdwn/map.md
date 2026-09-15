@@ -17,7 +17,8 @@ A **buildable spec + locked technical decisions** for *mdwn*: a standalone web a
 
 ## Decisions so far
 
-<!-- One line per resolved ticket: name (link) + gist. Detail lives in the ticket. -->
+- [Research: passkeys/WebAuthn implementation and recovery](issues/02-research-passkeys.md): `@simplewebauthn` v14 + RR7 `action`/`loader` + cookie sessions; passkeys-first is privacy-compatible; open signup needs rate limiting plus PoW-or-email; recovery = pre-enrolled second passkey + single-use recovery codes; keep attestation off.
+- [Research: free/cheap Postgres and RR7 hosting landscape](issues/03-research-infra.md): $0 is real — Cloudflare Workers+D1 (SQLite) or Workers+Neon free Postgres (permanent, no card); Fly/Render/Railway are not free; first cost ~$5/mo; no free tier offers customer-managed keys, so E2E must be app-level.
 
 ## Not yet specified
 
