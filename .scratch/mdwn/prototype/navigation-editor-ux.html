@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mdwn — navigation/editor UX prototype</title>
+  <!--
+    PROTOTYPE ONLY — do not ship.
+    Three variants of the mdwn vault navigation/editor surface, switchable via ?variant=a|b|c.
+    Question: which information hierarchy makes browsing, editing, sharing, publishing, and import feel natural?
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1d2633;
+      --muted: #6d7785;
+      --faint: #eef1f5;
+      --line: #dce2e9;
+      --paper: #ffffff;
+      --canvas: #f5f7fa;
+      --accent: #3867d6;
+      --accent-soft: #e8efff;
+      --green: #16794d;
+      --green-soft: #e5f6ed;
+      --orange: #a45514;
+      --orange-soft: #fff1e4;
+      --shadow: 0 14px 35px rgba(28, 42, 62, .09);
+      font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--canvas); }
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, [contenteditable]:focus-visible {
+      outline: 3px solid rgba(56, 103, 214, .32);
+      outline-offset: 2px;
+    }
+    .prototype-label {
+      position: fixed;
+      z-index: 50;
+      top: 12px;
+      right: 14px;
+      padding: 5px 9px;
+      border: 1px solid #d8b36e;
+      border-radius: 999px;
+      color: #70490c;
+      background: #fff7df;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      box-shadow: 0 3px 12px rgba(70, 50, 15, .08);
+    }
+    .app { min-height: 100vh; padding-bottom: 84px; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-height: 62px;
+      padding: 0 28px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .wordmark { font-weight: 850; letter-spacing: -.04em; font-size: 21px; }
+    .topbar .spacer { flex: 1; }
+    .avatar { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 50%; color: white; background: #27364a; font-size: 12px; font-weight: 800; }
+    .muted { color: var(--muted); }
+    .eyebrow { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--ink);
+      background: var(--paper);
+      font-weight: 700;
+    }
+    .button:hover { border-color: #aeb9c9; background: #fbfcfd; }
+    .button.primary { border-color: var(--accent); color: white; background: var(--accent); }
+    .button.quiet { border-color: transparent; background: transparent; }
+    .button.danger { color: #9c3030; }
+    .chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 999px; color: var(--muted); background: var(--faint); font-size: 12px; font-weight: 700; }
+    .chip.green { color: var(--green); background: var(--green-soft); }
+    .chip.orange { color: var(--orange); background: var(--orange-soft); }
+    .icon-button { display: inline-grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: 18px; }
+    .icon-button:hover { color: var(--ink); background: var(--faint); }
+    .surface { border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow); }
+    .tree { list-style: none; margin: 0; padding: 0; }
+    .tree li { margin: 2px 0; }
+    .tree button { width: 100%; border: 0; border-radius: 7px; padding: 7px 9px; color: var(--ink); background: transparent; text-align: left; }
+    .tree button:hover { background: var(--faint); }
+    .tree button.selected { color: #173f9f; background: var(--accent-soft); font-weight: 750; }
+    .tree .indent { padding-left: 27px; }
+    .tree .indent-2 { padding-left: 45px; }
+    .tree .folder { color: #637080; font-size: 13px; font-weight: 800; }
+    .tree .file { font-size: 13px; }
+    .tree .file::first-letter { color: var(--muted); }
+    .state-readout {
+      position: fixed;
+      z-index: 30;
+      right: 18px;
+      bottom: 77px;
+      max-width: 300px;
+      padding: 10px 12px;
+      border: 1px solid #c6d4ee;
+      border-radius: 9px;
+      color: #29436f;
+      background: #f4f7ff;
+      box-shadow: 0 8px 25px rgba(34, 65, 113, .10);
+      font-size: 12px;
+    }
+    .state-readout strong { display: block; margin-bottom: 2px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+
+    /* Variant A: persistent three-pane workspace. */
+    .variant-a .workspace { display: grid; grid-template-columns: 232px minmax(360px, 1fr) minmax(350px, .95fr); min-height: calc(100vh - 62px); }
+    .variant-a .sidebar { padding: 24px 15px; border-right: 1px solid var(--line); background: #fbfcfd; }
+    .variant-a .sidebar-head { display: flex; align-items: center; justify-content: space-between; margin: 0 8px 18px; }
+    .variant-a .sidebar-tools { display: flex; gap: 4px; margin-bottom: 18px; }
+    .variant-a .sidebar-tools .button { flex: 1; padding-inline: 7px; font-size: 12px; }
+    .variant-a .editor-pane { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--line); background: var(--paper); }
+    .variant-a .crumbs { display: flex; align-items: center; gap: 7px; min-height: 48px; padding: 0 23px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .variant-a .doc-head { display: flex; align-items: flex-start; gap: 15px; padding: 28px 30px 17px; }
+    .variant-a .doc-head h1 { flex: 1; margin: 0; font-size: 29px; letter-spacing: -.035em; }
+    .variant-a .doc-actions { display: flex; gap: 5px; }
+    .variant-a .modebar { display: flex; align-items: center; gap: 4px; padding: 0 30px 15px; }
+    .variant-a .modebar .button { padding: 5px 9px; font-size: 12px; }
+    .variant-a .modebar .active { color: #244aa1; border-color: #a9bce8; background: var(--accent-soft); }
+    .variant-a .editor { flex: 1; min-height: 350px; padding: 0 30px 32px; }
+    .variant-a textarea { width: 100%; height: 100%; min-height: 350px; resize: none; border: 0; color: #334155; background: transparent; font: 15px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .variant-a .preview-pane { min-width: 0; padding: 27px 31px; background: #fcfdff; }
+    .variant-a .preview-pane h2 { margin: 22px 0 7px; font-size: 25px; letter-spacing: -.03em; }
+    .variant-a .preview-pane h3 { margin: 22px 0 6px; font-size: 17px; }
+    .variant-a .preview-pane p { max-width: 52ch; color: #4d5a6b; }
+    .variant-a .preview-pane li { margin: 7px 0; color: #4d5a6b; }
+    .variant-a .preview-note { margin-top: 30px; padding: 12px 14px; border-left: 3px solid #94aee9; color: #52647d; background: #f0f4ff; font-size: 13px; }
+    .variant-a .bottom-status { display: flex; justify-content: space-between; padding: 10px 30px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+
+    /* Variant B: document-first canvas with navigation as a temporary drawer. */
+    .variant-b { background: #f1eee8; }
+    .variant-b .topbar { border-bottom-color: #d9d2c7; background: #fbfaf7; }
+    .variant-b .topbar .wordmark { color: #463b31; }
+    .variant-b .canvas { max-width: 1030px; margin: 0 auto; padding: 32px 28px 55px; }
+    .variant-b .crumbs { display: flex; align-items: center; gap: 10px; margin: 0 0 21px; color: #86786a; font-size: 13px; }
+    .variant-b .crumbs button { padding: 0; border: 0; color: #685949; background: transparent; text-decoration: underline; text-decoration-color: #c9bda9; text-underline-offset: 3px; }
+    .variant-b .doc-card { position: relative; min-height: 690px; padding: 65px clamp(32px, 9vw, 110px) 72px; border: 1px solid #dfd7cb; background: #fffdf9; box-shadow: 0 16px 42px rgba(79, 61, 38, .09); }
+    .variant-b .doc-meta { display: flex; align-items: center; gap: 9px; margin-bottom: 19px; color: #8d8072; font-size: 12px; }
+    .variant-b .doc-card h1 { margin: 0 0 19px; color: #382f28; font: 700 clamp(33px, 5vw, 52px)/1.03 Georgia, serif; letter-spacing: -.045em; }
+    .variant-b .lede { max-width: 58ch; margin: 0 0 35px; color: #75695e; font: 18px/1.65 Georgia, serif; }
+    .variant-b .prose { max-width: 65ch; color: #544940; font: 17px/1.78 Georgia, serif; }
+    .variant-b .prose h2 { margin: 32px 0 7px; color: #382f28; font-size: 25px; }
+    .variant-b .prose ul { padding-left: 23px; }
+    .variant-b .prose li { margin: 9px 0; }
+    .variant-b .doc-footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 47px; padding-top: 17px; border-top: 1px solid #e8e0d5; color: #8e8071; font-size: 12px; }
+    .variant-b .drawer {
+      position: fixed; z-index: 20; top: 62px; bottom: 0; left: 0; width: 315px; padding: 22px 19px; overflow: auto;
+      border-right: 1px solid #d9d2c7; background: #fbfaf7; box-shadow: 13px 0 35px rgba(57, 44, 27, .13);
+      transform: translateX(-105%); transition: transform .18s ease;
+    }
+    .variant-b .drawer.open { transform: translateX(0); }
+    .variant-b .drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+    .variant-b .drawer h2 { margin: 0; color: #44382f; font: 700 20px Georgia, serif; }
+    .variant-b .drawer .tree button { color: #55493e; }
+    .variant-b .drawer .tree button.selected { color: #6e4019; background: #f3e8d7; }
+    .variant-b .command-strip { display: flex; justify-content: center; gap: 8px; margin-top: 18px; }
+    .variant-b .command-strip .button { border-color: #d7ccbe; color: #6a5b4d; background: #fbfaf7; }
+    .variant-b .command-strip .button.primary { border-color: #93672f; color: white; background: #93672f; }
+    .variant-b .edit-surface { display: none; padding: 22px; border: 1px dashed #cdbda9; color: #655648; background: #faf2e6; font: 14px/1.6 ui-monospace, monospace; }
+    .variant-b.editing .edit-surface { display: block; }
+    .variant-b.editing .prose { display: none; }
+    .variant-b .edit-surface[contenteditable="true"] { outline: none; }
+
+    /* Variant C: command-centre / file-list-first. */
+    .variant-c { background: #101722; color: #e6edf7; }
+    .variant-c .topbar { border-bottom-color: #273346; color: #e6edf7; background: #151e2b; }
+    .variant-c .topbar .wordmark { color: #f0f5fd; }
+    .variant-c .topbar .muted { color: #8b9ab0; }
+    .variant-c .avatar { background: #607da9; }
+    .variant-c .button { border-color: #344257; color: #dce6f3; background: #1b2737; }
+    .variant-c .button:hover { border-color: #5d7395; background: #243349; }
+    .variant-c .button.primary { border-color: #6c8fe1; background: #5277d1; }
+    .variant-c .chip { color: #a8b8cd; background: #243145; }
+    .variant-c .chip.green { color: #8de0b3; background: #173e37; }
+    .variant-c .chip.orange { color: #f1bc8b; background: #493322; }
+    .variant-c .console { display: grid; grid-template-columns: minmax(390px, .85fr) minmax(450px, 1.15fr); max-width: 1400px; min-height: calc(100vh - 62px); margin: 0 auto; border-inline: 1px solid #273346; }
+    .variant-c .file-browser { border-right: 1px solid #273346; background: #121b28; }
+    .variant-c .browser-head { display: flex; align-items: center; gap: 10px; padding: 19px 22px 13px; }
+    .variant-c .browser-head h1 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .variant-c .browser-head .spacer { flex: 1; }
+    .variant-c .search { width: calc(100% - 44px); margin: 0 22px 16px; padding: 10px 12px; border: 1px solid #304158; border-radius: 8px; color: #e7eef8; background: #192535; }
+    .variant-c .search::placeholder { color: #75869e; }
+    .variant-c .pathbar { display: flex; align-items: center; gap: 8px; padding: 0 22px 13px; color: #91a5bf; font: 12px ui-monospace, monospace; }
+    .variant-c .file-list { border-top: 1px solid #273346; }
+    .variant-c .file-row { display: grid; grid-template-columns: 27px 1fr auto; align-items: center; gap: 8px; min-height: 57px; padding: 8px 22px; border-bottom: 1px solid #202d3e; color: #ccd8e8; background: transparent; text-align: left; }
+    .variant-c .file-row:hover { background: #182538; }
+    .variant-c .file-row.selected { border-left: 3px solid #7191e4; padding-left: 19px; background: #1b2b45; }
+    .variant-c .file-row .file-name { font-weight: 700; }
+    .variant-c .file-row .file-path { display: block; color: #7d8ea6; font: 11px ui-monospace, monospace; }
+    .variant-c .file-row time { color: #71839d; font-size: 11px; }
+    .variant-c .row-actions { display: flex; gap: 3px; }
+    .variant-c .row-actions .icon-button { width: 27px; height: 27px; color: #8fa0b7; }
+    .variant-c .editor-dock { display: flex; flex-direction: column; min-width: 0; background: #182231; }
+    .variant-c .dock-tabs { display: flex; align-items: center; min-height: 49px; border-bottom: 1px solid #2c394b; background: #151e2b; }
+    .variant-c .dock-tab { max-width: 230px; overflow: hidden; border: 0; border-right: 1px solid #2c394b; padding: 14px 18px; color: #8fa0b7; background: transparent; text-overflow: ellipsis; white-space: nowrap; }
+    .variant-c .dock-tab.active { color: #eef4fc; background: #1d2a3c; }
+    .variant-c .dock-tabs .spacer { flex: 1; }
+    .variant-c .dock-actions { display: flex; gap: 4px; padding-right: 12px; }
+    .variant-c .dock-actions .button { padding: 6px 9px; font-size: 12px; }
+    .variant-c .editor-meta { display: flex; align-items: center; justify-content: space-between; padding: 19px 28px 12px; color: #98a9bf; font-size: 12px; }
+    .variant-c .editor-meta strong { color: #e3ebf6; font-size: 14px; }
+    .variant-c .editor-wrap { flex: 1; padding: 0 28px 28px; }
+    .variant-c textarea { width: 100%; height: 100%; min-height: 470px; resize: none; border: 1px solid #304158; border-radius: 8px; padding: 20px; color: #d9e4f2; background: #121b28; font: 14px/1.8 ui-monospace, monospace; }
+    .variant-c .dock-foot { display: flex; align-items: center; justify-content: space-between; padding: 11px 28px; border-top: 1px solid #2c394b; color: #7e90a8; font-size: 11px; }
+    .variant-c .quick-menu { display: flex; gap: 6px; padding: 0 22px 17px; }
+    .variant-c .quick-menu .button { padding: 6px 9px; font-size: 11px; }
+
+    /* Shared prototype switcher. */
+    .switcher {
+      position: fixed; z-index: 40; bottom: 16px; left: 50%; display: flex; align-items: center; gap: 10px;
+      transform: translateX(-50%); padding: 7px; border: 1px solid #24344d; border-radius: 999px; color: #eff5ff;
+      background: #18263a; box-shadow: 0 12px 32px rgba(20, 31, 48, .28);
+    }
+    .switcher button { display: grid; place-items: center; width: 31px; height: 31px; border: 0; border-radius: 50%; color: white; background: #2b4162; font-size: 17px; }
+    .switcher button:hover { background: #3d5c8a; }
+    .switcher .variant-name { min-width: 178px; text-align: center; font-size: 12px; font-weight: 750; }
+    .switcher kbd { margin-left: 4px; padding: 1px 4px; border: 1px solid #60718b; border-radius: 4px; color: #b8c6d9; font-size: 10px; font-weight: 400; }
+    .toast { position: fixed; z-index: 60; top: 22px; left: 50%; padding: 8px 13px; border: 1px solid #bed0f2; border-radius: 999px; color: #29436f; background: #f2f6ff; box-shadow: 0 8px 22px rgba(30, 60, 112, .15); font-size: 12px; opacity: 0; transform: translate(-50%, -8px); transition: opacity .15s ease, transform .15s ease; pointer-events: none; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    @media (max-width: 1050px) {
+      .variant-a .workspace { grid-template-columns: 205px minmax(350px, 1fr); }
+      .variant-a .preview-pane { display: none; }
+      .variant-c .console { grid-template-columns: 350px minmax(420px, 1fr); }
+    }
+    @media (max-width: 720px) {
+      .prototype-label { top: 7px; right: 8px; font-size: 9px; }
+      .topbar { padding: 0 15px; }
+      .variant-a .workspace, .variant-c .console { display: block; }
+      .variant-a .sidebar, .variant-c .file-browser { display: none; }
+      .variant-a .editor-pane { border: 0; }
+      .variant-b .canvas { padding: 18px 10px 45px; }
+      .variant-b .doc-card { padding: 42px 24px 50px; }
+      .variant-c .editor-dock { min-height: 650px; }
+      .state-readout { right: 9px; bottom: 70px; max-width: 220px; font-size: 11px; }
+      .switcher .variant-name { min-width: 125px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-label">Throwaway prototype</div>
+  <div id="app"></div>
+  <div id="state" class="state-readout" aria-live="polite"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    'use strict';
+
+    const variants = [
+      { key: 'a', name: 'Persistent split workspace' },
+      { key: 'b', name: 'Document-first notebook' },
+      { key: 'c', name: 'File-list command centre' }
+    ];
+    const state = {
+      activeFile: 'Diet plan.md',
+      mode: 'split',
+      treeOpen: true,
+      drawerOpen: false,
+      editing: false,
+      saveMode: 'explicit',
+      dirty: false,
+      lastAction: 'Loaded the prototype'
+    };
+
+    function variantFromUrl() {
+      const requested = new URLSearchParams(location.search).get('variant');
+      return variants.some(v => v.key === requested) ? requested : 'a';
+    }
+
+    let activeVariant = variantFromUrl();
+    let toastTimer;
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+    }
+
+    function button(label, action, extra = '', attributes = '') {
+      return `<button class="button ${extra}" data-action="${action}" ${attributes}>${label}</button>`;
+    }
+
+    function treeMarkup(selected = state.activeFile) {
+      return `
+        <ul class="tree" aria-label="Vault files">
+          <li><button class="folder" data-action="toggle-tree">${state.treeOpen ? '▾' : '▸'}  mdwn vault</button></li>
+          ${state.treeOpen ? `
+            <li><button class="folder indent" data-action="noop">▾  Personal</button></li>
+            <li><button class="file indent-2 ${selected === 'Diet plan.md' ? 'selected' : ''}" data-action="select-file" data-file="Diet plan.md">□  Diet plan.md</button></li>
+            <li><button class="file indent-2 ${selected === 'Recipes.md' ? 'selected' : ''}" data-action="select-file" data-file="Recipes.md">□  Recipes.md</button></li>
+            <li><button class="folder indent" data-action="noop">▸  Projects</button></li>
+            <li><button class="folder indent" data-action="noop">▾  Shared with Jane</button></li>
+            <li><button class="file indent-2 ${selected === 'Weekly meals.md' ? 'selected' : ''}" data-action="select-file" data-file="Weekly meals.md">□  Weekly meals.md</button></li>
+          ` : ''}
+        </ul>`;
+    }
+
+    function editorText() {
+      if (state.activeFile === 'Recipes.md') return '# Recipes\n\nA small list of weeknight favourites.\n\n- Lentil soup\n- Lemon pasta\n- Roasted vegetables';
+      if (state.activeFile === 'Weekly meals.md') return '# Weekly meals\n\nA shared plan for the week.\n\n- Monday — tacos\n- Tuesday — soup';
+      return '# Diet plan\n\nA flexible plan for this week.\n\n## This week\n\n- Add vegetables to lunch\n- Keep easy leftovers available\n- Plan the next grocery run';
+    }
+
+    function renderTopbar(kind = 'light') {
+      return `<header class="topbar">
+        <div class="wordmark">mdwn</div>
+        ${kind === 'light' ? '<span class="muted">Personal vault</span>' : '<span class="muted">workspace / personal</span>'}
+        <div class="spacer"></div>
+        ${button('⌘ K  Search', 'search', 'quiet')}
+        <span class="avatar" title="Pseudonymous account">D</span>
+      </header>`;
+    }
+
+    function renderVariantA() {
+      return `<div class="variant-a">
+        ${renderTopbar()}
+        <main class="workspace">
+          <aside class="sidebar">
+            <div class="sidebar-head"><span class="eyebrow">Vault</span>${button('+', 'new', 'quiet', 'aria-label="Create new file"')}</div>
+            <div class="sidebar-tools">${button('Import', 'import')}${button('Export', 'export')}</div>
+            ${treeMarkup()}
+          </aside>
+          <section class="editor-pane">
+            <nav class="crumbs" aria-label="Breadcrumb"><span>mdwn vault</span><b>/</b><span>Personal</span><b>/</b><strong>${escapeHtml(state.activeFile)}</strong></nav>
+            <div class="doc-head"><h1>${escapeHtml(state.activeFile.replace('.md', ''))}</h1><div class="doc-actions">${button('Share', 'share')}${button('Publish', 'publish')}</div></div>
+            <div class="modebar">
+              ${button('Edit', 'mode-edit', state.mode === 'edit' ? 'active' : '')}
+              ${button('Split', 'mode-split', state.mode === 'split' ? 'active' : '')}
+              ${button('Preview', 'mode-preview', state.mode === 'preview' ? 'active' : '')}
+              <span class="spacer"></span>
+              <span class="chip ${state.dirty ? 'orange' : 'green'}">${state.dirty ? '● Unsaved changes' : '✓ Saved just now'}</span>
+            </div>
+            <div class="editor"><textarea aria-label="Markdown editor" data-editor>${escapeHtml(editorText())}</textarea></div>
+            <div class="bottom-status"><span>Markdown · 4 min read</span><span>${state.saveMode === 'auto' ? 'Autosave on' : 'Save with ⌘S'} · Private</span></div>
+          </section>
+          <article class="preview-pane">
+            <div class="eyebrow">Live preview</div>
+            <h2>${escapeHtml(state.activeFile.replace('.md', ''))}</h2>
+            <p class="muted">Updated a few seconds ago · <span class="chip green">Private</span></p>
+            <h3>This week</h3>
+            <p>A flexible plan for this week.</p>
+            <ul><li>Add vegetables to lunch</li><li>Keep easy leftovers available</li><li>Plan the next grocery run</li></ul>
+            <div class="preview-note">The persistent tree keeps navigation visible while the split view makes editing and reading simultaneous.</div>
+          </article>
+        </main>
+      </div>`;
+    }
+
+    function renderVariantB() {
+      return `<div class="variant-b ${state.editing ? 'editing' : ''}">
+        ${renderTopbar()}
+        <aside class="drawer ${state.drawerOpen ? 'open' : ''}" aria-label="Vault navigation">
+          <div class="drawer-head"><h2>Your vault</h2>${button('×', 'toggle-drawer', 'quiet', 'aria-label="Close vault navigation"')}</div>
+          <div class="sidebar-tools">${button('+ New', 'new')}${button('Import', 'import')}</div>
+          ${treeMarkup()}
+          <div style="margin-top:28px">${button('Export vault', 'export', 'quiet')}</div>
+        </aside>
+        <main class="canvas">
+          <nav class="crumbs" aria-label="Breadcrumb"><button data-action="toggle-drawer">☰ Vault</button><span>→</span><button data-action="noop">Personal</button><span>→</span><strong>${escapeHtml(state.activeFile)}</strong></nav>
+          <article class="doc-card">
+            <div class="doc-meta"><span class="chip">Markdown</span><span>Private</span><span>·</span><span>Edited today</span></div>
+            <h1>${escapeHtml(state.activeFile.replace('.md', ''))}</h1>
+            <p class="lede">A flexible plan for this week, written for quick reading rather than file management.</p>
+            <div class="prose"><h2>This week</h2><p>Keep the plan light enough to change. Make the next useful choice visible, then leave room for real life.</p><ul><li>Add vegetables to lunch</li><li>Keep easy leftovers available</li><li>Plan the next grocery run</li></ul><h2>Notes</h2><p>Shared plans can be opened from the same reading surface without making the reader learn a second kind of link.</p></div>
+            <div class="edit-surface" contenteditable="true" data-editor># ${escapeHtml(state.activeFile.replace('.md', ''))}\n\nA flexible plan for this week.\n\n## This week\n\n- Add vegetables to lunch\n- Keep easy leftovers available\n- Plan the next grocery run</div>
+            <div class="doc-footer"><span>Last saved locally in this prototype</span><span>${state.dirty ? 'Unsaved' : 'Saved'} · No tracking</span></div>
+          </article>
+          <div class="command-strip">
+            ${button(state.editing ? 'Done editing' : 'Edit', 'toggle-edit', 'primary')}
+            ${button('Share', 'share')}${button('Publish', 'publish')}${button('•••', 'more', 'quiet', 'aria-label="More file actions"')}
+          </div>
+        </main>
+      </div>`;
+    }
+
+    function renderVariantC() {
+      const files = [
+        ['Diet plan.md', 'Personal / Diet plan.md', 'now'],
+        ['Recipes.md', 'Personal / Recipes.md', '2d'],
+        ['Weekly meals.md', 'Shared with Jane / Weekly meals.md', '4d'],
+        ['Grocery list.md', 'Personal / Grocery list.md', '1w']
+      ];
+      return `<div class="variant-c">
+        ${renderTopbar('dark')}
+        <main class="console">
+          <section class="file-browser">
+            <div class="browser-head"><h1>Files</h1><span class="chip">12 items</span><span class="spacer"></span>${button('+', 'new', 'quiet', 'aria-label="Create new file"')}</div>
+            <input class="search" aria-label="Filter files" placeholder="Filter files  /  ⌘ P">
+            <div class="pathbar"><span>⌂</span><span>/</span><strong>Personal</strong><span class="spacer"></span><span>sort: updated</span></div>
+            <div class="quick-menu">${button('Import', 'import')}${button('Export', 'export')}${button('New folder', 'new-folder')}</div>
+            <div class="file-list" role="listbox" aria-label="Files">
+              ${files.map(([name, path, updated]) => `<button class="file-row ${state.activeFile === name ? 'selected' : ''}" data-action="select-file" data-file="${escapeHtml(name)}"><span>${name.endsWith('.md') ? '◈' : '□'}</span><span><span class="file-name">${escapeHtml(name)}</span><span class="file-path">${escapeHtml(path)}</span></span><span class="row-actions"><time>${updated}</time></span></button>`).join('')}
+            </div>
+          </section>
+          <section class="editor-dock">
+            <div class="dock-tabs"><button class="dock-tab active">${escapeHtml(state.activeFile)} <span>×</span></button><span class="spacer"></span><div class="dock-actions">${button('Share', 'share')}${button('Publish', 'publish')}</div></div>
+            <div class="editor-meta"><span><strong>${escapeHtml(state.activeFile)}</strong><br>Personal / Markdown</span><span class="chip ${state.dirty ? 'orange' : 'green'}">${state.dirty ? '● unsaved' : '✓ saved'}</span></div>
+            <div class="editor-wrap"><textarea aria-label="Markdown editor" data-editor>${escapeHtml(editorText())}</textarea></div>
+            <div class="dock-foot"><span>Ln 1, Col 1 · Markdown</span><span>${state.saveMode === 'auto' ? 'Autosave on' : '⌘S to save'} · encrypted after save</span></div>
+          </section>
+        </main>
+      </div>`;
+    }
+
+    function switcherMarkup() {
+      const current = variants.find(v => v.key === activeVariant);
+      return `<nav class="switcher" aria-label="Prototype variants">
+        <button data-action="previous-variant" aria-label="Previous variant">←</button>
+        <span class="variant-name">${current.key.toUpperCase()} · ${current.name}<kbd>← →</kbd></span>
+        <button data-action="next-variant" aria-label="Next variant">→</button>
+      </nav>`;
+    }
+
+    function renderState() {
+      const current = variants.find(v => v.key === activeVariant);
+      document.querySelector('#state').innerHTML = `<strong>Prototype state</strong>${current.key.toUpperCase()} · ${current.name}<br>File: <b>${escapeHtml(state.activeFile)}</b> · ${state.mode}${state.dirty ? ' · unsaved' : ''}<br>Last action: ${escapeHtml(state.lastAction)}`;
+    }
+
+    function announce(message) {
+      state.lastAction = message;
+      renderState();
+      const toast = document.querySelector('#toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1600);
+    }
+
+    function setVariant(next) {
+      activeVariant = next;
+      const url = new URL(location.href);
+      url.searchParams.set('variant', activeVariant);
+      history.replaceState({}, '', url);
+      render();
+      announce(`Showing variant ${activeVariant.toUpperCase()}`);
+    }
+
+    function cycleVariant(direction) {
+      const index = variants.findIndex(v => v.key === activeVariant);
+      setVariant(variants[(index + direction + variants.length) % variants.length].key);
+    }
+
+    function render() {
+      const content = activeVariant === 'a' ? renderVariantA() : activeVariant === 'b' ? renderVariantB() : renderVariantC();
+      document.querySelector('#app').innerHTML = `<div class="app">${content}${switcherMarkup()}</div>`;
+      renderState();
+    }
+
+    document.addEventListener('click', event => {
+      const target = event.target.closest('[data-action]');
+      if (!target) return;
+      const action = target.dataset.action;
+      if (action === 'previous-variant') return cycleVariant(-1);
+      if (action === 'next-variant') return cycleVariant(1);
+      if (action === 'select-file') {
+        state.activeFile = target.dataset.file;
+        state.dirty = false;
+        announce(`Selected ${state.activeFile}`);
+        return render();
+      }
+      if (action === 'toggle-tree') {
+        state.treeOpen = !state.treeOpen;
+        state.lastAction = state.treeOpen ? 'Expanded vault tree' : 'Collapsed vault tree';
+        return render();
+      }
+      if (action === 'toggle-drawer') {
+        state.drawerOpen = !state.drawerOpen;
+        state.lastAction = state.drawerOpen ? 'Opened navigation drawer' : 'Closed navigation drawer';
+        return render();
+      }
+      if (action === 'toggle-edit') {
+        state.editing = !state.editing;
+        state.mode = state.editing ? 'edit' : 'preview';
+        state.lastAction = state.editing ? 'Entered edit mode' : 'Returned to reading mode';
+        return render();
+      }
+      if (action.startsWith('mode-')) {
+        state.mode = action.replace('mode-', '');
+        state.lastAction = `Changed view to ${state.mode}`;
+        return render();
+      }
+      if (action === 'save') {
+        state.dirty = false;
+        announce(`Saved ${state.activeFile}`);
+        return render();
+      }
+      if (action === 'import') return announce('Import flow would open here (stub only)');
+      if (action === 'export') return announce('Browser-side export would start here (stub only)');
+      if (action === 'share') return announce('Directory/account sharing panel would open here (stub only)');
+      if (action === 'publish') return announce('Public-link panel would open here (stub only)');
+      if (action === 'new' || action === 'new-folder') return announce('Create flow would open here (stub only)');
+      if (action === 'search') return announce('Search palette would open here (stub only)');
+      if (action === 'more') return announce('More actions menu would open here (stub only)');
+    });
+
+    document.addEventListener('input', event => {
+      if (!event.target.matches('[data-editor]')) return;
+      state.dirty = true;
+      state.lastAction = `Editing ${state.activeFile}`;
+      renderState();
+    });
+
+    document.addEventListener('keydown', event => {
+      const element = document.activeElement;
+      const typing = element && (element.matches('input, textarea') || element.isContentEditable);
+      if (typing && event.key !== 'Escape') return;
+      if (event.key === 'ArrowLeft') { event.preventDefault(); cycleVariant(-1); }
+      if (event.key === 'ArrowRight') { event.preventDefault(); cycleVariant(1); }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault(); state.dirty = false; announce(`Saved ${state.activeFile}`); render();
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>
