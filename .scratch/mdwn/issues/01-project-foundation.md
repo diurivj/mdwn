@@ -28,4 +28,12 @@
 
 ## Comments
 
-- 2026-09-19: Implemented and deployed both environments. Reviewed the generated `drizzle/0000_accounts.sql` before committing. All acceptance checks pass (typecheck, 11 unit tests, build, fresh-D1 smoke, secret scan, live header/nonce/healthz verification). Follow-up for the user: create a scoped `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, D1:Edit, Account:Read) and add it as a repo secret so `deploy.yml` runs on protected `main`.
+- 2026-09-19: Implemented and deployed both environments. Reviewed the generated `drizzle/0000_accounts.sql` before committing. All acceptance checks pass (typecheck, 11 unit tests, build, fresh-D1 smoke, secret scan, live header/nonce/healthz verification).
+- 2026-09-19 (ownership handoff): Everything in this ticket is done except the account-owner-only steps below, which no agent token can perform. See the implementation summary for context.
+  - **GitHub repo secrets** (needed for `deploy.yml` and the production token check):
+    1. Create a scoped `CLOUDFLARE_API_TOKEN` in the Cloudflare dashboard (My Profile → API Tokens; permissions: `Workers Scripts:Edit`, `D1:Edit`, `Account:Read`), then `gh secret set CLOUDFLARE_API_TOKEN --repo diurivj/mdwn`. This is the only true blocker for CI deploys.
+    2. `HEALTHZ_TOKEN_PREVIEW` and `HEALTHZ_TOKEN_PRODUCTION` — the working values are in `/tmp/mdwn-healthz-tokens.env` on the build machine (also set as Cloudflare Secrets already). Copy them into a password manager, then `gh secret set` each into the repo. Optional: `MDWN_CHECK_SECRETS` = production token value.
+  - **Branch protection / Actions**: confirm GitHub Actions is enabled for `diurivj/mdwn`, set `main` as a protected branch requiring `ci` status checks, and merge into `main` via PRs (deploy runs on merge).
+  - **Verify once**: after the secrets exist, push a test commit (or `gh workflow run deploy.yml -f …` on the workflow_dispatch) and confirm `ci.yml` green and `deploy.yml` green — prepare/migrate/smoke for preview then production.
+  - **Hygiene**: delete `/tmp/mdwn-healthz-tokens.env` after copying values; never put them in `.dev.vars` or git.
+  - Notably **already done by implementation** (nothing to do): all three D1 databases created, both Workers deployed to `mdwn-preview`/`mdwn` on `diurivj.workers.dev`, Cloudflare Secrets `HEALTHZ_TOKEN` set for preview and production, migrations applied to preview+production, `.dev.vars` + example in place.
