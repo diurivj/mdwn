@@ -5,6 +5,17 @@ import { buildSecurityHeaders, DYNAMIC_CACHE_CONTROL, generateCspNonce } from "~
 import { cspNonceContext } from "~/security/nonce";
 
 /**
+ * The event object the fetch handler passes to the adapter. The adapter's
+ * `createRequestHandler` is typed for a Cloudflare **Pages** `EventContext`;
+ * on the **Workers** runtime we supply the subset of that contract the adapter
+ * actually consumes (request, waitUntil, passThroughOnException, env) plus our
+ * own `cspNonce` carry. The remaining Page-only fields (next, params, data,
+ * functionPath) are never read by the adapter, so constructing honest values
+ * for them would be fabrication — hence the single boundary assertion.
+ */
+type AdapterEvent = Parameters<typeof requestHandler>[0] & { cspNonce: string };
+
+/**
  * React Router v8 Framework Mode entry point on the Cloudflare Workers
  * runtime, using the @react-router/cloudflare adapter.
  *
@@ -36,19 +47,13 @@ export default {
   async fetch(request, env, ctx) {
     const nonce = generateCspNonce();
 
-    // The adapter follows a PagesFunction-style event shape; on Workers we
-    // supply the subset of the event it consumes (request, waitUntil,
-    // passThroughOnException, env) plus our own cspNonce carry. The cast
-    // adapts the Workers fetch handler to the PagesFunction contract;
-    // remaining Page-only fields (next, params, data, …) are never read by
-    // the adapter.
     const event = {
       request,
       env,
       waitUntil: ctx.waitUntil.bind(ctx),
       passThroughOnException: ctx.passThroughOnException.bind(ctx),
       cspNonce: nonce,
-    } as Parameters<typeof requestHandler>[0] & { cspNonce: string };
+    } as AdapterEvent;
 
     const response = await requestHandler(event);
 
