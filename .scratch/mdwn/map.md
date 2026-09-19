@@ -53,7 +53,7 @@ A **buildable spec + locked technical decisions** for *mdwn*: a standalone web a
 
 <!-- Beyond the destination; never graduates. Closed, not part of Decisions so far. -->
 
-- Monetization, billing, subscriptions — *never*, by explicit decision.
+- Monetization, billing, subscriptions — *never*, by explicit decision. The only support surface is an optional anonymous cryptocurrency donation page ([ADR-0007](../../docs/adr/0007-no-monetization-anonymous-support.md)).
 - Integrating with or reusing Oasis Vault — explicitly excluded.
 - CLI-driven or automatic ingestion/sync from local folders, git repos, research pipelines, or agent output — excluded from this MVP; import/export happens in the browser instead. A later CLI is a fresh effort after this destination is reached.
 - Real-time collaborative editing.

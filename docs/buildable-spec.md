@@ -47,6 +47,17 @@ Signup is open. The product is never monetized: there is no billing, subscriptio
 - Resumable hard deletion of Directory trees larger than 500 nodes.
 - Durable queue-backed autonomous Public-material teardown.
 
+### 1.2 Support and funding
+
+mdwn is never monetized: there is no billing, subscription, advertising, paywall, entitlement, or paid feature tier. Revenue never enters the product.
+
+- The only support surface is an optional, anonymous donation page linked from the site footer. It requires no Account, no session, and no personal data.
+- It shows static cryptocurrency addresses with QR codes generated locally (build-time or vendored); it embeds no third-party script, widget, tracker, or analytics, respecting the no-tracking invariants in section 2.1.
+- Donations grant nothing — no badge, priority, feature, storage, or service guarantee — and create no record in D1 or any operational store.
+- The page states what donations cover (domain and any future paid infrastructure) and that mdwn runs identically without them; capacity exhaustion still fails closed.
+
+Evaluated private donation options and their trade-offs are recorded in [`support-options.md`](support-options.md).
+
 ## 2. Non-negotiable invariants
 
 ### 2.1 Privacy and trust boundary
