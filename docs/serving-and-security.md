@@ -85,3 +85,4 @@ D1 Time Travel plus a pre-change export is the MVP rollback posture for risky mi
 
 - `ci.yml` — every PR and push to `main`: install, typecheck, unit tests, production build, migration smoke test, secret-leak check.
 - `deploy.yml` — `main` only: migrate + deploy preview, smoke it, then migrate + deploy production and smoke it. Requires `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `HEALTHZ_TOKEN_PREVIEW`, `HEALTHZ_TOKEN_PRODUCTION`, optional `MDWN_CHECK_SECRETS` repo secrets.
+- **Merge discipline.** `main` has no enforceable GitHub protection (private repo, Free plan), so the gate is a convention (see AGENTS.md): land work as a branch + PR and merge only when `ci` is green. Deploy runs automatically on merge to `main`.
