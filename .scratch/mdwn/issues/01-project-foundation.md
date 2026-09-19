@@ -4,13 +4,28 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] TypeScript + React Router v8 Framework Mode app running on the Cloudflare Workers runtime via `@react-router/cloudflare` and `@cloudflare/vite-plugin`.
-- [ ] Server rendering is limited to the application shell and non-sensitive route data; the layout and its rendering rules are explicit enough that private plaintext is never server-rendered.
-- [ ] D1 bound for local, preview, and production as separate databases (production D1 is never used from preview or local); Drizzle ORM uses its SQLite/D1 driver, the TypeScript schema is the source of truth, and reviewed generated SQL migrations are committed.
-- [ ] Wrangler applies migrations, and a smoke test proves a fresh empty D1 reaches the committed schema.
-- [ ] Strict Content Security Policy plus secure response headers on every response; Tailwind CSS with small local components; no secret can enter the client bundle (enforced by build-time and header checks).
-- [ ] Pull requests run type checking, tests, and a production build; protected `main` applies reviewed migrations and deploys the Worker through CI.
-- [ ] Production values come from Cloudflare Secrets, local values from an ignored `.dev.vars`.
-- [ ] A deployed preview environment is reachable and serves the shell over HTTPS, so every later ticket has somewhere to stand.
+- [x] TypeScript + React Router v8 Framework Mode app running on the Cloudflare Workers runtime via `@react-router/cloudflare` and `@cloudflare/vite-plugin`.
+- [x] Server rendering is limited to the application shell and non-sensitive route data; the layout and its rendering rules are explicit enough that private plaintext is never server-rendered.
+- [x] D1 bound for local, preview, and production as separate databases (production D1 is never used from preview or local); Drizzle ORM uses its SQLite/D1 driver, the TypeScript schema is the source of truth, and reviewed generated SQL migrations are committed.
+- [x] Wrangler applies migrations, and a smoke test proves a fresh empty D1 reaches the committed schema.
+- [x] Strict Content Security Policy plus secure response headers on every response; Tailwind CSS with small local components; no secret can enter the client bundle (enforced by build-time and header checks).
+- [x] Pull requests run type checking, tests, and a production build; protected `main` applies reviewed migrations and deploys the Worker through CI.
+- [x] Production values come from Cloudflare Secrets, local values from an ignored `.dev.vars`.
+- [x] A deployed preview environment is reachable and serves the shell over HTTPS, so every later ticket has somewhere to stand.
+
+## Implementation notes
+
+- **Stack**: React Router v8.4 Framework Mode (`ssr: true`) on Workers via the `@react-router/cloudflare` adapter (its `getLoadContext` seeds the per-request `RouterContextProvider` with the environment), `@cloudflare/vite-plugin`, Tailwind v4, Drizzle ORM (D1/SQLite driver), Wrangler. React Router v8's context-provider model replaces `context.cloudflare`; env is read as `getEnv(context)`.
+- **Environments**: default env = local (never deployed), `preview` = worker `mdwn-preview`, `production` = worker `mdwn`. The Cloudflare Vite plugin selects the environment at **build time** via `CLOUDFLARE_ENV` (`npm run build:preview|build:production`); plain `wrangler deploy` uploads the flattened build. Never `--env=` at deploy time.
+- **D1 + Drizzle**: three databases — `mdwn-db` (local, `c466a7b4-…`), `mdwn-db-preview` (`9f7eeb4f-…`), `mdwn-db-production` (`20cbcf9f-…`). `app/db/schema.ts` is the source of truth; `drizzle/0000_accounts.sql` (committed + reviewed) is the first migration. It intentionally creates only `accounts` with the spec-locked columns (wayfinder 09 / spec §8.2) so the pipeline has a real target without stepping on later tickets' schema work (06+ owns the remaining tables).
+- **Migration + smoke**: migrations applied via `wrangler d1 migrations apply` (`npm run db:migrate:*`, tracked in `d1_migrations`, idempotent, remote backups captured). `npm run db:smoke` proves a **fresh empty D1** reaches the committed schema (tables/columns/unique indexes) and that re-apply is a no-op; `npm run db:smoke -- --remote preview|production` verifies the live databases.
+- **Security headers**: applied at the worker boundary in `workers/app.ts` (single source of truth — matched routes, unmatched 404s, `.data`, resource routes, and error pages all get the same strict policy). One per-request CSP nonce is shared between the header and `entry.server.tsx` (<ServerRouter nonce>). `app/security/headers.ts` is pure and unit-tested. Dev-mode CSP is relaxed for Vite HMR only; preview/production are strict (`script-src 'self' 'nonce-…'`, no unsafe-inline/eval).
+- **Secrets**: `HEALTHZ_TOKEN` set as a Cloudflare Secret for preview and production; local value in ignored `.dev.vars`. `/healthz` requires `Authorization: Bearer <token>` and reports env + D1 liveness only. `npm run check:secrets` fails the build if any candidate secret (`.dev.vars`, `MDWN_CHECK_SECRETS`, secret-named env vars, PEM blocks) appears in `build/client`.
+- **CI/CD**: `.github/workflows/ci.yml` (every PR + main: typecheck, unit tests, build, migration smoke, secret check) and `deploy.yml` (protected main: migrate+deploy+smoke preview, then production). Deploy requires the `CLOUDFLARE_API_TOKEN` repo secret (skips cleanly until added); `HEALTHZ_TOKEN_*` secrets were set.
+- **Live**: preview https://mdwn-preview.diurivj.workers.dev and production https://mdwn.diurivj.workers.dev both serve the shell over HTTPS with strict CSP and connected D1 (verified via `/healthz`, 401 without token).
+
+## Comments
+
+- 2026-09-19: Implemented and deployed both environments. Reviewed the generated `drizzle/0000_accounts.sql` before committing. All acceptance checks pass (typecheck, 11 unit tests, build, fresh-D1 smoke, secret scan, live header/nonce/healthz verification). Follow-up for the user: create a scoped `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, D1:Edit, Account:Read) and add it as a repo secret so `deploy.yml` runs on protected `main`.

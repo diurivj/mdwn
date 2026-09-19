@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, test, build, migration smoke, secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+      - name: D1 migration smoke test (fresh local D1)
+        run: npm run db:smoke
+      - name: Secret-leak check on client bundle
+        run: npm run check:secrets
+        env:
+          MDWN_CHECK_SECRETS: ${{ secrets.MDWN_CHECK_SECRETS }} # optional: production HEALTHZ_TOKEN, comma-separated

@@ -1,0 +1,90 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+# Protected main: reviewed migrations are applied and the Worker deployed
+# through this workflow, never by hand (spec §3.5). Note the Cloudflare Vite
+# plugin selects the environment at build time (CLOUDFLARE_ENV), so each
+# environment is built and deployed separately.
+jobs:
+  deploy:
+    name: Migrate D1s and deploy Worker (preview, then production)
+    runs-on: ubuntu-latest
+    if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+
+      # --- Preview -----------------------------------------------------------
+      - name: Apply migrations to preview D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+        run: npm run db:migrate:preview
+
+      - name: Build and deploy preview Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+        run: npm run deploy:preview
+
+      - name: Smoke-test preview (schema + healthz + headers)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+          # When HEALTHZ_TOKEN_PREVIEW is set, verify the real secret never
+          # entered the client bundle of this build.
+          MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}
+        run: |
+          npm run db:smoke -- --remote preview
+          npm run check:secrets
+          code=$(curl -s -o /tmp/healthz-preview.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}" \
+            https://mdwn-preview.diurivj.workers.dev/healthz)
+          test "$code" = "200"
+          grep -q '"ok":true' /tmp/healthz-preview.json
+          curl -s -I https://mdwn-preview.diurivj.workers.dev/ \
+            | grep -qi "content-security-policy:.*default-src 'none'"
+
+      # --- Production ----------------------------------------------------------
+      - name: Apply migrations to production D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+        run: npm run db:migrate:production
+
+      - name: Build and deploy production Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+        run: npm run deploy:production
+
+      - name: Smoke-test production (schema + healthz + headers)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+          # When HEALTHZ_TOKEN_PRODUCTION is set, verify the real secret never
+          # entered the client bundle of the production build.
+          MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}
+        run: |
+          npm run db:smoke -- --remote production
+          npm run check:secrets
+          code=$(curl -s -o /tmp/healthz-prod.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}" \
+            https://mdwn.diurivj.workers.dev/healthz)
+          test "$code" = "200"
+          grep -q '"ok":true' /tmp/healthz-prod.json
+          curl -s -I https://mdwn.diurivj.workers.dev/ \
+            | grep -qi "content-security-policy:.*default-src 'none'"

@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mdwn-local",
+  "compatibility_date": "2026-09-18",
+  "main": "./workers/app.ts",
+  "vars": {
+    "APP_ENV": "local"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mdwn-db",
+      "database_id": "c466a7b4-5cd9-4993-8041-705e173622d4",
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  "env": {
+    "preview": {
+      "name": "mdwn-preview",
+      "vars": {
+        "APP_ENV": "preview"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "mdwn-db-preview",
+          "database_id": "9f7eeb4f-9fc4-4e68-8c42-5159f215f17b",
+          "migrations_dir": "./drizzle"
+        }
+      ]
+    },
+    "production": {
+      "name": "mdwn",
+      "vars": {
+        "APP_ENV": "production"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "mdwn-db-production",
+          "database_id": "20cbcf9f-0408-48d8-8e51-c8a7385435ef",
+          "migrations_dir": "./drizzle"
+        }
+      ]
+    }
+  }
+}

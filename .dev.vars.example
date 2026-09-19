@@ -1,0 +1,10 @@
+# Development-only values for `wrangler dev` / local `npm run dev`.
+# This file is gitignored. NEVER commit real values here.
+#
+# Production values live in Cloudflare Secrets (dashboard or
+# `wrangler secret put <NAME> --env=<preview|production>`) and are referenced
+# identically through `env.NAME`. The build-time secret check
+# (`npm run check:secrets`) fails if any value below leaks into build/client.
+#
+# Example:
+# HEALTHZ_TOKEN=local-development-only-token

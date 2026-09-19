@@ -1,0 +1,48 @@
+{
+  "name": "mdwn",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "build:preview": "CLOUDFLARE_ENV=preview react-router build",
+    "build:production": "CLOUDFLARE_ENV=production react-router build",
+    "typecheck": "wrangler types && react-router typegen && tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:migrate": "node scripts/apply-migrations.mjs local",
+    "db:migrate:preview": "node scripts/apply-migrations.mjs preview",
+    "db:migrate:production": "node scripts/apply-migrations.mjs production",
+    "db:smoke": "node scripts/smoke-db.mjs",
+    "db:smoke:preview": "node scripts/smoke-db.mjs --remote preview",
+    "db:smoke:production": "node scripts/smoke-db.mjs --remote production",
+    "check:secrets": "node scripts/check-bundle-secrets.mjs",
+    "deploy:preview": "npm run build:preview && wrangler deploy",
+    "deploy:production": "npm run build:production && wrangler deploy",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@react-router/cloudflare": "^8.4.0",
+    "drizzle-orm": "^0.45.2",
+    "isbot": "^5.1.36",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router": "^8.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.56.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@react-router/dev": "^8.4.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.20.4",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "drizzle-kit": "^0.31.10",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.3",
+    "vitest": "^5.0.1",
+    "wrangler": "^4.135.0"
+  }
+}
