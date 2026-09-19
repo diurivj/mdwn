@@ -12,7 +12,7 @@ Primitive rules:
 - Private plaintext is **never** server-rendered, serialized into the document, or emitted by a loader:
   - no Markdown source, File/Directory names, ordering, front matter, user-authored timestamps, Comment bodies, displayed pseudonyms, capability/ciphertext payloads;
   - no session cookies are read server-side and re-emitted; no secret value is ever included in any loader return value.
-- Server-side code that touches D1 goes through `app/db/client.ts` (Drizzle, D1/SQLite driver). Nothing it returns is encrypted content.
+- Server-side code that touches D1 goes through `app/db/client.server.ts` (Drizzle, D1/SQLite driver, marked `.server.ts` so RR refuses to pull it into the client bundle). Nothing it returns is encrypted content.
 - Later private routes (Files tree, editor) must render their shells server-side but obtain all ciphertext through `clientLoader`-style browser flows; if a route ever needs server data it must remain non-sensitive by construction and be reviewed against this list.
 - A violation of this boundary is a security bug, not a performance choice. Ticket 02 adds the cross-engine test suite that can enforce it.
 

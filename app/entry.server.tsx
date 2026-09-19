@@ -25,6 +25,12 @@ export default async function handleRequest(
     { nonce },
   );
 
+  // Stop rendering when the client disconnects (React streaming best
+  // practice); otherwise the aborted render keeps consuming CPU.
+  request.signal.addEventListener("abort", () => {
+    void body.cancel();
+  });
+
   responseHeaders.set("Content-Type", "text/html");
   return new Response(body, {
     status: responseStatusCode,

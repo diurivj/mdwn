@@ -1,5 +1,5 @@
 import { getEnv } from "~/context/env";
-import { ping } from "~/db/client";
+import { ping } from "~/db/client.server";
 import { DYNAMIC_CACHE_CONTROL } from "~/security/headers";
 
 import type { Route } from "./+types/healthz";
