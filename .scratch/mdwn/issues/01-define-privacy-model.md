@@ -1,7 +1,8 @@
 # Define the privacy model
 
 Type: grilling
-Status: open
+Status: resolved
+Assignee: diurivj
 Blocked by:
 
 ## Question
@@ -20,3 +21,9 @@ The hard tension: (d) is incompatible with server-rendered public links for anon
 Record an ADR if the decision survives the three tests (hard to reverse, surprising without context, a real trade-off).
 
 ## Answer
+
+**Resolution — End-to-end content privacy.** mdwn's private Markdown is encrypted and decrypted in the browser. The application service, its operators, and its managed database store opaque ciphertext and must not be able to read plaintext content. This is the core privacy boundary, not merely encryption at rest.
+
+mdwn is passkeys-first with no passwords; it has no tracking, analytics, advertising, or behavioural profiling. It may keep narrowly scoped operational security and abuse logs only when they exclude content, decryption keys, and public-link fragments and have bounded retention. Browser-side export and hard deletion are required privacy guarantees. Public links are anonymous and non-indexed by default, require no account, and use no cookies except those strictly necessary to function; publishers may later opt in to indexing.
+
+The resulting constraints are recorded in [ADR 0001: End-to-end content privacy](../../../docs/adr/0001-end-to-end-content-privacy.md) and the shared language in [CONTEXT.md](../../../CONTEXT.md). [Define encrypted-content and capability model](13-define-encrypted-content-capability-model.md) now decides the key lifecycle and metadata boundary that this choice requires.
