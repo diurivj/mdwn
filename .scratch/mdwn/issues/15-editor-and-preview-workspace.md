@@ -1,0 +1,17 @@
+# 15: Editor and preview workspace: saving, conflicts, and the File source limit
+
+**What to build:** A person edits Markdown in a persistent split editor/preview workspace, sees sanitized GFM live, and trusts that autosave either commits their draft or tells them plainly that it could not — never truncating, merging, or silently overwriting.
+
+**Blocked by:** 14 (Private tree).
+
+**Status:** ready-for-agent
+
+- [ ] Wide layouts persistently show the Files tree, breadcrumbs, Markdown editor, and live sanitized preview; narrow layouts use a tree drawer and mutually exclusive **Edit**, **Preview**, and (once ticket 21 exists) **Comments** views. A File opens in Edit, and switching views never loses the in-memory draft. There is no alternate desktop layout and no in-app document-tab strip.
+- [ ] Markdown rendering happens in the browser with `react-markdown`, `remark-gfm`, and conservative `rehype-sanitize`; arbitrary raw HTML and `rehype-raw` are not enabled.
+- [ ] Editing autosaves after a 750 ms debounce with no primary Save button; `Cmd/Ctrl+S` immediately flushes a pending save; the File header displays **Unsaved**, **Saving**, **Saved**, or **Couldn't save**; navigation first tries to flush a pending save; a close/reload warning appears only while a save is pending, unsaved, or failed; drafts live only in the current browser tab.
+- [ ] Every save supplies the revision that produced the draft. A stale revision stops autosave, preserves the local draft, and presents reload and discard, copy local draft, or explicitly confirm overwrite; there is no automatic merge and no silent last-write-wins.
+- [ ] File save is one conditional operation: it checks current effective write authority and the expected File revision, validates every submitted private (and, once ticket 22 exists, Public) representation payload before inserting a fresh private representation and content-key identity, replaces the parent-entry envelope and every active direct-Grant envelope for the fresh File key, conditionally swaps current pointers and revision, and removes the superseded representation once unreferenced. A malformed, oversize, or stale save leaves no new pointer, revision, or partial update.
+- [ ] The browser measures Markdown source as at most 262,144 UTF-8 bytes before encryption and again after decryption, shows `bytes / 262,144` from 235,930 bytes (90%), and announces **File limit reached** at the limit. A keystroke, composition result, paste, or conflict-overwrite proposal that would exceed the limit is rejected as one whole edit, never truncated, and the previously valid in-memory draft stays intact with no save attempt.
+- [ ] A locally held oversized legacy File or conflict draft shows **Couldn't save** with copy/download, reload/discard, and reduce-content choices; navigation and reload keep warning while it is unsaved or failed; the File remains readable and exportable but cannot save or confirm a conflict overwrite until reduced within the limit.
+- [ ] Same-browser tabs coordinate one editing lease per File: the first editing tab owns it, another tab opens read-only, **Edit here** requests a transfer, the current owner must save or explicitly discard pending work first, and the prior owner then becomes read-only.
+- [ ] Tests cover byte-exact limits including multi-byte UTF-8, 90% feedback, typing/composition/paste rejection without draft loss, `Cmd/Ctrl+S`, navigation warnings, legacy reduction, conflict overwrite, and a stale save that preserves the draft without mutating current state.

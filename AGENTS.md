@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues and specs live as local markdown under `.scratch/mdwn/` — a wayfinder map plus numbered ticket files. See `docs/agents/issue-tracker.md`.
+Issues and specs live as local markdown under `.scratch/mdwn/` — the wayfinder map with its completed decision tickets in `wayfinder/`, and the MVP build tickets in `issues/`, numbered from `01`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

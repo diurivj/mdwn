@@ -1,6 +1,6 @@
 # Passkeys / WebAuthn for an RR7 + Node app — research findings
 
-Research for `issues/02-research-passkeys.md`. Method: primary sources only (library repos/docs,
+Research for `wayfinder/02-research-passkeys.md`. Method: primary sources only (library repos/docs,
 the W3C WebAuthn spec, NIST SP 800-63B, platform vendor docs, OWASP). Web-search APIs were
 unavailable during this session, so facts below were pulled by fetching the source pages directly
 and, for SimpleWebAuthn, by cloning the repo at `main` (HEAD `7e3c4c4`, 2026-09-12). Every claim is
@@ -244,7 +244,7 @@ provide it. Attestation off.
 
 ---
 
-## 5. Decision inputs for `issues/04-design-auth.md`
+## 5. Decision inputs for `wayfinder/04-design-auth.md`
 
 Concrete facts a later decision depends on (not decisions themselves):
 

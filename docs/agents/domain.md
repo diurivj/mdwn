@@ -18,7 +18,7 @@ Single-context repo:
 ├── CONTEXT.md          ← glossary; the project's canonical vocabulary
 ├── docs/adr/           ← 0001…0007, numbered sequentially
 ├── docs/               ← buildable-spec.md, support-options.md, agents/
-└── .scratch/mdwn/      ← wayfinder map, issues/, research/
+└── .scratch/mdwn/      ← wayfinder map, wayfinder/ (decision tickets), issues/ (build tickets), research/
 ```
 
 ## Use the glossary's vocabulary
