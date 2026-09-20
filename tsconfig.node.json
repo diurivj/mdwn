@@ -1,11 +1,21 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["vite.config.ts", "vitest.config.ts", "drizzle.config.ts", "scripts/**/*.mjs", "tests/**/*.ts", "app/security/**/*.ts"],
+  "include": [
+    "vite.config.ts",
+    "vitest.config.ts",
+    "vitest.workers.config.ts",
+    "playwright.config.ts",
+    "drizzle.config.ts",
+    "scripts/**/*.mjs",
+    "tests/**/*.ts",
+    "e2e/**/*.ts",
+    "app/security/**/*.ts"
+  ],
   "compilerOptions": {
     "composite": true,
     "strict": true,
-    "types": ["node"],
-    "lib": ["ES2022"],
+    "types": ["node", "@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "bundler"

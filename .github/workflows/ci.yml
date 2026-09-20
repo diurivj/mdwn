@@ -33,3 +33,32 @@ jobs:
         run: npm run check:secrets
         env:
           MDWN_CHECK_SECRETS: ${{ secrets.MDWN_CHECK_SECRETS }} # optional: production HEALTHZ_TOKEN, comma-separated
+
+  browser:
+    name: Browser E2E (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Install ${{ matrix.browser }} and OS dependencies
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Browser tests (${{ matrix.browser }})
+        run: npm run test:e2e -- --project=${{ matrix.browser }}
+      - name: Upload ${{ matrix.browser }} diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-${{ matrix.browser }}-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: warn

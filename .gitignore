@@ -18,3 +18,5 @@ worker-configuration.d.ts
 
 # Test state
 coverage/
+playwright-report/
+test-results/

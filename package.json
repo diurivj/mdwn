@@ -8,8 +8,10 @@
     "build:preview": "CLOUDFLARE_ENV=preview react-router build",
     "build:production": "CLOUDFLARE_ENV=production react-router build",
     "typecheck": "wrangler types && react-router typegen && tsc -b",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.workers.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "test:e2e": "npm run build && playwright test",
+    "test:all": "npm test && npm run test:e2e",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:migrate": "node scripts/apply-migrations.mjs local",
     "db:migrate:preview": "node scripts/apply-migrations.mjs preview",
@@ -32,7 +34,9 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.56.0",
+    "@cloudflare/vitest-plugin": "^1.1.13",
     "@cloudflare/workers-types": "^4.20260702.1",
+    "@playwright/test": "^1.63.0",
     "@react-router/dev": "^8.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.20.4",
@@ -42,7 +46,7 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.3",
-    "vitest": "^5.0.1",
+    "vitest": "^4.1.11",
     "wrangler": "^4.135.0"
   }
 }

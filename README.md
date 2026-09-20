@@ -24,7 +24,9 @@ npm run dev          # local Workers runtime + D1 simulation + Tailwind
 | Command | Purpose |
 | --- | --- |
 | `npm run typecheck` | wrangler types + react-router typegen + `tsc -b` |
-| `npm test` | unit tests (Node) |
+| `npm test` | Node unit tests + Workers-runtime tests |
+| `npm run test:all` | unit/Worker tests, production build, and Chromium/Firefox/WebKit browser tests |
+| `npm run test:e2e` | browser tests against the built Worker (all three engines) |
 | `npm run build` | production build into `build/` |
 | `npm run db:generate` | generate a migration from `app/db/schema.ts` into `drizzle/` |
 | `npm run db:migrate[:preview\|:production]` | apply migrations via Wrangler |
@@ -41,6 +43,7 @@ remote values as Cloudflare Secrets per environment.
 - `workers/app.ts` — Workers entry that delegates to the React Router handler
 - `drizzle/` — committed, reviewed SQL migrations
 - `scripts/` — migration apply, D1 smoke, bundle secret check
-- `tests/` — Node unit tests
+- `tests/` — Node unit tests and Workers-runtime tests
+- `e2e/` — Playwright cross-engine tests against the built Worker
 - `.scratch/mdwn/` — issue tracker and wayfinding map (local markdown)
 - `docs/` — buildable spec, ADRs, serving/security policy
