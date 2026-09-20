@@ -14,7 +14,7 @@ Primitive rules:
   - no session cookies are read server-side and re-emitted; no secret value is ever included in any loader return value.
 - Server-side code that touches D1 goes through `app/db/client.server.ts` (Drizzle, D1/SQLite driver, marked `.server.ts` so RR refuses to pull it into the client bundle). Nothing it returns is encrypted content.
 - Later private routes (Files tree, editor) must render their shells server-side but obtain all ciphertext through `clientLoader`-style browser flows; if a route ever needs server data it must remain non-sensitive by construction and be reviewed against this list.
-- A violation of this boundary is a security bug, not a performance choice. Ticket 02 adds the cross-engine test suite that can enforce it.
+- A violation of this boundary is a security bug, not a performance choice. The cross-engine suite described in [`testing.md`](testing.md) enforces the route and browser-runtime boundary.
 
 ## 2. Response headers on every response
 
@@ -83,6 +83,6 @@ D1 Time Travel plus a pre-change export is the MVP rollback posture for risky mi
 
 ## 5. CI/CD
 
-- `ci.yml` — every PR and push to `main`: install, typecheck, unit tests, production build, migration smoke test, secret-leak check.
+- `ci.yml` — every PR and push to `main`: install, typecheck, Node/Workers tests, production build, migration smoke test, secret-leak check, and a Chromium/Firefox/WebKit browser matrix with failure artifacts.
 - `deploy.yml` — `main` only: migrate + deploy preview, smoke it, then migrate + deploy production and smoke it. Requires `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `HEALTHZ_TOKEN_PREVIEW`, `HEALTHZ_TOKEN_PRODUCTION`, optional `MDWN_CHECK_SECRETS` repo secrets.
 - **Merge discipline.** `main` has no enforceable GitHub protection (private repo, Free plan), so the gate is a convention (see AGENTS.md): land work as a branch + PR and merge only when `ci` is green. Deploy runs automatically on merge to `main`.
