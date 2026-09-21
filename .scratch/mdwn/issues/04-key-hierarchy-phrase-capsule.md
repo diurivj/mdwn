@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 (`mdwn/enc-v1` envelope library).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] One Vault root key per Account for its owned content; each Directory has an independently random Directory capability key; a parent Directory capability wraps each child Directory capability.
 - [x] Every persisted current File representation has a fresh, independently random File content key that encrypts the Markdown and File metadata and is wrapped by the containing Directory capability.
@@ -29,5 +29,7 @@ capsule is consumed by the production recovery open path in every target.
 - 2026-09-21: Added a fixed, independently encoded `mdwn/enc-v1` recovery capsule with a P-256 signing key; the shared case opens it through `openRecoveryCapsule` and retains the existing tamper and superseded-generation checks. Label and context mutation checks fail the independent case as expected; final unfiltered validation is recorded below after completion.
 
 - 2026-09-21 final validation: `npm run typecheck` passed; unfiltered `npm run test:all` passed with Node 5 files/40 tests, Worker 2 files/12 tests, and all 45 Chromium/Firefox/WebKit browser tests. `npm run db:smoke` passed against a fresh local D1 and `npm run check:secrets` found no candidate secrets in 10 client bundle files.
+
+- 2026-09-21: PR [#5](https://github.com/diurivj/mdwn/pull/5) was approved, merged to `main` at `4a186e8b897c6338a4f89acc9ec183216af15150`, and deployed after the exact-head CI checks passed.
 
 - 2026-09-21: Dependency note from ticket 03: use `app/crypto/enc-v1` (`docs/enc-v1.md`) for the `vault-recovery` and `device-enrollment` Key envelopes and for the `recovery-capsule` envelope. This ticket must extend the module with an explicit HKDF label: `createSymmetricWriter` currently fixes the `info` label to `mdwn/enc-v1/aes-256-gcm`, so the `mdwn/vault-recovery-capsule/v1` derivation needs its own label parameter (or a capsule entry point) rather than passing the capsule key as `baseKey`.

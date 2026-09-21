@@ -23,6 +23,8 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
+      - name: Unicode namespace data drift check
+        run: npm run check:namespace
       - name: Unit tests
         run: npm test
       - name: Production build
