@@ -1,0 +1,180 @@
+# `mdwn/enc-v1` envelope contract
+
+Ticket [03](../.scratch/mdwn/issues/03-enc-v1-envelope-library.md) selects this
+binary representation and `@hpke/core` **1.9.0** (hpke-js, with its transitive
+version pinned in `package-lock.json`). This is an application envelope around
+WebCrypto and RFC 9180, not a new ECDH protocol. It does not replace the
+independent security review required by ADR-0003.
+
+## Public interface and trust
+
+Import from `app/crypto/enc-v1`:
+
+- `createSymmetricWriter(baseKey, { maxMessages?, maxAuthenticatedBytes? })`
+  returns an ephemeral writer with `seal(plaintext, context)`. The base key must
+  be **32 random secret bytes**, never a password. Use this for content and
+  symmetric Key envelopes alike.
+- `openSymmetric(envelope, baseKey, expected)` opens only the symmetric suite.
+- `sealToRecipient(plaintext, recipientPublicKey, context)` and
+  `openForRecipient(envelope, recipientKeyPair, expected)` use only the pinned
+  HPKE suite. Supply an independently approved recipient public key. Transport
+  keys are WebCrypto ECDH P-256 handles; a private key must permit `deriveBits`.
+  Pass **both** handles to open: the private handle may be non-extractable.
+- `inspectEnvelope(envelope)` validates framing and returns **unauthenticated**
+  metadata. It is suitable for Worker structural validation, never authorization
+  or establishing the expected context. The parser is also available from the
+  dependency-free `app/crypto/enc-v1/format` module.
+- `digestEnvelope(envelope)` returns SHA-256 of the entire canonical envelope,
+  after structural validation. It is a byte-exact ciphertext identity, not a
+  plaintext hash or an authenticity claim.
+
+Every open requires an **external expected context**: purpose, Vault ID, object
+ID, protected key ID, exact current key epoch and representation revision, plus
+recipient and Publication IDs where applicable. An older envelope epoch fails as
+`stale-epoch`; a newer-than-current epoch fails as `unexpected-epoch`, so a
+caller cannot mistake an impossible future epoch for ordinary staleness and
+"fix" it by re-keying. There is no “decrypt using the
+header's own context” convenience. The chosen open method pins the suite: no
+algorithm negotiation, downgrade, or fallback. IDs are opaque, case-sensitive
+values, not file names or paths. The library does not infer authorization from
+an ID, key epoch, or successful decryption.
+
+`archive-manifest` and `import-staging-manifest` opens additionally require
+`expected.manifestDigest`, the exact current 32-byte digest from a trusted head.
+Old revisions and same-revision different ciphertext both fail. Reading the
+same **current** head repeatedly is permitted; this is rollback detection, not
+single-use consumption. Persisting/advancing the head and distributing it to
+other devices belongs to the caller's authenticated manifest/registry protocol.
+Never initialize it from the envelope or from unauthenticated server claims.
+A fresh device with no trusted checkpoint cannot detect a server replaying its
+entire history; a stateless envelope library cannot solve that problem. Content
+key epochs and Device registry epochs are distinct; callers bind the applicable
+current content authority, not merely a number supplied beside ciphertext.
+
+Inputs used across an asynchronous operation are snapshotted. The module does
+not persist, log, send, or SSR keys/plaintext. It provides no export of derived
+writer keys or their nonce state. `EnvelopeError.code` provides bounded failure
+categories without content or crypto-library exceptions in open failures.
+
+## Nonce allocation: new key domains, not distributed random IVs
+
+For symmetric encryption:
+
+1. Each writer obtains a fresh 256-bit CSPRNG **salt** (public namespace).
+2. Derive its AES-256 key from the 32-byte base key using HKDF-SHA-256, that salt,
+   and UTF-8 `mdwn/enc-v1/aes-256-gcm` as `info`. The base key never directly
+   encrypts a message.
+3. Allocate a 96-bit big-endian counter nonce starting at zero. Allocation is
+   synchronous, before the first encryption await; an exception or abandoned
+   operation burns the counter. A writer never wraps: its hard budget is
+   `2^32` messages, and it also refuses to exceed `2^30` cumulative
+   authenticated bytes (AAD and plaintext each padded to an AES block, plus the
+   16-byte tag), which bounds GCM's aggregate forgery risk. `maxMessages` and
+   `maxAuthenticatedBytes` may lower, never raise, those budgets; exhaustion
+   fails closed as `nonce-exhausted`.
+4. A new writer (another tab, device, retry after restart, or interrupted/offline
+   work resumed later) always generates a new salt and therefore a new AES key
+   domain. It does **not** restore the old salt/counter. Within one writer, even
+   concurrent calls use distinct counter values. No server, IndexedDB counter,
+   cross-tab lock, or online reservation service is needed.
+
+The HKDF `info` label is fixed to `mdwn/enc-v1/aes-256-gcm` for this content-key
+domain. Derivations that need a different domain-separated label — notably the
+[`mdwn/vault-recovery-capsule/v1`](../.scratch/mdwn/issues/04-key-hierarchy-phrase-capsule.md)
+recovery-capsule context — must not reuse this writer blindly; ticket 04/11 must
+extend this module with its own pinned label rather than passing a capsule key as
+`baseKey`.
+
+The guarantee is deterministic nonce uniqueness **within each derived key
+ domain**, conditional on the standard CSPRNG/HKDF key-separation assumptions.
+It does not claim mathematically impossible random key collisions: for `w`
+writers, the salt-collision bound is approximately `w*(w-1)/2^257`, before HKDF
+key-collision considerations. This is 256-bit key-domain separation, **not**
+assuming 96-bit random nonces will not collide. A cloned/rolled-back live JS/VM
+snapshot, broken RNG, compromised browser, or manually restoring internal key
+state is outside this contract. Ordinary browser restarts/storage eviction need
+no persisted allocation state and cannot rewind an old writer's counter.
+
+A retry can resend the **same envelope bytes** without invoking encryption. If
+it re-encrypts, it consumes a new nonce (or uses a new writer domain), producing
+different bytes. Import's exact sequence/digest retry rule must reuse the saved
+bytes, not encrypt again and call it the same retry.
+
+HPKE uses fresh RFC 9180 **base-mode** sender contexts, exactly one message per
+context, with KEM `0x0010` (DHKEM P-256/HKDF-SHA-256), KDF `0x0001`
+(HKDF-SHA-256), and AEAD `0x0002` (AES-256-GCM). The library owns its ephemeral
+key and nonce schedule. No context, custom ECDH construction, optional PSK,
+caller-provided ephemeral key, or alternate suite is exposed. Base mode does not
+identify the sender; any sender can encrypt to a public key. Sender authority
+comes from the authenticated device/Grant/Publication protocols, not HPKE alone.
+
+## Canonical binary representation (v1)
+
+All integers are **unsigned big-endian**; no varints, JSON, base64, optional field
+maps, padding, or trailing bytes. Whole envelopes are bounded to 512 KiB;
+callers must enforce narrower object/import limits (e.g. 16 KiB Key envelopes).
+Epochs and revisions are u64 on the wire but restricted to non-negative JS safe
+integers (`0` through `2^53-1`).
+
+| Order | Field | Encoding |
+| --- | --- | --- |
+| 1 | Version | 12 bytes, UTF-8 `mdwn/enc-v1` followed by NUL |
+| 2 | Suite | u8: `1` symmetric; `2` HPKE |
+| 3 | Purpose | u8 from the table below |
+| 4 | Key epoch | u64 |
+| 5 | Representation/manifest revision | u64 |
+| 6–8 | Vault ID, object ID, protected key ID | each: u16 byte length + UTF-8 |
+| 9–10 | Recipient ID, Publication ID | same; zero length means absent |
+| 11a | Symmetric parameters | 32-byte HKDF salt, then 12-byte GCM nonce |
+| 11b | HPKE parameters | 65-byte SEC1 uncompressed P-256 encapsulated public key (`04 || X || Y`) |
+| 12 | Ciphertext length | u32, includes 16-byte authentication tag |
+| 13 | Ciphertext | exact bytes, authentication tag last |
+
+Required IDs contain 1–256 UTF-8 bytes. Present optional IDs obey the same rule;
+empty strings are invalid. UTF-8 decoding is fatal on malformed input, encoding
+rejects lone UTF-16 surrogates, and a BOM is preserved as data. No Unicode
+normalization is applied to opaque IDs. Unknown fields in a caller's context
+are rejected rather than silently left unauthenticated.
+
+The entire header (everything preceding the ciphertext, **including** salt,
+nonce or encapsulated key, and ciphertext length) is AEAD additional authenticated
+data. HPKE `info` is the header prefix through the context (fields 1–10), providing
+application/suite/context domain separation within RFC 9180. The tag is always
+128 bits. A change to framing, suite semantics, or this field order needs a new
+version, not a permissive v1 decoder.
+
+| Purpose ID | Purpose |
+| --- | --- |
+| 1 | `directory-capability` |
+| 2 | `file-content-key` |
+| 3 | `file-content` |
+| 4 | `directory-metadata` |
+| 5 | `grant` |
+| 6 | `device-enrollment` |
+| 7 | `vault-recovery` |
+| 8 | `recovery-capsule` |
+| 9 | `public-representation` |
+| 10 | `private-comment-thread` |
+| 11 | `public-comment-audience-epoch` |
+| 12 | `comment-content` |
+| 13 | `attribution` |
+| 14 | `archive-manifest` |
+| 15 | `import-staging-manifest` |
+| 16 | `import-chunk` |
+
+Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
+ key`, `Comment audience epoch`); only the numeric ID is serialized. Every HPKE
+envelope, `grant`, and `device-enrollment` requires a recipient ID.
+`public-representation` and `public-comment-audience-epoch` require a Publication ID.
+Callers must supply the optional bindings for all other cases where applicable;
+for example a public Comment's content must bind its Publication, whereas a
+Private Comment has none. Purpose IDs must never be renumbered.
+
+## Sources
+
+- [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) — HPKE construction, suites,
+  base-mode security limits, and test vectors.
+- [RFC 5869](https://www.rfc-editor.org/rfc/rfc5869) — HKDF extract/expand and `info`.
+- [NIST SP 800-38D](https://csrc.nist.gov/pubs/sp/800/38/d/final) — GCM, IV uniqueness.
+- [hpke-js](https://github.com/dajiaji/hpke-js) — maintained implementation;
+  [selection notes](../.scratch/mdwn/research/enc-v1-hpke.md).
