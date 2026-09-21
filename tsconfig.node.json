@@ -9,7 +9,8 @@
     "scripts/**/*.mjs",
     "tests/**/*.ts",
     "e2e/**/*.ts",
-    "app/security/**/*.ts"
+    "app/security/**/*.ts",
+    "app/crypto/**/*.ts"
   ],
   "compilerOptions": {
     "composite": true,

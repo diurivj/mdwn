@@ -20,10 +20,24 @@ export default async function handleRequest(
 ) {
   const nonce = loadContext.get(cspNonceContext);
 
-  const body = await renderToReadableStream(
-    <ServerRouter nonce={nonce} context={routerContext} url={request.url} />,
-    { nonce },
-  );
+  const router = <ServerRouter nonce={nonce} context={routerContext} url={request.url} />;
+
+  // WebKit keeps parser-blocking module scripts behind an open streaming
+  // document. The browser-only crypto contract route is deliberately a
+  // finite test document so its shared library can execute in every engine;
+  // application routes retain the normal streaming renderer below.
+  if (new URL(request.url).pathname === "/__test/enc-v1") {
+    const finiteBody = await renderToReadableStream(router, { nonce });
+    await finiteBody.allReady;
+    const html = await new Response(finiteBody).text();
+    responseHeaders.set("Content-Type", "text/html");
+    return new Response(html, {
+      status: responseStatusCode,
+      headers: responseHeaders,
+    });
+  }
+
+  const body = await renderToReadableStream(router, { nonce });
 
   // Stop rendering when the client disconnects (React streaming best
   // practice); otherwise the aborted render keeps consuming CPU.

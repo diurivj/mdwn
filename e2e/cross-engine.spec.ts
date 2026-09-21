@@ -7,6 +7,13 @@ import {
   CROSS_ENGINE_ROUTE,
   CROSS_ENGINE_VECTOR,
 } from "../tests/support/cross-engine-vector";
+import {
+  ENC_V1_VECTOR_AAD_HEX,
+  ENC_V1_VECTOR_CIPHERTEXT_HEX,
+  ENC_V1_VECTOR_KEY,
+  ENC_V1_VECTOR_NONCE,
+  ENC_V1_VECTOR_PLAINTEXT,
+} from "../tests/support/enc-v1-vector";
 
 async function gotoApp(
   page: import("@playwright/test").Page,
@@ -44,6 +51,38 @@ async function runAesGcmVector(page: import("@playwright/test").Page) {
       ).join(""),
     };
   }, CROSS_ENGINE_VECTOR);
+}
+
+async function runEncV1AesVector(page: import("@playwright/test").Page) {
+  return page.evaluate(async (vector) => {
+    const fromHex = (value: string) =>
+      Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new Uint8Array(vector.key),
+      { name: "AES-GCM" },
+      false,
+      ["encrypt"],
+    );
+    const ciphertext = await crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv: new Uint8Array(vector.nonce),
+        additionalData: fromHex(vector.aadHex),
+        tagLength: 128,
+      },
+      key,
+      new Uint8Array(vector.plaintext),
+    );
+    return Array.from(new Uint8Array(ciphertext), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+  }, {
+    key: ENC_V1_VECTOR_KEY,
+    nonce: ENC_V1_VECTOR_NONCE,
+    aadHex: ENC_V1_VECTOR_AAD_HEX,
+    plaintext: ENC_V1_VECTOR_PLAINTEXT,
+  });
 }
 
 async function putDeviceRecord(
@@ -102,6 +141,27 @@ test.describe("cross-engine application contract", () => {
     expect(await runAesGcmVector(page)).toEqual({
       secureContext: true,
       ciphertext: CROSS_ENGINE_VECTOR.ciphertext,
+    });
+    expect(await runEncV1AesVector(page)).toBe(ENC_V1_VECTOR_CIPHERTEXT_HEX);
+  });
+
+  test("runs the enc-v1 seal/open, nonce, and replay seams in the browser", async ({
+    page,
+  }) => {
+    await gotoApp(page, "/__test/enc-v1");
+    console.log(await page.evaluate(() => Array.from(document.scripts).map((script) => ({ src: script.src, type: script.type, nonce: script.nonce }))));
+    const result = page.getByTestId("enc-v1-browser-result");
+    await expect(result).not.toHaveText("pending");
+    await expect
+      .poll(async () => JSON.parse(await result.textContent() ?? "{}"))
+      .toEqual({
+      aesCiphertext: ENC_V1_VECTOR_CIPHERTEXT_HEX,
+      aesVectorMatches: true,
+      hpkeOpened: true,
+      hpkeVectorMatches: true,
+      hpkePrivateExtractable: false,
+      nonceUnique: true,
+      replayRejected: true,
     });
   });
 
