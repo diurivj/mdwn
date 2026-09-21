@@ -84,12 +84,21 @@ For symmetric encryption:
    concurrent calls use distinct counter values. No server, IndexedDB counter,
    cross-tab lock, or online reservation service is needed.
 
-The HKDF `info` label is fixed to `mdwn/enc-v1/aes-256-gcm` for this content-key
-domain. Derivations that need a different domain-separated label — notably the
-[`mdwn/vault-recovery-capsule/v1`](../.scratch/mdwn/issues/04-key-hierarchy-phrase-capsule.md)
-recovery-capsule context — must not reuse this writer blindly; ticket 04/11 must
-extend this module with its own pinned label rather than passing a capsule key as
-`baseKey`.
+The default HKDF `info` label remains `mdwn/enc-v1/aes-256-gcm` for the content-key
+domain. [Ticket 04](../.scratch/mdwn/issues/04-key-hierarchy-phrase-capsule.md)
+adds the Recovery capsule domain through `infoLabel`. Its canonical `info` is
+UTF-8 `mdwn/vault-recovery-capsule/v1`, followed by the Account ID's u16 byte
+length, its UTF-8 bytes, and the recovery generation as u64 (all integers big-endian).
+`app/crypto/vault.ts` supplies the 32-byte Vault recovery secret as the HKDF input
+and records the writer's fresh public salt. It does not feed an already-derived
+capsule key into the default content-key domain or restore a writer's salt.
+
+Recovery capsule opens and reissues require an external expected Account ID and
+current generation; callers may also supply the trusted current recovery salt.
+Successful decryption does not establish the current generation or authorize
+enrollment. Persisting current recovery state and atomically superseding it belong
+to the signup and recovery ceremonies. Only `RecoveryMaterial.record` is suitable
+for service persistence; the surrounding material contains browser-local secrets.
 
 The guarantee is deterministic nonce uniqueness **within each derived key
  domain**, conditional on the standard CSPRNG/HKDF key-separation assumptions.
@@ -195,15 +204,13 @@ Their purpose names are pinned here:
 | 24 Public pseudonym update | `attribution` |
 | 29, 30 Import | `archive-manifest`, `import-staging-manifest`, `import-chunk` |
 
-Three decisions stay open, and later tickets own them:
+Two decisions stay open, and later tickets own them:
 
-1. **Recovery-capsule label.** Ticket 04 must add an explicit HKDF label for
-   `mdwn/vault-recovery-capsule/v1`; this module fixes `mdwn/enc-v1/aes-256-gcm`.
-2. **Public audience epoch needs two purposes.** Ticket 23 needs a symmetric
+1. **Public audience epoch needs two purposes.** Ticket 23 needs a symmetric
    wrapper for the Publication capability and an HPKE envelope for each device,
    so one `public-comment-audience-epoch` purpose is not enough. Split it and keep
    the two distinguishable in the authenticated context.
-3. **Purpose-to-suite enforcement.** The module does not stop a producer sealing
+2. **Purpose-to-suite enforcement.** The module does not stop a producer sealing
    any purpose with either suite. Tickets 18, 21, 22, and 23 should add a
    purpose-to-suite table once every purpose has exactly one suite.
 
