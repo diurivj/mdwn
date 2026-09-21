@@ -16,3 +16,7 @@
 - [ ] Every create and rename conditionally advances the affected `entries_revision`; on a winning concurrent structural change the Worker performs no mutation and returns nameless `409 namespace_changed`, and the authorized browser says **This folder changed on another device. Nothing was added, replaced, or overwritten.**, refreshes and decrypts the Directory, and preserves the requested name while offering Refresh and retry, Rename, or Cancel.
 - [ ] Wide layouts show the Files tree, breadcrumbs, editor, and preview; narrow layouts use a tree drawer — with no plaintext names in routes, titles, or logs in either.
 - [ ] Tests prove same-revision two-client creation commits exactly once with a `409` loser and no partial state, re-run the namespace fixtures through the real create path, and assert node/entry agreement after each mutation.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: Directory-entry envelopes use `app/crypto/enc-v1` (`docs/enc-v1.md`) with purposes `directory-capability`, `file-content-key`, and `directory-metadata`. A listing or manifest envelope opens only against the current `entries_revision` plus an externally trusted `manifestDigest`; an older revision or a same-revision fork fails `replayed-manifest`.

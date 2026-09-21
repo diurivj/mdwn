@@ -8,8 +8,10 @@
     "drizzle.config.ts",
     "scripts/**/*.mjs",
     "tests/**/*.ts",
+    "tests/fixtures/*.json",
     "e2e/**/*.ts",
-    "app/security/**/*.ts"
+    "app/security/**/*.ts",
+    "app/crypto/**/*.ts"
   ],
   "compilerOptions": {
     "composite": true,
@@ -17,7 +19,8 @@
     "types": ["node", "@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "bundler"
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true
   }
 }

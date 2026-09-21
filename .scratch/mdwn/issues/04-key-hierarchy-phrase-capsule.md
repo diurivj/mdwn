@@ -14,3 +14,7 @@
 - [ ] Key envelope purposes exist and are tested for at least `vault-recovery` (Account-owned roots and needed owned-File/Comment auxiliary capabilities) and `device-enrollment`, with an explicit rule that a capability received only through a Grant is excluded from the Vault-recovery envelope.
 - [ ] Phrase and capsule validation rejects the wrong phrase, wrong generation, wrong salt, a tampered capsule, and a superseded generation; reissue produces a new generation that supersedes the prior one.
 - [ ] Cross-engine vectors cover capsule seal/open, phrase round-trip, and tamper rejection in Chromium, Firefox, WebKit, and the Worker test target.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: use `app/crypto/enc-v1` (`docs/enc-v1.md`) for the `vault-recovery` and `device-enrollment` Key envelopes and for the `recovery-capsule` envelope. This ticket must extend the module with an explicit HKDF label: `createSymmetricWriter` currently fixes the `info` label to `mdwn/enc-v1/aes-256-gcm`, so the `mdwn/vault-recovery-capsule/v1` derivation needs its own label parameter (or a capsule entry point) rather than passing the capsule key as `baseKey`.

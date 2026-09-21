@@ -14,3 +14,7 @@
 - [ ] No new Publication is allowed for that File until cleanup completes, and a later Publication starts entirely fresh.
 - [ ] Public-participation limits and suspensions can never block this flow.
 - [ ] Tests prove interrupted teardown remains sealed and Owner-resumable, unknown, rotated, and sealed paths are indistinguishable, and no Publication row or public ciphertext survives completion.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: rotation rewraps the Public audience-epoch wrappers with the new Publication capability. Those wrappers are symmetric envelopes, distinct from the account-device HPKE envelopes (see ticket 23), and the superseded wrappers must be removed rather than left readable.

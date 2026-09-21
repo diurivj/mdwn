@@ -16,3 +16,7 @@
 - [ ] **Import** and **Export** live in the Files chrome; drag-and-drop targets eligible Directories; both the Import command and a valid drop open this preflight/review flow rather than inserting content into the editor.
 - [ ] A conforming plan constructs the complete encrypted record and chunk plan and measures every canonical field, descriptor count, chunk, staging manifest, and aggregate payload and digest; a nonconforming plan creates no session and uploads nothing, identifies the safe local item or problem and the configured limit, and suggests remove/fix, re-export, or split-and-retry. No valid subset is automatically imported.
 - [ ] Tests cover each bound at its limit and one over, Unicode profile rejection, traversal/absolute/empty component rejection, duplicate source path rejection, deterministic Keep-both names including literal suffixes and folded collisions, and an over-limit generated name.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: the staging manifest built here is an `import-staging-manifest` envelope in `app/crypto/enc-v1` (`docs/enc-v1.md`), and staged records use `import-chunk`. Sizes are measured on the canonical envelope bytes, whose digest is `digestEnvelope`.

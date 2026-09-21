@@ -17,3 +17,7 @@
 - [ ] After publication, any authorized File editor's save creates both the private and Public representations under one File-revision condition using the stored public key rather than the fragment; the Public pointer updates in the same operation as the private one.
 - [ ] An unknown path identifier returns a ciphertext-free `404` indistinguishable from the response for a rotated or sealed link.
 - [ ] Tests prove the paired save is atomic, the fragment never appears in requests, logs, errors, analytics, referrers, or server state, anonymous routes never return private or Collaborators-only ciphertext or envelopes, and a pending request creates no public access.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: the `public-representation` envelope is HPKE to the Publications public encryption key, so the matching private decryption capability stays in the fragment while an editor updates without it. Bind the Publication as `publicationId` and its public key as `recipientId`. The Publication-capability wrappers used by Public Comment epochs are separate symmetric envelopes. See `docs/enc-v1.md`.

@@ -17,3 +17,7 @@
 - [ ] Every read and create checks active thread and Publication state, current audience authorization, and epoch; edit/delete additionally checks author identity with Owner hard-delete as the only author exception; Public Comment participation counters are consumed atomically with accepted create, edit, and report operations.
 - [ ] Private Comments are never copied or exposed when publishing; a Public reader sees only eligible public epochs under the rendered document, with no Private/Public selector.
 - [ ] Tests prove audience transitions never disclose Collaborators-only history publicly, an unauthorized signed-in Account receives no data, and the Private thread is absent from every Public response.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: one Public audience epoch needs two envelopes with different suites — the Publication-capability wrapper (symmetric) and each device envelope (HPKE). The ticket 03 purpose table carries one `public-comment-audience-epoch`, so this ticket must split it into two distinct purposes (for example `public-comment-epoch-link` and `public-comment-epoch-device`) and keep them distinguishable in the authenticated context. A device envelope must not be trusted on a successful open alone, because HPKE base mode names no sender.
