@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 (`mdwn/enc-v1` envelope library).
 
-**Status:** ready-for-human
+**Status:** ready-for-agent
 
 - [x] One Vault root key per Account for its owned content; each Directory has an independently random Directory capability key; a parent Directory capability wraps each child Directory capability.
 - [x] Every persisted current File representation has a fresh, independently random File content key that encrypts the Markdown and File metadata and is wrapped by the containing Directory capability.
@@ -13,13 +13,17 @@
 - [x] A versioned AES-256-GCM `mdwn/enc-v1` Recovery capsule contains the stable Vault root key and a dedicated P-256 recovery-enrollment signing private key; the service side stores only opaque ciphertext/metadata, current generation and salt, and the matching public recovery-verification key.
 - [x] Key envelope purposes exist and are tested for at least `vault-recovery` (Account-owned roots and needed owned-File/Comment auxiliary capabilities) and `device-enrollment`, with an explicit rule that a capability received only through a Grant is excluded from the Vault-recovery envelope.
 - [x] Phrase and capsule validation rejects the wrong phrase, wrong generation, wrong salt, a tampered capsule, and a superseded generation; reissue produces a new generation that supersedes the prior one.
-- [x] Cross-engine vectors cover capsule seal/open, phrase round-trip, and tamper rejection in Chromium, Firefox, WebKit, and the Worker test target.
+- [ ] Cross-engine vectors cover capsule seal/open, phrase round-trip, and tamper rejection in Chromium, Firefox, WebKit, and the Worker test target.
 
-Implementation note (ready for review): browser-side primitives live in
+Implementation note (review follow-up required): browser-side primitives live in
 `app/crypto/vault.ts`; capsule HKDF labels extend `app/crypto/enc-v1` without
-changing its default writer contract. The shared recovery vector runs in Node,
-workerd, Chromium, Firefox, and WebKit.
+changing its default writer contract. The shared recovery checks run in Node,
+workerd, Chromium, Firefox, and WebKit, but the independent capsule vector still
+needs to exercise the production capsule implementation.
 
 ## Comments
+
+- Implementation review of `0da09b0`: the standards axis found no documented-rule violations and one optional duplicated-byte-helper cleanup. The spec axis confirmed that `independentRecoveryVector` tests raw WebCrypto in isolation, while application capsule coverage is only a same-implementation round trip. Add a fixed independently produced capsule consumed by the production open path, or independently open a production capsule, so a wrong production HKDF label/context or framing fails the cross-engine contract.
+- Validation recorded: typecheck and build passed; Node 40 tests and Worker 12 tests passed; `npx playwright test e2e/enc-v1.spec.ts --reporter=line --workers=1` passed 36 tests. This browser command omitted the nine foundation tests in `e2e/cross-engine.spec.ts`; the unfiltered full suite remains required after the vector fix. Orchestration stopped under the maintainer's stop-on-issues instruction before PR publication or ticket 05.
 
 - 2026-09-21: Dependency note from ticket 03: use `app/crypto/enc-v1` (`docs/enc-v1.md`) for the `vault-recovery` and `device-enrollment` Key envelopes and for the `recovery-capsule` envelope. This ticket must extend the module with an explicit HKDF label: `createSymmetricWriter` currently fixes the `info` label to `mdwn/enc-v1/aes-256-gcm`, so the `mdwn/vault-recovery-capsule/v1` derivation needs its own label parameter (or a capsule entry point) rather than passing the capsule key as `baseKey`.
