@@ -120,6 +120,86 @@ async function independentRecoveryVector(): Promise<string> {
   );
   return hex(ciphertext);
 }
+
+// Fixed, test-only P-256 signing material. The private key is serialized in the
+// capsule plaintext; production returns it only as a non-extractable CryptoKey.
+const INDEPENDENT_RECOVERY_PRIVATE_PKCS8 = bytes(
+  "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420317f915db7bc629c48fe765587897e01e282d3e8445f79f27f65d031a88082b2a14403420004abc7e49a4c6b3566d77d0304addc6ed0e98512ffccf505e6a8e3eb25c685136f853148544876de76c0f2ef99cdc3a05ccf5ded7860c7c021238f9e2073d2356c",
+);
+const INDEPENDENT_RECOVERY_PUBLIC_KEY = bytes(
+  "04abc7e49a4c6b3566d77d0304addc6ed0e98512ffccf505e6a8e3eb25c685136f853148544876de76c0f2ef99cdc3a05ccf5ded7860c7c021238f9e2073d2356c",
+);
+const INDEPENDENT_RECOVERY_CAPSULE_HEX = [
+  "6d64776e2f656e632d763100010800000000000000070000000000000001001b6163636f756e742d696e646570656e64",
+  "656e742d63617073756c6500167661756c742d7265636f766572792d63617073756c6500167661756c742d7265636f76",
+  "6572792d63617073756c65000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20a0",
+  "a1a2a3a4a5a6a7a8a9aaab000000dd79e435a5560b43e8f2aa8ea902023fb16fb83601b3829a30e8a453d0237931b14f",
+  "302cbdada9d18a5417ed7f52e471d8305235e6cf59526cf1c8577954fe952fccebb8355af954ec0c31749fd340ae591d",
+  "ade6ee3e160901b212c370cecf744d21c3be6eb2df6c713002f094f2f0309d6d93aa9e3001c55469cd3ccbe70ed1317a",
+  "7b03f8d09e566bc9b940587f2ed69a7d5373392a5c2c088ccdc729def98d66622d1b45ea9aa8b9c02bd7ad4ff56a9ee1",
+  "45b03198547379d5f69e261bdeb9549bc0e3719b67336fb4098ac188470d383deaf3d04971511c8101186dcf",
+].join("");
+
+function independentRecoveryPrefix(accountId: string, generation: number): Uint8Array<ArrayBuffer> {
+  // This is deliberately a separate encoder from app/crypto/enc-v1/format.
+  // Purpose 8 is the pinned recovery-capsule purpose ID in the v1 table.
+  const objectId = "vault-recovery-capsule";
+  return concatBytes(
+    utf8("mdwn/enc-v1\0"), Uint8Array.of(1), Uint8Array.of(8),
+    u64(generation), u64(1), lengthPrefixed(accountId), lengthPrefixed(objectId),
+    lengthPrefixed(objectId), lengthPrefixed(undefined), lengthPrefixed(undefined),
+  );
+}
+
+function independentRecoveryInfo(accountId: string, generation: number): Uint8Array<ArrayBuffer> {
+  const label = utf8("mdwn/vault-recovery-capsule/v1");
+  const account = utf8(accountId);
+  return concatBytes(label, u16(account.length), account, u64(generation));
+}
+
+async function independentRecoveryCapsuleFixture(): Promise<{
+  accountId: string;
+  generation: number;
+  phrase: string;
+  recoverySalt: Uint8Array<ArrayBuffer>;
+  capsule: Uint8Array<ArrayBuffer>;
+  vaultRootKey: Uint8Array<ArrayBuffer>;
+  recoveryVerificationPublicKey: Uint8Array<ArrayBuffer>;
+}> {
+  const accountId = "account-independent-capsule";
+  const generation = 7;
+  const recoverySecret = new Uint8Array(32);
+  const recoverySalt = bytes("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+  const nonce = bytes("a0a1a2a3a4a5a6a7a8a9aaab");
+  const vaultRootKey = bytes("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+  const plaintext = concatBytes(
+    utf8("mdwn/vault-recovery-capsule/v1\0"), vaultRootKey,
+    u32(INDEPENDENT_RECOVERY_PRIVATE_PKCS8.length), INDEPENDENT_RECOVERY_PRIVATE_PKCS8,
+  );
+  const aad = concatBytes(
+    independentRecoveryPrefix(accountId, generation), recoverySalt, nonce,
+    u32(plaintext.length + 16),
+  );
+  const base = await crypto.subtle.importKey("raw", recoverySecret, "HKDF", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: recoverySalt, info: independentRecoveryInfo(accountId, generation) },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt"],
+  );
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 }, key, plaintext,
+  ));
+  const capsule = concatBytes(aad, ciphertext);
+  assertEqual(hex(capsule), INDEPENDENT_RECOVERY_CAPSULE_HEX);
+  return {
+    accountId,
+    generation,
+    phrase: `${"abandon ".repeat(23)}art`,
+    recoverySalt,
+    capsule,
+    vaultRootKey,
+    recoveryVerificationPublicKey: INDEPENDENT_RECOVERY_PUBLIC_KEY,
+  };
+}
 async function hmac(key: Uint8Array<ArrayBuffer>, data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   const handle = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return new Uint8Array(await crypto.subtle.sign("HMAC", handle, data));
@@ -297,7 +377,7 @@ export const cases = [
     },
   },
   {
-    name: "round-trips the Vault recovery phrase and capsule across engines",
+    name: "opens an independent recovery capsule and round-trips across engines",
     async run() {
       // BIP-39 English test vector: 32 zero entropy bytes encode as 23x
       // `abandon` followed by `art` (the checksum word).
@@ -308,6 +388,20 @@ export const cases = [
         await independentRecoveryVector(),
         "105d91dd324a6b2f706e852771d0de27d61c1f373a07bb5af0ec0fe1a1cd3dd3a5feb5c34a27c3073c7e92e359ec7b",
       );
+      const independent = await independentRecoveryCapsuleFixture();
+      const independentlyOpened = await openRecoveryCapsule({
+        accountId: independent.accountId,
+        generation: independent.generation,
+        recoverySalt: independent.recoverySalt,
+        capsule: independent.capsule,
+        recoveryVerificationPublicKey: independent.recoveryVerificationPublicKey,
+      }, independent.phrase, {
+        accountId: independent.accountId,
+        generation: independent.generation,
+        recoverySalt: independent.recoverySalt,
+      });
+      assertEqual(hex(independentlyOpened.vaultRootKey), hex(independent.vaultRootKey));
+
       const material = await createRecoveryMaterial("account-cross-engine", { vaultRootKey: baseKey });
       assertEqual(material.phrase.split(" ").length, 24);
       assertEqual(generateRecoveryPhrase(material.recoverySecret), material.phrase);
