@@ -25,16 +25,35 @@ const hpke = new CipherSuite({ kem: new DhkemP256HkdfSha256(), kdf: new HkdfSha2
  * alone would not bound the total data protected by one key.
  */
 const MAX_AUTHENTICATED_BYTES = 2 ** 30;
+const DEFAULT_INFO_LABEL = "mdwn/enc-v1/aes-256-gcm";
+
+export interface SymmetricWriterOptions {
+  maxMessages?: number;
+  maxAuthenticatedBytes?: number;
+  /**
+   * Domain-separates the HKDF key derivation. The enc-v1 content label is the
+   * default; callers introducing another key domain must provide an explicit
+   * label and must never reuse a writer or its nonce state.
+  */
+  infoLabel?: string | Uint8Array;
+}
 
 function paddedToBlock(value: number): number {
   return Math.ceil(value / 16) * 16;
 }
 
-async function writerKey(baseKey: Uint8Array, salt: Uint8Array) {
+function labelBytes(label: string | Uint8Array = DEFAULT_INFO_LABEL): Uint8Array<ArrayBuffer> {
+  const value = typeof label === "string" ? encoder.encode(label) : new Uint8Array(label);
+  if (!value.length || value.length > 1024) throw new EnvelopeError("malformed");
+  return value;
+}
+
+async function writerKey(baseKey: Uint8Array, salt: Uint8Array, infoLabel?: string | Uint8Array) {
   if (!(baseKey instanceof Uint8Array) || baseKey.length !== 32) throw new EnvelopeError("malformed");
+  if (!(salt instanceof Uint8Array) || salt.length !== 32) throw new EnvelopeError("malformed");
   const key = await crypto.subtle.importKey("raw", new Uint8Array(baseKey), "HKDF", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
-    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(salt), info: encoder.encode("mdwn/enc-v1/aes-256-gcm") },
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(salt), info: labelBytes(infoLabel) },
     key, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
   );
 }
@@ -49,16 +68,20 @@ export async function createSymmetricWriter(
   {
     maxMessages = 2 ** 32,
     maxAuthenticatedBytes = MAX_AUTHENTICATED_BYTES,
-  }: { maxMessages?: number; maxAuthenticatedBytes?: number } = {},
+    infoLabel,
+  }: SymmetricWriterOptions = {},
 ): Promise<SymmetricWriter> {
   if (!Number.isSafeInteger(maxMessages) || maxMessages < 1 || maxMessages > 2 ** 32) throw new EnvelopeError("malformed");
   if (!Number.isSafeInteger(maxAuthenticatedBytes) || maxAuthenticatedBytes < 1 || maxAuthenticatedBytes > MAX_AUTHENTICATED_BYTES) {
     throw new EnvelopeError("malformed");
   }
   // Snapshot the base key: caller mutation must not change the derived writer key.
+  if (!(baseKey instanceof Uint8Array) || baseKey.length !== 32) throw new EnvelopeError("malformed");
   const snapshot = new Uint8Array(baseKey);
   const salt = crypto.getRandomValues(new Uint8Array(32));
-  const key = await writerKey(snapshot, salt);
+  // Snapshot the label before the first await, just like the base key.
+  const infoLabelSnapshot = labelBytes(infoLabel);
+  const key = await writerKey(snapshot, salt, infoLabelSnapshot);
   let counter = 0;
   let authenticatedBytes = 0;
   return {
@@ -142,12 +165,19 @@ async function checkExpected(envelope: ReturnType<typeof parseEnvelope>, expecte
   }
 }
 
-export async function openSymmetric(input: Uint8Array, baseKey: Uint8Array, expected: EnvelopeExpectation): Promise<Uint8Array<ArrayBuffer>> {
+export async function openSymmetric(
+  input: Uint8Array,
+  baseKey: Uint8Array,
+  expected: EnvelopeExpectation,
+  options: Pick<SymmetricWriterOptions, "infoLabel"> = {},
+): Promise<Uint8Array<ArrayBuffer>> {
   const envelope = parseEnvelope(input);
   if (envelope.suite !== SYMMETRIC_SUITE) throw new EnvelopeError("unsupported-suite");
+  if (!(baseKey instanceof Uint8Array) || baseKey.length !== 32) throw new EnvelopeError("malformed");
   const baseKeySnapshot = new Uint8Array(baseKey);
+  const infoLabelSnapshot = labelBytes(options.infoLabel);
   await checkExpected(envelope, expected);
-  const key = await writerKey(baseKeySnapshot, envelope.salt!);
+  const key = await writerKey(baseKeySnapshot, envelope.salt!, infoLabelSnapshot);
   try {
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: new Uint8Array(envelope.nonce!), additionalData: envelope.aad, tagLength: 128 },
@@ -157,4 +187,14 @@ export async function openSymmetric(input: Uint8Array, baseKey: Uint8Array, expe
   } catch {
     throw new EnvelopeError("authentication-failed");
   }
+}
+
+/** Opens a symmetric envelope in an explicitly named HKDF key domain. */
+export async function openSymmetricWithLabel(
+  input: Uint8Array,
+  baseKey: Uint8Array,
+  expected: EnvelopeExpectation,
+  infoLabel: string | Uint8Array,
+): Promise<Uint8Array<ArrayBuffer>> {
+  return openSymmetric(input, baseKey, expected, { infoLabel });
 }

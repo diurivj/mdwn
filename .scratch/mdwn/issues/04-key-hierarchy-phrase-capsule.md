@@ -4,16 +4,21 @@
 
 **Blocked by:** 03 (`mdwn/enc-v1` envelope library).
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] One Vault root key per Account for its owned content; each Directory has an independently random Directory capability key; a parent Directory capability wraps each child Directory capability.
-- [ ] Every persisted current File representation has a fresh, independently random File content key that encrypts the Markdown and File metadata and is wrapped by the containing Directory capability.
-- [ ] A 256-bit Vault recovery secret is browser-generated and represented as a checksum-protected 24-word phrase; it is never user-chosen, sent to the service, logged, or used as a password.
-- [ ] The browser derives a 256-bit recovery wrapping key with `HKDF-SHA-256` from that secret, a random public recovery salt, and the domain-separated `mdwn/vault-recovery-capsule/v1` context containing the Account ID and recovery generation.
-- [ ] A versioned AES-256-GCM `mdwn/enc-v1` Recovery capsule contains the stable Vault root key and a dedicated P-256 recovery-enrollment signing private key; the service side stores only opaque ciphertext/metadata, current generation and salt, and the matching public recovery-verification key.
-- [ ] Key envelope purposes exist and are tested for at least `vault-recovery` (Account-owned roots and needed owned-File/Comment auxiliary capabilities) and `device-enrollment`, with an explicit rule that a capability received only through a Grant is excluded from the Vault-recovery envelope.
-- [ ] Phrase and capsule validation rejects the wrong phrase, wrong generation, wrong salt, a tampered capsule, and a superseded generation; reissue produces a new generation that supersedes the prior one.
-- [ ] Cross-engine vectors cover capsule seal/open, phrase round-trip, and tamper rejection in Chromium, Firefox, WebKit, and the Worker test target.
+- [x] One Vault root key per Account for its owned content; each Directory has an independently random Directory capability key; a parent Directory capability wraps each child Directory capability.
+- [x] Every persisted current File representation has a fresh, independently random File content key that encrypts the Markdown and File metadata and is wrapped by the containing Directory capability.
+- [x] A 256-bit Vault recovery secret is browser-generated and represented as a checksum-protected 24-word phrase; it is never user-chosen, sent to the service, logged, or used as a password.
+- [x] The browser derives a 256-bit recovery wrapping key with `HKDF-SHA-256` from that secret, a random public recovery salt, and the domain-separated `mdwn/vault-recovery-capsule/v1` context containing the Account ID and recovery generation.
+- [x] A versioned AES-256-GCM `mdwn/enc-v1` Recovery capsule contains the stable Vault root key and a dedicated P-256 recovery-enrollment signing private key; the service side stores only opaque ciphertext/metadata, current generation and salt, and the matching public recovery-verification key.
+- [x] Key envelope purposes exist and are tested for at least `vault-recovery` (Account-owned roots and needed owned-File/Comment auxiliary capabilities) and `device-enrollment`, with an explicit rule that a capability received only through a Grant is excluded from the Vault-recovery envelope.
+- [x] Phrase and capsule validation rejects the wrong phrase, wrong generation, wrong salt, a tampered capsule, and a superseded generation; reissue produces a new generation that supersedes the prior one.
+- [x] Cross-engine vectors cover capsule seal/open, phrase round-trip, and tamper rejection in Chromium, Firefox, WebKit, and the Worker test target.
+
+Implementation note (ready for review): browser-side primitives live in
+`app/crypto/vault.ts`; capsule HKDF labels extend `app/crypto/enc-v1` without
+changing its default writer contract. The shared recovery vector runs in Node,
+workerd, Chromium, Firefox, and WebKit.
 
 ## Comments
 

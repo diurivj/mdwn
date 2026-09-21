@@ -14,6 +14,12 @@ Import from `app/crypto/enc-v1`:
   returns an ephemeral writer with `seal(plaintext, context)`. The base key must
   be **32 random secret bytes**, never a password. Use this for content and
   symmetric Key envelopes alike.
+- `createSymmetricWriter` accepts an optional `infoLabel` only for a new,
+  explicitly domain-separated key family. The writer still owns a fresh random
+  256-bit salt and all nonce state; callers cannot restore or supply a salt.
+  `openSymmetricWithLabel` opens a capsule or other explicitly labelled family
+  with the matching label. The default remains
+  `mdwn/enc-v1/aes-256-gcm`.
 - `openSymmetric(envelope, baseKey, expected)` opens only the symmetric suite.
 - `sealToRecipient(plaintext, recipientPublicKey, context)` and
   `openForRecipient(envelope, recipientKeyPair, expected)` use only the pinned

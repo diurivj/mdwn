@@ -4,6 +4,13 @@ import {
   createSymmetricWriter, digestEnvelope, EnvelopeError, inspectEnvelope,
   openForRecipient, openSymmetric, sealToRecipient, type EnvelopeContext,
 } from "../../app/crypto/enc-v1";
+import {
+  createRecoveryMaterial,
+  generateRecoveryPhrase,
+  openRecoveryCapsule,
+  recoveryPhraseToSecret,
+  RecoveryError,
+} from "../../app/crypto/vault";
 import vector from "../fixtures/enc-v1.json" with { type: "json" };
 import rfc from "../fixtures/rfc9180-p256-aes256.json" with { type: "json" };
 
@@ -26,6 +33,16 @@ async function rejects(operation: Promise<unknown>, code: string) {
     throw error;
   }
   throw new Error(`Expected ${code} rejection`);
+}
+
+async function rejectsRecovery(operation: Promise<unknown>, code: string) {
+  try {
+    await operation;
+  } catch (error) {
+    if (error instanceof RecoveryError && error.code === code) return;
+    throw error;
+  }
+  throw new Error(`Expected recovery ${code} rejection`);
 }
 
 export const baseKey = bytes(vector.baseKey);
@@ -81,6 +98,27 @@ function encodeContextLayout(context: EnvelopeContext): Uint8Array<ArrayBuffer> 
     lengthPrefixed(context.vaultId), lengthPrefixed(context.objectId), lengthPrefixed(context.keyId),
     lengthPrefixed(context.recipientId), lengthPrefixed(context.publicationId),
   );
+}
+
+async function independentRecoveryVector(): Promise<string> {
+  const secret = new Uint8Array(32);
+  const salt = bytes("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+  const accountId = "account-fixed-vector";
+  const label = utf8("mdwn/vault-recovery-capsule/v1");
+  const account = utf8(accountId);
+  const info = concatBytes(label, u16(account.length), account, u64(1));
+  const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt, info }, base,
+    { name: "AES-GCM", length: 256 }, false, ["encrypt"],
+  );
+  const nonce = bytes("a0a1a2a3a4a5a6a7a8a9aaab");
+  const aad = utf8("mdwn/recovery-capsule-vector-aad/v1");
+  const plaintext = utf8("mdwn/vault-recovery-capsule/v1\0");
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 }, key, plaintext,
+  );
+  return hex(ciphertext);
 }
 async function hmac(key: Uint8Array<ArrayBuffer>, data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   const handle = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -256,6 +294,42 @@ export const cases = [
       const restarted = await (await createSymmetricWriter(baseKey)).seal(baseKey, context);
       assertEqual(hex(inspectEnvelope(restarted).salt!) === hex(first.salt!), false);
       assertEqual(hex(await openSymmetric(restarted, baseKey, { context })), vector.baseKey);
+    },
+  },
+  {
+    name: "round-trips the Vault recovery phrase and capsule across engines",
+    async run() {
+      // BIP-39 English test vector: 32 zero entropy bytes encode as 23x
+      // `abandon` followed by `art` (the checksum word).
+      const zeroPhrase = `${"abandon ".repeat(23)}art`;
+      assertEqual(generateRecoveryPhrase(new Uint8Array(32)), zeroPhrase);
+      assertEqual(hex(recoveryPhraseToSecret(zeroPhrase)), "00".repeat(32));
+      assertEqual(
+        await independentRecoveryVector(),
+        "105d91dd324a6b2f706e852771d0de27d61c1f373a07bb5af0ec0fe1a1cd3dd3a5feb5c34a27c3073c7e92e359ec7b",
+      );
+      const material = await createRecoveryMaterial("account-cross-engine", { vaultRootKey: baseKey });
+      assertEqual(material.phrase.split(" ").length, 24);
+      assertEqual(generateRecoveryPhrase(material.recoverySecret), material.phrase);
+      const opened = await openRecoveryCapsule(material.record, material.phrase, {
+        accountId: material.accountId,
+        generation: material.generation,
+        recoverySalt: material.record.recoverySalt,
+      });
+      assertEqual(hex(opened.vaultRootKey), vector.baseKey);
+
+      const tampered = material.record.capsule.slice();
+      tampered[tampered.length - 1] ^= 1;
+      await rejectsRecovery(openRecoveryCapsule({ ...material.record, capsule: tampered }, material.phrase, {
+        accountId: material.accountId,
+        generation: material.generation,
+        recoverySalt: material.record.recoverySalt,
+      }), "authentication-failed");
+      await rejectsRecovery(openRecoveryCapsule(material.record, material.phrase, {
+        accountId: material.accountId,
+        generation: material.generation + 1,
+        recoverySalt: material.record.recoverySalt,
+      }), "superseded-generation");
     },
   },
 ];
