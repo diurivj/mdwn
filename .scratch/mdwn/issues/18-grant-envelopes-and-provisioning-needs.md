@@ -14,3 +14,7 @@
 - [ ] A recipient device holding server authorization but missing envelopes shows **Shared content is being securely provisioned** with no names, plaintext, or URL-fragment fallback; a newly eligible device may instead show **secure access is being prepared** while an already authorized browser provisions retained Comment or Public-history envelopes.
 - [ ] The cryptographic material alone is insufficient: server authorization removed by revoke, leave, or permission change takes effect independently of what a device still holds.
 - [ ] Tests prove acceptance provisions only for current devices, a revoked Grant leaves no usable envelope behind, Grant paths reject cross-purpose, cross-object, and stale-epoch envelopes, and inheritance covers descendants added after acceptance.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: Grant and Comment envelopes use `app/crypto/enc-v1` (`docs/enc-v1.md`) with purposes `grant`, `private-comment-thread`, and `public-comment-audience-epoch`. Opening is not authorization: HPKE base mode names no sender, so acceptance must require the current Device registry epoch and server authorization, never a successful open alone. Envelope epochs are exact — older fails `stale-epoch`, newer-than-current fails `unexpected-epoch` and must not trigger a re-key.

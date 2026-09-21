@@ -13,3 +13,7 @@
 - [ ] The job is resumable: an enrolled device can continue an interrupted update without producing a partial rename.
 - [ ] The UI is honest that cached copies and screenshots cannot be changed.
 - [ ] Tests prove all-old or all-new displayed state, cooldown enforcement, resume after interruption, and that concurrent normal work is blocked during the job.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: attribution envelopes use the `attribution` purpose in `app/crypto/enc-v1` (`docs/enc-v1.md`). The batch is resumable, so an interrupted run reuses stored bytes or re-seals with a fresh writer; nonce state is never persisted or restored.

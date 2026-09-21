@@ -14,3 +14,7 @@
 - [ ] A move out of a shared subtree completes its required rekeying within the bounded operation or is rejected/deferred; it may never leave future writes under an old capability.
 - [ ] The job is idempotent and resumable from an enrolled device after interruption, with observable progress and no duplicate rewrapping.
 - [ ] Tests prove server access is denied before rotation finishes, new writes under the affected root are blocked until it is safe, remaining authorized devices keep or regain current access after a proof refresh, no old-epoch envelope remains current, and an interrupted job resumes.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: rewrapping uses `app/crypto/enc-v1` (`docs/enc-v1.md`). An envelope under a superseded epoch fails `stale-epoch`; a future epoch fails `unexpected-epoch` and must fail closed rather than start a rotation. The symmetric writer keeps nonce state in memory only: an interrupted or resumed job must re-seal with a fresh writer (new key namespace) or reuse stored bytes verbatim, and must never persist or restore nonce state.

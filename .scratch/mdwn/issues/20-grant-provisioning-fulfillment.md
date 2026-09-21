@@ -13,3 +13,7 @@
 - [ ] Fulfillment is idempotent and bounded, and interrupted provisioning resumes from an enrolled device.
 - [ ] The flow works after Vault recovery (ticket 11) and after routine enrollment (ticket 12) without weakening either cutover's rules.
 - [ ] Tests prove only active Grant holders can provision, a recovered device receives nothing through its Vault-root envelope, revocation before fulfillment leaves the recipient without access, and no provisioning happens after revocation.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: resumed fulfillment must reuse the stored envelope bytes on an exact retry. If it re-seals instead, it uses a fresh writer or HPKE context; it never restores nonce state. See `docs/enc-v1.md`.

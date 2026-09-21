@@ -170,6 +170,37 @@ Callers must supply the optional bindings for all other cases where applicable;
 for example a public Comment's content must bind its Publication, whereas a
 Private Comment has none. Purpose IDs must never be renumbered.
 
+## Consumers and open decisions
+
+Future tickets that build envelopes must use this module rather than a new format.
+Their purpose names are pinned here:
+
+| Ticket | Purposes |
+| --- | --- |
+| 04 Vault key hierarchy and Recovery capsule | `vault-recovery`, `recovery-capsule`, `device-enrollment` |
+| 08 Signup bootstrap | `device-enrollment`, `vault-recovery` |
+| 12 Routine device enrollment | `device-enrollment` |
+| 14 Private tree | `directory-capability`, `file-content-key`, `directory-metadata` |
+| 18 Grant envelopes | `grant`, `private-comment-thread`, `public-comment-audience-epoch` |
+| 19 Key rotation, 20 Provisioning fulfillment | any affected purpose |
+| 21 Private comment threads | `private-comment-thread`, `comment-content`, `attribution` |
+| 22 Publish a File | `public-representation` |
+| 23 Public comment threads, 25 Link rotation and unpublish | `public-comment-audience-epoch` (see below) |
+| 24 Public pseudonym update | `attribution` |
+| 29, 30 Import | `archive-manifest`, `import-staging-manifest`, `import-chunk` |
+
+Three decisions stay open, and later tickets own them:
+
+1. **Recovery-capsule label.** Ticket 04 must add an explicit HKDF label for
+   `mdwn/vault-recovery-capsule/v1`; this module fixes `mdwn/enc-v1/aes-256-gcm`.
+2. **Public audience epoch needs two purposes.** Ticket 23 needs a symmetric
+   wrapper for the Publication capability and an HPKE envelope for each device,
+   so one `public-comment-audience-epoch` purpose is not enough. Split it and keep
+   the two distinguishable in the authenticated context.
+3. **Purpose-to-suite enforcement.** The module does not stop a producer sealing
+   any purpose with either suite. Tickets 18, 21, 22, and 23 should add a
+   purpose-to-suite table once every purpose has exactly one suite.
+
 ## Sources
 
 - [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) — HPKE construction, suites,

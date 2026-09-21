@@ -17,3 +17,7 @@
 - [ ] Cancelled, expired, disconnected, mismatched, or failed sessions create no visible content and are cleaned up; every canonical staged record carries the immutable Import ID.
 - [ ] Historical Comments from the local sidecar (at most 1,000; the 1,001st, malformed, or oversized record rejects the entire Import without omission) start a fresh Private thread as historical display data and reinstate neither former capabilities nor author mutation authority.
 - [ ] A disposable remote Workers Free + D1 proof validates exact and one-unit-over limits, retries and mismatches, expiry, failure, and stale-authority cases, no-visible-partial-tree behavior, and that every permitted worst-case upload and commit fits the 50-statement D1 Free invocation limit. If the proof fails, the bounded plan is reduced or made more efficient — never silently require a paid plan.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: staged envelopes use `app/crypto/enc-v1` (`docs/enc-v1.md`) with purposes `import-staging-manifest`, `import-chunk`, and `archive-manifest`. The Worker uses `inspectEnvelope` for structural, unauthenticated header validation only — the header becomes authenticated only after a successful open. `digestEnvelope` gives the whole-envelope SHA-256 identity. On an exact `(import_id, sequence, SHA-256(payload))` retry the browser must reuse the stored bytes verbatim and must never re-encrypt. The per-purpose caps in this ticket (16 KiB Key envelope, and so on) are tighter than the library backstop of 512 KiB.

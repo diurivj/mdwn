@@ -16,3 +16,7 @@
 - [ ] UI: wide layouts switch the right preview pane to the Comment inspector; narrow layouts use the Comments content view; the authenticated composer sits at the bottom of the selected thread; **Private** is the default authenticated thread; the Private and Public threads load through separate endpoints and are never combined.
 - [ ] A device that loses its last File-read path immediately loses thread authorization, and no thread ciphertext is served to it afterwards.
 - [ ] Tests enforce the mutation rules server-side (author identity, Owner hard-delete exception, epoch and access checks), prove read-only participation, and prove a revoked device receives no thread material.
+
+## Comments
+
+- 2026-09-21: Dependency note from ticket 03: thread and Comment envelopes use `app/crypto/enc-v1` (`docs/enc-v1.md`) with purposes `private-comment-thread`, `comment-content`, and `attribution`.
