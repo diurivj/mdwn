@@ -21,8 +21,8 @@
     "db:smoke:production": "node scripts/smoke-db.mjs --remote production",
     "check:secrets": "node scripts/check-bundle-secrets.mjs",
     "check:namespace": "node scripts/generate-namespace-v1-data.mjs --check",
-    "deploy:preview": "npm run build:preview && wrangler deploy",
-    "deploy:production": "npm run build:production && wrangler deploy",
+    "deploy:preview": "node scripts/deploy-worker.mjs preview",
+    "deploy:production": "node scripts/deploy-worker.mjs production",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {

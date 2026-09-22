@@ -9,12 +9,13 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
-# Protected main: reviewed migrations are applied and the Worker deployed
+# Reviewed main: reviewed migrations are applied and the Worker deployed
 # through this workflow, never by hand (spec §3.5). Note the Cloudflare Vite
 # plugin selects the environment at build time (CLOUDFLARE_ENV), so each
 # environment is built and deployed separately.
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     name: Migrate D1s and deploy Worker (preview, then production)
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +26,20 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
+
+      - name: Validate Session signing secrets before migrations
+        env:
+          SESSION_COOKIE_SECRET_PREVIEW: ${{ secrets.SESSION_COOKIE_SECRET_PREVIEW }}
+          SESSION_COOKIE_SECRET_PRODUCTION: ${{ secrets.SESSION_COOKIE_SECRET_PRODUCTION }}
+        run: |
+          node --input-type=module -e '
+            for (const name of ["SESSION_COOKIE_SECRET_PREVIEW", "SESSION_COOKIE_SECRET_PRODUCTION"]) {
+              if (!process.env[name] || process.env[name].length < 32) {
+                console.error(`${name} must contain at least 32 characters`);
+                process.exitCode = 1;
+              }
+            }
+          '
 
       # --- Preview -----------------------------------------------------------
       - name: Apply migrations to preview D1
@@ -37,6 +52,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+          SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET_PREVIEW }}
+          MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}
         run: npm run deploy:preview
 
       - name: Smoke-test preview (schema + healthz + headers)
@@ -54,6 +71,8 @@ jobs:
             https://mdwn-preview.diurivj.workers.dev/healthz)
           test "$code" = "200"
           grep -q '"ok":true' /tmp/healthz-preview.json
+          curl --fail --silent --show-error https://mdwn-preview.diurivj.workers.dev/api/auth/session \
+            | grep -q '"authenticated":false'
           curl -s -I https://mdwn-preview.diurivj.workers.dev/ \
             | grep -qi "content-security-policy:.*default-src 'none'"
 
@@ -68,6 +87,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
+          SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET_PRODUCTION }}
+          MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}
         run: npm run deploy:production
 
       - name: Smoke-test production (schema + healthz + headers)
@@ -85,5 +106,7 @@ jobs:
             https://mdwn.diurivj.workers.dev/healthz)
           test "$code" = "200"
           grep -q '"ok":true' /tmp/healthz-prod.json
+          curl --fail --silent --show-error https://mdwn.diurivj.workers.dev/api/auth/session \
+            | grep -q '"authenticated":false'
           curl -s -I https://mdwn.diurivj.workers.dev/ \
             | grep -qi "content-security-policy:.*default-src 'none'"
