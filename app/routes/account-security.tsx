@@ -1,216 +1,143 @@
-import {
-  startAuthentication,
-  startRegistration,
-  type PublicKeyCredentialCreationOptionsJSON,
-  type PublicKeyCredentialRequestOptionsJSON,
-} from "@simplewebauthn/browser";
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import { Link, redirect, useFetcher } from "react-router";
+
+import { authFailure, authGet, authPost } from "~/auth/client";
+import type {
+  AssertionStart,
+  PasskeySummary,
+  RegistrationStart,
+  RevocationResult,
+  SessionSummary,
+} from "~/auth/contracts";
 
 import type { Route } from "./+types/account-security";
 
-type SessionSummary = {
-  id: string;
-  createdAt: number;
-  idleExpiresAt: number;
-  absoluteExpiresAt: number;
-  refreshedAt: number | null;
-  current: boolean;
-};
+type SecurityData =
+  | { state: "ready"; sessions: SessionSummary[]; passkeys: PasskeySummary[] }
+  | { state: "signed-out" | "restricted" | "failed" };
 
-type PasskeySummary = {
-  id: string;
-  createdAt: number;
-  current: boolean;
-};
-
-type AssertionStart = {
-  challengeId: string;
-  options: PublicKeyCredentialRequestOptionsJSON;
-};
-
-type RegistrationStart = {
-  challengeId: string;
-  options: PublicKeyCredentialCreationOptionsJSON;
-};
-
-type Screen = "loading" | "ready" | "signed-out" | "restricted" | "failed";
-
-async function requestJson(path: string, body: object = {}): Promise<Response> {
-  return fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
+type Operation = "passkeys" | "sessions";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Account security — mdwn" }];
 }
 
-export default function AccountSecurity() {
-  const navigate = useNavigate();
-  const [screen, setScreen] = useState<Screen>("loading");
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
-  const [message, setMessage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+/** No server loader: the shell is SSR'd, but Account data only reaches the browser. */
+export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise<SecurityData> {
+  try {
+    const [sessions, passkeys] = await Promise.all([
+      authGet<{ sessions: SessionSummary[] }>("/api/auth/sessions", request.signal),
+      authGet<{ passkeys: PasskeySummary[] }>("/api/auth/passkeys", request.signal),
+    ]);
+    return { state: "ready", sessions: sessions.sessions, passkeys: passkeys.passkeys };
+  } catch (error) {
+    return { state: authFailure(error, request.signal) };
+  }
+}
 
-  async function loadSecurity(): Promise<void> {
-    try {
-      const sessionsResponse = await fetch("/api/auth/sessions");
-      if (sessionsResponse.status === 401) {
-        setScreen("signed-out");
-        return;
+export function HydrateFallback() {
+  return (
+    <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 py-12">
+      <Link className="text-sm text-stone-600 hover:underline" to="/">mdwn</Link>
+      <h1 className="mt-8 text-3xl font-semibold tracking-tight">Account security</h1>
+      <p className="mt-4 text-stone-600">Loading account security…</p>
+    </main>
+  );
+}
+
+async function confirmFreshPasskey(signal: AbortSignal): Promise<void> {
+  const start = await authPost<AssertionStart>(
+    "/api/auth/passkeys/fresh/options", {}, signal,
+  );
+  const response = await startAuthentication({ optionsJSON: start.options });
+  await authPost<{ ok: true }>(
+    "/api/auth/passkeys/fresh/verify",
+    { challengeId: start.challengeId, response },
+    signal,
+    "failed",
+  );
+}
+
+async function addPasskey(signal: AbortSignal): Promise<void> {
+  await confirmFreshPasskey(signal);
+  const start = await authPost<RegistrationStart>(
+    "/api/auth/passkeys/registration/options", {}, signal, "failed",
+  );
+  const response = await startRegistration({ optionsJSON: start.options });
+  await authPost<{ ok: true }>(
+    "/api/auth/passkeys/registration/verify",
+    { challengeId: start.challengeId, response },
+    signal,
+    "failed",
+  );
+}
+
+export async function clientAction({ request }: Route.ClientActionArgs) {
+  const form = await request.formData();
+  const intent = form.get("intent");
+  const operation: Operation = intent === "add-passkey" || intent === "remove-passkey"
+    ? "passkeys"
+    : "sessions";
+
+  try {
+    switch (intent) {
+      case "add-passkey":
+        await addPasskey(request.signal);
+        return { state: "success", message: "Passkey added." } as const;
+      case "remove-passkey": {
+        const credentialId = form.get("credentialId");
+        if (typeof credentialId !== "string" || !credentialId) break;
+        await confirmFreshPasskey(request.signal);
+        const result = await authPost<RevocationResult>(
+          "/api/auth/passkeys/remove", { credentialId }, request.signal, "failed",
+        );
+        if (result.signedOut) return redirect("/sign-in");
+        return { state: "success", message: "Passkey removed." } as const;
       }
-      if (sessionsResponse.status === 403) {
-        setScreen("restricted");
-        return;
+      case "refresh":
+        await authPost<{ ok: true }>("/api/auth/session/refresh", {}, request.signal);
+        return { state: "success", message: "Session refreshed." } as const;
+      case "sign-out":
+        await authPost<{ ok: true }>("/api/auth/sign-out", {}, request.signal);
+        return redirect("/sign-in");
+      case "revoke": {
+        const sessionId = form.get("sessionId");
+        if (typeof sessionId !== "string" || !sessionId) break;
+        const result = await authPost<RevocationResult>(
+          "/api/auth/sessions/revoke", { sessionId }, request.signal,
+        );
+        if (result.signedOut) return redirect("/sign-in");
+        return { state: "success", message: "Session revoked." } as const;
       }
-      if (!sessionsResponse.ok) throw new Error("could not load sessions");
-
-      const passkeysResponse = await fetch("/api/auth/passkeys");
-      if (passkeysResponse.status === 401) {
-        setScreen("signed-out");
-        return;
-      }
-      if (passkeysResponse.status === 403) {
-        setScreen("restricted");
-        return;
-      }
-      if (!passkeysResponse.ok) throw new Error("could not load passkeys");
-
-      const sessionsBody = (await sessionsResponse.json()) as { sessions: SessionSummary[] };
-      const passkeysBody = (await passkeysResponse.json()) as { passkeys: PasskeySummary[] };
-      setSessions(sessionsBody.sessions);
-      setPasskeys(passkeysBody.passkeys);
-      setScreen("ready");
-    } catch {
-      setScreen("failed");
+      case "revoke-all":
+        await authPost<{ ok: true }>("/api/auth/sessions/revoke-all", {}, request.signal);
+        return redirect("/sign-in");
     }
+  } catch (error) {
+    return { state: authFailure(error, request.signal), operation } as const;
   }
+  return { state: "failed", operation } as const;
+}
 
-  useEffect(() => {
-    void loadSecurity();
-  }, []);
-
-  function handleSessionResponse(response: Response): boolean {
-    if (response.status === 401) {
-      navigate("/sign-in");
-      return false;
-    }
-    if (response.status === 403) {
-      setScreen("restricted");
-      return false;
-    }
-    if (!response.ok) throw new Error("session action failed");
-    return true;
-  }
-
-  async function mutate(path: string, body: object = {}): Promise<boolean> {
-    setBusy(true);
-    setMessage(null);
-    try {
-      return handleSessionResponse(await requestJson(path, body));
-    } catch {
-      setMessage("We could not update your Sessions. Try again.");
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function completeFreshAssertion(): Promise<boolean> {
-    const startResponse = await requestJson("/api/auth/passkeys/fresh/options");
-    if (!handleSessionResponse(startResponse)) return false;
-    const start = await startResponse.json() as AssertionStart;
-    const response = await startAuthentication({ optionsJSON: start.options });
-    const verifyResponse = await requestJson("/api/auth/passkeys/fresh/verify", {
-      challengeId: start.challengeId,
-      response,
-    });
-    if (!verifyResponse.ok) throw new Error("fresh assertion failed");
-    return true;
-  }
-
-  async function addPasskey(): Promise<void> {
-    setBusy(true);
-    setMessage(null);
-    try {
-      if (!(await completeFreshAssertion())) return;
-      const startResponse = await requestJson("/api/auth/passkeys/registration/options");
-      if (!handleSessionResponse(startResponse)) return;
-      const start = await startResponse.json() as RegistrationStart;
-      const response = await startRegistration({ optionsJSON: start.options });
-      const verifyResponse = await requestJson("/api/auth/passkeys/registration/verify", {
-        challengeId: start.challengeId,
-        response,
-      });
-      if (!verifyResponse.ok) throw new Error("passkey registration failed");
-      setMessage("Passkey added.");
-      await loadSecurity();
-    } catch {
-      setMessage("We could not update your Passkeys. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function removePasskey(passkey: PasskeySummary): Promise<void> {
-    setBusy(true);
-    setMessage(null);
-    try {
-      if (!(await completeFreshAssertion())) return;
-      const response = await requestJson("/api/auth/passkeys/remove", {
-        credentialId: passkey.id,
-      });
-      if (!handleSessionResponse(response)) return;
-      if (passkey.current) {
-        navigate("/sign-in");
-        return;
-      }
-      setMessage("Passkey removed.");
-      await loadSecurity();
-    } catch {
-      setMessage("We could not update your Passkeys. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function refresh(): Promise<void> {
-    if (await mutate("/api/auth/session/refresh")) {
-      setMessage("Session refreshed.");
-      await loadSecurity();
-    }
-  }
-
-  async function signOut(): Promise<void> {
-    if (await mutate("/api/auth/sign-out")) navigate("/sign-in");
-  }
-
-  async function revoke(session: SessionSummary): Promise<void> {
-    if (!(await mutate("/api/auth/sessions/revoke", { sessionId: session.id }))) return;
-    if (session.current) {
-      navigate("/sign-in");
-      return;
-    }
-    setMessage("Session revoked.");
-    await loadSecurity();
-  }
-
-  async function revokeAll(): Promise<void> {
-    if (await mutate("/api/auth/sessions/revoke-all")) navigate("/sign-in");
-  }
+export default function AccountSecurity({ loaderData }: Route.ComponentProps) {
+  const fetcher = useFetcher<typeof clientAction>();
+  const busy = fetcher.state !== "idle";
+  const screen = fetcher.data?.state === "signed-out" || fetcher.data?.state === "restricted"
+    ? fetcher.data.state
+    : loaderData.state;
+  const message = !busy && fetcher.data?.state === "success"
+    ? fetcher.data.message
+    : !busy && fetcher.data?.state === "failed"
+      ? fetcher.data.operation === "passkeys"
+        ? "We could not update your Passkeys. Try again."
+        : "We could not update your Sessions. Try again."
+      : null;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 py-12">
-      <Link className="text-sm text-stone-600 hover:underline" to="/">
-        mdwn
-      </Link>
+      <Link className="text-sm text-stone-600 hover:underline" to="/">mdwn</Link>
       <h1 className="mt-8 text-3xl font-semibold tracking-tight">Account security</h1>
 
-      {screen === "loading" ? <p className="mt-4 text-stone-600">Loading account security…</p> : null}
       {screen === "signed-out" ? (
         <p className="mt-4 text-stone-600">
           Sign in to manage your Account. <Link className="underline" to="/sign-in">Sign in</Link>
@@ -225,25 +152,26 @@ export default function AccountSecurity() {
         <p className="mt-4 text-red-700">We could not load your Account security. Try again.</p>
       ) : null}
 
-      {screen === "ready" ? (
+      {screen === "ready" && loaderData.state === "ready" ? (
         <>
           <section className="mt-8">
             <h2 className="text-lg font-medium">Passkey management</h2>
             <p className="mt-2 text-sm text-stone-600">
               Confirm with a passkey before adding or removing a passkey.
             </p>
-            <div className="mt-4">
+            <fetcher.Form className="mt-4" method="post">
               <button
                 className="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
                 disabled={busy}
-                onClick={() => void addPasskey()}
-                type="button"
+                name="intent"
+                value="add-passkey"
+                type="submit"
               >
                 Add passkey
               </button>
-            </div>
+            </fetcher.Form>
             <ul className="mt-4 space-y-3">
-              {passkeys.map((passkey) => (
+              {loaderData.passkeys.map((passkey) => (
                 <li
                   className="flex items-center justify-between gap-4 rounded-md border border-stone-200 bg-white p-4"
                   key={passkey.id}
@@ -254,14 +182,18 @@ export default function AccountSecurity() {
                       Added {new Date(passkey.createdAt).toLocaleString()}
                     </p>
                   </div>
-                  <button
-                    className="rounded-md border border-stone-300 px-3 py-2 text-sm font-medium disabled:opacity-60"
-                    disabled={busy || passkeys.length === 1}
-                    onClick={() => void removePasskey(passkey)}
-                    type="button"
-                  >
-                    {passkey.current ? "Remove current passkey" : "Remove passkey"}
-                  </button>
+                  <fetcher.Form method="post">
+                    <input name="credentialId" type="hidden" value={passkey.id} />
+                    <button
+                      className="rounded-md border border-stone-300 px-3 py-2 text-sm font-medium disabled:opacity-60"
+                      disabled={busy || loaderData.passkeys.length === 1}
+                      name="intent"
+                      value="remove-passkey"
+                      type="submit"
+                    >
+                      {passkey.current ? "Remove current passkey" : "Remove passkey"}
+                    </button>
+                  </fetcher.Form>
                 </li>
               ))}
             </ul>
@@ -272,35 +204,38 @@ export default function AccountSecurity() {
             <p className="mt-2 text-sm text-stone-600">
               Refresh extends the 30-day idle deadline without extending the 90-day maximum.
             </p>
-            <div className="mt-4 flex flex-wrap gap-3">
+            <fetcher.Form className="mt-4 flex flex-wrap gap-3" method="post">
               <button
                 className="rounded-md border border-stone-300 px-4 py-2 text-sm font-medium disabled:opacity-60"
                 disabled={busy}
-                onClick={() => void refresh()}
-                type="button"
+                name="intent"
+                value="refresh"
+                type="submit"
               >
                 Refresh session
               </button>
               <button
                 className="rounded-md border border-stone-300 px-4 py-2 text-sm font-medium disabled:opacity-60"
                 disabled={busy}
-                onClick={() => void signOut()}
-                type="button"
+                name="intent"
+                value="sign-out"
+                type="submit"
               >
                 Sign out
               </button>
               <button
                 className="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
                 disabled={busy}
-                onClick={() => void revokeAll()}
-                type="button"
+                name="intent"
+                value="revoke-all"
+                type="submit"
               >
                 Sign out all sessions
               </button>
-            </div>
+            </fetcher.Form>
 
             <ul className="mt-8 space-y-3">
-              {sessions.map((session) => (
+              {loaderData.sessions.map((session) => (
                 <li
                   className="flex items-center justify-between gap-4 rounded-md border border-stone-200 bg-white p-4"
                   key={session.id}
@@ -313,14 +248,18 @@ export default function AccountSecurity() {
                       {session.refreshedAt ? "Refreshed" : "Created"} {new Date(session.refreshedAt ?? session.createdAt).toLocaleString()}
                     </p>
                   </div>
-                  <button
-                    className="rounded-md border border-stone-300 px-3 py-2 text-sm font-medium disabled:opacity-60"
-                    disabled={busy}
-                    onClick={() => void revoke(session)}
-                    type="button"
-                  >
-                    {session.current ? "Sign out this session" : "Revoke other session"}
-                  </button>
+                  <fetcher.Form method="post">
+                    <input name="sessionId" type="hidden" value={session.id} />
+                    <button
+                      className="rounded-md border border-stone-300 px-3 py-2 text-sm font-medium disabled:opacity-60"
+                      disabled={busy}
+                      name="intent"
+                      value="revoke"
+                      type="submit"
+                    >
+                      {session.current ? "Sign out this session" : "Revoke other session"}
+                    </button>
+                  </fetcher.Form>
                 </li>
               ))}
             </ul>

@@ -1,15 +1,19 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
-import { createCookie } from "react-router";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
-  createNormalSession,
   getActiveSession,
   revokeAllSessionsForActor,
   revokeSessionForActor,
   SESSION_ABSOLUTE_MS,
-  SESSION_COOKIE_NAME,
 } from "../../app/auth/session.server";
+import {
+  mutation,
+  seedAccount,
+  seedNormalSession,
+  sessionState,
+  signedCookie,
+} from "./auth-fixtures";
 
 declare global {
   namespace Cloudflare {
@@ -20,86 +24,13 @@ declare global {
   }
 }
 
-type SeededAccount = {
-  accountId: string;
-  credentialId: string;
-};
-
-type SeededSession = {
-  cookie: string;
-  id: string;
-};
-
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 });
 
-async function seedAccount(): Promise<SeededAccount> {
-  const accountId = crypto.randomUUID();
-  const credentialId = crypto.randomUUID();
-  const now = Date.now();
-  await env.DB.batch([
-    env.DB
-      .prepare(
-        "INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      )
-      .bind(accountId, crypto.randomUUID(), now, now),
-    env.DB
-      .prepare(
-        `INSERT INTO passkeys (credential_id, account_id, public_key, counter,
-          transports, device_type, backed_up, created_at, updated_at)
-         VALUES (?, ?, ?, 0, '[]', 'singleDevice', 0, ?, ?)`,
-      )
-      .bind(credentialId, accountId, Uint8Array.of(1).buffer, now, now),
-  ]);
-  return { accountId, credentialId };
-}
-
-async function signedCookie(sessionId: string): Promise<string> {
-  const serialized = await createCookie(SESSION_COOKIE_NAME, {
-    httpOnly: true,
-    path: "/",
-    secrets: [env.SESSION_COOKIE_SECRET],
-    sameSite: "lax",
-    secure: true,
-  }).serialize(sessionId);
-  return serialized.split(";", 1)[0]!;
-}
-
-async function seedNormalSession(account: SeededAccount): Promise<SeededSession> {
-  const setCookie = await createNormalSession(env, account.accountId, account.credentialId);
-  const cookie = setCookie.split(";", 1)[0]!;
-  const session = await getActiveSession(
-    new Request("https://mdwn.test/account/security", { headers: { cookie } }),
-    env,
-  );
-  if (!session) throw new Error("expected a seeded live Session");
-  return { cookie, id: session.id };
-}
-
-function mutation(path: string, cookie: string, body: object = {}): Promise<Response> {
-  return SELF.fetch(`https://mdwn.test${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      cookie,
-      origin: "https://mdwn.test",
-    },
-    body: JSON.stringify(body),
-  });
-}
-
-async function sessionState(cookie: string): Promise<{ authenticated: boolean }> {
-  const response = await SELF.fetch("https://mdwn.test/api/auth/session", {
-    headers: { cookie },
-  });
-  expect(response.status).toBe(200);
-  return response.json() as Promise<{ authenticated: boolean }>;
-}
-
 describe("normal Session lifecycle routes", () => {
   it("refreshes explicitly and revokes individual or all Sessions through public routes", async () => {
-    const account = await seedAccount();
+    const account = await seedAccount(1);
     const current = await seedNormalSession(account);
     const other = await seedNormalSession(account);
 
@@ -125,11 +56,40 @@ describe("normal Session lifecycle routes", () => {
       sessionId: other.id,
     });
     expect(individual.status).toBe(200);
+    expect(await individual.json()).toEqual({ ok: true, signedOut: false });
     expect(await sessionState(other.cookie)).toEqual({ authenticated: false });
+
+    const repeated = await mutation("/api/auth/sessions/revoke", current.cookie, {
+      sessionId: other.id,
+    });
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual({ ok: true, signedOut: false });
+    expect(repeated.headers.get("set-cookie")).toBeNull();
+    expect(await sessionState(current.cookie)).toEqual({ authenticated: true });
+
+    const unknown = await mutation("/api/auth/sessions/revoke", current.cookie, {
+      sessionId: crypto.randomUUID(),
+    });
+    expect(unknown.status).toBe(404);
+    expect(unknown.headers.get("set-cookie")).toBeNull();
+    expect(await sessionState(current.cookie)).toEqual({ authenticated: true });
 
     const all = await mutation("/api/auth/sessions/revoke-all", current.cookie);
     expect(all.status).toBe(200);
     expect(all.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(await sessionState(current.cookie)).toEqual({ authenticated: false });
+  });
+
+  it("clears the cookie only when the current Session itself is revoked", async () => {
+    const account = await seedAccount(1);
+    const current = await seedNormalSession(account);
+
+    const response = await mutation("/api/auth/sessions/revoke", current.cookie, {
+      sessionId: current.id,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, signedOut: true });
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
     expect(await sessionState(current.cookie)).toEqual({ authenticated: false });
   });
 
@@ -230,7 +190,7 @@ describe("normal Session lifecycle routes", () => {
       .bind(Date.now(), staleActor.id)
       .run();
 
-    expect(await revokeSessionForActor(env, capturedActor, firstPeer.id)).toBe(false);
+    expect(await revokeSessionForActor(env, capturedActor, firstPeer.id)).toBe("actor_inactive");
     expect(await revokeAllSessionsForActor(env, capturedActor)).toBe(false);
     expect(await sessionState(firstPeer.cookie)).toEqual({ authenticated: true });
     expect(await sessionState(secondPeer.cookie)).toEqual({ authenticated: true });

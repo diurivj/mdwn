@@ -407,6 +407,90 @@ test("consumes registration after freshness expires before its completion", asyn
   }
 });
 
+test("server-renders only the Account security shell, not its private lists", async ({
+  browser,
+  server,
+  baseURL,
+}) => {
+  const fixture = await signInSeededAccount(browser, server, baseURL!);
+  try {
+    const [session] = await sessionsFor(fixture.env, fixture.accountId);
+    const document = await fixture.page.request.get(`${fixture.origin}/account/security`);
+    expect(document.status()).toBe(200);
+    const html = await document.text();
+    expect(html).toContain("Loading account security…");
+    expect(html).not.toContain(session!.id);
+    expect(html).not.toContain(fixture.credentialId);
+  } finally {
+    await fixture.context.close();
+  }
+});
+
+test("holds mutations pending through revalidation instead of racing older lists", async ({
+  browser,
+  server,
+  baseURL,
+}) => {
+  const fixture = await signInSeededAccount(browser, server, baseURL!);
+  try {
+    const now = Date.now();
+    const otherId = `peer-${fixture.accountId}`;
+    await fixture.env.DB
+      .prepare(
+        `INSERT INTO sessions (
+          id, account_id, purpose, authenticated_passkey_id, created_at,
+          idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at
+        ) VALUES (?, ?, 'normal', ?, ?, ?, ?, ?, NULL, NULL)`,
+      )
+      .bind(
+        otherId,
+        fixture.accountId,
+        fixture.credentialId,
+        now,
+        now + SESSION_IDLE_MS,
+        now + SESSION_ABSOLUTE_MS,
+        now,
+      )
+      .run();
+    await fixture.page.goto(`${fixture.origin}/account/security`, { waitUntil: "commit" });
+    const revoke = fixture.page.getByRole("button", { name: "Revoke other session" });
+    await expect(revoke).toBeVisible();
+
+    let releaseRevalidation!: () => void;
+    const revalidationReleased = new Promise<void>((resolve) => {
+      releaseRevalidation = resolve;
+    });
+    let markRevalidationReached!: () => void;
+    const revalidationReached = new Promise<void>((resolve) => {
+      markRevalidationReached = resolve;
+    });
+    await fixture.page.route("**/api/auth/sessions", async (route) => {
+      const response = await route.fetch();
+      markRevalidationReached();
+      await revalidationReleased;
+      await route.fulfill({ response });
+    });
+
+    try {
+      await fixture.page.getByRole("button", { name: "Refresh session" }).click();
+      await revalidationReached;
+      await expect(revoke).toBeDisabled();
+    } finally {
+      releaseRevalidation();
+    }
+
+    await expect(revoke).toBeEnabled();
+    await revoke.click();
+    await expect(revoke).toHaveCount(0);
+    await expect(fixture.page.getByRole("status")).toHaveText("Session revoked.");
+    expect(await sessionsFor(fixture.env, fixture.accountId)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: otherId, revoked_at: expect.any(Number) })]),
+    );
+  } finally {
+    await fixture.context.close();
+  }
+});
+
 test("refreshes and revokes Sessions from the account-security UI", async ({
   browser,
   server,

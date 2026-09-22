@@ -21,6 +21,7 @@ import {
   SessionConfigurationError,
   type ActiveSession,
 } from "~/auth/session.server";
+import type { RevocationResult } from "~/auth/contracts";
 import { getEnv } from "~/context/env";
 
 import type { Route } from "./+types/auth";
@@ -186,10 +187,9 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
         ? await removePasskey(env, fresh.session, credentialId)
         : false;
       if (!removed) return failure(401);
-      const headers = credentialId === fresh.session.authenticatedPasskeyId
-        ? { "Set-Cookie": await clearSessionCookie(env) }
-        : undefined;
-      return Response.json({ ok: true }, { headers });
+      const signedOut = credentialId === fresh.session.authenticatedPasskeyId;
+      const headers = signedOut ? { "Set-Cookie": await clearSessionCookie(env) } : undefined;
+      return Response.json({ ok: true, signedOut } satisfies RevocationResult, { headers });
     }
 
     if (pathname === "/api/auth/session/refresh") {
@@ -203,14 +203,14 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       const parsed = record(body);
       const sessionId = parsed ? string(parsed.sessionId) : null;
       if (!sessionId) return failure(400);
-      if (!(await revokeSessionForActor(env, normal.session, sessionId))) {
+      const outcome = await revokeSessionForActor(env, normal.session, sessionId);
+      if (outcome === "actor_inactive") {
         return failure(401, { "Set-Cookie": await clearSessionCookie(env) });
       }
-      const headers =
-        sessionId === normal.session.id
-          ? { "Set-Cookie": await clearSessionCookie(env) }
-          : undefined;
-      return Response.json({ ok: true }, { headers });
+      if (outcome === "target_not_found") return failure(404);
+      const signedOut = sessionId === normal.session.id;
+      const headers = signedOut ? { "Set-Cookie": await clearSessionCookie(env) } : undefined;
+      return Response.json({ ok: true, signedOut } satisfies RevocationResult, { headers });
     }
 
     if (pathname === "/api/auth/sessions/revoke-all") {

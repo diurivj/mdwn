@@ -68,12 +68,12 @@ that fixture; no Playwright project or Worker-harness configuration change is
 needed.
 
 The contract suite also demonstrates the browser seams later cryptographic and
-device work will use. The foundation does not yet have an Account sign-in or
-production device-store module; the current tests deliberately use a
-harness-owned IndexedDB schema and a shared test Account identifier. Later
-authentication/device tickets can replace only that setup with the real flow;
-the Worker, browser, engine, restart, and artifact configuration stays the
-same.
+device work will use. Those tests deliberately use a harness-owned IndexedDB
+schema and a shared test Account identifier, not a production Encryption-device
+store. `e2e/auth-sign-in.spec.ts` separately seeds Accounts with passkeys and
+signs in through the real routes; it also checks the Account-security SSR shell
+and fetcher revalidation. Ticket 08 will replace seeding with signup and device
+enrollment without changing the Worker/browser/engine harness.
 
 - `window.isSecureContext` and AES-GCM WebCrypto;
 - a non-extractable `CryptoKey` structured-cloned into IndexedDB and recovered

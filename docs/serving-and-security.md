@@ -8,7 +8,7 @@ mdwn runs React Router v8 Framework Mode with `ssr: true`. The only thing ever s
 
 Primitive rules:
 
-- The server renders `app/root.tsx` (`Layout`) and route shells, including Home, Sign in, and Account security. `app/entry.server.tsx` renders the `ServerRouter`; sensitive Account state is fetched separately by the browser.
+- The server renders `app/root.tsx` (`Layout`) and route shells, including Home, Sign in, and Account security. `app/entry.server.tsx` renders the `ServerRouter`; Account security uses a public `HydrateFallback` and a browser-only `clientLoader` so its Session and Passkey lists never enter the server-rendered document. Browser-only `clientAction`s run WebAuthn ceremonies and submit mutations through React Router fetchers, while the resource-route actions still verify them on the Worker.
 - Private plaintext is **never** server-rendered, serialized into the document, or emitted by a loader:
   - no Markdown source, File/Directory names, ordering, front matter, user-authored timestamps, Comment bodies, displayed pseudonyms, capability/ciphertext payloads;
   - no session cookies are read server-side and re-emitted; no secret value is ever included in any loader return value.

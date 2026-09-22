@@ -4,12 +4,12 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
   type AuthenticationResponseJSON,
-  type PublicKeyCredentialCreationOptionsJSON,
-  type PublicKeyCredentialRequestOptionsJSON,
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 
 import { createDb, passkeys, sessions, sql } from "~/db/client.server";
+
+import type { AssertionStart, PasskeySummary, RegistrationStart } from "./contracts";
 
 import {
   FRESH_ASSERTION_MS,
@@ -42,24 +42,6 @@ type PasskeyRow = {
 
 type PasskeyCredentialRow = Pick<PasskeyRow, "credential_id" | "transports">;
 
-export type SignInOptions = {
-  challengeId: string;
-  options: PublicKeyCredentialRequestOptionsJSON;
-};
-
-export type FreshAssertionOptions = SignInOptions;
-
-export type PasskeyRegistrationOptions = {
-  challengeId: string;
-  options: PublicKeyCredentialCreationOptionsJSON;
-};
-
-export type PasskeySummary = {
-  id: string;
-  createdAt: number;
-  current: boolean;
-};
-
 /** WebAuthn resident credentials bind their user handle to the opaque Account ID. */
 export function accountUserHandle(accountId: string): string {
   const bytes = new TextEncoder().encode(accountId);
@@ -84,7 +66,7 @@ function parseTransports(value: string): string[] {
   }
 }
 
-function asAuthenticationResponse(value: unknown): AuthenticationResponseJSON | null {
+function credentialResponse<T extends { id: string }>(value: unknown): T | null {
   if (
     value === null ||
     typeof value !== "object" ||
@@ -93,19 +75,8 @@ function asAuthenticationResponse(value: unknown): AuthenticationResponseJSON | 
   ) {
     return null;
   }
-  return value as AuthenticationResponseJSON;
-}
-
-function asRegistrationResponse(value: unknown): RegistrationResponseJSON | null {
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    typeof (value as { id?: unknown }).id !== "string"
-  ) {
-    return null;
-  }
-  return value as RegistrationResponseJSON;
+  // The ceremony verifier validates the rest of the untrusted response.
+  return value as T;
 }
 
 async function createChallenge(
@@ -180,6 +151,31 @@ function optionalUserHandleMatches(
   return userHandle === undefined || userHandle === accountUserHandle(accountId);
 }
 
+async function verifyAssertion(
+  response: AuthenticationResponseJSON,
+  passkey: PasskeyRow,
+  challenge: ChallengeRow,
+): Promise<Awaited<ReturnType<typeof verifyAuthenticationResponse>> | null> {
+  try {
+    const verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: challenge.origin,
+      expectedRPID: challenge.rp_id,
+      credential: {
+        id: passkey.credential_id,
+        publicKey: new Uint8Array(passkey.public_key),
+        counter: passkey.counter,
+        transports: parseTransports(passkey.transports),
+      },
+      requireUserVerification: true,
+    });
+    return verification.verified ? verification : null;
+  } catch {
+    return null;
+  }
+}
+
 async function verifyAccountAssertion(
   env: Env,
   accountId: string,
@@ -196,24 +192,8 @@ async function verifyAccountAssertion(
   `);
   if (!passkey || !optionalUserHandleMatches(response, accountId)) return null;
 
-  try {
-    const verification = await verifyAuthenticationResponse({
-      response,
-      expectedChallenge: challenge.challenge,
-      expectedOrigin: challenge.origin,
-      expectedRPID: challenge.rp_id,
-      credential: {
-        id: passkey.credential_id,
-        publicKey: new Uint8Array(passkey.public_key),
-        counter: passkey.counter,
-        transports: parseTransports(passkey.transports),
-      },
-      requireUserVerification: true,
-    });
-    return verification.verified ? { passkey, verification } : null;
-  } catch {
-    return null;
-  }
+  const verification = await verifyAssertion(response, passkey, challenge);
+  return verification ? { passkey, verification } : null;
 }
 
 function updatePasskeyCounter(
@@ -235,7 +215,7 @@ function updatePasskeyCounter(
 }
 
 /** Starts a usernameless passkey assertion and persists its one-use challenge. */
-export async function beginSignIn(request: Request, env: Env): Promise<SignInOptions> {
+export async function beginSignIn(request: Request, env: Env): Promise<AssertionStart> {
   assertSessionConfiguration(env);
   const { rpId } = relyingParty(request);
   const options = await generateAuthenticationOptions({
@@ -274,7 +254,7 @@ export async function completeSignIn(
   );
   if (!challenge) return null;
 
-  const response = asAuthenticationResponse(payload);
+  const response = credentialResponse<AuthenticationResponseJSON>(payload);
   if (!response) return null;
 
   const passkey = await createDb(env.DB).get<PasskeyRow>(sql`
@@ -286,25 +266,8 @@ export async function completeSignIn(
     return null;
   }
 
-  let verification;
-  try {
-    verification = await verifyAuthenticationResponse({
-      response,
-      expectedChallenge: challenge.challenge,
-      expectedOrigin: challenge.origin,
-      expectedRPID: challenge.rp_id,
-      credential: {
-        id: passkey.credential_id,
-        publicKey: new Uint8Array(passkey.public_key),
-        counter: passkey.counter,
-        transports: parseTransports(passkey.transports),
-      },
-      requireUserVerification: true,
-    });
-  } catch {
-    return null;
-  }
-  if (!verification.verified) return null;
+  const verification = await verifyAssertion(response, passkey, challenge);
+  if (!verification) return null;
 
   const now = Date.now();
   const counterUpdated = await createDb(env.DB).run(
@@ -324,7 +287,7 @@ export async function beginFreshAssertion(
   request: Request,
   env: Env,
   session: ActiveSession,
-): Promise<FreshAssertionOptions> {
+): Promise<AssertionStart> {
   const { rpId } = relyingParty(request);
   const options = await generateAuthenticationOptions({
     rpID: rpId,
@@ -363,7 +326,7 @@ export async function completeFreshAssertion(
   );
   if (!challenge) return false;
 
-  const response = asAuthenticationResponse(payload);
+  const response = credentialResponse<AuthenticationResponseJSON>(payload);
   if (!response) return false;
   const asserted = await verifyAccountAssertion(env, session.accountId, response, challenge);
   if (!asserted || !asserted.verification.verified) return false;
@@ -419,7 +382,7 @@ export async function beginPasskeyRegistration(
   request: Request,
   env: Env,
   session: ActiveSession,
-): Promise<PasskeyRegistrationOptions | null> {
+): Promise<RegistrationStart | null> {
   if (!hasFreshAssertion(session)) return null;
   const { rpId } = relyingParty(request);
   const options = await generateRegistrationOptions({
@@ -467,7 +430,7 @@ export async function completePasskeyRegistration(
   );
   if (!challenge) return false;
 
-  const response = asRegistrationResponse(payload);
+  const response = credentialResponse<RegistrationResponseJSON>(payload);
   if (!response) return false;
 
   let verification;

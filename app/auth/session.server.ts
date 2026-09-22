@@ -2,6 +2,8 @@ import { createCookie, createSessionStorage, type SessionStorage } from "react-r
 
 import { createDb, sql } from "~/db/client.server";
 
+import type { SessionSummary } from "./contracts";
+
 export const SESSION_COOKIE_NAME = "__Host-mdwn_session";
 export const SESSION_IDLE_MS = 30 * 24 * 60 * 60 * 1_000;
 export const SESSION_ABSOLUTE_MS = 90 * 24 * 60 * 60 * 1_000;
@@ -18,15 +20,6 @@ type StoredSessionData = {
 
 export type ActiveSession = StoredSessionData & {
   id: string;
-};
-
-export type SessionSummary = {
-  id: string;
-  createdAt: number;
-  idleExpiresAt: number;
-  absoluteExpiresAt: number;
-  refreshedAt: number | null;
-  current: boolean;
 };
 
 type SessionRow = {
@@ -293,9 +286,10 @@ export async function revokeSessionForActor(
   actor: ActiveSession,
   sessionId: string,
   now = Date.now(),
-): Promise<boolean> {
-  if (actor.purpose !== "normal") return false;
-  const result = await createDb(env.DB).run(sql`
+): Promise<"revoked" | "already_revoked" | "actor_inactive" | "target_not_found"> {
+  if (actor.purpose !== "normal") return "actor_inactive";
+  const db = createDb(env.DB);
+  const result = await db.run(sql`
     WITH authorized AS MATERIALIZED (
       SELECT 1
       FROM sessions
@@ -314,7 +308,28 @@ export async function revokeSessionForActor(
       AND revoked_at IS NULL
       AND EXISTS (SELECT 1 FROM authorized)
   `);
-  return result.meta.changes === 1;
+  if (result.meta.changes === 1) return "revoked";
+
+  // A failed conditional update can mean either the actor lost authority or a
+  // peer was revoked concurrently. Only the former invalidates this cookie.
+  const checkedAt = Date.now();
+  const actorStillLive = await db.get<{ id: string }>(sql`
+    SELECT id FROM sessions
+    WHERE id = ${actor.id}
+      AND account_id = ${actor.accountId}
+      AND purpose = 'normal'
+      AND authenticated_passkey_id IS NOT NULL
+      AND revoked_at IS NULL
+      AND idle_expires_at > ${checkedAt}
+      AND absolute_expires_at > ${checkedAt}
+  `);
+  if (!actorStillLive) return "actor_inactive";
+
+  const target = await db.get<{ revoked_at: number | null }>(sql`
+    SELECT revoked_at FROM sessions
+    WHERE id = ${sessionId} AND account_id = ${actor.accountId}
+  `);
+  return target?.revoked_at != null ? "already_revoked" : "target_not_found";
 }
 
 /** Lists only live grants; the cookie's D1 row is marked for the UI. */
