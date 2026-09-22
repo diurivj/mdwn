@@ -142,9 +142,10 @@ async function signInSeededAccount(
   const rpId = new URL(baseURL).hostname;
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   // Playwright supplies the virtual WebAuthn calls even when Linux WebKit has
-  // no native constructor. SimpleWebAuthn checks it before invoking those calls.
+  // no native constructor (Playwright supplies an object placeholder instead).
+  // SimpleWebAuthn requires a function before invoking those calls.
   await context.addInitScript(() => {
-    if (typeof globalThis.PublicKeyCredential === "undefined") {
+    if (typeof globalThis.PublicKeyCredential !== "function") {
       Object.defineProperty(globalThis, "PublicKeyCredential", {
         configurable: true,
         value: class PublicKeyCredential {},
