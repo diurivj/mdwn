@@ -11,7 +11,8 @@
     "tests/fixtures/*.json",
     "e2e/**/*.ts",
     "app/security/**/*.ts",
-    "app/crypto/**/*.ts"
+    "app/crypto/**/*.ts",
+    "app/namespace-v1/**/*.ts"
   ],
   "compilerOptions": {
     "composite": true,

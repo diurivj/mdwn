@@ -20,6 +20,7 @@
     "db:smoke:preview": "node scripts/smoke-db.mjs --remote preview",
     "db:smoke:production": "node scripts/smoke-db.mjs --remote production",
     "check:secrets": "node scripts/check-bundle-secrets.mjs",
+    "check:namespace": "node scripts/generate-namespace-v1-data.mjs --check",
     "deploy:preview": "npm run build:preview && wrangler deploy",
     "deploy:production": "npm run build:production && wrangler deploy",
     "cf-typegen": "wrangler types"
