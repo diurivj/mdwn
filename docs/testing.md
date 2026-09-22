@@ -89,3 +89,5 @@ Each matrix job uploads `playwright-report/` plus `test-results/`, including
 screenshots, videos, and traces retained for failures. These artifacts can
 contain page and application details; keep them within the repository's CI
 retention/access policy and never put real credentials in browser fixtures.
+
+The auth fixture installs Playwright’s virtual WebAuthn authenticator. Linux WebKit can lack the native `PublicKeyCredential` constructor; the fixture supplies that constructor only when absent so SimpleWebAuthn reaches the virtual authenticator. This shim is confined to the test BrowserContext; application feature detection and Worker verification remain unchanged.
