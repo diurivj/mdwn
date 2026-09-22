@@ -5,6 +5,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   createNormalSession,
   getActiveSession,
+  revokeAllSessionsForActor,
+  revokeSessionForActor,
   SESSION_ABSOLUTE_MS,
   SESSION_COOKIE_NAME,
 } from "../../app/auth/session.server";
@@ -210,5 +212,39 @@ describe("normal Session lifecycle routes", () => {
       .bind(target.id)
       .first<{ revoked_at: number | null }>();
     expect(row?.revoked_at).toEqual(expect.any(Number));
+  });
+
+  it("does not let a revoked actor revoke peers, while a live actor revokes every Session", async () => {
+    const account = await seedAccount();
+    const staleActor = await seedNormalSession(account);
+    const firstPeer = await seedNormalSession(account);
+    const secondPeer = await seedNormalSession(account);
+    const capturedActor = await getActiveSession(
+      new Request("https://mdwn.test/account/security", { headers: { cookie: staleActor.cookie } }),
+      env,
+    );
+    if (!capturedActor) throw new Error("expected an actor snapshot");
+
+    await env.DB
+      .prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?")
+      .bind(Date.now(), staleActor.id)
+      .run();
+
+    expect(await revokeSessionForActor(env, capturedActor, firstPeer.id)).toBe(false);
+    expect(await revokeAllSessionsForActor(env, capturedActor)).toBe(false);
+    expect(await sessionState(firstPeer.cookie)).toEqual({ authenticated: true });
+    expect(await sessionState(secondPeer.cookie)).toEqual({ authenticated: true });
+
+    const liveActor = await seedNormalSession(account);
+    const capturedLiveActor = await getActiveSession(
+      new Request("https://mdwn.test/account/security", { headers: { cookie: liveActor.cookie } }),
+      env,
+    );
+    if (!capturedLiveActor) throw new Error("expected a live actor snapshot");
+
+    expect(await revokeAllSessionsForActor(env, capturedLiveActor)).toBe(true);
+    await expect(sessionState(liveActor.cookie)).resolves.toEqual({ authenticated: false });
+    await expect(sessionState(firstPeer.cookie)).resolves.toEqual({ authenticated: false });
+    await expect(sessionState(secondPeer.cookie)).resolves.toEqual({ authenticated: false });
   });
 });

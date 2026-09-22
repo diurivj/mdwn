@@ -4,6 +4,7 @@ import { cose, isoCBOR } from "@simplewebauthn/server/helpers";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 import type { TestHarness } from "wrangler";
 
+import { openAccountProfile, sealAccountProfile } from "../app/crypto/account-profile";
 import { test, expect } from "./fixtures";
 
 const ACCOUNT_ID = "019950d7-98c0-7000-8000-000000000002";
@@ -12,6 +13,7 @@ const REVOKED_ACCOUNT_ID = "019950d7-98c0-7000-8000-000000000004";
 const ABSOLUTE_ACCOUNT_ID = "019950d7-98c0-7000-8000-000000000005";
 const SESSION_IDLE_MS = 30 * 24 * 60 * 60 * 1_000;
 const SESSION_ABSOLUTE_MS = 90 * 24 * 60 * 60 * 1_000;
+const SEEDED_PUBLIC_PSEUDONYM = "Cobalt Wren";
 
 type BrowserTestEnv = {
   DB: D1Database;
@@ -29,6 +31,7 @@ type SignedInFixture = {
   env: BrowserTestEnv;
   origin: string;
   page: Page;
+  profileRootKey: Uint8Array;
   verifyPayload: VerifyPayload;
 };
 
@@ -42,6 +45,12 @@ type SessionRow = {
 
 type PasskeyRow = {
   credential_id: string;
+};
+
+type AccountProfileRow = {
+  ciphertext: ArrayBuffer;
+  epoch: number;
+  revision: number;
 };
 
 function accountUserHandle(accountId: string): string {
@@ -101,6 +110,18 @@ async function passkeysFor(
   return passkeys.results;
 }
 
+async function accountProfileFor(
+  env: BrowserTestEnv,
+  accountId: string,
+): Promise<AccountProfileRow> {
+  const profile = await env.DB
+    .prepare("SELECT ciphertext, epoch, revision FROM account_profiles WHERE account_id = ?")
+    .bind(accountId)
+    .first<AccountProfileRow>();
+  if (!profile) throw new Error("expected an encrypted Account profile");
+  return profile;
+}
+
 async function publicSessionState(page: Page): Promise<{
   body: { authenticated: boolean };
   status: number;
@@ -129,6 +150,12 @@ async function signInSeededAccount(
   await worker.applyD1Migrations("DB");
   const env = await worker.getEnv();
   const now = Date.now();
+  const profileRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const profile = await sealAccountProfile(
+    profileRootKey,
+    { publicPseudonym: SEEDED_PUBLIC_PSEUDONYM },
+    { accountId, epoch: 1, revision: 1 },
+  );
   await env.DB.batch([
     env.DB
       .prepare(
@@ -140,7 +167,7 @@ async function signInSeededAccount(
         `INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .bind(accountId, Uint8Array.of(0), 1, 1, now, now),
+      .bind(accountId, profile.ciphertext, profile.revision, profile.epoch, now, now),
     env.DB
       .prepare(
         `INSERT INTO passkeys (
@@ -169,6 +196,7 @@ async function signInSeededAccount(
     env,
     origin,
     page,
+    profileRootKey,
     verifyPayload,
   };
 }
@@ -180,6 +208,19 @@ test("signs a seeded Account into a normal Session and rejects assertion replay"
 }) => {
   const fixture = await signInSeededAccount(browser, server, baseURL!);
   try {
+    const profile = await accountProfileFor(fixture.env, fixture.accountId);
+    expect(profile).toMatchObject({ epoch: 1, revision: 1 });
+    await expect(openAccountProfile(
+      new Uint8Array(profile.ciphertext),
+      fixture.profileRootKey,
+      { accountId: fixture.accountId, epoch: profile.epoch, revision: profile.revision },
+    )).resolves.toEqual({ publicPseudonym: SEEDED_PUBLIC_PSEUDONYM });
+    await expect(openAccountProfile(
+      new Uint8Array(profile.ciphertext),
+      fixture.profileRootKey,
+      { accountId: fixture.accountId, epoch: profile.epoch, revision: profile.revision + 1 },
+    )).rejects.toMatchObject({ code: "context-mismatch" });
+
     expect(await publicSessionState(fixture.page)).toEqual({
       status: 200,
       body: { authenticated: true },
@@ -287,6 +328,69 @@ test("adds and removes an attestation-none resident Passkey after fresh assertio
       status: 200,
       body: { authenticated: true },
     });
+  } finally {
+    await fixture.context.close();
+  }
+});
+
+test("consumes registration after freshness expires before its completion", async ({
+  browser,
+  server,
+  baseURL,
+}) => {
+  const fixture = await signInSeededAccount(browser, server, baseURL!);
+  try {
+    await fixture.page.goto(`${fixture.origin}/account/security`, { waitUntil: "commit" });
+    await expect(fixture.page.getByRole("heading", { name: "Passkey management" })).toBeVisible();
+
+    await fixture.page.route("**/api/auth/passkeys/registration/options", async (route) => {
+      await fixture.context.credentials.delete(fixture.credentialId);
+      await route.continue();
+    });
+
+    let releaseVerify!: () => void;
+    const verificationReleased = new Promise<void>((resolve) => {
+      releaseVerify = resolve;
+    });
+    let markVerifyReached!: (payload: { challengeId: string }) => void;
+    const verifyReached = new Promise<{ challengeId: string }>((resolve) => {
+      markVerifyReached = resolve;
+    });
+    await fixture.page.route("**/api/auth/passkeys/registration/verify", async (route) => {
+      const payload = route.request().postDataJSON() as { challengeId: string };
+      markVerifyReached(payload);
+      await verificationReleased;
+      await route.continue();
+    });
+
+    await fixture.page.getByRole("button", { name: "Add passkey" }).click();
+    const payload = await verifyReached;
+    const [current] = await sessionsFor(fixture.env, fixture.accountId);
+    if (!current) throw new Error("expected a current Session");
+    await fixture.env.DB
+      .prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
+      .bind(Date.now() - 5 * 60 * 1_000 - 1, current.id)
+      .run();
+
+    const response = fixture.page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === "/api/auth/passkeys/registration/verify" &&
+        candidate.request().method() === "POST",
+    );
+    releaseVerify();
+    expect((await response).status()).toBe(401);
+    await expect(fixture.page.getByRole("status")).toHaveText(
+      "We could not update your Passkeys. Try again.",
+    );
+    expect(await passkeysFor(fixture.env, fixture.accountId)).toEqual([
+      { credential_id: fixture.credentialId },
+    ]);
+    expect(
+      await fixture.env.DB
+        .prepare("SELECT id FROM webauthn_challenges WHERE id = ?")
+        .bind(payload.challengeId)
+        .first(),
+    ).toBeNull();
   } finally {
     await fixture.context.close();
   }

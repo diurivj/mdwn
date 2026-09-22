@@ -15,8 +15,9 @@ import {
   hasFreshAssertion,
   listActiveSessions,
   refreshNormalSession,
-  revokeAllSessions,
   revokeSession,
+  revokeAllSessionsForActor,
+  revokeSessionForActor,
   SessionConfigurationError,
   type ActiveSession,
 } from "~/auth/session.server";
@@ -202,7 +203,9 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       const parsed = record(body);
       const sessionId = parsed ? string(parsed.sessionId) : null;
       if (!sessionId) return failure(400);
-      if (!(await revokeSession(env, normal.session.accountId, sessionId))) return failure(404);
+      if (!(await revokeSessionForActor(env, normal.session, sessionId))) {
+        return failure(401, { "Set-Cookie": await clearSessionCookie(env) });
+      }
       const headers =
         sessionId === normal.session.id
           ? { "Set-Cookie": await clearSessionCookie(env) }
@@ -211,7 +214,9 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     }
 
     if (pathname === "/api/auth/sessions/revoke-all") {
-      await revokeAllSessions(env, normal.session.accountId);
+      if (!(await revokeAllSessionsForActor(env, normal.session))) {
+        return failure(401, { "Set-Cookie": await clearSessionCookie(env) });
+      }
       return Response.json(
         { ok: true },
         { headers: { "Set-Cookie": await clearSessionCookie(env) } },

@@ -1,5 +1,7 @@
 import { createCookie, createSessionStorage, type SessionStorage } from "react-router";
 
+import { createDb, sql } from "~/db/client.server";
+
 export const SESSION_COOKIE_NAME = "__Host-mdwn_session";
 export const SESSION_IDLE_MS = 30 * 24 * 60 * 60 * 1_000;
 export const SESSION_ABSOLUTE_MS = 90 * 24 * 60 * 60 * 1_000;
@@ -112,35 +114,22 @@ export function createAccountSessionStorage(
       const absoluteExpiresAt = now + SESSION_ABSOLUTE_MS;
       const idleExpiresAt = Math.min(now + SESSION_IDLE_MS, absoluteExpiresAt);
 
-      const result = await env.DB.prepare(
-        `INSERT INTO sessions (
+      const result = await createDb(env.DB).run(sql`
+        INSERT INTO sessions (
           id, account_id, purpose, authenticated_passkey_id, created_at,
           idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at
         )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL
-        WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?)
+        SELECT ${id}, ${data.accountId}, ${data.purpose}, ${data.authenticatedPasskeyId ?? null},
+          ${now}, ${idleExpiresAt}, ${absoluteExpiresAt}, ${data.freshAssertedAt ?? null}, NULL, NULL
+        WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ${data.accountId})
           AND (
-            ? IS NULL OR EXISTS (
+            ${data.authenticatedPasskeyId ?? null} IS NULL OR EXISTS (
               SELECT 1 FROM passkeys
-              WHERE credential_id = ? AND account_id = ?
+              WHERE credential_id = ${data.authenticatedPasskeyId ?? null}
+                AND account_id = ${data.accountId}
             )
-          )`,
-      )
-        .bind(
-          id,
-          data.accountId,
-          data.purpose,
-          data.authenticatedPasskeyId ?? null,
-          now,
-          idleExpiresAt,
-          absoluteExpiresAt,
-          data.freshAssertedAt ?? null,
-          data.accountId,
-          data.authenticatedPasskeyId ?? null,
-          data.authenticatedPasskeyId ?? null,
-          data.accountId,
-        )
-        .run();
+          )
+      `);
 
       if (result.meta.changes !== 1) {
         throw new Error("could not create a live session");
@@ -149,16 +138,14 @@ export function createAccountSessionStorage(
     },
     async readData(id) {
       const now = Date.now();
-      const row = await env.DB.prepare(
-        `SELECT id, account_id, purpose, authenticated_passkey_id, fresh_asserted_at
+      const row = await createDb(env.DB).get<SessionRow>(sql`
+        SELECT id, account_id, purpose, authenticated_passkey_id, fresh_asserted_at
          FROM sessions
-         WHERE id = ?
+         WHERE id = ${id}
            AND revoked_at IS NULL
-           AND idle_expires_at > ?
-           AND absolute_expires_at > ?`,
-      )
-        .bind(id, now, now)
-        .first<SessionRow>();
+           AND idle_expires_at > ${now}
+           AND absolute_expires_at > ${now}
+      `);
 
       if (!row) return null;
       return {
@@ -175,33 +162,24 @@ export function createAccountSessionStorage(
     async updateData(id, data) {
       assertStoredSessionData(data);
       const now = Date.now();
-      const result = await env.DB.prepare(
-        `UPDATE sessions
-         SET account_id = ?, purpose = ?, authenticated_passkey_id = ?
-         WHERE id = ?
+      const result = await createDb(env.DB).run(sql`
+        UPDATE sessions
+         SET account_id = ${data.accountId},
+             purpose = ${data.purpose},
+             authenticated_passkey_id = ${data.authenticatedPasskeyId ?? null}
+         WHERE id = ${id}
            AND revoked_at IS NULL
-           AND idle_expires_at > ?
-           AND absolute_expires_at > ?`,
-      )
-        .bind(
-          data.accountId,
-          data.purpose,
-          data.authenticatedPasskeyId ?? null,
-          id,
-          now,
-          now,
-        )
-        .run();
+           AND idle_expires_at > ${now}
+           AND absolute_expires_at > ${now}
+      `);
       if (result.meta.changes !== 1) {
         throw new Error("could not update a live session");
       }
     },
     async deleteData(id) {
-      await env.DB.prepare(
-        "UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?",
-      )
-        .bind(Date.now(), id)
-        .run();
+      await createDb(env.DB).run(sql`
+        UPDATE sessions SET revoked_at = COALESCE(revoked_at, ${Date.now()}) WHERE id = ${id}
+      `);
     },
   });
 }
@@ -273,38 +251,69 @@ export async function refreshNormalSession(
 ): Promise<boolean> {
   if (session.purpose !== "normal") return false;
   const nextIdleExpiry = now + SESSION_IDLE_MS;
-  const result = await env.DB.prepare(
-    `UPDATE sessions
+  const result = await createDb(env.DB).run(sql`
+    UPDATE sessions
      SET idle_expires_at = CASE
-       WHEN absolute_expires_at < ? THEN absolute_expires_at
-       ELSE ?
+       WHEN absolute_expires_at < ${nextIdleExpiry} THEN absolute_expires_at
+       ELSE ${nextIdleExpiry}
      END,
-     refreshed_at = ?
-     WHERE id = ?
-       AND account_id = ?
+     refreshed_at = ${now}
+     WHERE id = ${session.id}
+       AND account_id = ${session.accountId}
        AND purpose = 'normal'
        AND revoked_at IS NULL
-       AND idle_expires_at > ?
-       AND absolute_expires_at > ?`,
-  )
-    .bind(nextIdleExpiry, nextIdleExpiry, now, session.id, session.accountId, now, now)
-    .run();
+       AND idle_expires_at > ${now}
+       AND absolute_expires_at > ${now}
+  `);
   return result.meta.changes === 1;
 }
 
+/** Idempotent self-sign-out only; account-security revocations use actor guards below. */
 export async function revokeSession(
   env: Env,
   accountId: string,
   sessionId: string,
   now = Date.now(),
 ): Promise<boolean> {
-  const result = await env.DB.prepare(
-    `UPDATE sessions
-     SET revoked_at = COALESCE(revoked_at, ?)
-     WHERE id = ? AND account_id = ? AND revoked_at IS NULL`,
-  )
-    .bind(now, sessionId, accountId)
-    .run();
+  const result = await createDb(env.DB).run(sql`
+    UPDATE sessions
+     SET revoked_at = COALESCE(revoked_at, ${now})
+     WHERE id = ${sessionId} AND account_id = ${accountId} AND revoked_at IS NULL
+  `);
+  return result.meta.changes === 1;
+}
+
+/**
+ * Atomically rechecks the actor's live normal Session before revoking one
+ * peer. The materialized predicate is evaluated before this UPDATE changes an
+ * actor row, so the check cannot be invalidated partway through a mutation.
+ */
+export async function revokeSessionForActor(
+  env: Env,
+  actor: ActiveSession,
+  sessionId: string,
+  now = Date.now(),
+): Promise<boolean> {
+  if (actor.purpose !== "normal") return false;
+  const result = await createDb(env.DB).run(sql`
+    WITH authorized AS MATERIALIZED (
+      SELECT 1
+      FROM sessions
+      WHERE id = ${actor.id}
+        AND account_id = ${actor.accountId}
+        AND purpose = 'normal'
+        AND authenticated_passkey_id IS NOT NULL
+        AND revoked_at IS NULL
+        AND idle_expires_at > ${now}
+        AND absolute_expires_at > ${now}
+    )
+    UPDATE sessions
+    SET revoked_at = COALESCE(revoked_at, ${now})
+    WHERE id = ${sessionId}
+      AND account_id = ${actor.accountId}
+      AND revoked_at IS NULL
+      AND EXISTS (SELECT 1 FROM authorized)
+  `);
   return result.meta.changes === 1;
 }
 
@@ -315,19 +324,16 @@ export async function listActiveSessions(
   currentSessionId: string,
   now = Date.now(),
 ): Promise<SessionSummary[]> {
-  const rows = await env.DB
-    .prepare(
-      `SELECT id, created_at, idle_expires_at, absolute_expires_at, refreshed_at
+  const rows = await createDb(env.DB).all<SessionSummaryRow>(sql`
+      SELECT id, created_at, idle_expires_at, absolute_expires_at, refreshed_at
        FROM sessions
-       WHERE account_id = ?
+       WHERE account_id = ${accountId}
          AND revoked_at IS NULL
-         AND idle_expires_at > ?
-         AND absolute_expires_at > ?
-       ORDER BY created_at DESC, id DESC`,
-    )
-    .bind(accountId, now, now)
-    .all<SessionSummaryRow>();
-  return rows.results.map((row) => ({
+         AND idle_expires_at > ${now}
+         AND absolute_expires_at > ${now}
+       ORDER BY created_at DESC, id DESC
+  `);
+  return rows.map((row) => ({
     id: row.id,
     createdAt: row.created_at,
     idleExpiresAt: row.idle_expires_at,
@@ -337,16 +343,31 @@ export async function listActiveSessions(
   }));
 }
 
-export async function revokeAllSessions(
+export async function revokeAllSessionsForActor(
   env: Env,
-  accountId: string,
+  actor: ActiveSession,
   now = Date.now(),
-): Promise<void> {
-  await env.DB.prepare(
-    "UPDATE sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL",
-  )
-    .bind(now, accountId)
-    .run();
+): Promise<boolean> {
+  if (actor.purpose !== "normal") return false;
+  const result = await createDb(env.DB).run(sql`
+    WITH authorized AS MATERIALIZED (
+      SELECT 1
+      FROM sessions
+      WHERE id = ${actor.id}
+        AND account_id = ${actor.accountId}
+        AND purpose = 'normal'
+        AND authenticated_passkey_id IS NOT NULL
+        AND revoked_at IS NULL
+        AND idle_expires_at > ${now}
+        AND absolute_expires_at > ${now}
+    )
+    UPDATE sessions
+    SET revoked_at = ${now}
+    WHERE account_id = ${actor.accountId}
+      AND revoked_at IS NULL
+      AND EXISTS (SELECT 1 FROM authorized)
+  `);
+  return result.meta.changes > 0;
 }
 
 /** Cookie clearing never changes D1 state; revocation has an explicit caller. */

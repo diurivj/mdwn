@@ -9,6 +9,8 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 
+import { createDb, passkeys, sessions, sql } from "~/db/client.server";
+
 import {
   FRESH_ASSERTION_MS,
   assertSessionConfiguration,
@@ -117,23 +119,14 @@ async function createChallenge(
   const { origin, rpId } = relyingParty(request);
   const now = Date.now();
   const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO webauthn_challenges (
+  await createDb(env.DB).run(sql`
+    INSERT INTO webauthn_challenges (
       id, challenge, purpose, account_id, session_id, origin, rp_id, expires_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      challenge,
-      purpose,
-      accountId,
-      sessionId,
-      origin,
-      rpId,
-      now + WEBAUTHN_CHALLENGE_MS,
-      now,
+    ) VALUES (
+      ${id}, ${challenge}, ${purpose}, ${accountId}, ${sessionId}, ${origin}, ${rpId},
+      ${now + WEBAUTHN_CHALLENGE_MS}, ${now}
     )
-    .run();
+  `);
   return id;
 }
 
@@ -146,19 +139,17 @@ async function consumeChallenge(
   sessionId: string | null,
 ): Promise<ChallengeRow | null> {
   const { origin, rpId } = relyingParty(request);
-  const row = await env.DB.prepare(
-    `DELETE FROM webauthn_challenges
-     WHERE id = ?
-       AND purpose = ?
-       AND expires_at > ?
-       AND account_id IS ?
-       AND session_id IS ?
-       AND origin = ?
-       AND rp_id = ?
-     RETURNING challenge, origin, rp_id`,
-  )
-    .bind(challengeId, purpose, Date.now(), accountId, sessionId, origin, rpId)
-    .first<ChallengeRow>();
+  const row = await createDb(env.DB).get<ChallengeRow>(sql`
+    DELETE FROM webauthn_challenges
+     WHERE id = ${challengeId}
+       AND purpose = ${purpose}
+       AND expires_at > ${Date.now()}
+       AND account_id IS ${accountId}
+       AND session_id IS ${sessionId}
+       AND origin = ${origin}
+       AND rp_id = ${rpId}
+     RETURNING challenge, origin, rp_id
+  `);
   return row ?? null;
 }
 
@@ -166,13 +157,12 @@ async function accountPasskeys(
   env: Env,
   accountId: string,
 ): Promise<PasskeyCredentialRow[]> {
-  const result = await env.DB
-    .prepare(
-      "SELECT credential_id, transports FROM passkeys WHERE account_id = ? ORDER BY created_at ASC, credential_id ASC",
-    )
-    .bind(accountId)
-    .all<PasskeyCredentialRow>();
-  return result.results;
+  return createDb(env.DB).all<PasskeyCredentialRow>(sql`
+    SELECT credential_id, transports
+    FROM passkeys
+    WHERE account_id = ${accountId}
+    ORDER BY created_at ASC, credential_id ASC
+  `);
 }
 
 function allowCredentials(passkeys: PasskeyCredentialRow[]) {
@@ -199,12 +189,11 @@ async function verifyAccountAssertion(
   passkey: PasskeyRow;
   verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
 } | null> {
-  const passkey = await env.DB.prepare(
-    `SELECT credential_id, account_id, public_key, counter, transports
-     FROM passkeys WHERE credential_id = ? AND account_id = ?`,
-  )
-    .bind(response.id, accountId)
-    .first<PasskeyRow>();
+  const passkey = await createDb(env.DB).get<PasskeyRow>(sql`
+    SELECT credential_id, account_id, public_key, counter, transports
+    FROM passkeys
+    WHERE credential_id = ${response.id} AND account_id = ${accountId}
+  `);
   if (!passkey || !optionalUserHandleMatches(response, accountId)) return null;
 
   try {
@@ -228,26 +217,21 @@ async function verifyAccountAssertion(
 }
 
 function updatePasskeyCounter(
-  env: Env,
   passkey: PasskeyRow,
   verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>,
   now: number,
 ) {
   if (!verification.verified) throw new Error("expected a verified assertion");
-  return env.DB.prepare(
-    `UPDATE passkeys
-     SET counter = ?, device_type = ?, backed_up = ?, updated_at = ?
-     WHERE credential_id = ? AND account_id = ? AND counter = ?`,
-  )
-    .bind(
-      verification.authenticationInfo.newCounter,
-      verification.authenticationInfo.credentialDeviceType,
-      verification.authenticationInfo.credentialBackedUp ? 1 : 0,
-      now,
-      passkey.credential_id,
-      passkey.account_id,
-      passkey.counter,
-    );
+  return sql`
+    UPDATE passkeys
+    SET counter = ${verification.authenticationInfo.newCounter},
+        device_type = ${verification.authenticationInfo.credentialDeviceType},
+        backed_up = ${verification.authenticationInfo.credentialBackedUp ? 1 : 0},
+        updated_at = ${now}
+    WHERE credential_id = ${passkey.credential_id}
+      AND account_id = ${passkey.account_id}
+      AND counter = ${passkey.counter}
+  `;
 }
 
 /** Starts a usernameless passkey assertion and persists its one-use challenge. */
@@ -293,12 +277,11 @@ export async function completeSignIn(
   const response = asAuthenticationResponse(payload);
   if (!response) return null;
 
-  const passkey = await env.DB.prepare(
-    `SELECT credential_id, account_id, public_key, counter, transports
-     FROM passkeys WHERE credential_id = ?`,
-  )
-    .bind(response.id)
-    .first<PasskeyRow>();
+  const passkey = await createDb(env.DB).get<PasskeyRow>(sql`
+    SELECT credential_id, account_id, public_key, counter, transports
+    FROM passkeys
+    WHERE credential_id = ${response.id}
+  `);
   if (!passkey || response.response?.userHandle !== accountUserHandle(passkey.account_id)) {
     return null;
   }
@@ -324,7 +307,9 @@ export async function completeSignIn(
   if (!verification.verified) return null;
 
   const now = Date.now();
-  const counterUpdated = await updatePasskeyCounter(env, passkey, verification, now).run();
+  const counterUpdated = await createDb(env.DB).run(
+    updatePasskeyCounter(passkey, verification, now),
+  );
   if (counterUpdated.meta.changes !== 1) return null;
 
   // Intentionally outside the verifier catch: a missing cookie-signing
@@ -384,45 +369,45 @@ export async function completeFreshAssertion(
   if (!asserted || !asserted.verification.verified) return false;
 
   const now = Date.now();
-  const counterStatement = updatePasskeyCounter(
-    env,
-    asserted.passkey,
-    asserted.verification,
-    now,
-  );
-  const sessionStatement = env.DB.prepare(
-    `UPDATE sessions
-     SET fresh_asserted_at = ?
-     WHERE id = ?
-       AND account_id = ?
+  const db = createDb(env.DB);
+  const counterStatement = db
+    .update(passkeys)
+    .set({
+      counter: asserted.verification.authenticationInfo.newCounter,
+      deviceType: asserted.verification.authenticationInfo.credentialDeviceType,
+      backedUp: asserted.verification.authenticationInfo.credentialBackedUp,
+      updatedAt: now,
+    })
+    .where(sql`
+      credential_id = ${asserted.passkey.credential_id}
+      AND account_id = ${asserted.passkey.account_id}
+      AND counter = ${asserted.passkey.counter}
+    `);
+  const sessionStatement = db
+    .update(sessions)
+    .set({ freshAssertedAt: now })
+    .where(sql`
+     id = ${session.id}
+       AND account_id = ${session.accountId}
        AND purpose = 'normal'
        AND revoked_at IS NULL
-       AND idle_expires_at > ?
-       AND absolute_expires_at > ?
+       AND idle_expires_at > ${now}
+       AND absolute_expires_at > ${now}
        AND authenticated_passkey_id IS NOT NULL
        AND EXISTS (
          SELECT 1 FROM passkeys
-         WHERE credential_id = ?
-           AND account_id = ?
-           AND counter = ?
+         WHERE credential_id = ${asserted.passkey.credential_id}
+           AND account_id = ${session.accountId}
+           AND counter = ${asserted.verification.authenticationInfo.newCounter}
        )
        AND EXISTS (
          SELECT 1 FROM passkeys AS authenticated_passkey
          WHERE authenticated_passkey.credential_id = sessions.authenticated_passkey_id
            AND authenticated_passkey.account_id = sessions.account_id
        )
-       AND changes() = 1`,
-  ).bind(
-    now,
-    session.id,
-    session.accountId,
-    now,
-    now,
-    asserted.passkey.credential_id,
-    session.accountId,
-    asserted.verification.authenticationInfo.newCounter,
-  );
-  const [counterUpdated, sessionUpdated] = await env.DB.batch([
+       AND changes() = 1
+    `);
+  const [counterUpdated, sessionUpdated] = await db.batch([
     counterStatement,
     sessionStatement,
   ]);
@@ -502,22 +487,25 @@ export async function completePasskeyRegistration(
   const credential = verification.registrationInfo.credential;
   if (credential.id !== response.id) return false;
   const now = Date.now();
-  const result = await env.DB.prepare(
-    `INSERT OR IGNORE INTO passkeys (
+  const result = await createDb(env.DB).run(sql`
+    INSERT OR IGNORE INTO passkeys (
       credential_id, account_id, public_key, counter, transports,
       device_type, backed_up, created_at, updated_at
     )
-    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+    SELECT ${credential.id}, ${session.accountId}, ${credential.publicKey}, ${credential.counter},
+      ${JSON.stringify(credential.transports ?? [])},
+      ${verification.registrationInfo.credentialDeviceType},
+      ${verification.registrationInfo.credentialBackedUp ? 1 : 0}, ${now}, ${now}
     WHERE EXISTS (
       SELECT 1 FROM sessions
-      WHERE id = ?
-        AND account_id = ?
+      WHERE id = ${session.id}
+        AND account_id = ${session.accountId}
         AND purpose = 'normal'
         AND revoked_at IS NULL
-        AND idle_expires_at > ?
-        AND absolute_expires_at > ?
-        AND fresh_asserted_at > ?
-        AND fresh_asserted_at <= ?
+        AND idle_expires_at > ${now}
+        AND absolute_expires_at > ${now}
+        AND fresh_asserted_at > ${now - FRESH_ASSERTION_MS}
+        AND fresh_asserted_at <= ${now}
         AND authenticated_passkey_id IS NOT NULL
         AND EXISTS (
           SELECT 1 FROM passkeys AS authenticated_passkey
@@ -525,27 +513,8 @@ export async function completePasskeyRegistration(
             AND authenticated_passkey.account_id = sessions.account_id
         )
     )
-      AND NOT EXISTS (SELECT 1 FROM passkeys WHERE credential_id = ?)`,
-  )
-    .bind(
-      credential.id,
-      session.accountId,
-      credential.publicKey,
-      credential.counter,
-      JSON.stringify(credential.transports ?? []),
-      verification.registrationInfo.credentialDeviceType,
-      verification.registrationInfo.credentialBackedUp ? 1 : 0,
-      now,
-      now,
-      session.id,
-      session.accountId,
-      now,
-      now,
-      now - FRESH_ASSERTION_MS,
-      now,
-      credential.id,
-    )
-    .run();
+      AND NOT EXISTS (SELECT 1 FROM passkeys WHERE credential_id = ${credential.id})
+  `);
   return result.meta.changes === 1;
 }
 
@@ -555,14 +524,12 @@ export async function listPasskeys(
   accountId: string,
   currentCredentialId: string,
 ): Promise<PasskeySummary[]> {
-  const rows = await env.DB
-    .prepare(
-      `SELECT credential_id, created_at FROM passkeys
-       WHERE account_id = ? ORDER BY created_at ASC, credential_id ASC`,
-    )
-    .bind(accountId)
-    .all<{ credential_id: string; created_at: number }>();
-  return rows.results.map((row) => ({
+  const rows = await createDb(env.DB).all<{ credential_id: string; created_at: number }>(sql`
+    SELECT credential_id, created_at FROM passkeys
+    WHERE account_id = ${accountId}
+    ORDER BY created_at ASC, credential_id ASC
+  `);
+  return rows.map((row) => ({
     id: row.credential_id,
     createdAt: row.created_at,
     current: row.credential_id === currentCredentialId,
@@ -580,51 +547,42 @@ export async function removePasskey(
   credentialId: string,
 ): Promise<boolean> {
   const now = Date.now();
-  const deletePasskey = env.DB.prepare(
-    `DELETE FROM passkeys
-     WHERE credential_id = ?
-       AND account_id = ?
-       AND (SELECT COUNT(*) FROM passkeys WHERE account_id = ?) > 1
+  const db = createDb(env.DB);
+  const deletePasskey = db.delete(passkeys).where(sql`
+     credential_id = ${credentialId}
+       AND account_id = ${session.accountId}
+       AND (SELECT COUNT(*) FROM passkeys WHERE account_id = ${session.accountId}) > 1
        AND EXISTS (
          SELECT 1 FROM sessions
-         WHERE id = ?
-           AND account_id = ?
+         WHERE id = ${session.id}
+           AND account_id = ${session.accountId}
            AND purpose = 'normal'
            AND revoked_at IS NULL
-           AND idle_expires_at > ?
-           AND absolute_expires_at > ?
-           AND fresh_asserted_at > ?
-           AND fresh_asserted_at <= ?
+           AND idle_expires_at > ${now}
+           AND absolute_expires_at > ${now}
+           AND fresh_asserted_at > ${now - FRESH_ASSERTION_MS}
+           AND fresh_asserted_at <= ${now}
            AND authenticated_passkey_id IS NOT NULL
            AND EXISTS (
              SELECT 1 FROM passkeys AS authenticated_passkey
              WHERE authenticated_passkey.credential_id = sessions.authenticated_passkey_id
                AND authenticated_passkey.account_id = sessions.account_id
            )
-       )`,
-  ).bind(
-    credentialId,
-    session.accountId,
-    session.accountId,
-    session.id,
-    session.accountId,
-    now,
-    now,
-    now - FRESH_ASSERTION_MS,
-    now,
-  );
-  const revokeCredentialSessions = env.DB.prepare(
-    `UPDATE sessions
-     SET revoked_at = ?
-     WHERE account_id = ?
-       AND authenticated_passkey_id = ?
+       )
+  `);
+  const revokeCredentialSessions = db
+    .update(sessions)
+    .set({ revokedAt: now })
+    .where(sql`
+     account_id = ${session.accountId}
+       AND authenticated_passkey_id = ${credentialId}
        AND revoked_at IS NULL
        AND changes() = 1
        AND NOT EXISTS (
          SELECT 1 FROM passkeys
-         WHERE credential_id = ? AND account_id = ?
-       )`,
-  ).bind(now, session.accountId, credentialId, credentialId, session.accountId);
-  const [deleted] = await env.DB.batch([deletePasskey, revokeCredentialSessions]);
+         WHERE credential_id = ${credentialId} AND account_id = ${session.accountId}
+       )
+    `);
+  const [deleted] = await db.batch([deletePasskey, revokeCredentialSessions]);
   return deleted.meta.changes === 1;
 }
