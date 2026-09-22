@@ -16,6 +16,16 @@ for renderer-free unit tests. The second uses
 Workers runtime (`workerd`) and bindings shape as the application. It is not a
 second server or a Node mock.
 
+Worker tests are typechecked by `tsconfig.cloudflare.json`, alongside the
+application and generated Worker bindings. The Node project excludes this
+directory. Shared JSON fixtures use import attributes, so the Worker project
+uses `ESNext` modules.
+
+The Worker test configuration supplies the committed D1 migrations and a
+test-only Session signing key through Miniflare bindings. Tests that need D1
+apply those migrations with `applyD1Migrations` from `cloudflare:test`; they
+do not recreate the schema or connect to a remote database.
+
 Put server-side tests that need the Worker runtime in
 `tests/worker/**/*.test.ts`. Import `SELF` from `cloudflare:test` and exercise
 the Worker through `SELF.fetch(...)`; use the real Web Platform APIs available

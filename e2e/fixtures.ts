@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
+
 import { createTestHarness, type TestHarness } from "wrangler";
 import { test as base, expect } from "@playwright/test";
+
+export const TEST_SESSION_COOKIE_SECRET =
+  "mdwn-browser-tests-only-not-a-deployment-secret";
 
 type TestFixtures = {
   reset: void;
@@ -8,6 +13,24 @@ type TestFixtures = {
 type WorkerFixtures = {
   server: TestHarness;
 };
+
+function localHttpsWorkerConfig() {
+  const config = JSON.parse(
+    readFileSync(new URL("../build/server/wrangler.json", import.meta.url), "utf8"),
+  ) as Record<string, unknown>;
+  const dev = (config.dev ?? {}) as Record<string, unknown>;
+  const vars = (config.vars ?? {}) as Record<string, unknown>;
+
+  return {
+    ...config,
+    dev: {
+      ...dev,
+      local_protocol: "https",
+      upstream_protocol: "https",
+    },
+    vars: { ...vars, SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET },
+  };
+}
 
 /**
  * Runs the browser suite against the production-shaped Worker build, not a
@@ -18,7 +41,15 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
   server: [
     async ({}, use) => {
       const server = createTestHarness({
-        workers: [{ configPath: "./build/server/wrangler.json" }],
+        // WebKit honors the production CSP's upgrade-insecure-requests. Serve
+        // the built Worker over local TLS so its assets remain reachable and
+        // WebAuthn runs in an actual secure context in every engine.
+        root: "./build/server",
+        workers: [
+          {
+            config: localHttpsWorkerConfig(),
+          },
+        ],
       });
 
       await server.listen();

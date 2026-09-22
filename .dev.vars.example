@@ -8,3 +8,4 @@
 #
 # Example:
 # HEALTHZ_TOKEN=local-development-only-token
+# SESSION_COOKIE_SECRET=replace-with-a-32-character-minimum-local-secret

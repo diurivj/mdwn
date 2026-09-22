@@ -1,3 +1,5 @@
+import { Link } from "react-router";
+
 import { getEnv } from "~/context/env";
 import { ping } from "~/db/client.server";
 
@@ -31,7 +33,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         <span className="text-lg font-semibold tracking-tight">mdwn</span>
         <nav className="flex items-center gap-3 text-sm text-stone-500">
           <span>Files</span>
-          <span className="cursor-not-allowed">Sign in</span>
+          <Link className="text-stone-700 hover:underline" to="/sign-in">
+            Sign in
+          </Link>
         </nav>
       </header>
 
