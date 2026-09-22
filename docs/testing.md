@@ -27,9 +27,13 @@ apply those migrations with `applyD1Migrations` from `cloudflare:test`; they
 do not recreate the schema or connect to a remote database.
 
 Put server-side tests that need the Worker runtime in
-`tests/worker/**/*.test.ts`. Import `SELF` from `cloudflare:test` and exercise
-the Worker through `SELF.fetch(...)`; use the real Web Platform APIs available
-in that target. Tests outside `tests/worker/` remain Node tests. The normal
+`tests/worker/**/*.test.ts`. Route and request-boundary tests must import `SELF`
+from `cloudflare:test` and exercise the Worker through `SELF.fetch(...)`.
+Schema constraints and atomic storage invariants without a public route may
+be tested directly through real D1 bindings and storage helpers in workerd.
+These tests supplement route coverage; they do not replace it or justify
+production test endpoints. Use the real Web Platform APIs in that target.
+Tests outside `tests/worker/` remain Node tests. The normal
 `npm test` command runs both targets, and a failing target stops the command.
 
 `tests/worker/cross-engine.test.ts` is the small contract test: it fetches the
