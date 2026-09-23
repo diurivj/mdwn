@@ -12,6 +12,10 @@ Canonical roles `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-huma
 
 Single-context: `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.
 
+### Post-review RR8 gate
+
+After every code review, load `.agents/skills/rr8-post-review/SKILL.md` and run it against the same pinned diff before finishing. Report its RR8/stack result separately from Standards and Spec, even when there are no RR8 touchpoints.
+
 ### Merge discipline
 
 The team is just the maintainer and agents, and `main` is a private Free repo with no enforceable branch protection — so the review gate is a convention, not a rule. Land work as a branch and pull request to `main`, and merge only once the `ci` workflow is green; the `deploy` workflow applies reviewed migrations and releases the Worker on merge.
