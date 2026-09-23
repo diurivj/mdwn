@@ -1,3 +1,9 @@
+import { and, isNotNull, lte, sql } from "drizzle-orm";
+import {
+  createDb,
+  rateLimitCounters,
+  securityEvents,
+} from "../db/client.server";
 import {
   RATE_LIMIT_POLICIES,
   type RateLimitAction,
@@ -208,7 +214,7 @@ async function resolveScopeIds(
 }
 
 async function incrementRollingCounter(
-  db: D1Database,
+  db: ReturnType<typeof createDb>,
   action: RateLimitAction,
   rule: RateLimitRule,
   scopeIds: readonly string[],
@@ -218,44 +224,32 @@ async function incrementRollingCounter(
 
   const purpose = counterPurpose(action);
   const scopeId = scopeIds[0];
-  const idPlaceholders = scopeIds.map(() => "?").join(", ");
-  const activePredicate = `purpose = ? AND scope_type = ? AND scope_id IN (${idPlaceholders}) AND window_ms = ? AND time_epoch > ? AND expires_at > ?`;
-  const activeBindings = [
-    purpose,
-    rule.scope,
-    ...scopeIds,
-    rule.windowMs,
-    now - rule.windowMs,
-    now,
-  ];
+  const activePredicate = sql`
+    purpose = ${purpose}
+    AND scope_type = ${rule.scope}
+    AND scope_id IN (${sql.join(scopeIds.map((id) => sql`${id}`), sql`, `)})
+    AND window_ms = ${rule.windowMs}
+    AND time_epoch > ${now - rule.windowMs}
+    AND expires_at > ${now}
+  `;
 
   // This one SQL statement sums the exact rolling interval and conditionally
   // increments the current millisecond bucket. SQLite serializes the write, so
   // concurrent requests cannot pass a stale SELECT-then-UPDATE check.
-  const statement = db.prepare(
-    `INSERT INTO rate_limit_counters
+  const result = await db.all<{ count: number }>(sql`
+    INSERT INTO rate_limit_counters
       (purpose, scope_type, scope_id, window_ms, time_epoch, count, expires_at)
-     SELECT ?, ?, ?, ?, ?, 1, ?
-     WHERE COALESCE((SELECT SUM(count) FROM rate_limit_counters WHERE ${activePredicate}), 0) < ?
-     ON CONFLICT (purpose, scope_type, scope_id, window_ms, time_epoch)
-     DO UPDATE SET count = rate_limit_counters.count + 1
-     RETURNING count`,
-  ).bind(
-    purpose,
-    rule.scope,
-    scopeId,
-    rule.windowMs,
-    now,
-    now + rule.windowMs,
-    ...activeBindings,
-    rule.limit,
-  );
-  const result = await statement.all<{ count: number }>();
-  if (result.results.length > 0) return { allowed: true };
+    SELECT ${purpose}, ${rule.scope}, ${scopeId}, ${rule.windowMs}, ${now}, 1, ${now + rule.windowMs}
+    WHERE COALESCE((SELECT SUM(count) FROM rate_limit_counters WHERE ${activePredicate}), 0) < ${rule.limit}
+    ON CONFLICT (purpose, scope_type, scope_id, window_ms, time_epoch)
+    DO UPDATE SET count = rate_limit_counters.count + 1
+    RETURNING count
+  `);
+  if (result.length > 0) return { allowed: true };
 
-  const retry = await db.prepare(
-    `SELECT MIN(expires_at) AS retry_at FROM rate_limit_counters WHERE ${activePredicate}`,
-  ).bind(...activeBindings).first<{ retry_at: number | null }>();
+  const retry = await db.get<{ retry_at: number | null }>(sql`
+    SELECT MIN(expires_at) AS retry_at FROM rate_limit_counters WHERE ${activePredicate}
+  `);
   const retryAt = retry?.retry_at;
   return {
     allowed: false,
@@ -283,11 +277,12 @@ export async function enforceRateLimit({
     if (!Number.isSafeInteger(now) || now < 0) throw new AbuseControlUnavailableError();
     const rules = RATE_LIMIT_POLICIES[action];
     if (!rules) throw new AbuseControlUnavailableError();
+    const database = createDb(db);
 
     const globalRules = rules.filter((rule) => rule.scope === "global");
     const otherRules = rules.filter((rule) => rule.scope !== "global");
     for (const rule of globalRules) {
-      const result = await incrementRollingCounter(db, action, rule, ["*"], now);
+      const result = await incrementRollingCounter(database, action, rule, ["*"], now);
       if (!result.allowed) {
         return { allowed: false, retryAfterSeconds: result.retryAfterSeconds ?? 1 };
       }
@@ -304,7 +299,7 @@ export async function enforceRateLimit({
         now,
       );
       if (scopeIds === null) continue;
-      const result = await incrementRollingCounter(db, action, rule, scopeIds, now);
+      const result = await incrementRollingCounter(database, action, rule, scopeIds, now);
       if (!result.allowed) denials.push(result.retryAfterSeconds ?? 1);
     }
 
@@ -379,27 +374,17 @@ export async function recordSecurityEvent(
   const networkBucketExpiresAt = event.networkBucket === undefined
     ? null
     : now + MAX_EVENT_NETWORK_BUCKET_MS;
-  await db.prepare(
-    `INSERT INTO security_events
+  await createDb(db).run(sql`
+    INSERT INTO security_events
       (id, created_at, expires_at, action_class, outcome, reason, account_id, publication_id,
        size_class, proof_state, counter_state, retry_at, network_bucket, network_bucket_expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(
-    eventId,
-    now,
-    expiresAt,
-    event.actionClass,
-    event.outcome,
-    event.reason,
-    event.accountId ?? null,
-    event.publicationId ?? null,
-    event.sizeClass ?? null,
-    event.proofState,
-    event.counterState,
-    event.retryAt ?? null,
-    event.networkBucket ?? null,
-    networkBucketExpiresAt,
-  ).run();
+    VALUES (
+      ${eventId}, ${now}, ${expiresAt}, ${event.actionClass}, ${event.outcome}, ${event.reason},
+      ${event.accountId ?? null}, ${event.publicationId ?? null}, ${event.sizeClass ?? null},
+      ${event.proofState}, ${event.counterState}, ${event.retryAt ?? null},
+      ${event.networkBucket ?? null}, ${networkBucketExpiresAt}
+    )
+  `);
   return eventId;
 }
 
@@ -415,12 +400,23 @@ export async function purgeExpiredAbuseRecords(
   now = Date.now(),
 ): Promise<AbusePurgeResult> {
   if (!Number.isSafeInteger(now) || now < 0) throw new AbuseControlUnavailableError();
-  const [buckets, counters, events] = await db.batch([
-    db.prepare(
-      "UPDATE security_events SET network_bucket = NULL, network_bucket_expires_at = NULL WHERE network_bucket IS NOT NULL AND network_bucket_expires_at <= ?",
-    ).bind(now),
-    db.prepare("DELETE FROM rate_limit_counters WHERE expires_at <= ?").bind(now),
-    db.prepare("DELETE FROM security_events WHERE expires_at <= ?").bind(now),
+  const database = createDb(db);
+  const [buckets, counters, events] = await database.batch([
+    database
+      .update(securityEvents)
+      .set({ networkBucket: null, networkBucketExpiresAt: null })
+      .where(
+        and(
+          isNotNull(securityEvents.networkBucket),
+          lte(securityEvents.networkBucketExpiresAt, now),
+        ),
+      ),
+    database
+      .delete(rateLimitCounters)
+      .where(lte(rateLimitCounters.expiresAt, now)),
+    database
+      .delete(securityEvents)
+      .where(lte(securityEvents.expiresAt, now)),
   ]);
   return {
     countersDeleted: counters.meta.changes,

@@ -10,7 +10,7 @@ export * from "./schema";
  * binding from wrangler.jsonc (separate databases per environment: local,
  * preview, production — production D1 is never bound in preview or local).
  *
- * Server-only module (RR convention): importable only from loaders/actions;
+ * Server-only module (RR convention): importable only from server-side code;
  * the client build errors on any client-side import, keeping the D1/Drizzle
  * dependency out of the browser bundle.
  */
