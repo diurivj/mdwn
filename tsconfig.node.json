@@ -14,6 +14,7 @@
     "app/crypto/**/*.ts",
     "app/namespace-v1/**/*.ts"
   ],
+  "exclude": ["tests/worker/**/*"],
   "compilerOptions": {
     "composite": true,
     "strict": true,

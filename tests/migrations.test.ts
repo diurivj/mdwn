@@ -38,4 +38,22 @@ describe("committed Drizzle migrations", () => {
       expect(tags).toContain(m.replace(/\.sql$/, ""));
     }
   });
+
+  it("keeps authentication records separate from opaque Account identity", () => {
+    const sql = readFileSync(join(DRIZZLE_DIR, "0001_accounts_auth.sql"), "utf8");
+
+    for (const table of [
+      "account_profiles",
+      "passkeys",
+      "webauthn_challenges",
+      "sessions",
+    ]) {
+      expect(sql).toContain(`CREATE TABLE \`${table}\``);
+    }
+
+    expect(sql).toContain("`ciphertext` blob NOT NULL");
+    expect(sql).toContain("`purpose` text NOT NULL");
+    expect(sql).toContain("`revoked_at` integer");
+    expect(sql).not.toMatch(/email|password|pseudonym|handle(?!_lookup_token)/i);
+  });
 });

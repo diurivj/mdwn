@@ -36,16 +36,30 @@ if (isRemoteCli && !(typeof remoteTarget === "string" && isEnvironment(remoteTar
 // The D1 binding name in wrangler.jsonc (single binding per environment).
 const BINDING = "DB";
 
-const EXPECTED_COLUMNS = [
-  "id",
-  "share_id",
-  "share_handle_lookup_token",
-  "created_at",
-  "updated_at",
+/** @type {Record<string, Record<string, string>>} */
+const EXPECTED_COLUMNS = {
+  accounts: { id: "TEXT", share_id: "TEXT", share_handle_lookup_token: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
+  account_profiles: { account_id: "TEXT", ciphertext: "BLOB", revision: "INTEGER", epoch: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
+  passkeys: { credential_id: "TEXT", account_id: "TEXT", public_key: "BLOB", counter: "INTEGER", transports: "TEXT", device_type: "TEXT", backed_up: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
+  sessions: { id: "TEXT", account_id: "TEXT", purpose: "TEXT", authenticated_passkey_id: "TEXT", created_at: "INTEGER", idle_expires_at: "INTEGER", absolute_expires_at: "INTEGER", fresh_asserted_at: "INTEGER", refreshed_at: "INTEGER", revoked_at: "INTEGER" },
+  webauthn_challenges: { id: "TEXT", challenge: "TEXT", purpose: "TEXT", account_id: "TEXT", session_id: "TEXT", origin: "TEXT", rp_id: "TEXT", expires_at: "INTEGER", created_at: "INTEGER" },
+};
+const EXPECTED_INDEXES = [
+  ["accounts", "accounts_share_id_unique", 1],
+  ["accounts", "accounts_share_handle_lookup_token_unique", 1],
+  ["passkeys", "passkeys_account_id_idx", 0],
+  ["sessions", "sessions_account_live_idx", 0],
+  ["sessions", "sessions_authenticated_passkey_idx", 0],
+  ["webauthn_challenges", "webauthn_challenges_challenge_unique", 1],
+  ["webauthn_challenges", "webauthn_challenges_expiry_idx", 0],
+  ["webauthn_challenges", "webauthn_challenges_session_idx", 0],
 ];
-const EXPECTED_UNIQUE_INDEXES = [
-  "accounts_share_id_unique",
-  "accounts_share_handle_lookup_token_unique",
+const EXPECTED_FOREIGN_KEYS = [
+  "account_profiles:account_id:accounts:id:RESTRICT",
+  "passkeys:account_id:accounts:id:RESTRICT",
+  "sessions:account_id:accounts:id:RESTRICT",
+  "webauthn_challenges:account_id:accounts:id:RESTRICT",
+  "webauthn_challenges:session_id:sessions:id:RESTRICT",
 ];
 
 /**
@@ -86,26 +100,36 @@ function queryResults(bindArgs, sql) {
  * @param {string} label
  */
 function verifySchema(bindArgs, label) {
-  const tables = queryResults(
-    bindArgs,
-    `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('accounts','d1_migrations');`,
-  );
-  for (const t of ["accounts", "d1_migrations"]) {
-    if (!tables.includes(t)) failNow(`${label}: missing table ${t}`);
-  }
-  const columns = queryResults(
-    bindArgs,
-    `SELECT name FROM pragma_table_info('accounts');`,
-  );
-  for (const c of EXPECTED_COLUMNS) {
-    if (!columns.includes(c)) failNow(`${label}: accounts missing column ${c}`);
-  }
-  const indexes = queryResults(
-    bindArgs,
-    `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='accounts';`,
-  );
-  for (const ix of EXPECTED_UNIQUE_INDEXES) {
-    if (!indexes.includes(ix)) failNow(`${label}: missing unique index ${ix}`);
+  // One schema snapshot keeps local and remote verification inexpensive.
+  // Table names below are source-controlled constants, never request input.
+  const names = Object.keys(EXPECTED_COLUMNS).map((name) => `'${name}'`).join(", ");
+  const facts = new Set(queryResults(bindArgs, `
+    SELECT 'table:' || name AS name FROM sqlite_master
+      WHERE type = 'table' AND name IN (${names}, 'd1_migrations')
+    UNION ALL
+    SELECT 'column:' || m.name || ':' || p.name || ':' || upper(p.type)
+      FROM sqlite_master AS m, pragma_table_info(m.name) AS p
+      WHERE m.type = 'table' AND m.name IN (${names})
+    UNION ALL
+    SELECT 'index:' || m.name || ':' || i.name || ':' || i."unique"
+      FROM sqlite_master AS m, pragma_index_list(m.name) AS i
+      WHERE m.type = 'table' AND m.name IN (${names})
+    UNION ALL
+    SELECT 'fk:' || m.name || ':' || f."from" || ':' || f."table" || ':' || f."to" || ':' || f.on_delete
+      FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f
+      WHERE m.type = 'table' AND m.name IN (${names});
+  `));
+  const required = [
+    "table:d1_migrations",
+    ...Object.entries(EXPECTED_COLUMNS).flatMap(([table, columns]) => [
+      `table:${table}`,
+      ...Object.entries(columns).map(([column, type]) => `column:${table}:${column}:${type}`),
+    ]),
+    ...EXPECTED_INDEXES.map(([table, name, unique]) => `index:${table}:${name}:${unique}`),
+    ...EXPECTED_FOREIGN_KEYS.map((key) => `fk:${key}`),
+  ];
+  for (const fact of required) {
+    if (!facts.has(fact)) failNow(`${label}: missing schema fact ${fact}`);
   }
   console.log(`✓ ${label}: schema matches the committed migration set`);
 }

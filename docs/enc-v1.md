@@ -176,6 +176,7 @@ version, not a permissive v1 decoder.
 | 14 | `archive-manifest` |
 | 15 | `import-staging-manifest` |
 | 16 | `import-chunk` |
+| 17 | `account-profile` |
 
 Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
  key`, `Comment audience epoch`); only the numeric ID is serialized. Every HPKE
@@ -185,6 +186,23 @@ Callers must supply the optional bindings for all other cases where applicable;
 for example a public Comment's content must bind its Publication, whereas a
 Private Comment has none. Purpose IDs must never be renumbered.
 
+## Account profile (purpose 17)
+
+Ticket 06 stores the current Account profile as an encrypted `account-profile`
+envelope. Its compact canonical plaintext contains the generated Public
+pseudonym; the service persists only the opaque ciphertext, Account-profile
+revision, and Vault-root epoch. No Account-profile key or plaintext reaches a
+Worker route, D1, logs, or a test-only production endpoint.
+
+`app/crypto/account-profile` binds its envelope context to caller-supplied,
+trusted current metadata: `vaultId` is the opaque Account ID, `objectId` is
+`account-profile`, `keyId` is `vault-root`, and `keyEpoch` and `revision` are
+the expected externally stored current epoch and profile revision. Opening
+requires that same expected context; it never treats an envelope header's
+Account, epoch, or revision as authority. The helper uses the ordinary
+symmetric writer with the Account-owned 32-byte Vault-root key, so the profile
+inherits the envelope's random salt and nonce allocation contract.
+
 ## Consumers and open decisions
 
 Future tickets that build envelopes must use this module rather than a new format.
@@ -193,6 +211,7 @@ Their purpose names are pinned here:
 | Ticket | Purposes |
 | --- | --- |
 | 04 Vault key hierarchy and Recovery capsule | `vault-recovery`, `recovery-capsule`, `device-enrollment` |
+| 06 Accounts, Passkeys, and Sessions | `account-profile` |
 | 08 Signup bootstrap | `device-enrollment`, `vault-recovery` |
 | 12 Routine device enrollment | `device-enrollment` |
 | 14 Private tree | `directory-capability`, `file-content-key`, `directory-metadata` |

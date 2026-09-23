@@ -58,8 +58,8 @@ test("isolates nonce key domains across simultaneous tabs and independent device
   const a = await type.launch();
   const b = await type.launch();
   try {
-    const contextA = await a.newContext();
-    const contextB = await b.newContext();
+    const contextA = await a.newContext({ ignoreHTTPSErrors: true });
+    const contextB = await b.newContext({ ignoreHTTPSErrors: true });
     const pages = await Promise.all([contextA.newPage(), contextA.newPage(), contextB.newPage()]);
     await Promise.all(pages.map((page) => installContract(page, envelopeScript, baseURL!)));
     const allocations = await Promise.all(pages.map((page) => page.evaluate(async () => {
@@ -93,7 +93,10 @@ test("does not resume an abandoned nonce sequence after a full browser restart",
   const profile = await mkdtemp(join(tmpdir(), "mdwn-enc-v1-profile-"));
   const type = playwright[browserName];
   try {
-    const first = await type.launchPersistentContext(profile, { headless: true });
+    const first = await type.launchPersistentContext(profile, {
+      headless: true,
+      ignoreHTTPSErrors: true,
+    });
     let prior: { bytes: number[]; salt: string };
     try {
       const page = await first.newPage();
@@ -109,7 +112,10 @@ test("does not resume an abandoned nonce sequence after a full browser restart",
     } finally {
       await first.close();
     }
-    const restarted = await type.launchPersistentContext(profile, { headless: true });
+    const restarted = await type.launchPersistentContext(profile, {
+      headless: true,
+      ignoreHTTPSErrors: true,
+    });
     try {
       const page = await restarted.newPage();
       await installContract(page, envelopeScript, baseURL!);

@@ -21,14 +21,16 @@
     "db:smoke:production": "node scripts/smoke-db.mjs --remote production",
     "check:secrets": "node scripts/check-bundle-secrets.mjs",
     "check:namespace": "node scripts/generate-namespace-v1-data.mjs --check",
-    "deploy:preview": "npm run build:preview && wrangler deploy",
-    "deploy:production": "npm run build:production && wrangler deploy",
+    "deploy:preview": "node scripts/deploy-worker.mjs preview",
+    "deploy:production": "node scripts/deploy-worker.mjs production",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
     "@hpke/core": "1.9.0",
     "@react-router/cloudflare": "^8.4.0",
     "@scure/bip39": "1.5.4",
+    "@simplewebauthn/browser": "14.0.0",
+    "@simplewebauthn/server": "14.0.2",
     "drizzle-orm": "^0.45.2",
     "isbot": "^5.1.36",
     "react": "^19.2.8",

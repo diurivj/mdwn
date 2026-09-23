@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 
+export { sql };
 export { accounts } from "./schema";
 export * from "./schema";
 

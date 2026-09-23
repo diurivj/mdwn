@@ -1,10 +1,11 @@
 # Development-only values for `wrangler dev` / local `npm run dev`.
-# This file is gitignored. NEVER commit real values here.
+# Copy this example to gitignored .dev.vars. NEVER commit real values here.
 #
-# Production values live in Cloudflare Secrets (dashboard or
-# `wrangler secret put <NAME> --env=<preview|production>`) and are referenced
-# identically through `env.NAME`. The build-time secret check
+# Preview and production values live in Cloudflare Secrets and are referenced
+# through env.NAME. Configure Session signing values in GitHub Secrets for the
+# reviewed deploy workflow; see docs/serving-and-security.md. The bundle check
 # (`npm run check:secrets`) fails if any value below leaks into build/client.
 #
 # Example:
 # HEALTHZ_TOKEN=local-development-only-token
+# SESSION_COOKIE_SECRET=replace-with-a-32-character-minimum-local-secret

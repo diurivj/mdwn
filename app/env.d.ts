@@ -12,6 +12,8 @@ declare global {
   interface Env {
     /** Gate for the /healthz probe. Cloudflare Secret per environment. */
     HEALTHZ_TOKEN?: string;
+    /** HMAC key for signed opaque Account Session cookies. */
+    SESSION_COOKIE_SECRET?: string;
   }
 }
 

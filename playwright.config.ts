@@ -13,6 +13,8 @@ export default defineConfig({
   ],
   outputDir: "test-results",
   use: {
+    // Wrangler generates a local development certificate for the test Worker.
+    ignoreHTTPSErrors: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",

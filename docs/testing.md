@@ -16,10 +16,24 @@ for renderer-free unit tests. The second uses
 Workers runtime (`workerd`) and bindings shape as the application. It is not a
 second server or a Node mock.
 
+Worker tests are typechecked by `tsconfig.cloudflare.json`, alongside the
+application and generated Worker bindings. The Node project excludes this
+directory. Shared JSON fixtures use import attributes, so the Worker project
+uses `ESNext` modules.
+
+The Worker test configuration supplies the committed D1 migrations and a
+test-only Session signing key through Miniflare bindings. Tests that need D1
+apply those migrations with `applyD1Migrations` from `cloudflare:test`; they
+do not recreate the schema or connect to a remote database.
+
 Put server-side tests that need the Worker runtime in
-`tests/worker/**/*.test.ts`. Import `SELF` from `cloudflare:test` and exercise
-the Worker through `SELF.fetch(...)`; use the real Web Platform APIs available
-in that target. Tests outside `tests/worker/` remain Node tests. The normal
+`tests/worker/**/*.test.ts`. Route and request-boundary tests must import `SELF`
+from `cloudflare:test` and exercise the Worker through `SELF.fetch(...)`.
+Schema constraints and atomic storage invariants without a public route may
+be tested directly through real D1 bindings and storage helpers in workerd.
+These tests supplement route coverage; they do not replace it or justify
+production test endpoints. Use the real Web Platform APIs in that target.
+Tests outside `tests/worker/` remain Node tests. The normal
 `npm test` command runs both targets, and a failing target stops the command.
 
 `tests/worker/cross-engine.test.ts` is the small contract test: it fetches the
@@ -54,12 +68,12 @@ that fixture; no Playwright project or Worker-harness configuration change is
 needed.
 
 The contract suite also demonstrates the browser seams later cryptographic and
-device work will use. The foundation does not yet have an Account sign-in or
-production device-store module; the current tests deliberately use a
-harness-owned IndexedDB schema and a shared test Account identifier. Later
-authentication/device tickets can replace only that setup with the real flow;
-the Worker, browser, engine, restart, and artifact configuration stays the
-same.
+device work will use. Those tests deliberately use a harness-owned IndexedDB
+schema and a shared test Account identifier, not a production Encryption-device
+store. `e2e/auth-sign-in.spec.ts` separately seeds Accounts with passkeys and
+signs in through the real routes; it also checks the Account-security SSR shell
+and fetcher revalidation. Ticket 08 will replace seeding with signup and device
+enrollment without changing the Worker/browser/engine harness.
 
 - `window.isSecureContext` and AES-GCM WebCrypto;
 - a non-extractable `CryptoKey` structured-cloned into IndexedDB and recovered
@@ -79,3 +93,5 @@ Each matrix job uploads `playwright-report/` plus `test-results/`, including
 screenshots, videos, and traces retained for failures. These artifacts can
 contain page and application details; keep them within the repository's CI
 retention/access policy and never put real credentials in browser fixtures.
+
+The auth fixture installs Playwright’s virtual WebAuthn authenticator. Linux WebKit can lack the native `PublicKeyCredential` constructor, with Playwright supplying an object placeholder; the fixture replaces a non-function value with a constructor so SimpleWebAuthn reaches the virtual authenticator. This shim is confined to the test BrowserContext; application feature detection and Worker verification remain unchanged.

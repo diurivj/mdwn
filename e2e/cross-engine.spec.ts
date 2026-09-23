@@ -116,6 +116,7 @@ test.describe("cross-engine application contract", () => {
     try {
       const firstBrowser = await browserType.launchPersistentContext(userDataDir, {
         headless: true,
+        ignoreHTTPSErrors: true,
       });
       const firstPage = await firstBrowser.newPage();
 
@@ -153,6 +154,7 @@ test.describe("cross-engine application contract", () => {
 
       const restartedBrowser = await browserType.launchPersistentContext(userDataDir, {
         headless: true,
+        ignoreHTTPSErrors: true,
       });
       const restartedPage = await restartedBrowser.newPage();
       try {
@@ -201,8 +203,8 @@ test.describe("cross-engine application contract", () => {
       browserType.launch(),
       browserType.launch(),
     ]);
-    const deviceContextA = await deviceBrowserA.newContext();
-    const deviceContextB = await deviceBrowserB.newContext();
+    const deviceContextA = await deviceBrowserA.newContext({ ignoreHTTPSErrors: true });
+    const deviceContextB = await deviceBrowserB.newContext({ ignoreHTTPSErrors: true });
     const [deviceA, deviceB] = await Promise.all([
       deviceContextA.newPage(),
       deviceContextB.newPage(),
