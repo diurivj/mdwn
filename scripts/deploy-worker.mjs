@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Build, scan, and deploy one selected Worker with its signing secret. */
+/** Build, scan, and deploy one selected Worker with its runtime secrets. */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,9 +27,16 @@ try {
       process.argv.length > (dryRun ? 4 : 3)) {
     throw new Error("Usage: deploy-worker.mjs <preview|production> [--dry-run]");
   }
-  const secret = process.env.SESSION_COOKIE_SECRET;
-  if (!secret || secret.length < 32) {
+  const sessionSecret = process.env.SESSION_COOKIE_SECRET;
+  const abuseSecret = process.env.ABUSE_HMAC_SECRET;
+  if (!sessionSecret || sessionSecret.length < 32) {
     throw new Error("SESSION_COOKIE_SECRET must contain at least 32 characters");
+  }
+  if (!abuseSecret || abuseSecret.length < 32) {
+    throw new Error("ABUSE_HMAC_SECRET must contain at least 32 characters");
+  }
+  if (sessionSecret === abuseSecret) {
+    throw new Error("SESSION_COOKIE_SECRET and ABUSE_HMAC_SECRET must be distinct");
   }
 
   run("npm", ["run", `build:${target}`]);
@@ -45,7 +52,10 @@ try {
   const temporaryDirectory = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "mdwn-deploy-"));
   const secretFile = join(temporaryDirectory, "secrets.json");
   try {
-    writeFileSync(secretFile, JSON.stringify({ SESSION_COOKIE_SECRET: secret }), { mode: 0o600 });
+    writeFileSync(secretFile, JSON.stringify({
+      SESSION_COOKIE_SECRET: sessionSecret,
+      ABUSE_HMAC_SECRET: abuseSecret,
+    }), { mode: 0o600 });
     const output = run("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretFile,
       ...(dryRun ? ["--dry-run", "--outdir", join(temporaryDirectory, "worker")] : [])], !dryRun);
     if (!dryRun) {

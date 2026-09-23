@@ -15,6 +15,13 @@
       "when": 1790050875604,
       "tag": "0001_accounts_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790140665890,
+      "tag": "0002_hesitant_sphinx",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,8 @@ declare global {
     HEALTHZ_TOKEN?: string;
     /** HMAC key for signed opaque Account Session cookies. */
     SESSION_COOKIE_SECRET?: string;
+    /** Rotatable HMAC key for purpose/time-epoch-scoped abuse-control buckets. */
+    ABUSE_HMAC_SECRET?: string;
   }
 }
 

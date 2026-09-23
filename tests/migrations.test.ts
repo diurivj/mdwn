@@ -39,6 +39,18 @@ describe("committed Drizzle migrations", () => {
     }
   });
 
+  it("stores only bounded abuse counters and allowlisted Security event columns", () => {
+    const sql = readFileSync(join(DRIZZLE_DIR, migrations[migrations.length - 1]), "utf8");
+
+    expect(sql).toContain("CREATE TABLE `rate_limit_counters`");
+    expect(sql).toContain("CREATE TABLE `security_events`");
+    expect(sql).toContain("`time_epoch` integer NOT NULL");
+    expect(sql).toContain("`network_bucket_expires_at` integer");
+    expect(sql).toContain("security_events_retention_bounded");
+    expect(sql).toContain("security_events_network_bucket_bounded");
+    expect(sql).not.toMatch(/raw_ip|full_url|request_headers|request_body|cookie|user_agent|fingerprint|capability|fragment/i);
+  });
+
   it("keeps authentication records separate from opaque Account identity", () => {
     const sql = readFileSync(join(DRIZZLE_DIR, "0001_accounts_auth.sql"), "utf8");
 

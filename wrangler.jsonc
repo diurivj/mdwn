@@ -6,8 +6,13 @@
   "vars": {
     "APP_ENV": "local"
   },
+  // The privacy policy disables blanket invocation logs and traces; only
+  // explicitly allowlisted Security events are persisted in D1.
   "observability": {
-    "enabled": true
+    "enabled": false
+  },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
   },
   "version_metadata": {
     "binding": "CF_VERSION_METADATA"
@@ -26,6 +31,9 @@
       "name": "mdwn-preview",
       "vars": {
         "APP_ENV": "preview"
+      },
+      "triggers": {
+        "crons": ["*/15 * * * *"]
       },
       "version_metadata": {
         "binding": "CF_VERSION_METADATA"
@@ -46,6 +54,9 @@
       "workers_dev": true,
       "vars": {
         "APP_ENV": "production"
+      },
+      "triggers": {
+        "crons": ["*/15 * * * *"]
       },
       "version_metadata": {
         "binding": "CF_VERSION_METADATA"

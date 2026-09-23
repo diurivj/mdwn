@@ -27,15 +27,27 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Validate Session signing secrets before migrations
+      - name: Validate Session and abuse-control secrets before migrations
         env:
           SESSION_COOKIE_SECRET_PREVIEW: ${{ secrets.SESSION_COOKIE_SECRET_PREVIEW }}
           SESSION_COOKIE_SECRET_PRODUCTION: ${{ secrets.SESSION_COOKIE_SECRET_PRODUCTION }}
+          ABUSE_HMAC_SECRET_PREVIEW: ${{ secrets.ABUSE_HMAC_SECRET_PREVIEW }}
+          ABUSE_HMAC_SECRET_PRODUCTION: ${{ secrets.ABUSE_HMAC_SECRET_PRODUCTION }}
         run: |
           node --input-type=module -e '
-            for (const name of ["SESSION_COOKIE_SECRET_PREVIEW", "SESSION_COOKIE_SECRET_PRODUCTION"]) {
-              if (!process.env[name] || process.env[name].length < 32) {
-                console.error(`${name} must contain at least 32 characters`);
+            for (const target of ["PREVIEW", "PRODUCTION"]) {
+              const session = process.env[`SESSION_COOKIE_SECRET_${target}`];
+              const abuse = process.env[`ABUSE_HMAC_SECRET_${target}`];
+              if (!session || session.length < 32) {
+                console.error(`SESSION_COOKIE_SECRET_${target} must contain at least 32 characters`);
+                process.exitCode = 1;
+              }
+              if (!abuse || abuse.length < 32) {
+                console.error(`ABUSE_HMAC_SECRET_${target} must contain at least 32 characters`);
+                process.exitCode = 1;
+              }
+              if (session && abuse && session === abuse) {
+                console.error(`Session and abuse-control secrets must be distinct for ${target}`);
                 process.exitCode = 1;
               }
             }
@@ -54,6 +66,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
           SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET_PREVIEW }}
+          ABUSE_HMAC_SECRET: ${{ secrets.ABUSE_HMAC_SECRET_PREVIEW }}
           MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}
         run: npm run deploy:preview
 
@@ -84,6 +97,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
           SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET_PRODUCTION }}
+          ABUSE_HMAC_SECRET: ${{ secrets.ABUSE_HMAC_SECRET_PRODUCTION }}
           MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}
         run: npm run deploy:production
 

@@ -1,9 +1,11 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 describe("deployed Worker identity", () => {
   it("includes the runtime's version ID in the health probe", async () => {
-    const response = await SELF.fetch("https://mdwn.test/healthz");
+    const response = await SELF.fetch("https://mdwn.test/healthz", {
+      headers: env.HEALTHZ_TOKEN ? { authorization: `Bearer ${env.HEALTHZ_TOKEN}` } : {},
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
