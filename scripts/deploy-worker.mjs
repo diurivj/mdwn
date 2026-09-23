@@ -1,14 +1,23 @@
 #!/usr/bin/env node
 /** Build, scan, and deploy one selected Worker with its signing secret. */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** @param {string} command @param {string[]} args */
-function run(command, args) {
-  const result = spawnSync(command, args, { stdio: "inherit" });
+import { deployedVersionId } from "./lib/deployment-readiness.mjs";
+
+/** @param {string} command @param {string[]} args @param {boolean} [capture] */
+function run(command, args, capture = false) {
+  const result = spawnSync(command, args, capture
+    ? { encoding: "utf8", stdio: ["inherit", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 }
+    : { stdio: "inherit" });
+  if (capture) {
+    process.stdout.write(result.stdout ?? "");
+    process.stderr.write(result.stderr ?? "");
+  }
   if (result.error || result.status !== 0) throw new Error(`${command} ${args[0]} failed`);
+  return capture ? `${result.stdout ?? ""}\n${result.stderr ?? ""}` : "";
 }
 
 try {
@@ -26,8 +35,9 @@ try {
   run("npm", ["run", `build:${target}`]);
   const config = JSON.parse(readFileSync("build/server/wrangler.json", "utf8"));
   const expectedName = target === "preview" ? "mdwn-preview" : "mdwn";
-  if (config.name !== expectedName || config.vars?.APP_ENV !== target) {
-    throw new Error("Built Worker does not match the requested deployment environment");
+  if (config.name !== expectedName || config.vars?.APP_ENV !== target ||
+      config.version_metadata?.binding !== "CF_VERSION_METADATA") {
+    throw new Error("Built Worker does not match the requested deployment environment or version binding");
   }
   // Secret-named environment variables are scanned before anything is uploaded.
   run("npm", ["run", "check:secrets"]);
@@ -36,8 +46,15 @@ try {
   const secretFile = join(temporaryDirectory, "secrets.json");
   try {
     writeFileSync(secretFile, JSON.stringify({ SESSION_COOKIE_SECRET: secret }), { mode: 0o600 });
-    run("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretFile,
-      ...(dryRun ? ["--dry-run", "--outdir", join(temporaryDirectory, "worker")] : [])]);
+    const output = run("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretFile,
+      ...(dryRun ? ["--dry-run", "--outdir", join(temporaryDirectory, "worker")] : [])], !dryRun);
+    if (!dryRun) {
+      const versionId = deployedVersionId(output);
+      // GitHub Actions reads this value only after Wrangler has deployed it.
+      if (process.env.GITHUB_OUTPUT) {
+        appendFileSync(process.env.GITHUB_OUTPUT, `version_id=${versionId}\n`);
+      }
+    }
   } finally {
     // Only this invocation's newly created directory is removed.
     rmSync(temporaryDirectory, { recursive: true, force: true });

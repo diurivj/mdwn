@@ -6,8 +6,8 @@ import type { Route } from "./+types/healthz";
 
 /**
  * Liveness/probe endpoint used by CI and ops. Gated by the HEALTHZ_TOKEN
- * secret (Bearer token) so it reveals environment status only to the owner.
- * Returns plain JSON, never shell HTML, and never any secret value.
+ * secret (Bearer token) so it reveals environment and deployed Worker version
+ * only to the owner. Returns plain JSON, never shell HTML or a secret value.
  */
 export async function loader({ context, request }: Route.LoaderArgs) {
   const env = getEnv(context);
@@ -31,7 +31,12 @@ export async function loader({ context, request }: Route.LoaderArgs) {
     });
   }
   return new Response(
-    JSON.stringify({ ok: true, appEnv: env.APP_ENV, db: "connected" }),
+    JSON.stringify({
+      ok: true,
+      appEnv: env.APP_ENV,
+      db: "connected",
+      versionId: env.CF_VERSION_METADATA.id,
+    }),
     { status: 200, headers },
   );
 }

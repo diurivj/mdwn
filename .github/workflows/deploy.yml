@@ -49,6 +49,7 @@ jobs:
         run: npm run db:migrate:preview
 
       - name: Build and deploy preview Worker
+        id: deploy_preview
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
@@ -63,18 +64,12 @@ jobs:
           # When HEALTHZ_TOKEN_PREVIEW is set, verify the real secret never
           # entered the client bundle of this build.
           MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}
+          HEALTHZ_TOKEN: ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}
+          DEPLOYED_VERSION_ID: ${{ steps.deploy_preview.outputs.version_id }}
         run: |
           npm run db:smoke -- --remote preview
           npm run check:secrets
-          code=$(curl -s -o /tmp/healthz-preview.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}" \
-            https://mdwn-preview.diurivj.workers.dev/healthz)
-          test "$code" = "200"
-          grep -q '"ok":true' /tmp/healthz-preview.json
-          curl --fail --silent --show-error https://mdwn-preview.diurivj.workers.dev/api/auth/session \
-            | grep -q '"authenticated":false'
-          curl -s -I https://mdwn-preview.diurivj.workers.dev/ \
-            | grep -qi "content-security-policy:.*default-src 'none'"
+          node scripts/check-worker-ready.mjs preview
 
       # --- Production ----------------------------------------------------------
       - name: Apply migrations to production D1
@@ -84,6 +79,7 @@ jobs:
         run: npm run db:migrate:production
 
       - name: Build and deploy production Worker
+        id: deploy_production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
@@ -98,15 +94,9 @@ jobs:
           # When HEALTHZ_TOKEN_PRODUCTION is set, verify the real secret never
           # entered the client bundle of the production build.
           MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}
+          HEALTHZ_TOKEN: ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}
+          DEPLOYED_VERSION_ID: ${{ steps.deploy_production.outputs.version_id }}
         run: |
           npm run db:smoke -- --remote production
           npm run check:secrets
-          code=$(curl -s -o /tmp/healthz-prod.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}" \
-            https://mdwn.diurivj.workers.dev/healthz)
-          test "$code" = "200"
-          grep -q '"ok":true' /tmp/healthz-prod.json
-          curl --fail --silent --show-error https://mdwn.diurivj.workers.dev/api/auth/session \
-            | grep -q '"authenticated":false'
-          curl -s -I https://mdwn.diurivj.workers.dev/ \
-            | grep -qi "content-security-policy:.*default-src 'none'"
+          node scripts/check-worker-ready.mjs production

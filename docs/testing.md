@@ -11,10 +11,12 @@ npm run test:all     # npm test, a production Worker build, and all browser engi
 ## Workers runtime
 
 `npm test` runs both Vitest configurations. The first uses the Node environment
-for renderer-free unit tests. The second uses
+for renderer-free unit tests, including simulated old/new deployment responses
+and bounded readiness retries. The second uses
 `@cloudflare/vitest-plugin` with `wrangler.jsonc`, so tests execute in the same
 Workers runtime (`workerd`) and bindings shape as the application. It is not a
-second server or a Node mock.
+second server or a Node mock. The Worker suite also checks that `/healthz`
+reports the runtime's version-metadata binding.
 
 Worker tests are typechecked by `tsconfig.cloudflare.json`, alongside the
 application and generated Worker bindings. The Node project excludes this
