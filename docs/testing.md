@@ -74,8 +74,10 @@ device work will use. Those tests deliberately use a harness-owned IndexedDB
 schema and a shared test Account identifier, not a production Encryption-device
 store. `e2e/auth-sign-in.spec.ts` separately seeds Accounts with passkeys and
 signs in through the real routes; it also checks the Account-security SSR shell
-and fetcher revalidation. Ticket 08 will replace seeding with signup and device
-enrollment without changing the Worker/browser/engine harness.
+and fetcher revalidation. `e2e/signup.spec.ts`, `e2e/signup-integrity.spec.ts`,
+and `e2e/device-store.spec.ts` exercise real signup, device enrollment, local
+recovery confirmation before any signup request, and persisted key handles
+through the same Worker/browser/engine harness.
 
 - `window.isSecureContext` and AES-GCM WebCrypto;
 - a non-extractable `CryptoKey` structured-cloned into IndexedDB and recovered

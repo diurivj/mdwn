@@ -91,6 +91,8 @@ export const sessions = sqliteTable(
     freshAssertedAt: integer("fresh_asserted_at"),
     refreshedAt: integer("refreshed_at"),
     revokedAt: integer("revoked_at"),
+    /** Null means unprovisioned; a private-capable Session names one exact device. */
+    deviceId: text("device_id"),
   },
   (table) => [
     index("sessions_account_live_idx").on(
@@ -129,13 +131,15 @@ export const webauthnChallenges = sqliteTable(
     rpId: text("rp_id").notNull(),
     expiresAt: integer("expires_at").notNull(),
     createdAt: integer("created_at").notNull(),
+    /** Only signup stores an HPKE possession challenge hash here. */
+    transportChallengeHash: blob("transport_challenge_hash"),
   },
   (table) => [
     index("webauthn_challenges_expiry_idx").on(table.expiresAt),
     index("webauthn_challenges_session_idx").on(table.sessionId),
     check(
       "webauthn_challenges_purpose_valid",
-      sql`${table.purpose} IN ('sign_in', 'fresh_assertion', 'passkey_registration')`,
+      sql`${table.purpose} IN ('sign_in', 'fresh_assertion', 'passkey_registration', 'signup')`,
     ),
     check(
       "webauthn_challenges_expiry_after_created",
@@ -304,3 +308,80 @@ export const securityEvents = sqliteTable(
 
 export type RateLimitCounter = typeof rateLimitCounters.$inferSelect;
 export type SecurityEvent = typeof securityEvents.$inferSelect;
+
+/** Signup's five-minute, one-use, random registration/PoW challenge. */
+export const registrationChallenges = sqliteTable("registration_challenges", {
+  id: text("id").primaryKey(),
+  challenge: text("challenge").notNull().unique(),
+  origin: text("origin").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [index("registration_challenges_expiry_idx").on(table.expiresAt)]);
+
+/** One encryption identity, hidden root Directory and current registry epoch per Account. */
+export const accountEncryptionIdentities = sqliteTable("account_encryption_identities", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "restrict" }),
+  rootDirectoryId: text("root_directory_id").notNull().unique(),
+  registryEpoch: integer("registry_epoch").notNull(),
+}, (table) => [check("account_encryption_epoch_positive", sql`${table.registryEpoch} >= 1`)]);
+
+/** Public device keys only; private CryptoKeys never cross the browser boundary. */
+export const encryptionDevices = sqliteTable("encryption_devices", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  transportPublicKey: blob("transport_public_key").notNull(),
+  assertionPublicKey: blob("assertion_public_key").notNull(),
+  state: text("state").notNull(),
+  approvalProvenance: text("approval_provenance").notNull(),
+  registryEpoch: integer("registry_epoch").notNull(),
+  createdAt: integer("created_at").notNull(),
+  lastProofAt: integer("last_proof_at"),
+}, (table) => [
+  index("encryption_devices_account_idx").on(table.accountId, table.state),
+  check("encryption_devices_state_valid", sql`${table.state} IN ('active', 'revoked', 'tombstoned')`),
+  check("encryption_devices_epoch_positive", sql`${table.registryEpoch} >= 1`),
+]);
+
+/** Both required opaque initial envelopes, explicitly addressable by purpose. */
+export const keyEnvelopes = sqliteTable("key_envelopes", {
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  purpose: text("purpose").notNull(),
+  objectId: text("object_id").notNull(),
+  recipientId: text("recipient_id").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  keyEpoch: integer("key_epoch").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.purpose, table.objectId, table.recipientId] }),
+  check("key_envelopes_purpose_valid", sql`${table.purpose} IN ('vault-recovery', 'device-enrollment')`),
+  check("key_envelopes_epoch_positive", sql`${table.keyEpoch} >= 1`),
+]);
+
+/** Opaque generation-1 capsule; no Vault recovery secret or phrase reaches D1. */
+export const recoveryCapsules = sqliteTable("recovery_capsules", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "restrict" }),
+  generation: integer("generation").notNull(),
+  recoverySalt: blob("recovery_salt").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  verificationPublicKey: blob("verification_public_key").notNull(),
+}, (table) => [check("recovery_capsules_generation_positive", sql`${table.generation} >= 1`)]);
+
+/** High-entropy authentication recovery codes: only SHA-256 hashes are retained. */
+export const authenticationRecoveryCodes = sqliteTable("authentication_recovery_codes", {
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  ordinal: integer("ordinal").notNull(),
+  codeHash: blob("code_hash").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.ordinal] }),
+  check("authentication_recovery_ordinal_valid", sql`${table.ordinal} BETWEEN 0 AND 9`),
+]);
+
+/** Spent mutation/security proofs only: never write a row for a private read. */
+export const deviceProofUses = sqliteTable("device_proof_uses", {
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  proofId: text("proof_id").notNull(),
+  sessionId: text("session_id").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.proofId] }),
+  index("device_proof_uses_expiry_idx").on(table.expiresAt),
+]);

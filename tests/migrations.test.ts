@@ -40,7 +40,7 @@ describe("committed Drizzle migrations", () => {
   });
 
   it("stores only bounded abuse counters and allowlisted Security event columns", () => {
-    const sql = readFileSync(join(DRIZZLE_DIR, migrations[migrations.length - 1]), "utf8");
+    const sql = readFileSync(join(DRIZZLE_DIR, "0002_hesitant_sphinx.sql"), "utf8");
 
     expect(sql).toContain("CREATE TABLE `rate_limit_counters`");
     expect(sql).toContain("CREATE TABLE `security_events`");
@@ -49,6 +49,16 @@ describe("committed Drizzle migrations", () => {
     expect(sql).toContain("security_events_retention_bounded");
     expect(sql).toContain("security_events_network_bucket_bounded");
     expect(sql).not.toMatch(/raw_ip|full_url|request_headers|request_body|cookie|user_agent|fingerprint|capability|fragment/i);
+  });
+
+  it("adds the signup registry and recovery records without plaintext secrets", () => {
+    const sql = readFileSync(join(DRIZZLE_DIR, "0003_colossal_falcon.sql"), "utf8");
+    for (const table of ["account_encryption_identities", "encryption_devices", "key_envelopes",
+      "recovery_capsules", "authentication_recovery_codes", "registration_challenges", "device_proof_uses"]) {
+      expect(sql).toContain(`CREATE TABLE \`${table}\``);
+    }
+    expect(sql).toContain("`device_id` text");
+    expect(sql).not.toMatch(/private_key|recovery_secret|recovery_phrase|raw_ip|user_agent/i);
   });
 
   it("keeps authentication records separate from opaque Account identity", () => {

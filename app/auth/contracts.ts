@@ -22,6 +22,8 @@ export type PasskeySummary = {
 export type AssertionStart = {
   challengeId: string;
   options: PublicKeyCredentialRequestOptionsJSON;
+  /** Issued only for sign-in: a prospective normal Session's binding digest. */
+  sessionBinding?: string;
 };
 
 export type RegistrationStart = {

@@ -13,6 +13,8 @@
     "app/db/**/*.ts",
     "app/security/**/*.ts",
     "app/crypto/**/*.ts",
+    "app/device/store.ts",
+    "app/signup/protocol.ts",
     "app/namespace-v1/**/*.ts"
   ],
   "exclude": ["tests/worker/**/*"],

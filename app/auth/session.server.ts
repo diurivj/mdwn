@@ -16,6 +16,7 @@ type StoredSessionData = {
   purpose: SessionPurpose;
   authenticatedPasskeyId?: string;
   freshAssertedAt?: number;
+  deviceId?: string;
 };
 
 export type ActiveSession = StoredSessionData & {
@@ -28,6 +29,7 @@ type SessionRow = {
   purpose: SessionPurpose;
   authenticated_passkey_id: string | null;
   fresh_asserted_at: number | null;
+  device_id: string | null;
 };
 
 type SessionSummaryRow = {
@@ -132,7 +134,7 @@ export function createAccountSessionStorage(
     async readData(id) {
       const now = Date.now();
       const row = await createDb(env.DB).get<SessionRow>(sql`
-        SELECT id, account_id, purpose, authenticated_passkey_id, fresh_asserted_at
+        SELECT id, account_id, purpose, authenticated_passkey_id, fresh_asserted_at, device_id
          FROM sessions
          WHERE id = ${id}
            AND revoked_at IS NULL
@@ -150,6 +152,7 @@ export function createAccountSessionStorage(
         ...(row.fresh_asserted_at !== null
           ? { freshAssertedAt: row.fresh_asserted_at }
           : {}),
+        ...(row.device_id !== null ? { deviceId: row.device_id } : {}),
       };
     },
     async updateData(id, data) {
@@ -198,12 +201,14 @@ export async function getActiveSession(
   }
 
   const freshAssertedAt = session.get("freshAssertedAt");
+  const deviceId = session.get("deviceId");
   return {
     id: session.id,
     accountId,
     purpose,
     ...(typeof authenticatedPasskeyId === "string" ? { authenticatedPasskeyId } : {}),
     ...(typeof freshAssertedAt === "number" ? { freshAssertedAt } : {}),
+    ...(typeof deviceId === "string" ? { deviceId } : {}),
   };
 }
 
@@ -217,6 +222,31 @@ export function hasFreshAssertion(
     session.freshAssertedAt > now - FRESH_ASSERTION_MS &&
     session.freshAssertedAt <= now
   );
+}
+
+export async function signSessionId(env: Env, id: string): Promise<string> {
+  return sessionCookie(env).serialize(id);
+}
+
+/** Prepared alongside the rest of signup: the cookie is signed before the atomic batch. */
+export function prepareBoundSession(
+  env: Env,
+  id: string,
+  accountId: string,
+  credentialId: string,
+  deviceId: string,
+  now: number,
+) {
+  assertSessionConfiguration(env);
+  return sql`
+    INSERT INTO sessions (
+      id, account_id, purpose, authenticated_passkey_id, device_id, created_at,
+      idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at
+    ) SELECT ${id}, ${accountId}, 'normal', ${credentialId}, ${deviceId}, ${now},
+      ${now + SESSION_IDLE_MS}, ${now + SESSION_ABSOLUTE_MS}, ${now}, NULL, NULL
+    WHERE EXISTS (SELECT 1 FROM passkeys WHERE credential_id = ${credentialId} AND account_id = ${accountId})
+      AND EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${deviceId} AND account_id = ${accountId} AND state = 'active')
+  `;
 }
 
 export async function createNormalSession(

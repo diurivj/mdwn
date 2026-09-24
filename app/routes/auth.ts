@@ -120,10 +120,10 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       const parsed = record(body);
       const challengeId = parsed ? string(parsed.challengeId) : null;
       const result = challengeId
-        ? await completeSignIn(request, env, challengeId, parsed?.response)
+        ? await completeSignIn(request, env, challengeId, parsed?.response, parsed?.deviceProof)
         : null;
       return result
-        ? Response.json({ ok: true }, { headers: { "Set-Cookie": result.setCookie } })
+        ? Response.json({ ok: true, bound: result.bound }, { headers: { "Set-Cookie": result.setCookie } })
         : failure(401);
     }
 
