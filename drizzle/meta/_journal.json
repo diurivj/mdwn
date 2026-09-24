@@ -22,6 +22,13 @@
       "when": 1790140665890,
       "tag": "0002_hesitant_sphinx",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790211922930,
+      "tag": "0003_colossal_falcon",
+      "breakpoints": true
     }
   ]
 }

@@ -41,8 +41,15 @@ const EXPECTED_COLUMNS = {
   accounts: { id: "TEXT", share_id: "TEXT", share_handle_lookup_token: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
   account_profiles: { account_id: "TEXT", ciphertext: "BLOB", revision: "INTEGER", epoch: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
   passkeys: { credential_id: "TEXT", account_id: "TEXT", public_key: "BLOB", counter: "INTEGER", transports: "TEXT", device_type: "TEXT", backed_up: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
-  sessions: { id: "TEXT", account_id: "TEXT", purpose: "TEXT", authenticated_passkey_id: "TEXT", created_at: "INTEGER", idle_expires_at: "INTEGER", absolute_expires_at: "INTEGER", fresh_asserted_at: "INTEGER", refreshed_at: "INTEGER", revoked_at: "INTEGER" },
-  webauthn_challenges: { id: "TEXT", challenge: "TEXT", purpose: "TEXT", account_id: "TEXT", session_id: "TEXT", origin: "TEXT", rp_id: "TEXT", expires_at: "INTEGER", created_at: "INTEGER" },
+  sessions: { id: "TEXT", account_id: "TEXT", purpose: "TEXT", authenticated_passkey_id: "TEXT", created_at: "INTEGER", idle_expires_at: "INTEGER", absolute_expires_at: "INTEGER", fresh_asserted_at: "INTEGER", refreshed_at: "INTEGER", revoked_at: "INTEGER", device_id: "TEXT" },
+  webauthn_challenges: { id: "TEXT", challenge: "TEXT", purpose: "TEXT", account_id: "TEXT", session_id: "TEXT", origin: "TEXT", rp_id: "TEXT", expires_at: "INTEGER", created_at: "INTEGER", transport_challenge_hash: "BLOB" },
+  registration_challenges: { id: "TEXT", challenge: "TEXT", origin: "TEXT", expires_at: "INTEGER", created_at: "INTEGER" },
+  account_encryption_identities: { account_id: "TEXT", root_directory_id: "TEXT", registry_epoch: "INTEGER" },
+  encryption_devices: { id: "TEXT", account_id: "TEXT", transport_public_key: "BLOB", assertion_public_key: "BLOB", state: "TEXT", approval_provenance: "TEXT", registry_epoch: "INTEGER", created_at: "INTEGER", last_proof_at: "INTEGER" },
+  key_envelopes: { account_id: "TEXT", purpose: "TEXT", object_id: "TEXT", recipient_id: "TEXT", ciphertext: "BLOB", key_epoch: "INTEGER" },
+  recovery_capsules: { account_id: "TEXT", generation: "INTEGER", recovery_salt: "BLOB", ciphertext: "BLOB", verification_public_key: "BLOB" },
+  authentication_recovery_codes: { account_id: "TEXT", ordinal: "INTEGER", code_hash: "BLOB" },
+  device_proof_uses: { account_id: "TEXT", proof_id: "TEXT", session_id: "TEXT", expires_at: "INTEGER" },
   rate_limit_counters: { purpose: "TEXT", scope_type: "TEXT", scope_id: "TEXT", window_ms: "INTEGER", time_epoch: "INTEGER", count: "INTEGER", expires_at: "INTEGER" },
   security_events: { id: "TEXT", created_at: "INTEGER", expires_at: "INTEGER", action_class: "TEXT", outcome: "TEXT", reason: "TEXT", account_id: "TEXT", publication_id: "TEXT", size_class: "TEXT", proof_state: "TEXT", counter_state: "TEXT", retry_at: "INTEGER", network_bucket: "TEXT", network_bucket_expires_at: "INTEGER" },
 };
@@ -60,6 +67,11 @@ const EXPECTED_INDEXES = [
   ["security_events", "security_events_network_expiry_idx", 0],
   ["security_events", "security_events_account_created_idx", 0],
   ["security_events", "security_events_publication_created_idx", 0],
+  ["registration_challenges", "registration_challenges_challenge_unique", 1],
+  ["registration_challenges", "registration_challenges_expiry_idx", 0],
+  ["account_encryption_identities", "account_encryption_identities_root_directory_id_unique", 1],
+  ["encryption_devices", "encryption_devices_account_idx", 0],
+  ["device_proof_uses", "device_proof_uses_expiry_idx", 0],
 ];
 const EXPECTED_FOREIGN_KEYS = [
   "account_profiles:account_id:accounts:id:RESTRICT",
@@ -67,6 +79,12 @@ const EXPECTED_FOREIGN_KEYS = [
   "sessions:account_id:accounts:id:RESTRICT",
   "webauthn_challenges:account_id:accounts:id:RESTRICT",
   "webauthn_challenges:session_id:sessions:id:RESTRICT",
+  "account_encryption_identities:account_id:accounts:id:RESTRICT",
+  "encryption_devices:account_id:accounts:id:RESTRICT",
+  "key_envelopes:account_id:accounts:id:RESTRICT",
+  "recovery_capsules:account_id:accounts:id:RESTRICT",
+  "authentication_recovery_codes:account_id:accounts:id:RESTRICT",
+  "device_proof_uses:account_id:accounts:id:RESTRICT",
 ];
 
 /**

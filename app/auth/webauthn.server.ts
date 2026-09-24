@@ -7,7 +7,9 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 
-import { createDb, passkeys, sessions, sql } from "~/db/client.server";
+import { atomicSqlBatch, createDb, passkeys, sessions, sql } from "~/db/client.server";
+import { sessionBindingDigest } from "~/device/proof";
+import { verifySignInDevice } from "~/device/proof.server";
 
 import type { AssertionStart, PasskeySummary, RegistrationStart } from "./contracts";
 
@@ -16,6 +18,8 @@ import {
   assertSessionConfiguration,
   createNormalSession,
   hasFreshAssertion,
+  prepareBoundSession,
+  signSessionId,
   type ActiveSession,
 } from "./session.server";
 
@@ -230,7 +234,7 @@ export async function beginSignIn(request: Request, env: Env): Promise<Assertion
     null,
     null,
   );
-  return { challengeId, options };
+  return { challengeId, options, sessionBinding: await sessionBindingDigest(challengeId) };
 }
 
 /**
@@ -243,7 +247,8 @@ export async function completeSignIn(
   env: Env,
   challengeId: string,
   payload: unknown,
-): Promise<{ setCookie: string } | null> {
+  deviceProof?: unknown,
+): Promise<{ setCookie: string; bound: boolean } | null> {
   const challenge = await consumeChallenge(
     env,
     "sign_in",
@@ -269,17 +274,26 @@ export async function completeSignIn(
   const verification = await verifyAssertion(response, passkey, challenge);
   if (!verification) return null;
 
+  const deviceId = await verifySignInDevice(
+    env, passkey.account_id, challengeId, deviceProof, request,
+    JSON.stringify({ challengeId, response }),
+  );
   const now = Date.now();
   const counterUpdated = await createDb(env.DB).run(
     updatePasskeyCounter(passkey, verification, now),
   );
   if (counterUpdated.meta.changes !== 1) return null;
 
-  // Intentionally outside the verifier catch: a missing cookie-signing
-  // secret is a predictable deployment failure, not a bad passkey response.
-  return {
-    setCookie: await createNormalSession(env, passkey.account_id, passkey.credential_id),
-  };
+  if (deviceId) {
+    const result = await atomicSqlBatch(env.DB, [
+      prepareBoundSession(env, challengeId, passkey.account_id, passkey.credential_id, deviceId, now),
+    ]);
+    if (result[0]?.meta.changes === 1) {
+      return { setCookie: await signSessionId(env, challengeId), bound: true };
+    }
+  }
+  // No active key/proof at creation: a genuinely unprovisioned normal Session.
+  return { setCookie: await createNormalSession(env, passkey.account_id, passkey.credential_id), bound: false };
 }
 
 /** Begins a known-Account assertion that can renew a normal Session's freshness. */

@@ -28,7 +28,10 @@ function localHttpsWorkerConfig() {
       local_protocol: "https",
       upstream_protocol: "https",
     },
-    vars: { ...vars, SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET },
+    vars: {
+      ...vars, SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET,
+      ABUSE_HMAC_SECRET: "mdwn-browser-abuse-tests-only-not-a-deployment-secret",
+    },
   };
 }
 
