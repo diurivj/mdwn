@@ -14,4 +14,4 @@
 
 ## Comments
 
-- This follow-up is separate from signup PR #11; wait for ticket 08 to land before moving its route modules. The folder name does not create a URL because this project maps routes explicitly in `app/routes.ts`.
+- 2026-09-23: Dependency satisfied: ticket 08 landed on `main` via PR #11 (`02a5332`). This follow-up can now move its resource-route modules without changing their URLs; `app/routes.ts` maps URLs explicitly.
