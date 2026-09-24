@@ -1,6 +1,7 @@
 import { createRequestHandler } from "@react-router/cloudflare";
 import { RouterContextProvider } from "react-router";
 import { envContext } from "~/context/env";
+import { purgeExpiredAbuseRecords } from "~/security/abuse-control.server";
 import { buildSecurityHeaders, DYNAMIC_CACHE_CONTROL, generateCspNonce } from "~/security/headers";
 import { cspNonceContext } from "~/security/nonce";
 
@@ -44,6 +45,10 @@ const requestHandler = createRequestHandler<Env>({
 });
 
 export default {
+  async scheduled(_controller, env) {
+    await purgeExpiredAbuseRecords(env.DB);
+  },
+
   async fetch(request, env, ctx) {
     const nonce = generateCspNonce();
 

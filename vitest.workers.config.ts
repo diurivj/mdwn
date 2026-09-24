@@ -10,6 +10,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations("./drizzle"),
+          HEALTHZ_TOKEN: "mdwn-worker-test-health-probe-not-a-deployment-secret",
           SESSION_COOKIE_SECRET: "mdwn-worker-tests-only-not-a-deployment-secret",
         },
       },

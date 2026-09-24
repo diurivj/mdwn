@@ -43,6 +43,8 @@ const EXPECTED_COLUMNS = {
   passkeys: { credential_id: "TEXT", account_id: "TEXT", public_key: "BLOB", counter: "INTEGER", transports: "TEXT", device_type: "TEXT", backed_up: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
   sessions: { id: "TEXT", account_id: "TEXT", purpose: "TEXT", authenticated_passkey_id: "TEXT", created_at: "INTEGER", idle_expires_at: "INTEGER", absolute_expires_at: "INTEGER", fresh_asserted_at: "INTEGER", refreshed_at: "INTEGER", revoked_at: "INTEGER" },
   webauthn_challenges: { id: "TEXT", challenge: "TEXT", purpose: "TEXT", account_id: "TEXT", session_id: "TEXT", origin: "TEXT", rp_id: "TEXT", expires_at: "INTEGER", created_at: "INTEGER" },
+  rate_limit_counters: { purpose: "TEXT", scope_type: "TEXT", scope_id: "TEXT", window_ms: "INTEGER", time_epoch: "INTEGER", count: "INTEGER", expires_at: "INTEGER" },
+  security_events: { id: "TEXT", created_at: "INTEGER", expires_at: "INTEGER", action_class: "TEXT", outcome: "TEXT", reason: "TEXT", account_id: "TEXT", publication_id: "TEXT", size_class: "TEXT", proof_state: "TEXT", counter_state: "TEXT", retry_at: "INTEGER", network_bucket: "TEXT", network_bucket_expires_at: "INTEGER" },
 };
 const EXPECTED_INDEXES = [
   ["accounts", "accounts_share_id_unique", 1],
@@ -53,6 +55,11 @@ const EXPECTED_INDEXES = [
   ["webauthn_challenges", "webauthn_challenges_challenge_unique", 1],
   ["webauthn_challenges", "webauthn_challenges_expiry_idx", 0],
   ["webauthn_challenges", "webauthn_challenges_session_idx", 0],
+  ["rate_limit_counters", "rate_limit_counters_expiry_idx", 0],
+  ["security_events", "security_events_expiry_idx", 0],
+  ["security_events", "security_events_network_expiry_idx", 0],
+  ["security_events", "security_events_account_created_idx", 0],
+  ["security_events", "security_events_publication_created_idx", 0],
 ];
 const EXPECTED_FOREIGN_KEYS = [
   "account_profiles:account_id:accounts:id:RESTRICT",

@@ -9,3 +9,4 @@
 # Example:
 # HEALTHZ_TOKEN=local-development-only-token
 # SESSION_COOKIE_SECRET=replace-with-a-32-character-minimum-local-secret
+# ABUSE_HMAC_SECRET=replace-with-a-different-32-character-random-secret

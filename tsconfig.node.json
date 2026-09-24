@@ -10,6 +10,7 @@
     "tests/**/*.ts",
     "tests/fixtures/*.json",
     "e2e/**/*.ts",
+    "app/db/**/*.ts",
     "app/security/**/*.ts",
     "app/crypto/**/*.ts",
     "app/namespace-v1/**/*.ts"
