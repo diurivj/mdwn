@@ -6,7 +6,7 @@ Issues and specs for this repo live as markdown files under `.scratch/`. The Git
 
 - One effort per directory: `.scratch/<effort-slug>/`. The current effort is `mdwn` (`.scratch/mdwn/`).
 - **Wayfinder tickets** (resolved decision tickets) live at `.scratch/<effort-slug>/wayfinder/<NN>-<slug>.md`, numbered from `01`. `mdwn`'s are `01`–`27`.
-- **Build tickets** live at `.scratch/<effort-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order — one file per ticket, never a single combined tickets file. `mdwn`'s build tickets are `01`–`33`.
+- **Build tickets** live at `.scratch/<effort-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order — one file per ticket, never a single combined tickets file. Inspect the directory for the current highest number.
 - Numbers are allocated sequentially within each directory and never reused.
 - The wayfinder **map** stays at `.scratch/<effort-slug>/map.md` and links to its child tickets under `wayfinder/`.
 - Triage state is a `Status:` line near the top of each ticket file (see `triage-labels.md` for the role strings). Build tickets are published `ready-for-agent`.
@@ -16,11 +16,11 @@ Issues and specs for this repo live as markdown files under `.scratch/`. The Git
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<effort-slug>/issues/`, numbered from the next free `NN` (the next free number in `mdwn` is `34`).
+Create a new file under `.scratch/<effort-slug>/issues/`, numbered one higher than the current highest `NN` in that directory.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly. Because `mdwn` now has two numbered sets — build tickets under `issues/` (`01`–`33`) and wayfinder tickets under `wayfinder/` (`01`–`27`) — treat a bare number as a build ticket unless the user says wayfinder.
+Read the file at the referenced path. The user will normally pass the path or the issue number directly. Because `mdwn` has two numbered sets — build tickets under `issues/` and wayfinder tickets under `wayfinder/` — treat a bare number as a build ticket unless the user says wayfinder.
 
 ## Wayfinding operations
 
