@@ -9,6 +9,7 @@ import {
   sealDeviceEnrollmentEnvelope,
 } from "~/crypto/vault";
 import { createDevice, getDevice, updateRegistryEpoch } from "~/device/store";
+import { newOpaqueId } from "~/opaque-id";
 import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "~/signup/protocol";
 
 const GATE_KEY = "mdwn:signup:recovery-confirmation-pending";
@@ -25,20 +26,6 @@ export function isSignupRecoveryConfirmationPending(): boolean {
 
 export function confirmSignupRecovery(): void {
   localStorage.removeItem(GATE_KEY);
-}
-
-/** RFC 9562 UUIDv7: millisecond timestamp followed by cryptographic random bits. */
-export function newSignupId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  let timestamp = BigInt(Date.now());
-  for (let index = 5; index >= 0; index--) {
-    bytes[index] = Number(timestamp & 255n);
-    timestamp >>= 8n;
-  }
-  bytes[6] = (bytes[6]! & 15) | 0x70;
-  bytes[8] = (bytes[8]! & 63) | 0x80;
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 async function digest(bytes: Uint8Array): Promise<string> {
@@ -59,9 +46,9 @@ export type PreparedSignup = {
 
 /** Prepare locally, then let the user save and verify recovery material before any network request. */
 export async function prepareSignup(): Promise<PreparedSignup> {
-  const accountId = newSignupId();
-  const rootDirectoryId = newSignupId();
-  const deviceId = newSignupId();
+  const accountId = newOpaqueId();
+  const rootDirectoryId = newOpaqueId();
+  const deviceId = newOpaqueId();
   const device = await createDevice(accountId, deviceId);
   // Persist the *candidate* epoch before network I/O: a lost commit response
   // must still allow the saved keys to bind on the next Passkey sign-in.

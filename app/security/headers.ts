@@ -85,7 +85,7 @@ export function buildSecurityHeaders(input: SecurityHeadersInput): Record<string
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     // Deny all browser features; no tracking, no sensors.
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=()",
+    "Permissions-Policy": "camera=(self), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
     // Anonymous public pages are non-indexed by default (spec §2.1).

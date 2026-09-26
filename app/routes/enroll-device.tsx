@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { Link } from "react-router";
 
 import { beginCandidate, loadEnrollmentPage, pollCandidate, type PendingCandidate } from "~/enrollment/ceremony-client";
-import { useRecoveryProvisioning } from "~/recovery/provision-hook";
+import { useOwnedProvisioning } from "~/device/owned-provision-hook";
 
 import type { Route } from "./+types/enroll-device";
 
@@ -28,7 +28,7 @@ export default function EnrollDevice({ loaderData }: Route.ComponentProps) {
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const provisioning = useRecoveryProvisioning(phase === "setup");
+  const provisioning = useOwnedProvisioning(phase === "setup");
 
   useEffect(() => {
     if (!pending || !canvas.current || (phase !== "scan" && phase !== "waiting")) return;

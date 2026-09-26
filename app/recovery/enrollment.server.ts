@@ -1,4 +1,5 @@
-import { assertSessionConfiguration, FRESH_ASSERTION_MS, hasFreshAssertion, SESSION_ABSOLUTE_MS, SESSION_IDLE_MS, signSessionId, type ActiveSession } from "~/auth/session.server";
+import { freshNormalSessionGuard } from "~/auth/fresh-session.server";
+import { assertSessionConfiguration, hasFreshAssertion, SESSION_ABSOLUTE_MS, SESSION_IDLE_MS, signSessionId, type ActiveSession } from "~/auth/session.server";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
 import { sealDeviceEnrollmentEnvelope } from "~/crypto/vault";
@@ -12,17 +13,6 @@ const noStore = { "Cache-Control": "no-store" };
 
 function failed(): Response {
   return Response.json({ error: "recovery_failed" }, { status: 400, headers: noStore });
-}
-
-function freshSession(session: ActiveSession, now: number) {
-  return sql`EXISTS (
-    SELECT 1 FROM sessions WHERE id = ${session.id} AND account_id = ${session.accountId}
-      AND purpose = 'normal' AND authenticated_passkey_id IS NOT NULL
-      AND revoked_at IS NULL AND idle_expires_at > ${now} AND absolute_expires_at > ${now}
-      AND fresh_asserted_at > ${now - FRESH_ASSERTION_MS} AND fresh_asserted_at <= ${now}
-      AND EXISTS (SELECT 1 FROM passkeys WHERE credential_id = sessions.authenticated_passkey_id
-        AND account_id = sessions.account_id)
-  )`;
 }
 
 type EnrollmentRow = {
@@ -50,7 +40,7 @@ async function enrollment(env: Env, session: ActiveSession, id: string, now: num
     JOIN recovery_capsules c ON c.account_id = e.account_id AND c.generation = e.generation
     JOIN account_encryption_identities i ON i.account_id = e.account_id AND i.registry_epoch = e.registry_epoch
     WHERE e.id = ${id} AND e.account_id = ${session.accountId} AND e.session_id = ${session.id}
-      AND e.expires_at > ${now} AND ${freshSession(session, now)}
+      AND e.expires_at > ${now} AND ${freshNormalSessionGuard(session, now)}
   `)) ?? null;
 }
 
@@ -95,7 +85,7 @@ export async function startRecoveryEnrollment(request: Request, env: Env, sessio
   }>(sql`
     SELECT c.generation, c.recovery_salt, c.ciphertext, c.verification_public_key, i.registry_epoch
     FROM recovery_capsules c JOIN account_encryption_identities i ON i.account_id = c.account_id
-    WHERE c.account_id = ${session.accountId} AND ${freshSession(session, now)}
+    WHERE c.account_id = ${session.accountId} AND ${freshNormalSessionGuard(session, now)}
   `);
   if (!row) return failed();
   const id = crypto.randomUUID();
@@ -105,7 +95,7 @@ export async function startRecoveryEnrollment(request: Request, env: Env, sessio
       (id, account_id, session_id, generation, registry_epoch, nonce, state, created_at, expires_at)
     SELECT ${id}, ${session.accountId}, ${session.id}, ${row.generation}, ${row.registry_epoch},
       ${nonce}, 'started', ${now}, ${now + ENROLLMENT_MS}
-    WHERE ${freshSession(session, now)}
+    WHERE ${freshNormalSessionGuard(session, now)}
       AND EXISTS (SELECT 1 FROM recovery_capsules WHERE account_id = ${session.accountId}
         AND generation = ${row.generation})
       AND EXISTS (SELECT 1 FROM account_encryption_identities WHERE account_id = ${session.accountId}
@@ -149,7 +139,7 @@ export async function challengeRecoveryEnrollment(
         intent_digest = ${digest}, next_metadata_digest = ${decodeBytes(intent.nextMetadataDigest, 32)},
         challenge_hash = ${hash}
       WHERE id = ${id} AND account_id = ${session.accountId} AND session_id = ${session.id}
-        AND state = 'started' AND expires_at > ${now} AND ${freshSession(session, now)}
+        AND state = 'started' AND expires_at > ${now} AND ${freshNormalSessionGuard(session, now)}
         AND EXISTS (SELECT 1 FROM recovery_capsules WHERE account_id = ${session.accountId}
           AND generation = ${row.generation})
         AND EXISTS (SELECT 1 FROM account_encryption_identities WHERE account_id = ${session.accountId}
@@ -233,7 +223,7 @@ export async function commitRecoveryEnrollment(env: Env, session: ActiveSession,
         AND candidate_device_id = ${body.intent.deviceId}
         AND transport_public_key = ${decodeBytes(body.intent.transportPublicKey, 65)}
         AND assertion_public_key = ${decodeBytes(body.intent.assertionPublicKey, 65)}
-        AND ${freshSession(session, now)}
+        AND ${freshNormalSessionGuard(session, now)}
         AND EXISTS (SELECT 1 FROM recovery_capsules WHERE account_id = ${session.accountId}
           AND generation = ${row.generation} AND verification_public_key = ${new Uint8Array(row.verification_public_key)})
         AND EXISTS (SELECT 1 FROM account_encryption_identities WHERE account_id = ${session.accountId}

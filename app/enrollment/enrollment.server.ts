@@ -1,12 +1,11 @@
-import type { SQL } from "drizzle-orm";
-
-import { assertSessionConfiguration, FRESH_ASSERTION_MS, hasFreshAssertion,
+import { freshNormalSessionGuard } from "~/auth/fresh-session.server";
+import { assertSessionConfiguration, hasFreshAssertion,
   SESSION_ABSOLUTE_MS, SESSION_IDLE_MS, signSessionId, type ActiveSession } from "~/auth/session.server";
 import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
 import { sealDeviceEnrollmentEnvelope } from "~/crypto/vault";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { newSignupId } from "~/signup/bootstrap";
+import { newOpaqueId } from "~/opaque-id";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 
 import { approvalMessage, candidateTranscriptMessage, possessionMessage, sha256,
@@ -18,16 +17,6 @@ const failed = () => Response.json({ error: "enrollment_failed" }, { status: 400
 
 function equal(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
-}
-
-function freshSession(session: ActiveSession, now: number): SQL {
-  return sql`EXISTS (SELECT 1 FROM sessions WHERE id = ${session.id}
-    AND account_id = ${session.accountId} AND purpose = 'normal'
-    AND authenticated_passkey_id = ${session.authenticatedPasskeyId ?? null}
-    AND revoked_at IS NULL AND idle_expires_at > ${now} AND absolute_expires_at > ${now}
-    AND fresh_asserted_at > ${now - FRESH_ASSERTION_MS} AND fresh_asserted_at <= ${now}
-    AND EXISTS (SELECT 1 FROM passkeys WHERE credential_id = sessions.authenticated_passkey_id
-      AND account_id = sessions.account_id))`;
 }
 
 async function verifySignature(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): Promise<boolean> {
@@ -75,7 +64,7 @@ export async function startDeviceEnrollment(env: Env, session: ActiveSession,
     const assertion = decodeBytes(transcript.assertionPublicKey, 65);
     await crypto.subtle.importKey("raw", transport, { name: "ECDH", namedCurve: "P-256" }, false, []);
     await crypto.subtle.importKey("raw", assertion, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
-    const enrollmentId = newSignupId();
+    const enrollmentId = newOpaqueId();
     const expiresAt = now + ENROLLMENT_MS;
     const inserted = await createDb(env.DB).run(sql`
       INSERT INTO device_enrollments (id, account_id, candidate_session_id, candidate_device_id,
@@ -84,7 +73,7 @@ export async function startDeviceEnrollment(env: Env, session: ActiveSession,
       SELECT ${enrollmentId}, ${session.accountId}, ${session.id}, ${transcript.deviceId},
         ${transport}, ${assertion}, ${message}, ${digest}, ${decodeBytes(transcript.pairingSecretHash, 32)},
         ${transcript.registryEpoch}, 'pending', ${now}, ${expiresAt}
-      WHERE ${freshSession(session, now)}
+      WHERE ${freshNormalSessionGuard(session, now)}
         AND EXISTS (SELECT 1 FROM sessions WHERE id = ${session.id} AND device_id IS NULL)
         AND EXISTS (SELECT 1 FROM account_encryption_identities WHERE account_id = ${session.accountId}
           AND registry_epoch = ${transcript.registryEpoch})
@@ -170,7 +159,7 @@ export async function approveDeviceEnrollment(env: Env, session: ActiveSession,
         AND candidate_session_id = ${row.candidate_session_id} AND expires_at > ${now}
         AND registry_epoch = ${authorized.registryEpoch}
         AND transcript = ${new Uint8Array(row.transcript)}
-        AND ${freshSession(session, now)} AND ${guard}
+        AND ${freshNormalSessionGuard(session, now)} AND ${guard}
         AND EXISTS (SELECT 1 FROM sessions WHERE id = ${row.candidate_session_id}
           AND account_id = ${session.accountId} AND purpose = 'normal' AND device_id IS NULL
           AND revoked_at IS NULL AND idle_expires_at > ${now} AND absolute_expires_at > ${now})`);
@@ -271,7 +260,7 @@ export async function commitDeviceEnrollment(env: Env, session: ActiveSession,
           label.context.objectId !== row.candidate_device_id || label.context.keyId !== row.candidate_device_id ||
           label.context.keyEpoch !== 1 || label.context.revision !== 1) return failed();
     }
-    const newSessionId = newSignupId();
+    const newSessionId = newOpaqueId();
     const cookie = await signSessionId(env, newSessionId);
     const results = await atomicSqlBatch(env.DB, [
       sql`UPDATE device_enrollments SET state = 'consumed', challenge_ciphertext = NULL
@@ -286,7 +275,7 @@ export async function commitDeviceEnrollment(env: Env, session: ActiveSession,
           AND approval_message = ${approval} AND approval_signature = ${approvalSignature}
           AND envelope_digest = ${envelopeDigest} AND enrollment_envelope = ${envelope}
           AND challenge_hash = ${challengeHash}
-          AND ${freshSession(session, now)}
+          AND ${freshNormalSessionGuard(session, now)}
           AND EXISTS (SELECT 1 FROM sessions WHERE id = ${session.id} AND device_id IS NULL)
           AND EXISTS (SELECT 1 FROM account_encryption_identities WHERE account_id = ${row.account_id}
             AND registry_epoch = ${row.registry_epoch})

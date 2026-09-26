@@ -9,11 +9,11 @@ import {
   activateRecoveryCandidate, createRecoveryCandidate, getDevice, getRecoveryCandidate,
   listRecoveryCandidates,
 } from "~/device/store";
-import { newSignupId } from "~/signup/bootstrap";
+import { newOpaqueId } from "~/opaque-id";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 
 import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type NextRecoveryMetadata, type RecoveryIntent } from "./protocol";
-import { recoveryProvisioningNeeded } from "./provision-client";
+import { ownedProvisioningNeeded } from "~/device/owned-provision-client";
 
 type Start = {
   enrollmentId: string; accountId: string; generation: number; registryEpoch: number;
@@ -40,7 +40,7 @@ export async function loadVaultRecovery(signal: AbortSignal): Promise<Loaded> {
     const device = await getDevice(accountId);
     let restoring = false;
     if (device) {
-      try { restoring = await recoveryProvisioningNeeded(signal); }
+      try { restoring = await ownedProvisioningNeeded(signal); }
       catch { restoring = true; }
     }
     return { state: "ready", ...(parsed?.accountId === accountId &&
@@ -74,7 +74,7 @@ export async function runVaultRecovery(request: Request) {
     const next = await createRecoveryMaterial(start.accountId, {
       generation: start.generation + 1, vaultRootKey: opened.vaultRootKey,
     });
-    const candidate = await createRecoveryCandidate(start.accountId, newSignupId());
+    const candidate = await createRecoveryCandidate(start.accountId, newOpaqueId());
     const persisted = await getRecoveryCandidate(start.accountId, candidate.deviceId);
     if (!persisted || persisted.deviceId !== candidate.deviceId) throw new Error("Device keys unavailable");
     const transportPublicKey = encodeBytes(new Uint8Array(await crypto.subtle.exportKey("raw", persisted.transportKeyPair.publicKey)));

@@ -5,7 +5,7 @@ import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "~/cr
 import { privateRequest } from "~/device/private-client";
 import { activateEnrollmentCandidate, createEnrollmentCandidate, getDevice,
   getEnrollmentCandidate } from "~/device/store";
-import { newSignupId } from "~/signup/bootstrap";
+import { newOpaqueId } from "~/opaque-id";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 
 import { approvalMessage, candidateTranscriptMessage, parseQrPayload, possessionMessage,
@@ -70,7 +70,7 @@ export async function beginCandidate(signal: AbortSignal, label: string): Promis
   if (state.deviceId || !Number.isSafeInteger(state.registryEpoch) || state.registryEpoch < 1) {
     throw new Error("Device is already active");
   }
-  const deviceId = newSignupId();
+  const deviceId = newOpaqueId();
   await createEnrollmentCandidate(state.accountId, deviceId);
   const device = await getEnrollmentCandidate(state.accountId, deviceId);
   if (!device) throw new Error("Candidate keys unavailable");

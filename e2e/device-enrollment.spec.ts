@@ -62,6 +62,35 @@ test("a synced Passkey needs QR approval before the second browser can open File
       }
     });
     await original.page.goto(`${origin}/enroll-device/approve`, { waitUntil: "commit" });
+    const substitutedKeyLink = await candidate.page.evaluate(async (value) => {
+      const [base, fragment] = value.split("#");
+      const decode = (input: string) => atob(input.replaceAll("-", "+").replaceAll("_", "/"));
+      const encode = (input: Uint8Array) => btoa(String.fromCharCode(...input))
+        .replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+      const payload = JSON.parse(decode(fragment!)) as {
+        transcript: { accountId: string; registryEpoch: number; deviceId: string;
+          transportPublicKey: string; assertionPublicKey: string; pairingSecretHash: string };
+        transcriptDigest: string;
+      };
+      const replacement = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+      payload.transcript.transportPublicKey = encode(new Uint8Array(await crypto.subtle.exportKey("raw", replacement.publicKey)));
+      const transcript = payload.transcript;
+      const canonical = JSON.stringify(["mdwn/device-enrollment-candidate/v1", transcript.accountId,
+        transcript.registryEpoch, transcript.deviceId, transcript.transportPublicKey,
+        transcript.assertionPublicKey, transcript.pairingSecretHash]);
+      payload.transcriptDigest = encode(new Uint8Array(await crypto.subtle.digest(
+        "SHA-256", new TextEncoder().encode(canonical))));
+      return `${base}#${encode(new TextEncoder().encode(JSON.stringify(payload)))}`;
+    }, pairingLink);
+    await original.page.getByRole("textbox", { name: "Pairing link" }).fill(substitutedKeyLink);
+    await original.page.getByRole("button", { name: "Approve device" }).click();
+    await expect(original.page.getByRole("alert")).toBeVisible();
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE state = 'active'")
+      .first<{ n: number }>())?.n).toBe(1);
+    await candidate.page.getByRole("button", { name: "I've scanned it" }).click();
+    await expect(candidate.page.getByRole("heading", { name: "Waiting for approval" })).toBeVisible();
+    await candidate.page.goto(`${origin}/`, { waitUntil: "commit" });
     await original.page.getByRole("textbox", { name: "Pairing link" }).fill(pairingLink);
     await original.page.getByRole("button", { name: "Approve device" }).click();
     // The candidate's sign-in and fresh assertion advanced its virtual copy
@@ -78,8 +107,15 @@ test("a synced Passkey needs QR approval before the second browser can open File
     await expect(original.page.getByRole("status").or(original.page.getByRole("alert"))).toBeVisible({ timeout: 30_000 });
     expect(await original.page.getByRole("alert").count(), browserErrors.join("\n")).toBe(0);
     await expect(original.page.getByRole("status")).toContainText("Approval sent");
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE state = 'active'")
+      .first<{ n: number }>())?.n).toBe(1);
+    await candidate.page.route("**/api/private/recovery-provision/next", (route) => route.abort());
+    await candidate.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
     await expect(candidate.page.getByRole("heading", { name: "Setting up your Files securely…" }))
       .toBeVisible({ timeout: 120_000 });
+    expect(await env.DB.prepare("SELECT state FROM crypto_jobs WHERE kind = 'enrollment_owned'")
+      .first<{ state: string }>()).toEqual({ state: "pending" });
+    await candidate.page.unroute("**/api/private/recovery-provision/next");
     await candidate.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
     await expect(candidate.page.getByRole("heading", { name: "Private access ready" })).toBeVisible();
     expect(sent.every((request) => !request.includes(rawSecret) && !request.includes("Second device"))).toBe(true);
@@ -96,6 +132,84 @@ test("a synced Passkey needs QR approval before the second browser can open File
       .first<{ n: number }>())?.n).toBe(1);
     expect((await original.page.evaluate(async () =>
       (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>)).authenticated).toBe(true);
+    await original.page.getByRole("textbox", { name: "Pairing link" }).fill(pairingLink);
+    await original.page.getByRole("button", { name: "Approve device" }).click();
+    await expect(original.page.getByRole("alert")).toBeVisible();
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE state = 'active'")
+      .first<{ n: number }>())?.n).toBe(2);
+  } finally {
+    await candidate?.context.close();
+    await original.context.close();
+  }
+});
+
+test("lost candidate keys, expiry, and stale registry state restart without activation", async ({ browser, server, baseURL }) => {
+  const origin = new URL(baseURL!).origin;
+  const worker = server.getWorker<{ DB: D1Database }>();
+  await worker.applyD1Migrations("DB");
+  const env = await worker.getEnv();
+  const original = await withPasskey(browser, origin);
+  let candidate: Awaited<ReturnType<typeof withPasskey>> | undefined;
+  try {
+    await original.page.getByRole("button", { name: "Create account", exact: true }).click();
+    await completeRecoveryPresentation(original.page);
+    await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
+    await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
+    await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
+    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    await candidate.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
+
+    const start = async () => {
+      await candidate!.page.getByRole("button", { name: "Create pairing QR code" }).click();
+      await expect(candidate!.page.getByRole("heading", { name: "Scan this QR code" })).toBeVisible();
+      const link = await candidate!.page.getByRole("textbox", { name: "Pairing link" }).inputValue();
+      const encoded = link.split("#")[1]!;
+      return (JSON.parse(atob(encoded.replaceAll("-", "+").replaceAll("_", "/"))) as {
+        enrollmentId: string;
+      }).enrollmentId;
+    };
+    const expectRestart = async () => {
+      await expect(candidate!.page.getByRole("heading", { name: "Restart device enrollment" }))
+        .toBeVisible({ timeout: 30_000 });
+      await expect(candidate!.page.getByRole("alert")).toContainText("Start again on this browser");
+      expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE state = 'active'")
+        .first<{ n: number }>())?.n).toBe(1);
+    };
+    const restart = async () => {
+      await candidate!.page.getByRole("button", { name: "Start again" }).click();
+      await expect(candidate!.page.getByRole("heading", { name: "Enroll this device" })).toBeVisible();
+    };
+
+    await start();
+    await candidate.page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("mdwn-device-store");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction("pending_enrollment", "readwrite");
+        transaction.objectStore("pending_enrollment").clear();
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      db.close();
+    });
+    await expectRestart();
+    await restart();
+
+    const expiredId = await start();
+    const now = Date.now();
+    await env.DB.prepare("UPDATE device_enrollments SET created_at = ?, expires_at = ? WHERE id = ?")
+      .bind(now - 9 * 60_000, now - 1, expiredId).run();
+    await expectRestart();
+    await restart();
+
+    await start();
+    await env.DB.prepare("UPDATE account_encryption_identities SET registry_epoch = registry_epoch + 1")
+      .run();
+    await expectRestart();
   } finally {
     await candidate?.context.close();
     await original.context.close();
