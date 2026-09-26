@@ -60,7 +60,10 @@ export async function loadEnrollmentPage(signal: AbortSignal): Promise<{
       return { state: "pending", pending };
     }
     return { state: "unprovisioned" };
-  } catch { return { state: "signed-out" }; }
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return { state: "signed-out" };
+  }
 }
 
 export async function beginCandidate(signal: AbortSignal, label: string): Promise<PendingCandidate> {

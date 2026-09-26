@@ -1,4 +1,5 @@
 import type { Browser } from "@playwright/test";
+import QRCode from "qrcode";
 
 import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
@@ -214,4 +215,112 @@ test("lost candidate keys, expiry, and stale registry state restart without acti
     await candidate?.context.close();
     await original.context.close();
   }
+});
+
+test("approval tampering, stale freshness, and a removed approver never activate the candidate", async ({ browser, server, baseURL }) => {
+  const origin = new URL(baseURL!).origin;
+  const worker = server.getWorker<{ DB: D1Database }>();
+  await worker.applyD1Migrations("DB");
+  const env = await worker.getEnv();
+  const original = await withPasskey(browser, origin);
+  let candidate: Awaited<ReturnType<typeof withPasskey>> | undefined;
+  try {
+    await original.page.getByRole("button", { name: "Create account", exact: true }).click();
+    await completeRecoveryPresentation(original.page);
+    await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
+    await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
+    await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
+    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    await candidate.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
+    await candidate.page.getByRole("button", { name: "Create pairing QR code" }).click();
+    await expect(candidate.page.getByRole("heading", { name: "Scan this QR code" })).toBeVisible();
+    const pairingLink = await candidate.page.getByRole("textbox", { name: "Pairing link" }).inputValue();
+    const enrollmentId = (JSON.parse(atob(pairingLink.split("#")[1]!
+      .replaceAll("-", "+").replaceAll("_", "/"))) as { enrollmentId: string }).enrollmentId;
+    await candidate.page.goto(`${origin}/`, { waitUntil: "commit" });
+    await original.page.goto(`${origin}/enroll-device/approve`, { waitUntil: "commit" });
+    await original.page.getByRole("textbox", { name: "Pairing link" }).fill(pairingLink);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await original.page.getByRole("button", { name: "Approve device" }).click();
+      await expect(original.page.getByRole(attempt === 2 ? "status" : "alert"))
+        .toBeVisible({ timeout: 30_000 });
+    }
+    const row = await env.DB.prepare(`SELECT candidate_session_id, candidate_device_id,
+      approving_device_id, envelope_digest, approval_signature FROM device_enrollments WHERE id = ?`)
+      .bind(enrollmentId).first<{ candidate_session_id: string; candidate_device_id: string;
+        approving_device_id: string; envelope_digest: ArrayBuffer; approval_signature: ArrayBuffer }>();
+    expect(row).not.toBeNull();
+    const originalDigest = new Uint8Array(row!.envelope_digest);
+    const originalSignature = new Uint8Array(row!.approval_signature);
+    const expectRejected = async () => {
+      await candidate!.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
+      await expect(candidate!.page.getByRole("heading", { name: "Restart device enrollment" }))
+        .toBeVisible({ timeout: 30_000 });
+      expect(await env.DB.prepare("SELECT id FROM encryption_devices WHERE id = ?")
+        .bind(row!.candidate_device_id).first()).toBeNull();
+      await candidate!.page.goto(`${origin}/`, { waitUntil: "commit" });
+    };
+
+    await env.DB.prepare("UPDATE device_enrollments SET envelope_digest = ? WHERE id = ?")
+      .bind(new Uint8Array(32), enrollmentId).run();
+    await expectRejected();
+    await env.DB.prepare("UPDATE device_enrollments SET envelope_digest = ? WHERE id = ?")
+      .bind(originalDigest, enrollmentId).run();
+
+    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
+      .bind(Date.now() - 10 * 60_000, row!.candidate_session_id).run();
+    await expectRejected();
+    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
+      .bind(Date.now(), row!.candidate_session_id).run();
+
+    await env.DB.prepare("UPDATE device_enrollments SET approval_signature = ? WHERE id = ?")
+      .bind(new Uint8Array(64), enrollmentId).run();
+    await expectRejected();
+    await env.DB.prepare("UPDATE device_enrollments SET approval_signature = ? WHERE id = ?")
+      .bind(originalSignature, enrollmentId).run();
+
+    await env.DB.prepare("UPDATE encryption_devices SET state = 'revoked' WHERE id = ?")
+      .bind(row!.approving_device_id).run();
+    await expectRejected();
+  } finally {
+    await candidate?.context.close();
+    await original.context.close();
+  }
+});
+
+test("the QR scanner decodes a camera video stream", async ({ page, baseURL }) => {
+  const value = "qr-scanner-check";
+  const qr = await QRCode.toDataURL(value, { errorCorrectionLevel: "M", width: 512, margin: 4 });
+  await page.goto(`${new URL(baseURL!).origin}/enroll-device/approve`, { waitUntil: "commit" });
+  await page.evaluate((imageUrl) => {
+    const mediaDevices = navigator.mediaDevices;
+    Object.defineProperty(mediaDevices, "enumerateDevices", {
+      configurable: true, value: async () => [{ kind: "videoinput", deviceId: "qr-test", groupId: "", label: "QR test" }],
+    });
+    Object.defineProperty(mediaDevices, "getUserMedia", {
+      configurable: true,
+      value: async () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 640;
+        canvas.height = 640;
+        const image = new Image();
+        image.src = imageUrl;
+        await image.decode();
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = "white";
+        context.fillRect(0, 0, 640, 640);
+        context.drawImage(image, 64, 64, 512, 512);
+        const stream = canvas.captureStream(15);
+        const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+        setInterval(() => {
+          context.drawImage(image, 64, 64, 512, 512);
+          track.requestFrame?.();
+        }, 100);
+        return stream;
+      },
+    });
+  }, qr);
+  await page.getByRole("button", { name: "Scan QR code" }).click();
+  await expect(page.getByRole("textbox", { name: "Pairing link" })).toHaveValue(value, { timeout: 30_000 });
 });

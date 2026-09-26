@@ -18,7 +18,10 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise
     const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal: request.signal });
     if (!response.ok) return { state: "unavailable" };
     try { return { state: "ready", provisioning: await ownedProvisioningKind(request.signal) }; }
-    catch { return { state: "ready", provisioning: "unknown" }; }
+    catch (error) {
+      if (request.signal.aborted) throw error;
+      return { state: "ready", provisioning: "unknown" };
+    }
   } catch (error) {
     if (request.signal.aborted) throw error;
     return { state: error instanceof PrivateAccessError ? error.state : "unavailable" };

@@ -48,6 +48,16 @@ function live(row: EnrollmentRow | null, now: number): row is EnrollmentRow {
   return !!row && row.expires_at > now && row.state !== "consumed";
 }
 
+function candidateTranscriptFromRow(row: EnrollmentRow): CandidateTranscript {
+  return {
+    accountId: row.account_id, registryEpoch: row.registry_epoch,
+    deviceId: row.candidate_device_id,
+    transportPublicKey: encodeBytes(new Uint8Array(row.transport_public_key)),
+    assertionPublicKey: encodeBytes(new Uint8Array(row.assertion_public_key)),
+    pairingSecretHash: encodeBytes(new Uint8Array(row.pairing_secret_hash)),
+  };
+}
+
 export async function startDeviceEnrollment(env: Env, session: ActiveSession,
   transcript: CandidateTranscript, transcriptDigest: string): Promise<Response> {
   assertSessionConfiguration(env);
@@ -95,13 +105,7 @@ export async function pendingDeviceEnrollment(env: Env, authorized: AuthorizedDe
       AND registry_epoch = ${authorized.registryEpoch} AND ${privateReadGuard(authorized)}`);
   if (!row) return failed();
   return Response.json({ enrollmentId: row.id, expiresAt: row.expires_at,
-    transcript: {
-      accountId: row.account_id, registryEpoch: row.registry_epoch,
-      deviceId: row.candidate_device_id,
-      transportPublicKey: encodeBytes(new Uint8Array(row.transport_public_key)),
-      assertionPublicKey: encodeBytes(new Uint8Array(row.assertion_public_key)),
-      pairingSecretHash: encodeBytes(new Uint8Array(row.pairing_secret_hash)),
-    }, transcriptDigest: encodeBytes(new Uint8Array(row.transcript_digest)),
+    transcript: candidateTranscriptFromRow(row), transcriptDigest: encodeBytes(new Uint8Array(row.transcript_digest)),
     pairingSecretHash: encodeBytes(new Uint8Array(row.pairing_secret_hash)),
   }, { headers: noStore });
 }
@@ -185,11 +189,7 @@ export async function deviceEnrollmentStatus(env: Env, session: ActiveSession,
   if (!row.challenge_ciphertext || !row.enrollment_envelope || !row.approval_signature ||
       !row.approving_device_id || !row.envelope_digest) return failed();
   const approval: EnrollmentApproval = {
-    accountId: row.account_id, registryEpoch: row.registry_epoch,
-    deviceId: row.candidate_device_id,
-    transportPublicKey: encodeBytes(new Uint8Array(row.transport_public_key)),
-    assertionPublicKey: encodeBytes(new Uint8Array(row.assertion_public_key)),
-    pairingSecretHash: encodeBytes(new Uint8Array(row.pairing_secret_hash)),
+    ...candidateTranscriptFromRow(row),
     enrollmentId: row.id, transcriptDigest: encodeBytes(new Uint8Array(row.transcript_digest)),
     envelopeDigest: encodeBytes(new Uint8Array(row.envelope_digest)),
     approvingDeviceId: row.approving_device_id, expiresAt: row.expires_at,
