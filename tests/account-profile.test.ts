@@ -18,7 +18,7 @@ const expected = {
 };
 
 describe("encrypted Account profiles", () => {
-  it("pins account-profile as purpose 17 and appends owned-device as purpose 18", () => {
+  it("pins account-profile as purpose 17 and appends device purposes without renumbering", () => {
     expect(PURPOSES).toEqual([
       "directory-capability", "file-content-key", "file-content", "directory-metadata",
       "grant", "device-enrollment", "vault-recovery", "recovery-capsule",
@@ -26,6 +26,7 @@ describe("encrypted Account profiles", () => {
       "comment-content", "attribution", "archive-manifest", "import-staging-manifest", "import-chunk",
       "account-profile",
       "owned-device",
+      "device-label",
     ]);
     expect(accountProfileContext(expected)).toEqual({
       purpose: "account-profile",

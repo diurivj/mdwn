@@ -62,7 +62,7 @@ describe("security headers on every response", () => {
     expect(headers["X-Content-Type-Options"]).toBe("nosniff");
     expect(headers["X-Frame-Options"]).toBe("DENY");
     expect(headers["Referrer-Policy"]).toBe("no-referrer");
-    expect(headers["Permissions-Policy"]).toContain("camera=()");
+    expect(headers["Permissions-Policy"]).toContain("camera=(self)");
     expect(headers["Cross-Origin-Opener-Policy"]).toBe("same-origin");
     expect(headers["Cross-Origin-Resource-Policy"]).toBe("same-origin");
     expect(headers["X-Robots-Tag"]).toBe("noindex, nofollow");

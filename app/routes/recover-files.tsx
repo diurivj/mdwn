@@ -1,7 +1,7 @@
 import { Link, useFetcher } from "react-router";
 
 import { forgetRecoveryPhrase, loadVaultRecovery, runVaultRecovery } from "~/recovery/ceremony-client";
-import { useRecoveryProvisioning } from "~/recovery/provision-hook";
+import { useOwnedProvisioning } from "~/device/owned-provision-hook";
 
 import type { Route } from "./+types/recover-files";
 
@@ -25,7 +25,7 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher<typeof clientAction>();
   const needsRestoration = loaderData.restoring ||
     (fetcher.data?.state === "success" && fetcher.data.restoring);
-  const restoring = useRecoveryProvisioning(Boolean(needsRestoration));
+  const restoring = useOwnedProvisioning(Boolean(needsRestoration));
   const busy = fetcher.state !== "idle";
   const phrase = fetcher.data?.state === "success" ? fetcher.data.phrase : loaderData.phrase;
   return (

@@ -34,7 +34,7 @@ header.
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `DENY` |
 | `Referrer-Policy` | `no-referrer` |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=()` |
+| `Permissions-Policy` | `camera=(self), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=()` |
 | `Cross-Origin-Opener-Policy` | `same-origin` |
 | `Cross-Origin-Resource-Policy` | `same-origin` |
 | `X-Robots-Tag` | `noindex, nofollow` (anonymous public pages are non-indexed by default) |
@@ -43,6 +43,7 @@ header.
 The CSP is single-value, nonce-based, and allows first-party resources only (`script-src 'self' 'nonce-…'`, no `unsafe-inline`/`unsafe-eval` in production; `default-src 'none'`; `frame-ancestors 'none'`; `upgrade-insecure-requests`). The per-request nonce is generated in `workers/app.ts`, seeded into the load context (`app/security/nonce.ts`) for `entry.server.tsx` (which stamps the React Router inline scripts) and reused by the response wrapper to build the header. Under the local dev server the CSP is relaxed for Vite HMR only (`ws:`, `unsafe-eval`); nothing relaxed is ever applied in preview or production.
 
 The policy lives in `app/security/headers.ts` (pure) and is asserted by `tests/headers.test.ts`.
+Camera access is limited to this origin for the device-enrollment QR scanner and still requires browser permission.
 
 ## 3. Secrets and environment variables
 

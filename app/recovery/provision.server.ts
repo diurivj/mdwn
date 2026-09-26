@@ -7,13 +7,13 @@ const noStore = { "Cache-Control": "no-store" };
 const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers: noStore });
 
 type NextRow = {
-  id: string; state: "pending" | "complete"; cursor: string | null;
+  id: string; kind: "recovery_owned" | "enrollment_owned"; state: "pending" | "complete"; cursor: string | null;
   object_id: string | null; ciphertext: ArrayBuffer | null; key_epoch: number | null;
 };
 
 export async function nextOwnedEnvelope(env: Env, authorized: AuthorizedDevice): Promise<Response> {
   const row = await createDb(env.DB).get<NextRow>(sql`
-    SELECT j.id, j.state, j.cursor, k.object_id, k.ciphertext, k.key_epoch
+    SELECT j.id, j.kind, j.state, j.cursor, k.object_id, k.ciphertext, k.key_epoch
     FROM crypto_jobs j
     LEFT JOIN key_envelopes k ON k.rowid = (
       SELECT source.rowid FROM key_envelopes source
@@ -23,11 +23,11 @@ export async function nextOwnedEnvelope(env: Env, authorized: AuthorizedDevice):
       ORDER BY source.object_id LIMIT 1
     )
     WHERE j.account_id = ${authorized.accountId} AND j.device_id = ${authorized.deviceId}
-      AND j.kind = 'recovery_owned' AND ${privateReadGuard(authorized)}
+      AND j.kind IN ('recovery_owned', 'enrollment_owned') AND ${privateReadGuard(authorized)}
     ORDER BY j.created_at DESC LIMIT 1
   `);
   if (!row) return Response.json({ state: "complete", item: null }, { headers: noStore });
-  return Response.json({ state: row.state, cursor: row.cursor,
+  return Response.json({ state: row.state, kind: row.kind, cursor: row.cursor,
     item: row.state === "pending" && row.object_id && row.ciphertext && row.key_epoch
       ? { objectId: row.object_id, envelope: encodeBytes(new Uint8Array(row.ciphertext)), keyEpoch: row.key_epoch }
       : null,
@@ -39,7 +39,7 @@ export async function finishOwnedProvisioning(env: Env, authorized: AuthorizedDe
   const committed = await commitPrivateMutation(env, authorized, (guard) => sql`
     UPDATE crypto_jobs SET state = 'complete', updated_at = ${now}
     WHERE account_id = ${authorized.accountId} AND device_id = ${authorized.deviceId}
-      AND kind = 'recovery_owned' AND state = 'pending' AND ${guard}
+      AND kind IN ('recovery_owned', 'enrollment_owned') AND state = 'pending' AND ${guard}
       AND NOT EXISTS (SELECT 1 FROM key_envelopes source
         WHERE source.account_id = crypto_jobs.account_id AND source.purpose = 'vault-recovery'
           AND source.recipient_id = 'vault-root' AND source.superseded_at IS NULL
@@ -48,7 +48,7 @@ export async function finishOwnedProvisioning(env: Env, authorized: AuthorizedDe
   if (committed) return Response.json({ ok: true }, { headers: noStore });
   const alreadyComplete = await createDb(env.DB).get<{ id: string }>(sql`
     SELECT id FROM crypto_jobs WHERE account_id = ${authorized.accountId}
-      AND device_id = ${authorized.deviceId} AND kind = 'recovery_owned' AND state = 'complete'
+      AND device_id = ${authorized.deviceId} AND kind IN ('recovery_owned', 'enrollment_owned') AND state = 'complete'
       AND ${privateReadGuard(authorized)} LIMIT 1`);
   return alreadyComplete ? Response.json({ ok: true }, { headers: noStore }) : denied();
 }
@@ -94,7 +94,7 @@ export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevi
         ${envelope}, ${source.key_epoch}, NULL
       FROM crypto_jobs j
       WHERE j.account_id = ${authorized.accountId} AND j.device_id = ${authorized.deviceId}
-        AND j.kind = 'recovery_owned' AND j.state = 'pending' AND j.cursor IS ${cursor}
+        AND j.kind IN ('recovery_owned', 'enrollment_owned') AND j.state = 'pending' AND j.cursor IS ${cursor}
         AND EXISTS (SELECT 1 FROM key_envelopes source WHERE source.account_id = j.account_id
           AND source.purpose = 'vault-recovery' AND source.object_id = ${objectId}
           AND source.recipient_id = 'vault-root' AND source.superseded_at IS NULL
@@ -107,7 +107,7 @@ export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevi
         AND ${guard}`,
     sql`UPDATE crypto_jobs SET cursor = ${objectId}, updated_at = ${now}
       WHERE account_id = ${authorized.accountId} AND device_id = ${authorized.deviceId}
-        AND kind = 'recovery_owned' AND state = 'pending' AND cursor IS ${cursor}
+        AND kind IN ('recovery_owned', 'enrollment_owned') AND state = 'pending' AND cursor IS ${cursor}
         AND changes() = 1`,
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
       SELECT ${authorized.accountId}, ${authorized.proofId}, ${authorized.sessionId},
@@ -123,7 +123,7 @@ export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevi
         AND k.object_id = ${objectId} AND k.recipient_id = j.device_id
         AND k.ciphertext = ${envelope} AND k.superseded_at IS NULL
     WHERE j.account_id = ${authorized.accountId} AND j.device_id = ${authorized.deviceId}
-      AND j.kind = 'recovery_owned' AND j.cursor >= ${objectId}
+      AND j.kind IN ('recovery_owned', 'enrollment_owned') AND j.cursor >= ${objectId}
       AND ${privateReadGuard(authorized)} LIMIT 1`);
   return duplicate ? Response.json({ ok: true }, { headers: noStore }) : denied();
 }
