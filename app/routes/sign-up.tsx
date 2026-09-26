@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router";
 
 import { commitSignup, confirmSignupRecovery, prepareSignup, type PreparedSignup } from "~/signup/bootstrap";
 import { HoneypotField } from "~/security/HoneypotField";
@@ -9,9 +9,20 @@ export function meta() {
   return [{ title: "Sign up — mdwn" }];
 }
 
+// THROWAWAY: dev-only rendering alternative. Real signup is unchanged without ?variant=.
+const SignupPrototype = import.meta.env.DEV ? lazy(() => import("./sign-up.prototype")) : null;
+
+export default function SignUpRoute() {
+  const [params] = useSearchParams();
+  if (SignupPrototype && params.has("variant")) {
+    return <Suspense fallback={<p className="p-8">Loading signup design study…</p>}><SignupPrototype /></Suspense>;
+  }
+  return <SignUp />;
+}
+
 type Stage = "ready" | "working" | "phrase" | "codes" | "done" | "failed";
 
-export default function SignUp() {
+function SignUp() {
   const [stage, setStage] = useState<Stage>("ready");
   const [hydrated, setHydrated] = useState(false);
   const mounted = useRef(false);

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "react-router dev",
+    "prototype:signup": "react-router dev --host 127.0.0.1 --port 5174",
     "build": "react-router build",
     "build:preview": "CLOUDFLARE_ENV=preview react-router build",
     "build:production": "CLOUDFLARE_ENV=production react-router build",
