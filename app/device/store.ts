@@ -9,14 +9,21 @@ export type StoredDevice = {
 const DATABASE = "mdwn-device-store";
 const STORE = "devices";
 const PENDING_RECOVERY = "pending_recovery";
+const PENDING_ENROLLMENT = "pending_enrollment";
+
+type PendingStore = typeof PENDING_RECOVERY | typeof PENDING_ENROLLMENT;
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE, 2);
+    const request = indexedDB.open(DATABASE, 3);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath: "accountId" });
       if (!request.result.objectStoreNames.contains(PENDING_RECOVERY)) {
         request.result.createObjectStore(PENDING_RECOVERY, { keyPath: "deviceId" })
+          .createIndex("accountId", "accountId");
+      }
+      if (!request.result.objectStoreNames.contains(PENDING_ENROLLMENT)) {
+        request.result.createObjectStore(PENDING_ENROLLMENT, { keyPath: "deviceId" })
           .createIndex("accountId", "accountId");
       }
     };
@@ -174,7 +181,7 @@ export async function updateRegistryEpoch(accountId: string, epoch: number): Pro
 }
 
 /** Candidate handles are durable but separate from the active-device store until server commit. */
-export async function createRecoveryCandidate(accountId: string, deviceId: string): Promise<StoredDevice> {
+async function createPendingCandidate(accountId: string, deviceId: string, store: PendingStore): Promise<StoredDevice> {
   if (!accountId || !deviceId) throw new Error("Device identifiers are required");
   const [transportKeyPair, assertionKeyPair] = await Promise.all([
     crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]),
@@ -185,8 +192,8 @@ export async function createRecoveryCandidate(accountId: string, deviceId: strin
   const db = await openDatabase();
   try {
     await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(PENDING_RECOVERY, "readwrite");
-      transaction.objectStore(PENDING_RECOVERY).add(device);
+      const transaction = db.transaction(store, "readwrite");
+      transaction.objectStore(store).add(device);
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);
@@ -196,13 +203,21 @@ export async function createRecoveryCandidate(accountId: string, deviceId: strin
   return device;
 }
 
-export async function getRecoveryCandidate(accountId: string, deviceId: string): Promise<StoredDevice | null> {
+export async function createRecoveryCandidate(accountId: string, deviceId: string): Promise<StoredDevice> {
+  return createPendingCandidate(accountId, deviceId, PENDING_RECOVERY);
+}
+
+export async function createEnrollmentCandidate(accountId: string, deviceId: string): Promise<StoredDevice> {
+  return createPendingCandidate(accountId, deviceId, PENDING_ENROLLMENT);
+}
+
+async function getPendingCandidate(accountId: string, deviceId: string, store: PendingStore): Promise<StoredDevice | null> {
   try {
     const db = await openDatabase();
     let value: unknown;
     try {
       value = await new Promise((resolve, reject) => {
-        const request = db.transaction(PENDING_RECOVERY, "readonly").objectStore(PENDING_RECOVERY).get(deviceId);
+        const request = db.transaction(store, "readonly").objectStore(store).get(deviceId);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
@@ -212,14 +227,22 @@ export async function getRecoveryCandidate(accountId: string, deviceId: string):
   } catch { return null; }
 }
 
-export async function listRecoveryCandidates(accountId: string): Promise<StoredDevice[]> {
+export async function getRecoveryCandidate(accountId: string, deviceId: string): Promise<StoredDevice | null> {
+  return getPendingCandidate(accountId, deviceId, PENDING_RECOVERY);
+}
+
+export async function getEnrollmentCandidate(accountId: string, deviceId: string): Promise<StoredDevice | null> {
+  return getPendingCandidate(accountId, deviceId, PENDING_ENROLLMENT);
+}
+
+async function listPendingCandidates(accountId: string, store: PendingStore): Promise<StoredDevice[]> {
   try {
     const db = await openDatabase();
     let records: unknown[];
     try {
       records = await new Promise((resolve, reject) => {
-        const request = db.transaction(PENDING_RECOVERY, "readonly")
-          .objectStore(PENDING_RECOVERY).index("accountId").getAll(accountId);
+        const request = db.transaction(store, "readonly")
+          .objectStore(store).index("accountId").getAll(accountId);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
@@ -234,17 +257,22 @@ export async function listRecoveryCandidates(accountId: string): Promise<StoredD
   } catch { return []; }
 }
 
+export async function listRecoveryCandidates(accountId: string): Promise<StoredDevice[]> {
+  return listPendingCandidates(accountId, PENDING_RECOVERY);
+}
+
 /** Called only after the server reports this exact candidate active at its current epoch. */
-export async function activateRecoveryCandidate(accountId: string, deviceId: string, registryEpoch: number): Promise<void> {
+async function activatePendingCandidate(accountId: string, deviceId: string,
+  registryEpoch: number, store: PendingStore): Promise<void> {
   if (!Number.isSafeInteger(registryEpoch) || registryEpoch < 1) throw new Error("Invalid registry epoch");
-  const candidate = await getRecoveryCandidate(accountId, deviceId);
+  const candidate = await getPendingCandidate(accountId, deviceId, store);
   if (!candidate || candidate.deviceId !== deviceId) throw new Error("Device keys unavailable");
   const db = await openDatabase();
   try {
     await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction([STORE, PENDING_RECOVERY], "readwrite");
+      const transaction = db.transaction([STORE, store], "readwrite");
       transaction.objectStore(STORE).put({ ...candidate, registryEpoch });
-      const pending = transaction.objectStore(PENDING_RECOVERY);
+      const pending = transaction.objectStore(store);
       const keys = pending.index("accountId").getAllKeys(accountId);
       keys.onsuccess = () => {
         for (const key of keys.result) pending.delete(key);
@@ -255,4 +283,12 @@ export async function activateRecoveryCandidate(accountId: string, deviceId: str
     });
   } finally { db.close(); }
   requestPersistence();
+}
+
+export async function activateRecoveryCandidate(accountId: string, deviceId: string, registryEpoch: number): Promise<void> {
+  return activatePendingCandidate(accountId, deviceId, registryEpoch, PENDING_RECOVERY);
+}
+
+export async function activateEnrollmentCandidate(accountId: string, deviceId: string, registryEpoch: number): Promise<void> {
+  return activatePendingCandidate(accountId, deviceId, registryEpoch, PENDING_ENROLLMENT);
 }

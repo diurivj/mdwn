@@ -339,6 +339,7 @@ export const encryptionDevices = sqliteTable("encryption_devices", {
   assertionPublicKey: blob("assertion_public_key").notNull(),
   state: text("state").notNull(),
   approvalProvenance: text("approval_provenance").notNull(),
+  labelCiphertext: blob("label_ciphertext"),
   revocationReason: text("revocation_reason"),
   registryEpoch: integer("registry_epoch").notNull(),
   createdAt: integer("created_at").notNull(),
@@ -398,6 +399,38 @@ export const recoveryEnrollments = sqliteTable("recovery_enrollments", {
   check("recovery_enrollments_epoch_positive", sql`${table.registryEpoch} >= 1`),
 ]);
 
+/** Exact candidate keys and one-use approval state; pairing secrets and private keys never enter D1. */
+export const deviceEnrollments = sqliteTable("device_enrollments", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  candidateSessionId: text("candidate_session_id").notNull().references(() => sessions.id, { onDelete: "restrict" }),
+  candidateDeviceId: text("candidate_device_id").notNull(),
+  transportPublicKey: blob("transport_public_key").notNull(),
+  assertionPublicKey: blob("assertion_public_key").notNull(),
+  transcript: blob("transcript").notNull(),
+  transcriptDigest: blob("transcript_digest").notNull(),
+  pairingSecretHash: blob("pairing_secret_hash").notNull(),
+  registryEpoch: integer("registry_epoch").notNull(),
+  state: text("state").notNull(),
+  approvingDeviceId: text("approving_device_id"),
+  approvingSessionId: text("approving_session_id"),
+  approvingProofId: text("approving_proof_id"),
+  approvalMessage: blob("approval_message"),
+  approvalSignature: blob("approval_signature"),
+  enrollmentEnvelope: blob("enrollment_envelope"),
+  envelopeDigest: blob("envelope_digest"),
+  challengeCiphertext: blob("challenge_ciphertext"),
+  challengeHash: blob("challenge_hash"),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  index("device_enrollments_candidate_idx").on(table.candidateSessionId, table.expiresAt),
+  index("device_enrollments_account_idx").on(table.accountId, table.expiresAt),
+  check("device_enrollments_state_valid", sql`${table.state} IN ('pending', 'challenged', 'consumed')`),
+  check("device_enrollments_expiry_valid", sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + 600000`),
+  check("device_enrollments_epoch_positive", sql`${table.registryEpoch} >= 1`),
+]);
+
 /** Browser-driven, bounded owned-key provisioning after recovery; never carries a capability. */
 export const cryptoJobs = sqliteTable("crypto_jobs", {
   id: text("id").primaryKey(),
@@ -410,7 +443,7 @@ export const cryptoJobs = sqliteTable("crypto_jobs", {
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [
   index("crypto_jobs_device_idx").on(table.accountId, table.deviceId, table.state),
-  check("crypto_jobs_kind_valid", sql`${table.kind} = 'recovery_owned'`),
+  check("crypto_jobs_kind_valid", sql`${table.kind} IN ('recovery_owned', 'enrollment_owned')`),
   check("crypto_jobs_state_valid", sql`${table.state} IN ('pending', 'complete')`),
 ]);
 

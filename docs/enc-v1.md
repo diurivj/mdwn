@@ -177,6 +177,8 @@ version, not a permissive v1 decoder.
 | 15 | `import-staging-manifest` |
 | 16 | `import-chunk` |
 | 17 | `account-profile` |
+| 18 | `owned-device` |
+| 19 | `device-label` |
 
 Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
  key`, `Comment audience epoch`); only the numeric ID is serialized. Every HPKE
@@ -203,6 +205,11 @@ Account, epoch, or revision as authority. The helper uses the ordinary
 symmetric writer with the Account-owned 32-byte Vault-root key, so the profile
 inherits the envelope's random salt and nonce allocation contract.
 
+`owned-device` (purpose 18) wraps Account-owned recovery-envelope capabilities
+for an active device during bounded provisioning. `device-label` (purpose 19)
+protects an optional device label under the Vault root key; its context binds
+the Account and exact device ID. Neither purpose carries a Grant capability.
+
 ## Consumers and open decisions
 
 Future tickets that build envelopes must use this module rather than a new format.
@@ -213,7 +220,8 @@ Their purpose names are pinned here:
 | 04 Vault key hierarchy and Recovery capsule | `vault-recovery`, `recovery-capsule`, `device-enrollment` |
 | 06 Accounts, Passkeys, and Sessions | `account-profile` |
 | 08 Signup bootstrap | `device-enrollment`, `vault-recovery` |
-| 12 Routine device enrollment | `device-enrollment` |
+| 11 Vault recovery | `owned-device` |
+| 12 Routine device enrollment | `device-enrollment`, `owned-device`, `device-label` |
 | 14 Private tree | `directory-capability`, `file-content-key`, `directory-metadata` |
 | 18 Grant envelopes | `grant`, `private-comment-thread`, `public-comment-audience-epoch` |
 | 19 Key rotation, 20 Provisioning fulfillment | any affected purpose |

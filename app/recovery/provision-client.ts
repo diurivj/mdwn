@@ -9,15 +9,21 @@ import { decodeBytes, encodeBytes } from "~/signup/protocol";
 
 type Next = {
   state: "pending" | "complete";
+  kind?: "recovery_owned" | "enrollment_owned";
   cursor?: string | null;
   item: { objectId: string; envelope: string; keyEpoch: number } | null;
 };
 
 /** Read the private job state without advancing its cursor during route loading. */
 export async function recoveryProvisioningNeeded(signal?: AbortSignal): Promise<boolean> {
+  return (await ownedProvisioningKind(signal)) !== null;
+}
+
+export async function ownedProvisioningKind(signal?: AbortSignal): Promise<"recovery" | "enrollment" | null> {
   const response = await privateRequest("/api/private/recovery-provision/next", { method: "POST", signal });
   if (!response.ok) throw new Error("Recovery job unavailable");
-  return ((await response.json()) as Next).state === "pending";
+  const next = await response.json() as Next;
+  return next.state === "pending" ? next.kind === "enrollment_owned" ? "enrollment" : "recovery" : null;
 }
 
 /** Each request handles one opaque owned key; a later visit safely resumes the cursor. */
