@@ -1,9 +1,15 @@
 import type { Browser } from "@playwright/test";
 
+import { openRecoveryCapsule, sealVaultRecoveryEnvelope } from "../app/crypto/vault";
 import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
 
 test.setTimeout(240_000);
+
+function newObjectId(): string {
+  const id = crypto.randomUUID();
+  return `${id.slice(0, 14)}7${id.slice(15)}`;
+}
 
 async function authenticator(browser: Browser, origin: string) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -20,7 +26,7 @@ async function authenticator(browser: Browser, origin: string) {
   return { context, page };
 }
 
-test("a recovery code, replacement Passkey, fresh assertion and phrase restore owned Files on a new device", async ({ browser, server, baseURL }) => {
+test("a recovery code, replacement Passkey, fresh assertion and phrase restore owned Files on a new device", async ({ browser, browserName, server, baseURL }) => {
   const origin = new URL(baseURL!).origin;
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
@@ -43,6 +49,26 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
     const firstDevice = await env.DB.prepare("SELECT id FROM encryption_devices WHERE account_id = ?")
       .bind(identifier).first<{ id: string }>();
     expect(firstDevice?.id).toBeTruthy();
+    const ownedEnvelopeCount = browserName === "chromium" ? 22 : 1;
+    if (ownedEnvelopeCount > 1) {
+      const row = await env.DB.prepare("SELECT generation, recovery_salt, ciphertext, verification_public_key FROM recovery_capsules WHERE account_id = ?")
+        .bind(identifier).first<{ generation: number; recovery_salt: ArrayBuffer; ciphertext: ArrayBuffer; verification_public_key: ArrayBuffer }>();
+      expect(row).toBeTruthy();
+      const recoverySalt = new Uint8Array(row!.recovery_salt);
+      const opened = await openRecoveryCapsule({ accountId: identifier, generation: row!.generation,
+        recoverySalt, capsule: new Uint8Array(row!.ciphertext),
+        recoveryVerificationPublicKey: new Uint8Array(row!.verification_public_key),
+      }, phrase, { accountId: identifier, generation: row!.generation, recoverySalt });
+      for (let index = 1; index < ownedEnvelopeCount; index++) {
+        const objectId = newObjectId();
+        const envelope = await sealVaultRecoveryEnvelope(opened.vaultRootKey, {
+          key: crypto.getRandomValues(new Uint8Array(32)), objectId, keyId: objectId, scope: "owned",
+        }, { purpose: "vault-recovery", vaultId: identifier, objectId, keyId: objectId,
+          keyEpoch: 1, revision: 1 });
+        await env.DB.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'vault-recovery', ?, 'vault-root', ?, 1)")
+          .bind(identifier, objectId, envelope).run();
+      }
+    }
 
     replacement = await authenticator(browser, origin);
     await replacement.page.goto(`${origin}/recover`, { waitUntil: "commit" });
@@ -69,12 +95,12 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
       }
     });
     replacement.page.on("request", (request) => {
-      if (new URL(request.url()).pathname.startsWith("/api/vault-recovery/")) {
+      if (new URL(request.url()).pathname.startsWith("/api/files-recovery/")) {
         vaultRequests.push(request.postData() ?? "");
       }
     });
     await replacement.page.goto(`${origin}/recover-files`, { waitUntil: "commit" });
-    await replacement.page.route("**/api/vault-recovery/commit", (route) => route.abort("failed"));
+    await replacement.page.route("**/api/files-recovery/commit", (route) => route.abort("failed"));
     await replacement.page.getByLabel("Current recovery phrase").fill(phrase);
     await replacement.page.getByRole("button", { name: "Recover Files" }).click();
     await expect(replacement.page.getByRole("alert")).toContainText("could not confirm the result", { timeout: 120_000 });
@@ -82,9 +108,9 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
       .bind(identifier).first()).toEqual({ n: 1 });
     expect((await original.page.evaluate(async () =>
       (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>)).authenticated).toBe(true);
-    await replacement.page.unroute("**/api/vault-recovery/commit");
+    await replacement.page.unroute("**/api/files-recovery/commit");
     await replacement.page.reload({ waitUntil: "commit" });
-    await replacement.page.route("**/api/vault-recovery/commit", async (route) => {
+    await replacement.page.route("**/api/files-recovery/commit", async (route) => {
       const response = await route.fetch();
       expect(response.status()).toBe(200);
       await route.abort("failed");
@@ -95,7 +121,7 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
     await expect(replacement.page.getByRole("alert")).toContainText("could not confirm the result", { timeout: 120_000 });
     expect(await env.DB.prepare("SELECT state, cursor FROM crypto_jobs WHERE account_id = ?")
       .bind(identifier).first()).toEqual({ state: "pending", cursor: null });
-    await replacement.page.unroute("**/api/vault-recovery/commit");
+    await replacement.page.unroute("**/api/files-recovery/commit");
     await replacement.page.unroute("**/api/private/recovery-provision/step");
     const stillAuthenticated = await replacement.page.evaluate(async () =>
       (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>);
@@ -114,8 +140,11 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
     expect(vaultRequests.every((body) => !body.includes(newPhrase!.trim()))).toBe(true);
     await replacement.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
     await expect(replacement.page.getByRole("heading", { name: "Private access ready" })).toBeVisible();
-    expect(await env.DB.prepare("SELECT state, cursor FROM crypto_jobs WHERE account_id = ?")
-      .bind(identifier).first(), provisionResponses.join(", ")).toEqual({ state: "complete", cursor: expect.any(String) });
+    await expect.poll(async () => env.DB.prepare("SELECT state, cursor FROM crypto_jobs WHERE account_id = ?")
+      .bind(identifier).first(), { timeout: 120_000, message: provisionResponses.join(", ") })
+      .toEqual({ state: "complete", cursor: expect.any(String) });
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM key_envelopes WHERE account_id = ? AND purpose = 'owned-device'")
+      .bind(identifier).first<{ n: number }>())?.n).toBe(ownedEnvelopeCount);
     expect((await original.page.evaluate(async () =>
       (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>)).authenticated).toBe(false);
     const devices = await env.DB.prepare("SELECT id, state, revocation_reason FROM encryption_devices WHERE account_id = ? ORDER BY created_at")

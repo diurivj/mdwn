@@ -80,7 +80,7 @@ async function fixture() {
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
 async function startRecovery(f: Fixture) {
-  const response = await post("/api/vault-recovery/start", f.recovering.cookie);
+  const response = await post("/api/files-recovery/start", f.recovering.cookie);
   expect(response.status, await response.clone().text()).toBe(200);
   return response.json() as Promise<{
     enrollmentId: string; accountId: string; generation: number; registryEpoch: number;
@@ -132,7 +132,7 @@ async function challenge(f: Fixture, start: Awaited<ReturnType<typeof startRecov
   expect(await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" },
     prepared.opened.recoveryVerificationPublicKey, decodeBytes(prepared.intentSignature, 64),
     new Uint8Array(recoveryIntentMessage(prepared.intent)))).toBe(true);
-  const response = await post("/api/vault-recovery/challenge", f.recovering.cookie, {
+  const response = await post("/api/files-recovery/challenge", f.recovering.cookie, {
     enrollmentId: start.enrollmentId, intent: prepared.intent, intentSignature: prepared.intentSignature,
   });
   expect(response.status, await response.clone().text()).toBe(200);
@@ -150,7 +150,7 @@ async function commit(f: Fixture, start: Awaited<ReturnType<typeof startRecovery
   const challengeSignature = encodeBytes(new Uint8Array(await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" }, signingKey,
     new Uint8Array(possessionMessage(p.intentDigest, secret)))));
-  return post("/api/vault-recovery/commit", f.recovering.cookie, {
+  return post("/api/files-recovery/commit", f.recovering.cookie, {
     enrollmentId: start.enrollmentId, intent: p.intent, intentSignature: p.intentSignature,
     challengeSecret: encodeBytes(secret), challengeSignature, nextMetadata: p.metadata,
     nextCapsule: encodeBytes(p.next.record.capsule), enrollmentEnvelope: encodeBytes(p.envelope),
@@ -257,7 +257,7 @@ describe("Vault recovery enrollment", () => {
     const start = await startRecovery(f);
     const p = await prepare(f, start);
     const substituted = { ...p.intent, transportPublicKey: encodeBytes(new Uint8Array(65).fill(1)) };
-    const invalid = await post("/api/vault-recovery/challenge", f.recovering.cookie, {
+    const invalid = await post("/api/files-recovery/challenge", f.recovering.cookie, {
       enrollmentId: start.enrollmentId, intent: substituted, intentSignature: p.intentSignature,
     });
     expect(invalid.status).not.toBe(200);
@@ -292,13 +292,13 @@ describe("Vault recovery enrollment", () => {
   it("rejects stale Sessions, missing fresh assertions, and a superseded generation", async () => {
     const f = await fixture();
     await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = NULL WHERE id = ?").bind(f.recovering.id).run();
-    expect((await post("/api/vault-recovery/start", f.recovering.cookie)).status).not.toBe(200);
+    expect((await post("/api/files-recovery/start", f.recovering.cookie)).status).not.toBe(200);
     await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
       .bind(Date.now(), f.recovering.id).run();
     const start = await startRecovery(f);
     const p = await prepare(f, start);
     await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?").bind(Date.now(), f.recovering.id).run();
-    expect((await post("/api/vault-recovery/challenge", f.recovering.cookie, {
+    expect((await post("/api/files-recovery/challenge", f.recovering.cookie, {
       enrollmentId: start.enrollmentId, intent: p.intent, intentSignature: p.intentSignature,
     })).status).not.toBe(200);
     expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE account_id = ?")
@@ -312,7 +312,7 @@ describe("Vault recovery enrollment", () => {
     await env.DB.prepare("UPDATE recovery_capsules SET generation = 2, recovery_salt = ?, ciphertext = ?, verification_public_key = ? WHERE account_id = ?")
       .bind(replacementCapsule.recoverySalt, replacementCapsule.record.capsule,
         replacementCapsule.recoveryVerificationPublicKeyBytes, newer.accountId).run();
-    expect((await post("/api/vault-recovery/challenge", newer.recovering.cookie, {
+    expect((await post("/api/files-recovery/challenge", newer.recovering.cookie, {
       enrollmentId: newerStart.enrollmentId, intent: newerPrepared.intent,
       intentSignature: newerPrepared.intentSignature,
     })).status).not.toBe(200);
@@ -328,10 +328,10 @@ describe("Vault recovery enrollment", () => {
     const signature = encodeBytes(new Uint8Array(await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" }, p.opened.recoveryEnrollmentKeyPair.privateKey,
       new Uint8Array(recoveryIntentMessage(altered)))));
-    expect((await post("/api/vault-recovery/challenge", f.recovering.cookie, {
+    expect((await post("/api/files-recovery/challenge", f.recovering.cookie, {
       enrollmentId: start.enrollmentId, intent: altered, intentSignature: signature,
     })).status).not.toBe(200);
-    expect((await post("/api/vault-recovery/challenge", f.recovering.cookie, {
+    expect((await post("/api/files-recovery/challenge", f.recovering.cookie, {
       enrollmentId: start.enrollmentId, intent: p.intent, intentSignature: p.intentSignature,
     })).status).not.toBe(200);
     expect((await oldPrivateRead(f)).status).toBe(200);
@@ -339,8 +339,8 @@ describe("Vault recovery enrollment", () => {
 
   it("limits new starts and keeps a failed ceremony from adding a device", async () => {
     const f = await fixture();
-    for (let index = 0; index < 3; index++) expect((await post("/api/vault-recovery/start", f.recovering.cookie)).status).toBe(200);
-    expect((await post("/api/vault-recovery/start", f.recovering.cookie)).status).toBe(429);
+    for (let index = 0; index < 3; index++) expect((await post("/api/files-recovery/start", f.recovering.cookie)).status).toBe(200);
+    expect((await post("/api/files-recovery/start", f.recovering.cookie)).status).toBe(429);
     expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE account_id = ?")
       .bind(f.accountId).first<{ n: number }>())?.n).toBe(1);
   });

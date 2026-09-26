@@ -1,7 +1,8 @@
 import { Link } from "react-router";
 
 import { privateRequest, PrivateAccessError, type PrivateAccessState } from "~/device/private-client";
-import { resumeRecoveryProvisioning } from "~/recovery/provision-client";
+import { recoveryProvisioningNeeded } from "~/recovery/provision-client";
+import { useRecoveryProvisioning } from "~/recovery/provision-hook";
 
 import type { Route } from "./+types/device-access";
 
@@ -16,7 +17,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise
   try {
     const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal: request.signal });
     if (!response.ok) return { state: "unavailable" };
-    try { return { state: "ready", restoring: !await resumeRecoveryProvisioning(request.signal) }; }
+    try { return { state: "ready", restoring: await recoveryProvisioningNeeded(request.signal) }; }
     catch { return { state: "ready", restoring: true }; }
   } catch (error) {
     if (request.signal.aborted) throw error;
@@ -34,6 +35,7 @@ export function HydrateFallback() {
 
 export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
   const { state } = loaderData;
+  const restoring = useRecoveryProvisioning(Boolean(loaderData.restoring));
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
       <Link to="/" className="text-sm underline">mdwn</Link>
@@ -41,7 +43,7 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
         <>
           <h1 className="mt-8 text-2xl font-semibold">Private access ready</h1>
           <p className="mt-4">This browser has an active Encryption device. Your Files experience is coming soon.</p>
-          {loaderData.restoring && <p role="status" className="mt-4">Restoring your Files securely…</p>}
+          {restoring && <p role="status" className="mt-4">Restoring your Files securely…</p>}
         </>
       ) : state === "signed-out" ? (
         <>

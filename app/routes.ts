@@ -9,7 +9,7 @@ export default [
   route("account/security", "routes/account-security.tsx"),
   route("account/device-access", "routes/device-access.tsx"),
   route("api/auth/recovery/*", "routes/api/auth-recovery.ts"),
-  route("api/vault-recovery/*", "routes/api/vault-recovery.ts"),
+  route("api/files-recovery/*", "routes/api/files-recovery.ts"),
   route("api/private/recovery-provision/*", "routes/api/recovery-provision.ts"),
   route("api/auth/*", "routes/auth.ts"),
   route("api/signup/*", "routes/signup.ts"),

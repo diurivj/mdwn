@@ -13,6 +13,13 @@ type Next = {
   item: { objectId: string; envelope: string; keyEpoch: number } | null;
 };
 
+/** Read the private job state without advancing its cursor during route loading. */
+export async function recoveryProvisioningNeeded(signal?: AbortSignal): Promise<boolean> {
+  const response = await privateRequest("/api/private/recovery-provision/next", { method: "POST", signal });
+  if (!response.ok) throw new Error("Recovery job unavailable");
+  return ((await response.json()) as Next).state === "pending";
+}
+
 /** Each request handles one opaque owned key; a later visit safely resumes the cursor. */
 export async function resumeRecoveryProvisioning(signal?: AbortSignal, maxSteps = 20): Promise<boolean> {
   const stateResponse = await fetch("/api/device/state", { cache: "no-store", signal });
@@ -66,4 +73,17 @@ export async function resumeRecoveryProvisioning(signal?: AbortSignal, maxSteps 
     if (!updated.ok) throw new Error("Recovery job changed");
   }
   return false;
+}
+
+/** Keep scheduling bounded passes while the page is open; an interrupted visit resumes from the job cursor. */
+export async function finishRecoveryProvisioning(signal: AbortSignal): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      if (await resumeRecoveryProvisioning(signal)) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    } catch {
+      if (signal.aborted) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 3_000));
+    }
+  }
 }

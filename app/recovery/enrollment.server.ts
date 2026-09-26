@@ -220,6 +220,9 @@ export async function commitRecoveryEnrollment(env: Env, session: ActiveSession,
     const newSessionId = crypto.randomUUID();
     const cookie = await signSessionId(env, newSessionId);
     const eventId = crypto.randomUUID();
+    const activatedDevice = sql`EXISTS (SELECT 1 FROM encryption_devices
+      WHERE id = ${body.intent.deviceId} AND account_id = ${session.accountId}
+        AND state = 'active' AND approval_provenance = 'recovery')`;
     const results = await atomicSqlBatch(env.DB, [
       sql`DELETE FROM recovery_enrollments WHERE id = ${body.enrollmentId}
         AND account_id = ${session.accountId} AND session_id = ${session.id}
@@ -243,37 +246,31 @@ export async function commitRecoveryEnrollment(env: Env, session: ActiveSession,
           ${row.registry_epoch + 1}, ${now} WHERE changes() = 1`,
       sql`UPDATE encryption_devices SET state = 'tombstoned', revocation_reason = 'recovery'
         WHERE account_id = ${session.accountId} AND id != ${body.intent.deviceId} AND state = 'active'
-          AND EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${body.intent.deviceId}
-            AND account_id = ${session.accountId} AND state = 'active' AND approval_provenance = 'recovery')`,
+          AND ${activatedDevice}`,
       sql`UPDATE key_envelopes SET superseded_at = ${now}
         WHERE account_id = ${session.accountId} AND purpose = 'device-enrollment'
           AND recipient_id != ${body.intent.deviceId} AND superseded_at IS NULL
-          AND EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${body.intent.deviceId}
-            AND account_id = ${session.accountId} AND state = 'active' AND approval_provenance = 'recovery')`,
+          AND ${activatedDevice}`,
       sql`INSERT INTO key_envelopes
         (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch, superseded_at)
         SELECT ${session.accountId}, 'device-enrollment', ${body.intent.deviceId}, ${body.intent.deviceId},
           ${enrollmentEnvelope}, 1, NULL
-        WHERE EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${body.intent.deviceId}
-          AND account_id = ${session.accountId} AND state = 'active' AND approval_provenance = 'recovery')`,
+        WHERE ${activatedDevice}`,
       sql`UPDATE recovery_capsules SET generation = ${metadata.generation},
           recovery_salt = ${decodeBytes(metadata.recoverySalt, 32)}, ciphertext = ${nextCapsule},
           verification_public_key = ${newVerificationKey}
         WHERE account_id = ${session.accountId} AND generation = ${row.generation}
-          AND EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${body.intent.deviceId}
-            AND account_id = ${session.accountId} AND state = 'active' AND approval_provenance = 'recovery')`,
+          AND ${activatedDevice}`,
       sql`UPDATE sessions SET revoked_at = ${now}
         WHERE account_id = ${session.accountId} AND revoked_at IS NULL
-          AND EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${body.intent.deviceId}
-            AND account_id = ${session.accountId} AND state = 'active' AND approval_provenance = 'recovery')`,
+          AND ${activatedDevice}`,
       sql`INSERT INTO sessions
         (id, account_id, purpose, authenticated_passkey_id, device_id, created_at,
          idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at)
         SELECT ${newSessionId}, ${session.accountId}, 'normal', ${session.authenticatedPasskeyId ?? null},
           ${body.intent.deviceId}, ${now}, ${now + SESSION_IDLE_MS}, ${now + SESSION_ABSOLUTE_MS},
           ${now}, NULL, NULL
-        WHERE EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${body.intent.deviceId}
-          AND account_id = ${session.accountId} AND state = 'active' AND approval_provenance = 'recovery')
+        WHERE ${activatedDevice}
           AND EXISTS (SELECT 1 FROM passkeys WHERE credential_id = ${session.authenticatedPasskeyId ?? null}
             AND account_id = ${session.accountId})`,
       sql`INSERT INTO security_events
