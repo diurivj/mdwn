@@ -2,7 +2,7 @@
 
 **Question:** Which presentation makes saving two different recovery backups feel clear and worthwhile?
 
-**Branch:** `prototype/signup-onboarding-ux` — keep out of `main`. Ticket 35 tracks the production rewrite. No design has been approved yet.
+**Branch:** `prototype/signup-onboarding-ux` — keep out of `main`. Ticket 35 tracks the production rewrite. Option A's flow is approved; production implementation remains pending.
 
 ## See the mocks now
 
@@ -43,4 +43,4 @@ node scripts/prototype-signup-snapshots.mjs
 
 Checked: typecheck, production build, client-bundle secret scan, and prototype-marker exclusion from client/server builds. Chromium rendered all 12 snapshots with no horizontal overflow and no phrase display on the confirmation screen. An isolated in-memory-router browser walkthrough exercised all three variants: mismatch, back/re-confirmation, code acknowledgement, simulated passkey cancellation/success, variant switching, and zero outgoing requests. This is prototype smoke verification, not production authentication or a complete accessibility/cross-browser test suite.
 
-**Verdict:** pending maintainer feedback. Choose a direction, or identify parts to combine, before implementing ticket 35.
+**Verdict:** the maintainer approved **Option A's flow**. One passkey completes signup; adding a backup passkey is optional, not another required step. Completion should emphasize that the Account is ready, with “Go to Files” as the primary destination once that workspace exists and the backup-passkey suggestion secondary or deferred to Account security. The captured mockups predate this completion-hierarchy clarification. Keep them as the design-study source, and apply the decision in ticket 35's production rewrite.
