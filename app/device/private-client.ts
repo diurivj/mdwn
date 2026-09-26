@@ -78,7 +78,10 @@ export async function privateRequest(
   try {
     const response = await fetch(url.href, {
       method: options.method, body: options.body, signal: options.signal,
-      headers: { "X-Mdwn-Device-Proof": JSON.stringify(proof) },
+      headers: {
+        "X-Mdwn-Device-Proof": JSON.stringify(proof),
+        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
       cache: "no-store", redirect: "error",
     });
     if (response.status === 401) throw new PrivateAccessError("signed-out");

@@ -1,10 +1,10 @@
-import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import { startRegistration } from "@simplewebauthn/browser";
 import { Link, redirect, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
+import { confirmFreshPasskey } from "~/auth/fresh-client";
 import { prepareRecoveryCodeSet } from "~/auth/recovery-codes";
 import type {
-  AssertionStart,
   PasskeySummary,
   RegistrationStart,
   RevocationResult,
@@ -44,19 +44,6 @@ export function HydrateFallback() {
       <h1 className="mt-8 text-3xl font-semibold tracking-tight">Account security</h1>
       <p className="mt-4 text-stone-600">Loading account security…</p>
     </main>
-  );
-}
-
-async function confirmFreshPasskey(signal: AbortSignal): Promise<void> {
-  const start = await authPost<AssertionStart>(
-    "/api/auth/passkeys/fresh/options", {}, signal,
-  );
-  const response = await startAuthentication({ optionsJSON: start.options });
-  await authPost<{ ok: true }>(
-    "/api/auth/passkeys/fresh/verify",
-    { challengeId: start.challengeId, response },
-    signal,
-    "failed",
   );
 }
 

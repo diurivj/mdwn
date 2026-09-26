@@ -13,6 +13,7 @@ export const PURPOSES = [
   "public-representation", "private-comment-thread", "public-comment-audience-epoch",
   "comment-content", "attribution", "archive-manifest", "import-staging-manifest", "import-chunk",
   "account-profile",
+  "owned-device",
 ] as const;
 
 export const MANIFEST_PURPOSES: readonly EnvelopePurpose[] = ["archive-manifest", "import-staging-manifest"];

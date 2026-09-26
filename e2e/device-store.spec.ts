@@ -140,7 +140,7 @@ test("missing, swapped, and mismatched handles fail closed without regenerating 
     await store.createDevice("first-account", "first-device");
     await store.createDevice("other-account", "other-device");
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("mdwn-device-store", 1);
+      const request = indexedDB.open("mdwn-device-store");
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });

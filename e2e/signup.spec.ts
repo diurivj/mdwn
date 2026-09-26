@@ -80,7 +80,7 @@ async function signedProof(page: Page, accountId: string) {
       sessionBinding: string; registryEpoch: number; deviceId: string;
     };
     const device = await new Promise<{ assertionKeyPair: CryptoKeyPair; deviceId: string; registryEpoch: number }>((resolve, reject) => {
-      const opening = indexedDB.open("mdwn-device-store", 1);
+      const opening = indexedDB.open("mdwn-device-store");
       opening.onerror = () => reject(opening.error);
       opening.onsuccess = () => {
         const database = opening.result;
@@ -155,7 +155,7 @@ test("signs up atomically with a bound device and gates recovery material before
       encryption_devices: 1, key_envelopes: 2, recovery_capsules: 1,
       authentication_recovery_codes: 10, sessions: 1,
     })) expect(await count(env, table, accountId), table).toBe(expected);
-    expect(await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'crypto_jobs'").first()).toBeNull();
+    expect(await count(env, "crypto_jobs", accountId)).toBe(0);
     const identity = await env.DB.prepare("SELECT root_directory_id, registry_epoch FROM account_encryption_identities WHERE account_id = ?")
       .bind(accountId).first<{ root_directory_id: string; registry_epoch: number }>();
     expect(identity).toMatchObject({ registry_epoch: 1, root_directory_id: payload.transcript.rootDirectoryId });

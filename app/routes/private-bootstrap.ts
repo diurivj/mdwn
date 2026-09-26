@@ -1,4 +1,4 @@
-import { requireSameOrigin } from "~/auth/request.server";
+import { hasEmptyBody, requireSameOrigin } from "~/auth/request.server";
 import { getEnv } from "~/context/env";
 import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, privateReadGuard } from "~/device/proof.server";
@@ -17,20 +17,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   // Browsers/Workers can expose an empty POST as a non-null stream. Inspect
   // without buffering an unbounded body, and reject any actual bytes before
   // verifying the canonical empty-body digest.
-  if (request.body) {
-    const reader = request.body.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value.byteLength) return Response.json({ error: "device_proof_required" }, { status: 403 });
-      }
-    } catch {
-      return Response.json({ error: "device_proof_required" }, { status: 403 });
-    } finally {
-      await reader.cancel();
-    }
-  }
+  if (!await hasEmptyBody(request)) return Response.json({ error: "device_proof_required" }, { status: 403 });
   let proof: unknown;
   try { proof = JSON.parse(request.headers.get("X-Mdwn-Device-Proof") ?? "null"); }
   catch { return Response.json({ error: "device_proof_required" }, { status: 403 }); }
@@ -49,8 +36,11 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     FROM account_encryption_identities i
     JOIN key_envelopes root ON root.account_id = i.account_id
       AND root.purpose = 'vault-recovery' AND root.object_id = i.root_directory_id
+      AND root.superseded_at IS NULL
     JOIN key_envelopes enrollment ON enrollment.account_id = i.account_id
       AND enrollment.purpose = 'device-enrollment' AND enrollment.recipient_id = ${authorized.deviceId}
+      AND enrollment.object_id = ${authorized.deviceId}
+      AND enrollment.superseded_at IS NULL
     JOIN recovery_capsules c ON c.account_id = i.account_id
     JOIN account_profiles p ON p.account_id = i.account_id
     WHERE i.account_id = ${authorized.accountId}

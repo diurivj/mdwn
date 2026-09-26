@@ -176,7 +176,7 @@ export const rateLimitCounters = sqliteTable(
     index("rate_limit_counters_expiry_idx").on(table.expiresAt),
     check(
       "rate_limit_counters_purpose_valid",
-      sql`${table.purpose} IN ('registration.challenge', 'registration.success', 'webauthn.sign_in', 'recovery.attempt', 'session.refresh', 'public_comment.mutate', 'public_comment.report', 'publication.mutate')`,
+      sql`${table.purpose} IN ('registration.challenge', 'registration.success', 'webauthn.sign_in', 'recovery.attempt', 'vault_recovery.start', 'session.refresh', 'public_comment.mutate', 'public_comment.report', 'publication.mutate')`,
     ),
     check(
       "rate_limit_counters_scope_valid",
@@ -187,6 +187,7 @@ export const rateLimitCounters = sqliteTable(
       sql`(${table.purpose} IN ('registration.challenge', 'registration.success') AND ${table.scopeType} IN ('global', 'network'))
         OR (${table.purpose} = 'webauthn.sign_in' AND ${table.scopeType} IN ('global', 'network', 'account'))
         OR (${table.purpose} = 'recovery.attempt' AND ${table.scopeType} IN ('global', 'network', 'recovery_identifier'))
+        OR (${table.purpose} = 'vault_recovery.start' AND ${table.scopeType} IN ('global', 'network', 'account'))
         OR (${table.purpose} = 'session.refresh' AND ${table.scopeType} = 'session')
         OR (${table.purpose} = 'public_comment.mutate' AND ${table.scopeType} IN ('global', 'network', 'account', 'publication', 'account_publication'))
         OR (${table.purpose} = 'public_comment.report' AND ${table.scopeType} = 'account')
@@ -338,6 +339,7 @@ export const encryptionDevices = sqliteTable("encryption_devices", {
   assertionPublicKey: blob("assertion_public_key").notNull(),
   state: text("state").notNull(),
   approvalProvenance: text("approval_provenance").notNull(),
+  revocationReason: text("revocation_reason"),
   registryEpoch: integer("registry_epoch").notNull(),
   createdAt: integer("created_at").notNull(),
   lastProofAt: integer("last_proof_at"),
@@ -355,13 +357,14 @@ export const keyEnvelopes = sqliteTable("key_envelopes", {
   recipientId: text("recipient_id").notNull(),
   ciphertext: blob("ciphertext").notNull(),
   keyEpoch: integer("key_epoch").notNull(),
+  supersededAt: integer("superseded_at"),
 }, (table) => [
   primaryKey({ columns: [table.accountId, table.purpose, table.objectId, table.recipientId] }),
-  check("key_envelopes_purpose_valid", sql`${table.purpose} IN ('vault-recovery', 'device-enrollment')`),
+  check("key_envelopes_purpose_valid", sql`${table.purpose} IN ('vault-recovery', 'device-enrollment', 'owned-device')`),
   check("key_envelopes_epoch_positive", sql`${table.keyEpoch} >= 1`),
 ]);
 
-/** Opaque generation-1 capsule; no Vault recovery secret or phrase reaches D1. */
+/** Current opaque capsule; no Vault recovery secret or phrase reaches D1. */
 export const recoveryCapsules = sqliteTable("recovery_capsules", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "restrict" }),
   generation: integer("generation").notNull(),
@@ -369,6 +372,47 @@ export const recoveryCapsules = sqliteTable("recovery_capsules", {
   ciphertext: blob("ciphertext").notNull(),
   verificationPublicKey: blob("verification_public_key").notNull(),
 }, (table) => [check("recovery_capsules_generation_positive", sql`${table.generation} >= 1`)]);
+
+/** One-use recovery enrollment. Candidate public keys remain invisible to the registry until commit. */
+export const recoveryEnrollments = sqliteTable("recovery_enrollments", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "restrict" }),
+  generation: integer("generation").notNull(),
+  registryEpoch: integer("registry_epoch").notNull(),
+  nonce: blob("nonce").notNull(),
+  state: text("state").notNull(),
+  candidateDeviceId: text("candidate_device_id"),
+  transportPublicKey: blob("transport_public_key"),
+  assertionPublicKey: blob("assertion_public_key"),
+  intentDigest: blob("intent_digest"),
+  nextMetadataDigest: blob("next_metadata_digest"),
+  challengeHash: blob("challenge_hash"),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  index("recovery_enrollments_account_idx").on(table.accountId, table.expiresAt),
+  check("recovery_enrollments_state_valid", sql`${table.state} IN ('started', 'challenged')`),
+  check("recovery_enrollments_expiry_valid", sql`${table.expiresAt} > ${table.createdAt}`),
+  check("recovery_enrollments_generation_positive", sql`${table.generation} >= 1`),
+  check("recovery_enrollments_epoch_positive", sql`${table.registryEpoch} >= 1`),
+]);
+
+/** Browser-driven, bounded owned-key provisioning after recovery; never carries a capability. */
+export const cryptoJobs = sqliteTable("crypto_jobs", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  kind: text("kind").notNull(),
+  state: text("state").notNull(),
+  cursor: text("cursor"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("crypto_jobs_device_idx").on(table.accountId, table.deviceId, table.state),
+  check("crypto_jobs_kind_valid", sql`${table.kind} = 'recovery_owned'`),
+  check("crypto_jobs_state_valid", sql`${table.state} IN ('pending', 'complete')`),
+]);
 
 /** High-entropy authentication recovery codes: only SHA-256 hashes are retained. */
 export const authenticationRecoveryCodes = sqliteTable("authentication_recovery_codes", {

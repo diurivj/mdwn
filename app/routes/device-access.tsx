@@ -1,6 +1,8 @@
 import { Link } from "react-router";
 
 import { privateRequest, PrivateAccessError, type PrivateAccessState } from "~/device/private-client";
+import { recoveryProvisioningNeeded } from "~/recovery/provision-client";
+import { useRecoveryProvisioning } from "~/recovery/provision-hook";
 
 import type { Route } from "./+types/device-access";
 
@@ -8,13 +10,15 @@ export function meta({}: Route.MetaArgs) {
   return [{ title: "Device access — mdwn" }];
 }
 
-type Access = { state: "ready" | PrivateAccessState };
+type Access = { state: "ready" | PrivateAccessState; restoring?: boolean };
 
 /** Browser-only: neither private ciphertext nor even the Account status enters SSR. */
 export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise<Access> {
   try {
     const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal: request.signal });
-    return { state: response.ok ? "ready" : "unavailable" };
+    if (!response.ok) return { state: "unavailable" };
+    try { return { state: "ready", restoring: await recoveryProvisioningNeeded(request.signal) }; }
+    catch { return { state: "ready", restoring: true }; }
   } catch (error) {
     if (request.signal.aborted) throw error;
     return { state: error instanceof PrivateAccessError ? error.state : "unavailable" };
@@ -31,6 +35,7 @@ export function HydrateFallback() {
 
 export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
   const { state } = loaderData;
+  const restoring = useRecoveryProvisioning(Boolean(loaderData.restoring));
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
       <Link to="/" className="text-sm underline">mdwn</Link>
@@ -38,6 +43,7 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
         <>
           <h1 className="mt-8 text-2xl font-semibold">Private access ready</h1>
           <p className="mt-4">This browser has an active Encryption device. Your Files experience is coming soon.</p>
+          {restoring && <p role="status" className="mt-4">Restoring your Files securely…</p>}
         </>
       ) : state === "signed-out" ? (
         <>
@@ -50,7 +56,7 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
           <p className="mt-4">{state === "device-lost"
             ? "This browser no longer has the keys for its bound Encryption device. No private request was sent."
             : "This Session has no active Encryption device. A passkey alone cannot open private material."}</p>
-          <p className="mt-3">Use an existing active device for enrollment, or your recovery phrase for recovery enrollment if no device is available. These ceremonies are not available yet.</p>
+          <p className="mt-3">Use an existing active device for enrollment, or <Link to="/recover-files" className="underline">recover your Files with your recovery phrase</Link> if no device is available.</p>
           <Link to="/account/security" className="mt-4 inline-block underline">Account security</Link>
         </>
       ) : (

@@ -121,7 +121,7 @@ test("losing a persisted private key before passkey registration never activates
       const response = await route.fetch();
       expect(response.status()).toBe(200);
       await page.evaluate(async () => {
-        const opening = indexedDB.open("mdwn-device-store", 1);
+        const opening = indexedDB.open("mdwn-device-store");
         const db = await new Promise<IDBDatabase>((resolve, reject) => {
           opening.onsuccess = () => resolve(opening.result);
           opening.onerror = () => reject(opening.error);
