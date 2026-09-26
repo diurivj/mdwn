@@ -8,6 +8,7 @@ export const SESSION_COOKIE_NAME = "__Host-mdwn_session";
 export const SESSION_IDLE_MS = 30 * 24 * 60 * 60 * 1_000;
 export const SESSION_ABSOLUTE_MS = 90 * 24 * 60 * 60 * 1_000;
 export const FRESH_ASSERTION_MS = 5 * 60 * 1_000;
+export const RECOVERY_SESSION_MS = 5 * 60 * 1_000;
 
 export type SessionPurpose = "normal" | "recovery";
 
@@ -75,10 +76,10 @@ function assertStoredSessionData(
   ) {
     throw new Error("invalid server-side session data");
   }
-  // Ticket 10 owns recovery-code ceremonies and their five-minute restricted
-  // Session lifetime. Ticket 06 only creates normal Sessions.
+  // Restricted Sessions are issued only by atomic recovery-code consumption;
+  // never create or refresh them via the normal Session storage path.
   if (data.purpose === "recovery") {
-    throw new Error("recovery sessions are not available yet");
+    throw new Error("recovery sessions require code consumption");
   }
 }
 
@@ -140,6 +141,7 @@ export function createAccountSessionStorage(
            AND revoked_at IS NULL
            AND idle_expires_at > ${now}
            AND absolute_expires_at > ${now}
+           AND (purpose = 'normal' OR created_at > ${now - RECOVERY_SESSION_MS})
       `);
 
       if (!row) return null;

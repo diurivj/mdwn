@@ -108,6 +108,7 @@ export default function SignIn() {
           ) : null}
         </p>
       ) : null}
+      <p className="mt-4 text-sm text-stone-600">Lost all your passkeys? <Link className="underline" to="/recover">Use an authentication recovery code</Link>.</p>
       {!working && fetcher.data?.state === "failed" ? (
         <p className="mt-4 text-red-700">We could not sign you in. Try again.</p>
       ) : null}

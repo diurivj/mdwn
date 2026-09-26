@@ -36,7 +36,7 @@ export type {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ABUSE_PURGE_INTERVAL_MS = 15 * 60 * 1000;
 // Leave one cron period for cleanup to run before the policy retention maxima.
-const MAX_EVENT_RETENTION_MS = 30 * DAY_MS - ABUSE_PURGE_INTERVAL_MS;
+export const MAX_EVENT_RETENTION_MS = 30 * DAY_MS - ABUSE_PURGE_INTERVAL_MS;
 const MAX_EVENT_NETWORK_BUCKET_MS = DAY_MS - ABUSE_PURGE_INTERVAL_MS;
 
 const SECURITY_ACTIONS = new Set<SecurityEventActionClass>([

@@ -146,6 +146,7 @@ export default function SignUp() {
         <section className="mt-8">
           <h2 className="text-xl font-semibold">Save your recovery codes</h2>
           <p className="mt-2">These ten one-time codes are shown only now. Store them separately from your recovery phrase and passkey. Add a second passkey in Account security when you finish.</p>
+          <p className="mt-4">Save this non-secret recovery identifier alongside your codes: <span className="break-all font-mono">{prepared?.transcriptBase.accountId}</span></p>
           <ol className="mt-4 space-y-2 rounded-md border p-4">
             {secrets.recoveryCodes.map((code, index) => <li key={index} className="break-all font-mono text-sm">{index + 1}. {code}</li>)}
           </ol>
