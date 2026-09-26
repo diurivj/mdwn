@@ -1,6 +1,7 @@
 import { startRegistration } from "@simplewebauthn/browser";
 
 import { authPost } from "~/auth/client";
+import { prepareRecoveryCodeSet } from "~/auth/recovery-codes";
 import { sealAccountProfile } from "~/crypto/account-profile";
 import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
 import {
@@ -10,7 +11,6 @@ import {
 import { createDevice, getDevice, updateRegistryEpoch } from "~/device/store";
 import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "~/signup/protocol";
 
-const encoder = new TextEncoder();
 const GATE_KEY = "mdwn:signup:recovery-confirmation-pending";
 
 /** A pending local gate must be checked before enabling private mutations or imports. */
@@ -43,10 +43,6 @@ export function newSignupId(): string {
 
 async function digest(bytes: Uint8Array): Promise<string> {
   return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))));
-}
-
-function randomCode(): string {
-  return encodeBytes(crypto.getRandomValues(new Uint8Array(24)));
 }
 
 export type SignupSecrets = { phrase: string; recoveryCodes: string[] };
@@ -84,8 +80,7 @@ export async function prepareSignup(): Promise<PreparedSignup> {
     { publicPseudonym: `Member ${encodeBytes(crypto.getRandomValues(new Uint8Array(9)))}` },
     { accountId, epoch: 1, revision: 1 },
   );
-  const recoveryCodes = Array.from({ length: 10 }, randomCode);
-  const recoveryCodeHashes = await Promise.all(recoveryCodes.map((code) => digest(encoder.encode(code))));
+  const { codes: recoveryCodes, hashes: recoveryCodeHashes } = await prepareRecoveryCodeSet();
   // Reject noncanonical material locally rather than submitting an inconsistent transcript.
   inspectEnvelope(hierarchy.rootDirectoryRecoveryEnvelope);
   inspectEnvelope(enrollmentEnvelope);

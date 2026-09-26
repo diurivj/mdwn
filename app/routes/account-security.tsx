@@ -2,6 +2,7 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { Link, redirect, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
+import { prepareRecoveryCodeSet } from "~/auth/recovery-codes";
 import type {
   AssertionStart,
   PasskeySummary,
@@ -13,10 +14,10 @@ import type {
 import type { Route } from "./+types/account-security";
 
 type SecurityData =
-  | { state: "ready"; sessions: SessionSummary[]; passkeys: PasskeySummary[] }
+  | { state: "ready"; sessions: SessionSummary[]; passkeys: PasskeySummary[]; identifier: string }
   | { state: "signed-out" | "restricted" | "failed" };
 
-type Operation = "passkeys" | "sessions";
+type Operation = "passkeys" | "sessions" | "codes";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Account security — mdwn" }];
@@ -25,11 +26,12 @@ export function meta({}: Route.MetaArgs) {
 /** No server loader: the shell is SSR'd, but Account data only reaches the browser. */
 export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise<SecurityData> {
   try {
-    const [sessions, passkeys] = await Promise.all([
+    const [sessions, passkeys, recovery] = await Promise.all([
       authGet<{ sessions: SessionSummary[] }>("/api/auth/sessions", request.signal),
       authGet<{ passkeys: PasskeySummary[] }>("/api/auth/passkeys", request.signal),
+      authGet<{ identifier: string }>("/api/auth/recovery/identifier", request.signal),
     ]);
-    return { state: "ready", sessions: sessions.sessions, passkeys: passkeys.passkeys };
+    return { state: "ready", sessions: sessions.sessions, passkeys: passkeys.passkeys, identifier: recovery.identifier };
   } catch (error) {
     return { state: authFailure(error, request.signal) };
   }
@@ -77,7 +79,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
   const intent = form.get("intent");
   const operation: Operation = intent === "add-passkey" || intent === "remove-passkey"
     ? "passkeys"
-    : "sessions";
+    : intent === "rotate-codes" ? "codes" : "sessions";
 
   try {
     switch (intent) {
@@ -93,6 +95,12 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         );
         if (result.signedOut) return redirect("/sign-in");
         return { state: "success", message: "Passkey removed." } as const;
+      }
+      case "rotate-codes": {
+        await confirmFreshPasskey(request.signal);
+        const { codes, hashes } = await prepareRecoveryCodeSet();
+        await authPost<{ ok: true }>("/api/auth/recovery/rotate", { hashes }, request.signal, "failed");
+        return { state: "codes", codes } as const;
       }
       case "refresh":
         await authPost<{ ok: true }>("/api/auth/session/refresh", {}, request.signal);
@@ -130,7 +138,9 @@ export default function AccountSecurity({ loaderData }: Route.ComponentProps) {
     : !busy && fetcher.data?.state === "failed"
       ? fetcher.data.operation === "passkeys"
         ? "We could not update your Passkeys. Try again."
-        : "We could not update your Sessions. Try again."
+        : fetcher.data.operation === "codes"
+          ? "We could not replace your recovery codes. Try again."
+          : "We could not update your Sessions. Try again."
       : null;
 
   return (
@@ -197,6 +207,23 @@ export default function AccountSecurity({ loaderData }: Route.ComponentProps) {
                 </li>
               ))}
             </ul>
+          </section>
+
+          <section className="mt-10 border-t border-stone-200 pt-8">
+            <h2 className="text-lg font-medium">Authentication recovery</h2>
+            <p className="mt-2 text-sm text-stone-600">Save this non-secret recovery identifier with your offline codes: <span className="break-all font-mono">{loaderData.identifier}</span></p>
+            <p className="mt-2 text-sm text-stone-600">Replacing your codes invalidates every unused code in the previous set. Confirm with a passkey first. Store the new codes safely: they will only be shown once.</p>
+            <fetcher.Form method="post" className="mt-4">
+              <button disabled={busy} name="intent" value="rotate-codes" type="submit" className="rounded-md border border-stone-300 px-4 py-2 text-sm font-medium disabled:opacity-60">Replace recovery codes</button>
+            </fetcher.Form>
+            {!busy && fetcher.data?.state === "codes" && (
+              <div role="status" className="mt-4 rounded-md border p-4">
+                <p>Save these ten new one-time codes now. All previous codes are invalid.</p>
+                <ol className="mt-3 space-y-1">
+                  {fetcher.data.codes.map((code, index) => <li className="break-all font-mono text-sm" key={index}>{index + 1}. {code}</li>)}
+                </ol>
+              </div>
+            )}
           </section>
 
           <section className="mt-10 border-t border-stone-200 pt-8">
