@@ -19,4 +19,5 @@
 
 ## Comments
 
-- Maintainer-approved sequence correction: ticket 08 now owns the device-proof, device-key-persistence, and bind-on-sign-in prerequisites needed for independently acceptable signup. This ticket remains blocked by 08 and covers their comprehensive enforcement and lifecycle integration; no dependency points back from 08 to this ticket.
+- Maintainer-approved sequence correction: ticket 08 now owns the device-proof, device-key-persistence, and bind-on-sign-in prerequisites needed for independently acceptable signup. This ticket is blocked by 08 until that prerequisite lands and covers their comprehensive enforcement and lifecycle integration; no dependency points back from 08 to this ticket.
+- 2026-09-23: Dependency satisfied by PR #11 (`02a5332`); this ticket is ready to implement its remaining private-route enforcement, registry-epoch, and device-loss work. Do not repeat ticket 08's completed primitives.
