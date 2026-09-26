@@ -55,7 +55,7 @@ async function fixture() {
 
 describe("private endpoint device lifecycle", () => {
   it("refuses every unprovisioned and recovery Session but leaves account-security accessible", async () => {
-    const { account, unbound, read, sign } = await fixture();
+    const { account, unbound, deviceId, read, sign } = await fixture();
     const recovery = await recoveryCookie(account.accountId);
     expect((await read(unbound.cookie, await sign(unbound.id))).status).toBe(403);
     expect((await read(recovery, await sign())).status).toBe(403);
@@ -63,6 +63,10 @@ describe("private endpoint device lifecycle", () => {
     expect((await SELF.fetch("https://mdwn.test/api/auth/sessions", { headers: { cookie: unbound.cookie } })).status).toBe(200);
     const state = await SELF.fetch("https://mdwn.test/api/device/state", { headers: { cookie: unbound.cookie } });
     expect(await state.json()).toMatchObject({ accountId: account.accountId, deviceId: null, registryEpoch: 1 });
+    const candidate = await SELF.fetch(`https://mdwn.test/api/device/state?candidateDeviceId=${deviceId}`, {
+      headers: { cookie: unbound.cookie },
+    });
+    expect(await candidate.json()).toMatchObject({ deviceId: null, candidateActive: true });
   });
 
   it("binds the entire request, never consumes a read proof, and exposes no ciphertext on invalid proof", async () => {
@@ -131,7 +135,7 @@ describe("private endpoint device lifecycle", () => {
     expect((await read(second.cookie, await sign(second.id, { epoch: 2 }))).status).toBe(200);
     await env.DB.prepare("UPDATE encryption_devices SET state = 'tombstoned' WHERE id = ?").bind(deviceId).run();
     expect((await read(second.cookie, await sign(second.id, { epoch: 2 }))).status).toBe(403);
-    const inactive = await SELF.fetch("https://mdwn.test/api/device/state", { headers: { cookie: second.cookie } });
-    expect(await inactive.json()).toMatchObject({ deviceId: null, registryEpoch: 3 });
+    const inactive = await SELF.fetch(`https://mdwn.test/api/device/state?candidateDeviceId=${deviceId}`, { headers: { cookie: second.cookie } });
+    expect(await inactive.json()).toMatchObject({ deviceId: null, registryEpoch: 3, candidateActive: false });
   });
 });

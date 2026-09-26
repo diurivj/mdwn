@@ -55,8 +55,14 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         );
         const saved = await getDevice(state.accountId);
         if (saved && state.registryEpoch !== null && state.registryEpoch > saved.registryEpoch) {
-          await updateRegistryEpoch(state.accountId, state.registryEpoch);
-          return { state: "registry-refreshed" } as const;
+          const current = await authGet<{
+            accountId: string; registryEpoch: number | null; candidateActive: boolean;
+          }>(`/api/device/state?candidateDeviceId=${encodeURIComponent(saved.deviceId)}`, request.signal);
+          if (current.accountId === state.accountId && current.registryEpoch === state.registryEpoch &&
+              current.candidateActive) {
+            await updateRegistryEpoch(state.accountId, state.registryEpoch);
+            return { state: "registry-refreshed" } as const;
+          }
         }
       } catch {
         if (request.signal.aborted) throw new Error("sign-in aborted");
