@@ -132,7 +132,6 @@ export async function runVaultRecovery(request: Request) {
     committedPhrase = next.phrase;
     try {
       await activateRecoveryCandidate(start.accountId, candidate.deviceId, committed.registryEpoch);
-      return { state: "success", phrase: next.phrase, restoring: true } as const;
     } catch { /* The committed device can resume from the pending record or normal private access. */ }
     return { state: "success", phrase: next.phrase, restoring: true } as const;
   } catch (error) {
