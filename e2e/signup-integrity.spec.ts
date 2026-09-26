@@ -52,7 +52,7 @@ for (const scenario of ["candidate key", "capsule digest", "registration challen
   });
 }
 
-for (const scenario of ["bad binding proof", "tombstoned device"] as const) {
+for (const scenario of ["bad binding proof", "stale registry", "revoked device", "tombstoned device"] as const) {
   test(`sign-in with ${scenario} stays unprovisioned`, async ({ browser, server, baseURL }) => {
     const worker = server.getWorker<{DB:D1Database}>();
     await worker.applyD1Migrations("DB");
@@ -68,8 +68,12 @@ for (const scenario of ["bad binding proof", "tombstoned device"] as const) {
         method:"POST", headers:{"Content-Type":"application/json"}, body:"{}",
       }).then((result) => result.status));
       expect(signedOut).toBe(200);
-      if (scenario === "tombstoned device") {
-        await env.DB.prepare("UPDATE encryption_devices SET state='tombstoned' WHERE account_id=?").bind(account!.id).run();
+      if (scenario === "stale registry") {
+        await env.DB.prepare("UPDATE account_encryption_identities SET registry_epoch=2 WHERE account_id=?").bind(account!.id).run();
+      }
+      if (scenario === "revoked device" || scenario === "tombstoned device") {
+        await env.DB.prepare("UPDATE encryption_devices SET state=? WHERE account_id=?")
+          .bind(scenario === "revoked device" ? "revoked" : "tombstoned", account!.id).run();
       }
       await page.goto(`${new URL(baseURL!).origin}/sign-in`, {waitUntil:"commit"});
       let presented = false;
@@ -81,12 +85,28 @@ for (const scenario of ["bad binding proof", "tombstoned device"] as const) {
         await route.continue({postData:JSON.stringify(body)});
       });
       await page.getByRole("button", {name:"Sign in with a passkey"}).click();
-      await expect(page.getByText("This browser has no active Encryption device", {exact:false})).toBeVisible();
+      if (scenario === "stale registry") {
+        await expect(page.getByText("Device registry changed", {exact:false})).toBeVisible();
+      } else {
+        await expect(page.getByText("This browser has no active Encryption device", {exact:false})).toBeVisible();
+      }
       expect(presented).toBe(true);
       expect(await env.DB.prepare("SELECT count(*) AS n FROM sessions WHERE account_id=? AND device_id IS NULL")
         .bind(account!.id).first()).toEqual({n:1});
+      expect(await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id=?")
+        .bind(account!.id).first()).toEqual({registry_epoch:scenario === "bad binding proof" ? 1 : 2});
       const read = await page.evaluate(async () => (await fetch("/api/private/bootstrap", {method:"POST"})).status);
       expect(read).toBe(403);
+      if (scenario === "stale registry") {
+        await page.getByRole("button", {name:"Sign in with a passkey"}).click();
+        await expect(page.getByText("Check private access")).toBeVisible();
+        await page.getByText("Check private access").click();
+        await expect(page.getByRole("heading", {name:"Private access ready"})).toBeVisible();
+        expect(await env.DB.prepare("SELECT count(*) AS n FROM sessions WHERE account_id=? AND device_id IS NOT NULL AND revoked_at IS NULL")
+          .bind(account!.id).first()).toEqual({n:1});
+        expect(await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id=?")
+          .bind(account!.id).first()).toEqual({registry_epoch:2});
+      }
     } finally { await context.close(); }
   });
 }

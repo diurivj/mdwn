@@ -1,7 +1,7 @@
 import { requireSameOrigin } from "~/auth/request.server";
 import { getEnv } from "~/context/env";
 import { createDb, sql } from "~/db/client.server";
-import { authorizePrivateRequest } from "~/device/proof.server";
+import { authorizePrivateRequest, privateReadGuard } from "~/device/proof.server";
 import { encodeBytes } from "~/signup/protocol";
 
 import type { Route } from "./+types/private-bootstrap";
@@ -14,6 +14,23 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   if (request.method !== "POST") return Response.json({ error: "device_proof_required" }, { status: 405 });
   try { requireSameOrigin(request); }
   catch { return Response.json({ error: "device_proof_required" }, { status: 403 }); }
+  // Browsers/Workers can expose an empty POST as a non-null stream. Inspect
+  // without buffering an unbounded body, and reject any actual bytes before
+  // verifying the canonical empty-body digest.
+  if (request.body) {
+    const reader = request.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value.byteLength) return Response.json({ error: "device_proof_required" }, { status: 403 });
+      }
+    } catch {
+      return Response.json({ error: "device_proof_required" }, { status: 403 });
+    } finally {
+      await reader.cancel();
+    }
+  }
   let proof: unknown;
   try { proof = JSON.parse(request.headers.get("X-Mdwn-Device-Proof") ?? "null"); }
   catch { return Response.json({ error: "device_proof_required" }, { status: 403 }); }
@@ -38,10 +55,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     JOIN account_profiles p ON p.account_id = i.account_id
     WHERE i.account_id = ${authorized.accountId}
       AND i.registry_epoch = ${authorized.registryEpoch}
-      AND EXISTS (SELECT 1 FROM sessions WHERE id = ${authorized.sessionId}
-        AND account_id = i.account_id AND device_id = ${authorized.deviceId}
-        AND revoked_at IS NULL AND idle_expires_at > ${Date.now()}
-        AND absolute_expires_at > ${Date.now()})
+      AND ${privateReadGuard(authorized)}
   `);
   if (!rows) return Response.json({ error: "device_proof_required" }, { status: 403 });
   return Response.json({

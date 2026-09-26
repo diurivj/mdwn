@@ -175,5 +175,18 @@ describe("signup challenge and first private-operation boundary", () => {
     expect(await update(2)).toBe(false);
     expect(await env.DB.prepare("SELECT revision FROM account_profiles WHERE account_id=?").bind(account.accountId).first()).toEqual({revision:2});
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM device_proof_uses WHERE account_id=?").bind(account.accountId).first()).toEqual({n:1});
+    const competingProof = await signDeviceProof(pair.privateKey, {
+      deviceId, sessionBinding: await sessionBindingDigest(seeded.id), registryEpoch: 1, method: "POST", url,
+    });
+    const competing = await authorizePrivateRequest(read, env, competingProof);
+    expect(competing).not.toBeNull();
+    if (!competing) return;
+    const results = await Promise.all([1, 2].map(() => commitPrivateMutation(env, competing, (guard) =>
+      sql`UPDATE account_profiles SET revision = revision + 1
+        WHERE account_id = ${account.accountId} AND revision = 2 AND ${guard}`,
+    )));
+    expect(results.sort()).toEqual([false, true]);
+    expect(await env.DB.prepare("SELECT revision FROM account_profiles WHERE account_id=?").bind(account.accountId).first()).toEqual({revision:3});
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM device_proof_uses WHERE account_id=?").bind(account.accountId).first()).toEqual({n:2});
   });
 });

@@ -29,6 +29,13 @@
       "when": 1790211922930,
       "tag": "0003_colossal_falcon",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1790452782519,
+      "tag": "0004_device_registry_epochs",
+      "breakpoints": true
     }
   ]
 }

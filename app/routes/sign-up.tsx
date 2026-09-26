@@ -154,7 +154,7 @@ export default function SignUp() {
           </button>
         </section>
       )}
-      {stage === "done" && <p className="mt-6">Your account is ready. Your recovery material will not be shown again. <Link to="/account/security" className="underline">Add a second passkey</Link>.</p>}
+      {stage === "done" && <p className="mt-6">Your account is ready. Your recovery material will not be shown again. <Link to="/account/device-access" className="underline">Check private access</Link> · <Link to="/account/security" className="underline">Add a second passkey</Link>.</p>}
     </main>
   );
 }

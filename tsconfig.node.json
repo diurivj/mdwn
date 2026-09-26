@@ -14,6 +14,8 @@
     "app/security/**/*.ts",
     "app/crypto/**/*.ts",
     "app/device/store.ts",
+    "app/device/proof.ts",
+    "app/device/private-client.ts",
     "app/signup/protocol.ts",
     "app/namespace-v1/**/*.ts"
   ],
