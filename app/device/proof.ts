@@ -1,5 +1,5 @@
 /** Canonical device possession statements shared by the browser and Worker. */
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+import { decodeBytes, encodeBytes } from "../signup/protocol";
 
 const encoder = new TextEncoder();
 const MAX_PROOF_AGE_MS = 5 * 60_000;

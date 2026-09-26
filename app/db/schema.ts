@@ -318,7 +318,12 @@ export const registrationChallenges = sqliteTable("registration_challenges", {
   createdAt: integer("created_at").notNull(),
 }, (table) => [index("registration_challenges_expiry_idx").on(table.expiresAt)]);
 
-/** One encryption identity, hidden root Directory and current registry epoch per Account. */
+/**
+ * One encryption identity, hidden root Directory and current registry epoch per Account.
+ * The custom 0004 migration enforces monotonic epochs and advances the epoch
+ * in the same statement as active-device insert/deactivation. Callers must not
+ * bump the epoch separately; bulk replacement can advance it several times.
+ */
 export const accountEncryptionIdentities = sqliteTable("account_encryption_identities", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "restrict" }),
   rootDirectoryId: text("root_directory_id").notNull().unique(),

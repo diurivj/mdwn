@@ -5,6 +5,7 @@ export default [
   route("sign-in", "routes/sign-in.tsx"),
   route("sign-up", "routes/sign-up.tsx"),
   route("account/security", "routes/account-security.tsx"),
+  route("account/device-access", "routes/device-access.tsx"),
   route("api/auth/*", "routes/auth.ts"),
   route("api/signup/*", "routes/signup.ts"),
   route("api/device/state", "routes/device-state.ts"),

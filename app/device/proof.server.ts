@@ -61,6 +61,20 @@ export async function authorizeDeviceForSession(
   };
 }
 
+/** Recheck the live Session, device membership and epoch in the same SELECT that returns ciphertext. */
+export function privateReadGuard(authorization: AuthorizedDevice): SQL {
+  const { accountId, sessionId, deviceId, registryEpoch } = authorization;
+  const now = Date.now();
+  return sql`EXISTS (SELECT 1 FROM sessions s
+    JOIN encryption_devices d ON d.id = s.device_id AND d.account_id = s.account_id
+    JOIN account_encryption_identities r ON r.account_id = s.account_id
+    WHERE s.id = ${sessionId} AND s.account_id = ${accountId}
+      AND s.purpose = 'normal' AND s.authenticated_passkey_id IS NOT NULL
+      AND s.device_id = ${deviceId} AND s.revoked_at IS NULL
+      AND s.idle_expires_at > ${now} AND s.absolute_expires_at > ${now}
+      AND d.state = 'active' AND r.registry_epoch = ${registryEpoch})`;
+}
+
 /**
  * Atomic mutation boundary. The caller's statement MUST place the provided
  * predicate alongside its expected revision/idempotency condition. The second
@@ -89,6 +103,7 @@ export async function commitPrivateMutation(
     EXISTS (SELECT 1 FROM sessions s JOIN encryption_devices d ON d.id = s.device_id
       JOIN account_encryption_identities r ON r.account_id = s.account_id
       WHERE s.id = ${sessionId} AND s.account_id = ${accountId} AND s.purpose = 'normal'
+        AND s.authenticated_passkey_id IS NOT NULL
         AND s.device_id = ${deviceId} AND s.revoked_at IS NULL
         AND s.idle_expires_at > ${now} AND s.absolute_expires_at > ${now}
         AND d.account_id = s.account_id AND d.state = 'active'

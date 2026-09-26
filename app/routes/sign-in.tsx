@@ -2,10 +2,10 @@ import { startAuthentication } from "@simplewebauthn/browser";
 import { useEffect, useState } from "react";
 import { Link, useFetcher } from "react-router";
 
-import { authFailure, authPost } from "~/auth/client";
+import { authFailure, authGet, authPost } from "~/auth/client";
 import type { AssertionStart } from "~/auth/contracts";
 import { signDeviceProof } from "~/device/proof";
-import { getDevice } from "~/device/store";
+import { getDevice, updateRegistryEpoch } from "~/device/store";
 
 import type { Route } from "./+types/sign-in";
 
@@ -45,6 +45,24 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     const result = await authPost<{ ok: true; bound: boolean }>(
       "/api/auth/sign-in/verify", { ...submission, deviceProof }, request.signal, "failed",
     );
+    if (!result.bound) {
+      // The Passkey created an unprovisioned Session. If the local device only
+      // had a stale epoch, refresh its cached authority; binding still needs
+      // a *new* Passkey sign-in, never an upgrade of this Session in place.
+      try {
+        const state = await authGet<{ accountId: string; registryEpoch: number | null }>(
+          "/api/device/state", request.signal,
+        );
+        const saved = await getDevice(state.accountId);
+        if (saved && state.registryEpoch !== null && state.registryEpoch > saved.registryEpoch) {
+          await updateRegistryEpoch(state.accountId, state.registryEpoch);
+          return { state: "registry-refreshed" } as const;
+        }
+      } catch {
+        if (request.signal.aborted) throw new Error("sign-in aborted");
+        // Revoked/missing/unreadable keys remain unprovisioned.
+      }
+    }
     return { state: result.bound ? "signed-in" : "unprovisioned" } as const;
   } catch (error) {
     authFailure(error, request.signal);
@@ -73,11 +91,14 @@ export default function SignIn() {
           {working ? "Checking your passkey…" : "Sign in with a passkey"}
         </button>
       </fetcher.Form>
-      {!working && (fetcher.data?.state === "signed-in" || fetcher.data?.state === "unprovisioned") ? (
+      {!working && (fetcher.data?.state === "signed-in" || fetcher.data?.state === "unprovisioned" || fetcher.data?.state === "registry-refreshed") ? (
         <p className="mt-4 text-emerald-700">
-          Signed in. <Link className="underline" to="/account/security">Manage Sessions</Link>
+          Signed in. <Link className="underline" to="/account/device-access">Check private access</Link> · <Link className="underline" to="/account/security">Manage Sessions</Link>
           {fetcher.data.state === "unprovisioned" ? (
             <span className="block text-amber-800">This browser has no active Encryption device. Use an existing device or your recovery phrase to regain private access.</span>
+          ) : null}
+          {fetcher.data.state === "registry-refreshed" ? (
+            <span className="block text-amber-800">Device registry changed. Sign in again with your passkey to check this device's current authority.</span>
           ) : null}
         </p>
       ) : null}
