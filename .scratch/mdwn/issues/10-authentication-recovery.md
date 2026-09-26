@@ -18,4 +18,4 @@
 ## Comments
 
 - Implemented a five-minute code-backed restricted Session, one-use code deletion, replacement Passkey enrollment with atomic global Session revocation and a bounded Security event, and fresh-assertion-gated code-set rotation. The Account ID is the non-secret recovery identifier, presented at signup and in Account security. Enrollment is followed by a new Passkey assertion; the resulting normal Session is unprovisioned. Ticket 11 must implement the separate Vault recovery ceremony before a newly recovered browser can read private Files.
-- Validation: `npm run typecheck` and `npm run test:all` passed (79 Node tests, 70 Worker tests, 153 browser tests across Chromium, Firefox, and WebKit). Implementation completion does not imply merge or deployment; the PR and green CI remain the merge gate.
+- Validation: `npm run typecheck` and `npm run test:all` passed (79 Node tests, 70 Worker tests, 156 browser tests across Chromium, Firefox, and WebKit). Implementation completion does not imply merge or deployment; the PR and green CI remain the merge gate.

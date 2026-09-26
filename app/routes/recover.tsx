@@ -65,14 +65,14 @@ export default function Recover({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher<typeof clientAction>();
   const busy = fetcher.state !== "idle";
   const state = fetcher.data?.state;
-  const canContinue = loaderData.restricted || state === "started";
+  const canContinue = loaderData.restricted;
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 py-12">
       <Link to="/sign-in" className="text-sm underline">Sign in</Link>
       <h1 className="mt-8 text-3xl font-semibold">Recover your Account</h1>
       <p className="mt-3 text-stone-600">If you have lost your passkeys, use your recovery identifier and one unused authentication recovery code to add a replacement passkey.</p>
       <p className="mt-3 text-stone-600">If you have lost every passkey and every code, your Account cannot be recovered. There is no support or operator override.</p>
-      <p className="mt-3 text-stone-600">A new passkey does not unlock your encrypted Files. This browser will still need separate device enrollment or your Vault recovery phrase to regain private access.</p>
+      <p className="mt-3 text-stone-600">A new passkey does not unlock your encrypted Files. This browser will still need separate device enrollment or your recovery phrase to regain private access.</p>
       {state === "recovered" ? (
         <p role="status" className="mt-6">Your passkey is ready and you are signed in. <Link className="underline" to="/account/device-access">Check private access</Link>.</p>
       ) : state === "passkey-added" ? (

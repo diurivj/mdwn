@@ -1,5 +1,6 @@
-import type { Browser } from "@playwright/test";
+import { createHash, randomBytes } from "node:crypto";
 
+import type { Browser } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
 
@@ -100,4 +101,37 @@ test("a used code adds a replacement Passkey, revokes other Sessions and leaves 
     await replacement?.context.close();
     await original.context.close();
   }
+});
+
+test("an expired recovery Session offers a new-code form instead of only Continue", async ({ browser, server, baseURL }) => {
+  const origin = new URL(baseURL!).origin;
+  const worker = server.getWorker<{ DB: D1Database }>();
+  await worker.applyD1Migrations("DB");
+  const env = await worker.getEnv();
+  const randomId = crypto.randomUUID();
+  const identifier = `${randomId.slice(0, 14)}7${randomId.slice(15)}`;
+  const code = randomBytes(24).toString("base64url");
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
+      .bind(identifier, crypto.randomUUID(), now, now),
+    env.DB.prepare("INSERT INTO authentication_recovery_codes (account_id, ordinal, code_hash) VALUES (?, 0, ?)")
+      .bind(identifier, new Uint8Array(createHash("sha256").update(code).digest())),
+  ]);
+  const { page, context } = await newAuthenticator(browser, origin);
+  try {
+    await page.goto(`${origin}/recover`, { waitUntil: "commit" });
+    const start = await page.evaluate(async ({ identifier, code }) =>
+      (await fetch("/api/auth/recovery/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier, code }),
+      })).status, { identifier, code });
+    expect(start).toBe(200);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Continue adding a passkey" })).toBeVisible();
+    await env.DB.prepare("UPDATE sessions SET created_at = ? WHERE account_id = ? AND purpose = 'recovery'")
+      .bind(Date.now() - 5 * 60_000 - 1, identifier).run();
+    await page.getByRole("button", { name: "Continue adding a passkey" }).click();
+    await expect(page.getByLabel("Unused recovery code")).toBeVisible({ timeout: 5000 });
+  } finally { await context.close(); }
 });
