@@ -8,12 +8,17 @@ export type StoredDevice = {
 
 const DATABASE = "mdwn-device-store";
 const STORE = "devices";
+const PENDING_RECOVERY = "pending_recovery";
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE, 1);
+    const request = indexedDB.open(DATABASE, 2);
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(STORE, { keyPath: "accountId" });
+      if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath: "accountId" });
+      if (!request.result.objectStoreNames.contains(PENDING_RECOVERY)) {
+        request.result.createObjectStore(PENDING_RECOVERY, { keyPath: "deviceId" })
+          .createIndex("accountId", "accountId");
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -166,4 +171,88 @@ export async function updateRegistryEpoch(accountId: string, epoch: number): Pro
   const device = await getDevice(accountId);
   if (!device) throw new Error("Device keys unavailable");
   await saveDevice({ ...device, registryEpoch: epoch });
+}
+
+/** Candidate handles are durable but separate from the active-device store until server commit. */
+export async function createRecoveryCandidate(accountId: string, deviceId: string): Promise<StoredDevice> {
+  if (!accountId || !deviceId) throw new Error("Device identifiers are required");
+  const [transportKeyPair, assertionKeyPair] = await Promise.all([
+    crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]),
+    crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]),
+  ]);
+  const device: StoredDevice = { accountId, deviceId, registryEpoch: 0, transportKeyPair, assertionKeyPair };
+  if (!await validDevice(device)) throw new Error("Device keys unavailable");
+  const db = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(PENDING_RECOVERY, "readwrite");
+      transaction.objectStore(PENDING_RECOVERY).add(device);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } finally { db.close(); }
+  requestPersistence();
+  return device;
+}
+
+export async function getRecoveryCandidate(accountId: string, deviceId: string): Promise<StoredDevice | null> {
+  try {
+    const db = await openDatabase();
+    let value: unknown;
+    try {
+      value = await new Promise((resolve, reject) => {
+        const request = db.transaction(PENDING_RECOVERY, "readonly").objectStore(PENDING_RECOVERY).get(deviceId);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    } finally { db.close(); }
+    return await validDevice(value) && (value as StoredDevice).accountId === accountId
+      ? value as StoredDevice : null;
+  } catch { return null; }
+}
+
+export async function listRecoveryCandidates(accountId: string): Promise<StoredDevice[]> {
+  try {
+    const db = await openDatabase();
+    let records: unknown[];
+    try {
+      records = await new Promise((resolve, reject) => {
+        const request = db.transaction(PENDING_RECOVERY, "readonly")
+          .objectStore(PENDING_RECOVERY).index("accountId").getAll(accountId);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    } finally { db.close(); }
+    const devices: StoredDevice[] = [];
+    for (const record of records) {
+      if (await validDevice(record) && (record as StoredDevice).accountId === accountId) {
+        devices.push(record as StoredDevice);
+      }
+    }
+    return devices;
+  } catch { return []; }
+}
+
+/** Called only after the server reports this exact candidate active at its current epoch. */
+export async function activateRecoveryCandidate(accountId: string, deviceId: string, registryEpoch: number): Promise<void> {
+  if (!Number.isSafeInteger(registryEpoch) || registryEpoch < 1) throw new Error("Invalid registry epoch");
+  const candidate = await getRecoveryCandidate(accountId, deviceId);
+  if (!candidate || candidate.deviceId !== deviceId) throw new Error("Device keys unavailable");
+  const db = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction([STORE, PENDING_RECOVERY], "readwrite");
+      transaction.objectStore(STORE).put({ ...candidate, registryEpoch });
+      const pending = transaction.objectStore(PENDING_RECOVERY);
+      const keys = pending.index("accountId").getAllKeys(accountId);
+      keys.onsuccess = () => {
+        for (const key of keys.result) pending.delete(key);
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } finally { db.close(); }
+  requestPersistence();
 }

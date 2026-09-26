@@ -539,6 +539,29 @@ export async function openVaultRecoveryEnvelope(
   }
 }
 
+/** A recovered device can provision only Account-owned recovery-envelope capabilities. */
+export async function sealOwnedDeviceEnvelope(
+  capability: VaultRecoveryCapability,
+  recipientPublicKey: CryptoKey,
+  context: EnvelopeContext,
+): Promise<Bytes> {
+  if (!capability || capability.scope !== "owned" || capability.grantDerived === true ||
+      context.purpose !== "owned-device" || context.objectId !== capability.objectId ||
+      context.keyId !== capability.keyId || !context.recipientId) {
+    throw new RecoveryError("grant-capability");
+  }
+  return sealToRecipient(checkKey(capability.key), recipientPublicKey, context);
+}
+
+export async function openOwnedDeviceEnvelope(
+  envelope: Uint8Array,
+  recipient: CryptoKeyPair,
+  context: EnvelopeContext,
+): Promise<Bytes> {
+  if (context.purpose !== "owned-device" || !context.recipientId) throw new RecoveryError("malformed");
+  return openForRecipient(envelope, recipient, { context });
+}
+
 export async function sealDeviceEnrollmentEnvelope(
   vaultRootKey: Uint8Array,
   recipientPublicKey: CryptoKey,

@@ -93,7 +93,7 @@ test("a private operation refreshes only cached authority, binds the actual requ
   expect(await attempt(page)).toEqual({ state: "stale" });
   epoch = 2;
   await page.evaluate(async () => {
-    const open = indexedDB.open("mdwn-device-store", 1);
+    const open = indexedDB.open("mdwn-device-store");
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error);
     });

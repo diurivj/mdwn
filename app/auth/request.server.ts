@@ -21,8 +21,22 @@ export function requireSameOrigin(request: Request): void {
   }
 }
 
+/** Read-only POST resources accept no body without buffering an arbitrary upload. */
+export async function hasEmptyBody(request: Request): Promise<boolean> {
+  if (!request.body) return true;
+  const reader = request.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return true;
+      if (value.byteLength) return false;
+    }
+  } catch { return false; }
+  finally { await reader.cancel(); }
+}
+
 /** WebAuthn JSON is bounded protocol input, never an arbitrary upload. */
-export async function readAuthJson(request: Request): Promise<unknown> {
+export async function readAuthJsonText(request: Request): Promise<{ raw: string; value: unknown }> {
   if (!request.headers.get("content-type")?.startsWith("application/json")) {
     throw new AuthRequestError(400, "bad_request");
   }
@@ -61,10 +75,15 @@ export async function readAuthJson(request: Request): Promise<unknown> {
   }
 
   try {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+    const raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { raw, value: JSON.parse(raw) as unknown };
   } catch {
     throw new AuthRequestError(400, "bad_request");
   }
+}
+
+export async function readAuthJson(request: Request): Promise<unknown> {
+  return (await readAuthJsonText(request)).value;
 }
 
 export function record(value: unknown): Record<string, unknown> | null {

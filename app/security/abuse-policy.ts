@@ -3,6 +3,7 @@ export type RateLimitAction =
   | "registration.success"
   | "webauthn.sign_in"
   | "recovery.attempt"
+  | "vault_recovery.start"
   | "session.refresh"
   | "public_comment.mutate"
   | "public_comment.report"
@@ -57,6 +58,13 @@ export const RATE_LIMIT_POLICIES = {
     { scope: "network", limit: 10, windowMs: day },
     { scope: "recovery_identifier", limit: 3, windowMs: hour },
     { scope: "recovery_identifier", limit: 10, windowMs: day },
+  ],
+  "vault_recovery.start": [
+    { scope: "global", limit: 30, windowMs: 10 * minute },
+    { scope: "network", limit: 3, windowMs: hour },
+    { scope: "network", limit: 10, windowMs: day },
+    { scope: "account", limit: 3, windowMs: hour },
+    { scope: "account", limit: 10, windowMs: day },
   ],
   "session.refresh": [
     { scope: "session", limit: 12, windowMs: hour },
