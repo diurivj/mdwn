@@ -15,6 +15,7 @@ export const PURPOSES = [
   "account-profile",
   "owned-device",
   "device-label",
+  "file-receiving-key",
 ] as const;
 
 export const MANIFEST_PURPOSES: readonly EnvelopePurpose[] = ["archive-manifest", "import-staging-manifest"];
