@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createSymmetricWriter, digestEnvelope } from "../../app/crypto/enc-v1";
+import { digestEnvelope } from "../../app/crypto/enc-v1";
 import { createFileReceivingKey, createFileSave } from "../../app/crypto/file-receiving";
-import { assertExactFileRecipientDescriptors, assertFileHeadAdvance, canonicalFileHeadBytes, parseFileHeadBytes, signFileHead,
-  verifyDirectFileRecipientEnvelope, verifyFileHead, verifyFileParentEnvelope, verifyFilePublicationRepresentation,
+import { assertExactFileRecipientDescriptors, assertFileHeadCommitTransition, assertFileHeadCheckpointAdvance, canonicalFileHeadBytes, parseFileHeadBytes, signFileHead,
+  verifyDirectFileRecipientEnvelope, verifyFileHead, verifyFileParentEnvelope,
   verifyFileReceivingTarget, verifyFileRepresentation, type FileHeadStatement } from "../../app/tree/file-head";
 
 const hex = (byte: number) => new Uint8Array(32).fill(byte);
@@ -24,6 +24,14 @@ const base: FileHeadStatement = {
 async function keys() {
   const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
   return { pair, publicBytes: new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)) };
+}
+
+async function signedVerifier() {
+  const { pair, publicBytes } = await keys();
+  return async (statement: FileHeadStatement, scope = { ownerId: "owner-1", vaultId: "owner-1", fileId: "file-1" }) =>
+    verifyFileHead(await signFileHead(statement, pair.privateKey), {
+      ...scope, signerDeviceId: "signer-1", publicKey: publicBytes,
+    });
 }
 
 describe("current File head", () => {
@@ -148,60 +156,147 @@ describe("current File head", () => {
       representation: { id: "representation-2", digest: await digestEnvelope(other.contentEnvelope) } } };
     await expect(verifyFileRepresentation(crossContext, "representation-2", other.contentEnvelope))
       .rejects.toMatchObject({ code: "context-mismatch" });
-    await expect(verifyFilePublicationRepresentation(verified, "published", save.contentEnvelope))
-      .rejects.toMatchObject({ code: "context-mismatch" });
-    const publicEnvelope = await (await createSymmetricWriter(new Uint8Array(32).fill(9)))
-      .seal(new TextEncoder().encode("Public view"), { purpose: "public-representation", vaultId: "owner-1",
-        objectId: "file-1", keyId: "public-key", keyEpoch: 1, revision: 2, publicationId: "publication-1" });
-    const active = { ...statement, publication: { status: "active" as const, id: "publication-1",
-      representationId: "published", digest: await digestEnvelope(publicEnvelope) } };
-    const published = await verifyFileHead(await signFileHead(active, pair.privateKey), {
-      ownerId: "owner-1", vaultId: "owner-1", fileId: "file-1", signerDeviceId: "signer-1", publicKey: publicBytes,
-    });
-    await verifyFilePublicationRepresentation(published, "published", publicEnvelope);
-    await expect(verifyFilePublicationRepresentation(published, "other-representation", publicEnvelope))
-      .rejects.toMatchObject({ code: "context-mismatch" });
   });
 
-  it("rejects rollback/forks and permits only explicit authenticated same-revision transitions", async () => {
-    const { pair, publicBytes } = await keys();
-    const verified = async (statement: FileHeadStatement) => verifyFileHead(await signFileHead(statement, pair.privateKey), {
-      ownerId: "owner-1", vaultId: "owner-1", fileId: "file-1", signerDeviceId: "signer-1", publicKey: publicBytes,
-    });
+  it("accepts adjacent add/remove commits and catches up across their identical recipient endpoints", async () => {
+    const verified = await signedVerifier();
+    const checkpoint = await verified(base);
+    const added = await verified({ ...base, recipientSetVersion: 2, recipients: [...base.recipients,
+      { accountId: "recipient-3", deviceId: "device-c", registryEpoch: 1, publicKeyDigest: hex(0x88),
+        grants: [{ id: "grant-4", generation: 1 }], envelopeDigest: hex(0x89) },
+    ] });
+    const current = await verified({ ...base, recipientSetVersion: 3 });
+    assertFileHeadCommitTransition(checkpoint, added, { expectedSameRevisionTransition: "recipient-set-update" });
+    assertFileHeadCommitTransition(added, current, { expectedSameRevisionTransition: "recipient-set-update" });
+    expect(() => assertFileHeadCommitTransition(checkpoint, current, { expectedSameRevisionTransition: "recipient-set-update" }))
+      .toThrowError(/transition-required/);
+    assertFileHeadCheckpointAdvance(checkpoint, current);
+  });
+
+  it("catches up past recipient churn and a fresh-key save without treating the checkpoint as the prior commit", async () => {
+    const verified = await signedVerifier();
+    const checkpoint = await verified(base);
+    const added = await verified({ ...base, recipientSetVersion: 2, recipients: [...base.recipients,
+      { accountId: "recipient-3", deviceId: "device-c", registryEpoch: 1, publicKeyDigest: hex(0x88),
+        grants: [{ id: "grant-4", generation: 1 }], envelopeDigest: hex(0x89) },
+    ] });
+    const removed = await verified({ ...base, recipientSetVersion: 3,
+      recipients: base.recipients.map((r) => ({ ...r, envelopeDigest: hex(0x90) })) });
+    const saved = await verified({ ...removed.statement, revision: 3, contentKey: { id: "content-3", epoch: 6 },
+      representation: { id: "representation-3", digest: hex(0xa1) }, parentEnvelopeDigest: hex(0xa2),
+      recipients: removed.statement.recipients.map((r) => ({ ...r, envelopeDigest: hex(0xa3) })) });
+    assertFileHeadCommitTransition(checkpoint, added, { expectedSameRevisionTransition: "recipient-set-update" });
+    assertFileHeadCommitTransition(added, removed, { expectedSameRevisionTransition: "recipient-set-update" });
+    assertFileHeadCommitTransition(removed, saved);
+    expect(() => assertFileHeadCommitTransition(checkpoint, saved)).toThrowError(/transition-required/);
+    assertFileHeadCheckpointAdvance(checkpoint, removed);
+    assertFileHeadCheckpointAdvance(checkpoint, saved);
+  });
+
+  it("catches up over multiple guarded receiving-pair and recipient updates", async () => {
+    const verified = await signedVerifier();
+    const checkpoint = await verified(base);
+    const added = await verified({ ...base, recipientSetVersion: 2, recipients: [...base.recipients,
+      { accountId: "recipient-3", deviceId: "device-c", registryEpoch: 1, publicKeyDigest: hex(0x88),
+        grants: [{ id: "grant-4", generation: 1 }], envelopeDigest: hex(0x89) },
+    ] });
+    const rotated = await verified({ ...added.statement,
+      receivingKey: { id: "receiving-2", epoch: 2, publicKeyDigest: hex(0xb1) }, parentEnvelopeDigest: hex(0xb2) });
+    const removed = await verified({ ...rotated.statement, recipientSetVersion: 3, recipients: base.recipients });
+    const current = await verified({ ...removed.statement,
+      receivingKey: { id: "receiving-3", epoch: 3, publicKeyDigest: hex(0xc1) }, parentEnvelopeDigest: hex(0xc2) });
+    assertFileHeadCommitTransition(checkpoint, added, { expectedSameRevisionTransition: "recipient-set-update" });
+    assertFileHeadCommitTransition(added, rotated, { expectedSameRevisionTransition: "receiving-rotation" });
+    assertFileHeadCommitTransition(rotated, removed, { expectedSameRevisionTransition: "recipient-set-update" });
+    assertFileHeadCommitTransition(removed, current, { expectedSameRevisionTransition: "receiving-rotation" });
+    expect(() => assertFileHeadCommitTransition(checkpoint, current, { expectedSameRevisionTransition: "both" }))
+      .toThrowError(/transition-required/);
+    assertFileHeadCheckpointAdvance(checkpoint, current);
+  });
+
+  it("rejects checkpoint forks, rollbacks in every coordinate, and cross-File heads", async () => {
+    const verified = await signedVerifier();
+    const checkpoint = await verified({ ...base, receivingKey: { ...base.receivingKey, epoch: 3 }, recipientSetVersion: 3 });
+    assertFileHeadCheckpointAdvance(checkpoint, checkpoint);
+    const fork = await verified({ ...checkpoint.statement, representation: { ...checkpoint.statement.representation,
+      digest: hex(0xd1) } });
+    expect(() => assertFileHeadCheckpointAdvance(checkpoint, fork)).toThrowError(/fork/);
+    const decreases: FileHeadStatement[] = [
+      { ...checkpoint.statement, revision: 1 },
+      { ...checkpoint.statement, contentKey: { ...checkpoint.statement.contentKey, epoch: 4 } },
+      { ...checkpoint.statement, receivingKey: { ...checkpoint.statement.receivingKey, epoch: 2 } },
+      { ...checkpoint.statement, recipientSetVersion: 2 },
+    ];
+    for (const statement of decreases) {
+      const old = await verified(statement);
+      expect(() => assertFileHeadCheckpointAdvance(checkpoint, old)).toThrowError(/rollback/);
+    }
+    for (const statement of [
+      { ...checkpoint.statement, ownerId: "other-owner", vaultId: "other-owner" },
+      { ...checkpoint.statement, fileId: "other-file" },
+    ]) {
+      const foreign = await verified(statement, {
+        ownerId: statement.ownerId, vaultId: statement.vaultId, fileId: statement.fileId,
+      });
+      expect(() => assertFileHeadCheckpointAdvance(checkpoint, foreign)).toThrowError(/context-mismatch/);
+    }
+  });
+
+  it("does not admit same-revision representation/key changes or recipient changes without a version", async () => {
+    const verified = await signedVerifier();
+    const checkpoint = await verified(base);
+    for (const statement of [
+      { ...base, recipientSetVersion: 2, recipients: [base.recipients[0]],
+        representation: { id: "rewritten", digest: hex(0xee) } },
+      { ...base, recipientSetVersion: 2, recipients: [base.recipients[0]],
+        contentKey: { id: "rewritten-key", epoch: 6 } },
+      { ...base, recipientSetVersion: 2, recipients: [base.recipients[0]],
+        parentEnvelopeDigest: hex(0xef) },
+      { ...base, recipients: [base.recipients[0]] },
+      { ...base, receivingKey: { id: "unauthorized-target", epoch: 1, publicKeyDigest: hex(0xf0) },
+        recipientSetVersion: 2, recipients: [base.recipients[0]] },
+    ]) {
+      const changed = await verified(statement);
+      expect(() => assertFileHeadCheckpointAdvance(checkpoint, changed)).toThrow();
+    }
+  });
+
+  it("rejects rollback/forks and permits only declared same-revision commit shapes", async () => {
+    const verified = await signedVerifier();
     const current = await verified(base);
-    assertFileHeadAdvance(current, current);
+    assertFileHeadCommitTransition(current, current);
     const fork = await verified({ ...base, representation: { id: "representation-2", digest: hex(0xbb) } });
-    expect(() => assertFileHeadAdvance(current, fork)).toThrowError(/fork/);
+    expect(() => assertFileHeadCommitTransition(current, fork)).toThrowError(/fork/);
     const targetFork = await verified({ ...base, receivingKey: { ...base.receivingKey, publicKeyDigest: hex(0xcc) } });
-    expect(() => assertFileHeadAdvance(current, targetFork)).toThrowError(/fork/);
+    expect(() => assertFileHeadCommitTransition(current, targetFork)).toThrowError(/fork/);
     const newer = await verified({ ...base, revision: 3, contentKey: { id: "content-3", epoch: 6 },
       representation: { id: "representation-3", digest: hex(0xaa) }, parentEnvelopeDigest: hex(0x99),
       recipients: base.recipients.map((r) => ({ ...r, envelopeDigest: hex(0xab) })) });
     // Same authorized recipient set/version, but fresh HPKE wrappers for the new File content key.
-    assertFileHeadAdvance(current, newer);
+    assertFileHeadCommitTransition(current, newer);
     const unchangedWrappers = await verified({ ...newer.statement, recipients: base.recipients });
-    expect(() => assertFileHeadAdvance(current, unchangedWrappers)).toThrowError(/transition-required/);
+    expect(() => assertFileHeadCommitTransition(current, unchangedWrappers)).toThrowError(/transition-required/);
     const missingVersion = await verified({ ...newer.statement, recipients: [base.recipients[0]] });
-    expect(() => assertFileHeadAdvance(current, missingVersion)).toThrowError(/transition-required/);
-    expect(() => assertFileHeadAdvance(newer, current)).toThrowError(/rollback/);
+    expect(() => assertFileHeadCommitTransition(current, missingVersion)).toThrowError(/transition-required/);
+    expect(() => assertFileHeadCommitTransition(newer, current)).toThrowError(/rollback/);
     const staleEpoch = await verified({ ...base, revision: 3, contentKey: { id: "content-3", epoch: 4 },
       representation: { id: "representation-3", digest: hex(0xaa) } });
-    expect(() => assertFileHeadAdvance(current, staleEpoch)).toThrowError(/rollback/);
+    expect(() => assertFileHeadCommitTransition(current, staleEpoch)).toThrowError(/rollback/);
     const recipientUpdate = await verified({ ...base, recipientSetVersion: 2, recipients: [base.recipients[1]] });
-    expect(() => assertFileHeadAdvance(current, recipientUpdate)).toThrowError(/transition-required/);
-    assertFileHeadAdvance(current, recipientUpdate, { authenticatedSameRevision: "recipient-set-update" });
+    expect(() => assertFileHeadCommitTransition(current, recipientUpdate)).toThrowError(/transition-required/);
+    assertFileHeadCommitTransition(current, recipientUpdate, { expectedSameRevisionTransition: "recipient-set-update" });
     const rotation = await verified({ ...base, receivingKey: { id: "receiving-2", epoch: 2, publicKeyDigest: hex(0xf1) },
       parentEnvelopeDigest: hex(0xf2) });
-    expect(() => assertFileHeadAdvance(current, rotation, { authenticatedSameRevision: "recipient-set-update" }))
+    expect(() => assertFileHeadCommitTransition(current, rotation, { expectedSameRevisionTransition: "recipient-set-update" }))
       .toThrowError(/transition-required/);
-    assertFileHeadAdvance(current, rotation, { authenticatedSameRevision: "receiving-rotation" });
+    assertFileHeadCommitTransition(current, rotation, { expectedSameRevisionTransition: "receiving-rotation" });
     const combined = await verified({ ...rotation.statement, recipientSetVersion: 2, recipients: [base.recipients[1]] });
-    assertFileHeadAdvance(current, combined, { authenticatedSameRevision: "both" });
-    expect(() => assertFileHeadAdvance(rotation, current, { authenticatedSameRevision: "receiving-rotation" }))
+    assertFileHeadCommitTransition(current, combined, { expectedSameRevisionTransition: "both" });
+    expect(() => assertFileHeadCommitTransition(rotation, current, { expectedSameRevisionTransition: "receiving-rotation" }))
       .toThrowError(/rollback/);
     const rewrittenKey = await verified({ ...base, recipientSetVersion: 2, recipients: [base.recipients[1]],
       contentKey: { id: "content-fork", epoch: 5 } });
-    expect(() => assertFileHeadAdvance(current, rewrittenKey, { authenticatedSameRevision: "recipient-set-update" }))
+    expect(() => assertFileHeadCommitTransition(current, rewrittenKey, { expectedSameRevisionTransition: "recipient-set-update" }))
       .toThrowError(/transition-required/);
   });
 });
