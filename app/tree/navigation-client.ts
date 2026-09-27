@@ -4,7 +4,8 @@ import {
   type DirectoryListing, type LoadedDirectFile, type LoadedFile, type RootAccess, type TreeKind,
 } from "./client";
 import { privateRequest } from "~/device/private-client";
-import { namedRoot, openGrantedDirectory, sharedRoots, type GrantRoot } from "~/sharing/client";
+import { namedRoot, openGrantedDirectory, sharedRootsPage,
+  type GrantRoot, type SharedRootsPage } from "~/sharing/client";
 
 export type Crumb = { id: string; name: string };
 export type FilesSnapshot = {
@@ -31,6 +32,33 @@ export function savedExpanded(accountId: string): string[] {
     const parsed: unknown = JSON.parse(localStorage.getItem(expandedPreferenceKey(accountId)) ?? "[]");
     return Array.isArray(parsed) ? parsed.slice(0, 200).filter((value): value is string => typeof value === "string") : [];
   } catch { return []; }
+}
+
+type SharedRootsPageLoader = (signal: AbortSignal, cursor: string | null) => Promise<SharedRootsPage>;
+
+/** Follow every bounded root page; a missing Grant is known only after its final cursor. */
+export async function findSharedRootByGrantId(grantId: string, targetId: string, signal: AbortSignal,
+  loadPage: SharedRootsPageLoader = sharedRootsPage): Promise<GrantRoot | undefined> {
+  let cursor: string | null = null;
+  const seenCursors = new Set<string>();
+  while (true) {
+    signal.throwIfAborted();
+    const page = await loadPage(signal, cursor);
+    signal.throwIfAborted();
+    if (!page || !Array.isArray(page.roots) ||
+        (page.nextCursor !== null && typeof page.nextCursor !== "string")) {
+      throw new Error("Invalid shared root page");
+    }
+    const root = page.roots.find((item) => item.grantId === grantId);
+    if (root) {
+      if (root.targetId !== targetId) throw new TreeNotFoundError();
+      return root;
+    }
+    if (page.nextCursor === null) return undefined;
+    if (!page.nextCursor || seenCursors.has(page.nextCursor)) throw new Error("Invalid shared root cursor");
+    seenCursors.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
 }
 
 async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal,
@@ -107,9 +135,12 @@ export async function loadFilesPage(nodeId: string, kind: TreeKind, signal: Abor
     const state = await fetch("/api/device/state", { cache: "no-store", signal });
     if (!state.ok) throw new Error("Device unavailable");
     const { accountId: actorAccountId } = await state.json() as { accountId: string };
-    const roots = await sharedRoots(signal);
-    const root: GrantRoot | undefined = roots.find((r) => r.grantId === scope.grantId);
-    if (!root || root.status !== "ready") throw new SharedProvisioningError();
+    const targetId = scope.scope === "direct-file" ? nodeId :
+      scope.scope === "directory-grant" && Array.isArray(scope.path) ? scope.path[0] : undefined;
+    if (!targetId) throw new TreeNotFoundError();
+    const root = await findSharedRootByGrantId(scope.grantId, targetId, signal);
+    if (!root) throw new TreeNotFoundError();
+    if (root.status !== "ready") throw new SharedProvisioningError();
     const name = await namedRoot(root, actorAccountId);
     signal.throwIfAborted();
     if (scope.scope === "direct-file") {
