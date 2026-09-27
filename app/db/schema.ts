@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { blob, check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { blob, check, foreignKey, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
  * mdwn foundation schema.
@@ -466,4 +466,93 @@ export const deviceProofUses = sqliteTable("device_proof_uses", {
 }, (table) => [
   primaryKey({ columns: [table.accountId, table.proofId] }),
   index("device_proof_uses_expiry_idx").on(table.expiresAt),
+]);
+
+/** Opaque owned tree. Non-root nodes must have exactly one agreeing encrypted edge. */
+export const vaultNodes = sqliteTable("vault_nodes", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  parentNodeId: text("parent_node_id"),
+  importId: text("import_id"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  check("vault_nodes_kind_valid", sql`${table.kind} IN ('directory', 'file')`),
+  check("vault_nodes_root_directory", sql`${table.parentNodeId} IS NOT NULL OR ${table.kind} = 'directory'`),
+  check("vault_nodes_no_self_parent", sql`${table.parentNodeId} IS NULL OR ${table.parentNodeId} != ${table.id}`),
+  uniqueIndex("vault_nodes_one_root_idx").on(table.ownerId).where(sql`${table.parentNodeId} IS NULL`),
+  uniqueIndex("vault_nodes_owner_edge_idx").on(table.ownerId, table.id, table.parentNodeId),
+  index("vault_nodes_parent_idx").on(table.parentNodeId),
+  // The reciprocal, deferred FKs to directories and directory_entries are in
+  // the reviewed migration: Drizzle cannot express this circular relationship.
+]);
+
+/** Current revision of one Directory namespace; no plaintext name index exists. */
+export const directories = sqliteTable("directories", {
+  nodeId: text("node_id").primaryKey().references(() => vaultNodes.id, { onDelete: "restrict" }),
+  ownerId: text("owner_id").notNull(),
+  entriesRevision: integer("entries_revision").notNull(),
+  /** Device-signed, encrypted commitment to the current entry ciphertexts (migration 0009). */
+  listingCiphertext: blob("listing_ciphertext"),
+  listingDigest: blob("listing_digest"),
+  listingSignature: blob("listing_signature"),
+  listingDeviceId: text("listing_device_id").references(() => encryptionDevices.id, { onDelete: "restrict" }),
+}, (table) => [
+  uniqueIndex("directories_owner_node_idx").on(table.ownerId, table.nodeId),
+  index("directories_listing_device_idx").on(table.listingDeviceId),
+  check("directories_revision_positive", sql`${table.entriesRevision} >= 1`),
+]);
+
+/** One File has exactly one current encrypted representation, not a version history. */
+export const files = sqliteTable("files", {
+  nodeId: text("node_id").primaryKey().references(() => vaultNodes.id, { onDelete: "restrict" }),
+  ownerId: text("owner_id").notNull(),
+  currentRepresentationId: text("current_representation_id").notNull(),
+  currentRevision: integer("current_revision").notNull(),
+}, (table) => [
+  uniqueIndex("files_owner_node_idx").on(table.ownerId, table.nodeId),
+  check("files_revision_positive", sql`${table.currentRevision} >= 1`),
+  // The current-pointer composite deferred FK is in the reviewed migration.
+]);
+
+/** Each current edge carries opaque, separately encrypted name/order and key envelope. */
+export const directoryEntries = sqliteTable("directory_entries", {
+  childNodeId: text("child_node_id").primaryKey().references(() => vaultNodes.id, { onDelete: "restrict" }),
+  ownerId: text("owner_id").notNull(),
+  parentNodeId: text("parent_node_id").notNull(),
+  nameCiphertext: blob("name_ciphertext").notNull(),
+  orderCiphertext: blob("order_ciphertext").notNull(),
+  keyEnvelope: blob("key_envelope").notNull(),
+}, (table) => [
+  uniqueIndex("directory_entries_owner_edge_idx").on(table.ownerId, table.childNodeId, table.parentNodeId),
+  index("directory_entries_parent_idx").on(table.ownerId, table.parentNodeId),
+  check("directory_entries_ciphertext_bounded", sql`length(${table.nameCiphertext}) BETWEEN 1 AND 4096
+    AND length(${table.orderCiphertext}) BETWEEN 1 AND 4096
+    AND length(${table.keyEnvelope}) BETWEEN 1 AND 16384`),
+  foreignKey({ columns: [table.ownerId, table.parentNodeId],
+    foreignColumns: [directories.ownerId, directories.nodeId] }).onDelete("restrict"),
+  foreignKey({ columns: [table.ownerId, table.childNodeId, table.parentNodeId],
+    foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.parentNodeId] }).onDelete("restrict"),
+]);
+
+/** Bounded single-blob private Markdown and File-metadata ciphertext. */
+export const fileRepresentations = sqliteTable("file_representations", {
+  id: text("id").primaryKey(),
+  fileNodeId: text("file_node_id").notNull(),
+  ownerId: text("owner_id").notNull(),
+  revision: integer("revision").notNull(),
+  contentKeyId: text("content_key_id").notNull(),
+  keyEpoch: integer("key_epoch").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  ciphertextSize: integer("ciphertext_size").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("file_representations_owner_pointer_idx").on(table.ownerId, table.fileNodeId, table.id, table.revision),
+  uniqueIndex("file_representations_file_revision_idx").on(table.fileNodeId, table.revision),
+  check("file_representations_revision_positive", sql`${table.revision} >= 1`),
+  check("file_representations_epoch_positive", sql`${table.keyEpoch} >= 1`),
+  check("file_representations_ciphertext_bounded", sql`length(${table.ciphertext}) <= 524288 AND ${table.ciphertextSize} = length(${table.ciphertext})`),
+  foreignKey({ columns: [table.ownerId, table.fileNodeId],
+    foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
 ]);

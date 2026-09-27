@@ -11,22 +11,9 @@ import {
 import { createDevice, getDevice, updateRegistryEpoch } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "~/signup/protocol";
+import { RECOVERY_CONFIRMATION_GATE_KEY } from "~/signup/recovery-gate";
 
-const GATE_KEY = "mdwn:signup:recovery-confirmation-pending";
-
-/** A pending local gate must be checked before enabling private mutations or imports. */
-export function isSignupRecoveryConfirmationPending(): boolean {
-  try {
-    return typeof window !== "undefined" && localStorage.getItem(GATE_KEY) !== null;
-  } catch {
-    // Unreadable client storage cannot grant private write access.
-    return true;
-  }
-}
-
-export function confirmSignupRecovery(): void {
-  localStorage.removeItem(GATE_KEY);
-}
+export { confirmSignupRecovery, isSignupRecoveryConfirmationPending } from "~/signup/recovery-gate";
 
 async function digest(bytes: Uint8Array): Promise<string> {
   return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))));
@@ -102,7 +89,7 @@ export async function prepareSignup(): Promise<PreparedSignup> {
     recoveryCodeHashes,
     registryEpoch: 1,
   };
-  localStorage.setItem(GATE_KEY, accountId);
+  localStorage.setItem(RECOVERY_CONFIRMATION_GATE_KEY, accountId);
   return { secrets: { phrase: recovery.phrase, recoveryCodes }, transcriptBase, material };
 }
 

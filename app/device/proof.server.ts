@@ -15,6 +15,7 @@ export type AuthorizedDevice = {
   sessionId: string;
   deviceId: string;
   registryEpoch: number;
+  assertionPublicKey: Uint8Array;
   proofId: string;
   expiresAt: number;
 };
@@ -63,7 +64,8 @@ export async function authorizeDeviceForSession(
   const verified = proof as DeviceProof;
   return {
     accountId: session.accountId, sessionId: session.id, deviceId: session.deviceId,
-    registryEpoch: device.registry_epoch, proofId: verified.proofId, expiresAt: verified.expiresAt,
+    registryEpoch: device.registry_epoch, assertionPublicKey: new Uint8Array(device.assertion_public_key),
+    proofId: verified.proofId, expiresAt: verified.expiresAt,
   };
 }
 
@@ -97,6 +99,18 @@ export async function purgeExpiredSignupProofs(env: Env, now = Date.now()): Prom
   ]);
 }
 
+function privateMutationGuard(authorization: AuthorizedDevice, now: number): SQL {
+  const { accountId, sessionId, deviceId, registryEpoch, proofId } = authorization;
+  return sql`EXISTS (SELECT 1 FROM sessions s JOIN encryption_devices d ON d.id = s.device_id
+    JOIN account_encryption_identities r ON r.account_id = s.account_id
+    WHERE s.id = ${sessionId} AND s.account_id = ${accountId} AND s.purpose = 'normal'
+      AND s.authenticated_passkey_id IS NOT NULL AND s.device_id = ${deviceId}
+      AND s.revoked_at IS NULL AND s.idle_expires_at > ${now} AND s.absolute_expires_at > ${now}
+      AND d.account_id = s.account_id AND d.state = 'active' AND r.registry_epoch = ${registryEpoch})
+    AND NOT EXISTS (SELECT 1 FROM device_proof_uses
+      WHERE account_id = ${accountId} AND proof_id = ${proofId})`;
+}
+
 export async function commitPrivateMutation(
   env: Env,
   authorization: AuthorizedDevice,
@@ -105,19 +119,8 @@ export async function commitPrivateMutation(
   const now = Date.now();
   if (authorization.expiresAt <= now) return false;
   const proofDay = coarseProofTime(now);
-  const { accountId, sessionId, deviceId, registryEpoch, proofId, expiresAt } = authorization;
-  const guard = sql`
-    EXISTS (SELECT 1 FROM sessions s JOIN encryption_devices d ON d.id = s.device_id
-      JOIN account_encryption_identities r ON r.account_id = s.account_id
-      WHERE s.id = ${sessionId} AND s.account_id = ${accountId} AND s.purpose = 'normal'
-        AND s.authenticated_passkey_id IS NOT NULL
-        AND s.device_id = ${deviceId} AND s.revoked_at IS NULL
-        AND s.idle_expires_at > ${now} AND s.absolute_expires_at > ${now}
-        AND d.account_id = s.account_id AND d.state = 'active'
-        AND r.registry_epoch = ${registryEpoch})
-      AND NOT EXISTS (SELECT 1 FROM device_proof_uses
-        WHERE account_id = ${accountId} AND proof_id = ${proofId})
-  `;
+  const { accountId, sessionId, deviceId, proofId, expiresAt } = authorization;
+  const guard = privateMutationGuard(authorization, now);
   const [changed, consumed] = await atomicSqlBatch(env.DB, [
     mutation(guard),
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
@@ -126,6 +129,38 @@ export async function commitPrivateMutation(
     sql`UPDATE encryption_devices SET last_proof_at = ${proofDay}
       WHERE id = ${deviceId} AND account_id = ${accountId} AND changes() = 1
         AND (last_proof_at IS NULL OR last_proof_at < ${proofDay})`,
+  ]);
+  return changed.meta.changes === 1 && consumed.meta.changes === 1;
+}
+
+/** One proof, one parent namespace CAS and its dependent writes in a D1 transaction.
+ * No dependent statement may mutate without the freshly consumed proof row.
+ * If the CAS loses, the batch commits zero changes, including zero proof uses.
+ */
+export async function commitDirectoryMutation(
+  env: Env, authorization: AuthorizedDevice, parentId: string, expectedRevision: number,
+  listingHead: { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array },
+  eligible: SQL, statements: (committed: SQL) => readonly SQL[],
+): Promise<boolean> {
+  const now = Date.now();
+  if (authorization.expiresAt <= now) return false;
+  const { accountId, sessionId, deviceId, proofId, expiresAt } = authorization;
+  const guard = privateMutationGuard(authorization, now);
+  // changes() is the preceding statement's *direct* row count. Chaining it
+  // prevents a previously spent proof from authorizing dependent statements.
+  const committed = sql`changes() = 1`;
+  const [changed, consumed] = await atomicSqlBatch(env.DB, [
+    sql`UPDATE directories SET entries_revision = entries_revision + 1,
+        listing_ciphertext = ${listingHead.ciphertext}, listing_digest = ${listingHead.digest},
+        listing_signature = ${listingHead.signature}, listing_device_id = ${deviceId}
+      WHERE node_id = ${parentId} AND owner_id = ${accountId}
+        AND entries_revision = ${expectedRevision} AND ${eligible} AND ${guard}`,
+    sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
+      SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt} WHERE changes() = 1`,
+    ...statements(committed),
+    sql`UPDATE encryption_devices SET last_proof_at = ${coarseProofTime(now)}
+      WHERE id = ${deviceId} AND account_id = ${accountId} AND ${committed}
+        AND (last_proof_at IS NULL OR last_proof_at < ${coarseProofTime(now)})`,
   ]);
   return changed.meta.changes === 1 && consumed.meta.changes === 1;
 }

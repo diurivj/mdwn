@@ -10,17 +10,20 @@ export function meta({}: Route.MetaArgs) {
   return [{ title: "Device access — mdwn" }];
 }
 
-type Access = { state: "ready" | PrivateAccessState; provisioning?: "recovery" | "enrollment" | "unknown" | null };
+type Access = { state: "ready" | PrivateAccessState; rootId?: string;
+  provisioning?: "recovery" | "enrollment" | "unknown" | null };
 
 /** Browser-only: neither private ciphertext nor even the Account status enters SSR. */
 export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise<Access> {
   try {
     const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal: request.signal });
     if (!response.ok) return { state: "unavailable" };
-    try { return { state: "ready", provisioning: await ownedProvisioningKind(request.signal) }; }
+    const bootstrap = await response.json() as { rootDirectoryId: string };
+    try { return { state: "ready", rootId: bootstrap.rootDirectoryId,
+      provisioning: await ownedProvisioningKind(request.signal) }; }
     catch (error) {
       if (request.signal.aborted) throw error;
-      return { state: "ready", provisioning: "unknown" };
+      return { state: "ready", rootId: bootstrap.rootDirectoryId, provisioning: "unknown" };
     }
   } catch (error) {
     if (request.signal.aborted) throw error;
@@ -45,7 +48,8 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
       {state === "ready" ? (
         <>
           <h1 className="mt-8 text-2xl font-semibold">Private access ready</h1>
-          <p className="mt-4">This browser has an active Encryption device. Your Files experience is coming soon.</p>
+          <p className="mt-4">This browser has an active Encryption device.</p>
+          {loaderData.rootId && <Link to={`/d/${loaderData.rootId}`} className="mt-4 block underline">Open Files</Link>}
           <Link to="/enroll-device/approve" className="mt-4 inline-block underline">Approve another device</Link>
           {restoring && <p role="status" className="mt-4">{loaderData.provisioning === "recovery"
             ? "Restoring your Files securely…" : "Setting up your Files securely…"}</p>}

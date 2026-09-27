@@ -45,15 +45,32 @@ algorithm negotiation, downgrade, or fallback. IDs are opaque, case-sensitive
 values, not file names or paths. The library does not infer authorization from
 an ID, key epoch, or successful decryption.
 
-`archive-manifest` and `import-staging-manifest` opens additionally require
+`archive-manifest`, `import-staging-manifest`, and self-addressed Directory
+listing envelopes (`directory-metadata` with `objectId === keyId`) additionally require
 `expected.manifestDigest`, the exact current 32-byte digest from a trusted head.
+Individual child-entry `directory-metadata` envelopes have distinct object/key IDs
+and do not act as listing heads.
 Old revisions and same-revision different ciphertext both fail. Reading the
 same **current** head repeatedly is permitted; this is rollback detection, not
 single-use consumption. Persisting/advancing the head and distributing it to
 other devices belongs to the caller's authenticated manifest/registry protocol.
 Never initialize it from the envelope or from unauthenticated server claims.
-A fresh device with no trusted checkpoint cannot detect a server replaying its
-entire history; a stateless envelope library cannot solve that problem. Content
+Ticket 14's Directory protocol persists the head in the same proof-guarded D1
+transaction as the parent revision and entry mutations. The browser signs the
+head's ciphertext digest with its non-extractable Device assertion key, binding
+Account, Directory, Device, and revision under `mdwn/directory-listing/v1`.
+The encrypted head commits to every child ID, kind, and complete encrypted
+name/order/capability bytes. On read the browser verifies the signature against
+the approved Device registry public key supplied by the authenticated private
+resource, then passes that verified digest as `expected.manifestDigest` and
+compares the opened member commitment with the returned entries. Initial empty
+revision 1 has no head. Browser-local revision/digest checkpoints reject old
+and same-revision forks across subsequent reads; D1 refuses same-revision head
+rewrites. The registry-key source is still the service's approved-device
+registry, not an offline independent trust root. A fresh device with no trusted
+checkpoint cannot detect a server replaying its entire history or a malicious
+service forging both a registry key and its head; a stateless envelope library
+cannot solve that problem. Content
 key epochs and Device registry epochs are distinct; callers bind the applicable
 current content authority, not merely a number supplied beside ciphertext.
 

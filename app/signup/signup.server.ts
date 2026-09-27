@@ -243,7 +243,13 @@ export async function completeSignup(request: Request, env: Env, body: unknown):
       prepareBoundSession(env, challengeId, accountId, credential.id, deviceId, now),
     ];
     const results = await atomicSqlBatch(env.DB, [...successQuota.statements, ...statements]);
-    if (results.some((result) => result.meta.changes !== 1)) throw new Error("incomplete signup batch");
+    // The identity insert's trigger also inserts the hidden root node and its
+    // Directory. D1 meta.changes includes those two trigger writes, while
+    // SQLite changes() in later statements counts the direct insert only.
+    const identityIndex = successQuota.statements.length + 2;
+    if (results.some((result, i) => result.meta.changes !== (i === identityIndex ? 3 : 1))) {
+      throw new Error("incomplete signup batch");
+    }
     return Response.json({ ok: true, sessionBinding: await sessionBindingDigest(challengeId) }, {
       headers: { "Set-Cookie": cookie, "Cache-Control": "no-store" },
     });

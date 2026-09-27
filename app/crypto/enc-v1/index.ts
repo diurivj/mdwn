@@ -149,7 +149,11 @@ export async function digestEnvelope(input: Uint8Array): Promise<Uint8Array<Arra
 
 async function checkExpected(envelope: ReturnType<typeof parseEnvelope>, expected: EnvelopeExpectation) {
   const expectedContext = encodeContext(expected.context);
-  const manifest = MANIFEST_PURPOSES.includes(envelope.context.purpose);
+  // A Directory listing is distinguished from an individual encrypted entry
+  // by its self-addressed key ID. Entries remain independently decryptable.
+  const manifest = MANIFEST_PURPOSES.includes(envelope.context.purpose) ||
+    (envelope.context.purpose === "directory-metadata" &&
+      envelope.context.objectId === envelope.context.keyId);
   // Older-than-current is ordinary staleness; newer-than-current is not something a
   // re-key can explain, so callers can fail closed instead of silently re-keying.
   if (envelope.context.keyEpoch < expected.context.keyEpoch) throw new EnvelopeError("stale-epoch");

@@ -1,0 +1,2320 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "b11d6bc0-670e-4eed-b065-f34bcdc4f577",
+  "prevId": "fd558a50-8159-4c18-abca-8f092762f603",
+  "tables": {
+    "account_encryption_identities": {
+      "name": "account_encryption_identities",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "root_directory_id": {
+          "name": "root_directory_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "registry_epoch": {
+          "name": "registry_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "account_encryption_identities_root_directory_id_unique": {
+          "name": "account_encryption_identities_root_directory_id_unique",
+          "columns": [
+            "root_directory_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "account_encryption_identities_account_id_accounts_id_fk": {
+          "name": "account_encryption_identities_account_id_accounts_id_fk",
+          "tableFrom": "account_encryption_identities",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "account_encryption_epoch_positive": {
+          "name": "account_encryption_epoch_positive",
+          "value": "\"account_encryption_identities\".\"registry_epoch\" >= 1"
+        }
+      }
+    },
+    "account_profiles": {
+      "name": "account_profiles",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "epoch": {
+          "name": "epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "account_profiles_account_id_accounts_id_fk": {
+          "name": "account_profiles_account_id_accounts_id_fk",
+          "tableFrom": "account_profiles",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "account_profiles_revision_positive": {
+          "name": "account_profiles_revision_positive",
+          "value": "\"account_profiles\".\"revision\" >= 1"
+        },
+        "account_profiles_epoch_positive": {
+          "name": "account_profiles_epoch_positive",
+          "value": "\"account_profiles\".\"epoch\" >= 1"
+        }
+      }
+    },
+    "accounts": {
+      "name": "accounts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "share_id": {
+          "name": "share_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "share_handle_lookup_token": {
+          "name": "share_handle_lookup_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "accounts_share_id_unique": {
+          "name": "accounts_share_id_unique",
+          "columns": [
+            "share_id"
+          ],
+          "isUnique": true
+        },
+        "accounts_share_handle_lookup_token_unique": {
+          "name": "accounts_share_handle_lookup_token_unique",
+          "columns": [
+            "share_handle_lookup_token"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "authentication_recovery_codes": {
+      "name": "authentication_recovery_codes",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code_hash": {
+          "name": "code_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "authentication_recovery_codes_account_id_accounts_id_fk": {
+          "name": "authentication_recovery_codes_account_id_accounts_id_fk",
+          "tableFrom": "authentication_recovery_codes",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "authentication_recovery_codes_account_id_ordinal_pk": {
+          "columns": [
+            "account_id",
+            "ordinal"
+          ],
+          "name": "authentication_recovery_codes_account_id_ordinal_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "authentication_recovery_ordinal_valid": {
+          "name": "authentication_recovery_ordinal_valid",
+          "value": "\"authentication_recovery_codes\".\"ordinal\" BETWEEN 0 AND 9"
+        }
+      }
+    },
+    "crypto_jobs": {
+      "name": "crypto_jobs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cursor": {
+          "name": "cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "crypto_jobs_device_idx": {
+          "name": "crypto_jobs_device_idx",
+          "columns": [
+            "account_id",
+            "device_id",
+            "state"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "crypto_jobs_account_id_accounts_id_fk": {
+          "name": "crypto_jobs_account_id_accounts_id_fk",
+          "tableFrom": "crypto_jobs",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "crypto_jobs_device_id_encryption_devices_id_fk": {
+          "name": "crypto_jobs_device_id_encryption_devices_id_fk",
+          "tableFrom": "crypto_jobs",
+          "tableTo": "encryption_devices",
+          "columnsFrom": [
+            "device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "crypto_jobs_kind_valid": {
+          "name": "crypto_jobs_kind_valid",
+          "value": "\"crypto_jobs\".\"kind\" IN ('recovery_owned', 'enrollment_owned')"
+        },
+        "crypto_jobs_state_valid": {
+          "name": "crypto_jobs_state_valid",
+          "value": "\"crypto_jobs\".\"state\" IN ('pending', 'complete')"
+        }
+      }
+    },
+    "device_enrollments": {
+      "name": "device_enrollments",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_session_id": {
+          "name": "candidate_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_device_id": {
+          "name": "candidate_device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "transport_public_key": {
+          "name": "transport_public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "assertion_public_key": {
+          "name": "assertion_public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "transcript": {
+          "name": "transcript",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "transcript_digest": {
+          "name": "transcript_digest",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "pairing_secret_hash": {
+          "name": "pairing_secret_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "registry_epoch": {
+          "name": "registry_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approving_device_id": {
+          "name": "approving_device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approving_session_id": {
+          "name": "approving_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approving_proof_id": {
+          "name": "approving_proof_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approval_message": {
+          "name": "approval_message",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approval_signature": {
+          "name": "approval_signature",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enrollment_envelope": {
+          "name": "enrollment_envelope",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "envelope_digest": {
+          "name": "envelope_digest",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "challenge_ciphertext": {
+          "name": "challenge_ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "challenge_hash": {
+          "name": "challenge_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "device_enrollments_candidate_idx": {
+          "name": "device_enrollments_candidate_idx",
+          "columns": [
+            "candidate_session_id",
+            "expires_at"
+          ],
+          "isUnique": false
+        },
+        "device_enrollments_account_idx": {
+          "name": "device_enrollments_account_idx",
+          "columns": [
+            "account_id",
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "device_enrollments_account_id_accounts_id_fk": {
+          "name": "device_enrollments_account_id_accounts_id_fk",
+          "tableFrom": "device_enrollments",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "device_enrollments_candidate_session_id_sessions_id_fk": {
+          "name": "device_enrollments_candidate_session_id_sessions_id_fk",
+          "tableFrom": "device_enrollments",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "candidate_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "device_enrollments_state_valid": {
+          "name": "device_enrollments_state_valid",
+          "value": "\"device_enrollments\".\"state\" IN ('pending', 'challenged', 'consumed')"
+        },
+        "device_enrollments_expiry_valid": {
+          "name": "device_enrollments_expiry_valid",
+          "value": "\"device_enrollments\".\"expires_at\" > \"device_enrollments\".\"created_at\" AND \"device_enrollments\".\"expires_at\" <= \"device_enrollments\".\"created_at\" + 600000"
+        },
+        "device_enrollments_epoch_positive": {
+          "name": "device_enrollments_epoch_positive",
+          "value": "\"device_enrollments\".\"registry_epoch\" >= 1"
+        }
+      }
+    },
+    "device_proof_uses": {
+      "name": "device_proof_uses",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proof_id": {
+          "name": "proof_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "device_proof_uses_expiry_idx": {
+          "name": "device_proof_uses_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "device_proof_uses_account_id_accounts_id_fk": {
+          "name": "device_proof_uses_account_id_accounts_id_fk",
+          "tableFrom": "device_proof_uses",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "device_proof_uses_account_id_proof_id_pk": {
+          "columns": [
+            "account_id",
+            "proof_id"
+          ],
+          "name": "device_proof_uses_account_id_proof_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "directories": {
+      "name": "directories",
+      "columns": {
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "entries_revision": {
+          "name": "entries_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "directories_owner_node_idx": {
+          "name": "directories_owner_node_idx",
+          "columns": [
+            "owner_id",
+            "node_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "directories_node_id_vault_nodes_id_fk": {
+          "name": "directories_node_id_vault_nodes_id_fk",
+          "tableFrom": "directories",
+          "tableTo": "vault_nodes",
+          "columnsFrom": [
+            "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "directories_revision_positive": {
+          "name": "directories_revision_positive",
+          "value": "\"directories\".\"entries_revision\" >= 1"
+        }
+      }
+    },
+    "directory_entries": {
+      "name": "directory_entries",
+      "columns": {
+        "child_node_id": {
+          "name": "child_node_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "parent_node_id": {
+          "name": "parent_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name_ciphertext": {
+          "name": "name_ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "order_ciphertext": {
+          "name": "order_ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key_envelope": {
+          "name": "key_envelope",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "directory_entries_owner_edge_idx": {
+          "name": "directory_entries_owner_edge_idx",
+          "columns": [
+            "owner_id",
+            "child_node_id",
+            "parent_node_id"
+          ],
+          "isUnique": true
+        },
+        "directory_entries_parent_idx": {
+          "name": "directory_entries_parent_idx",
+          "columns": [
+            "owner_id",
+            "parent_node_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "directory_entries_child_node_id_vault_nodes_id_fk": {
+          "name": "directory_entries_child_node_id_vault_nodes_id_fk",
+          "tableFrom": "directory_entries",
+          "tableTo": "vault_nodes",
+          "columnsFrom": [
+            "child_node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "directory_entries_owner_id_parent_node_id_directories_owner_id_node_id_fk": {
+          "name": "directory_entries_owner_id_parent_node_id_directories_owner_id_node_id_fk",
+          "tableFrom": "directory_entries",
+          "tableTo": "directories",
+          "columnsFrom": [
+            "owner_id",
+            "parent_node_id"
+          ],
+          "columnsTo": [
+            "owner_id",
+            "node_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "directory_entries_owner_id_child_node_id_parent_node_id_vault_nodes_owner_id_id_parent_node_id_fk": {
+          "name": "directory_entries_owner_id_child_node_id_parent_node_id_vault_nodes_owner_id_id_parent_node_id_fk",
+          "tableFrom": "directory_entries",
+          "tableTo": "vault_nodes",
+          "columnsFrom": [
+            "owner_id",
+            "child_node_id",
+            "parent_node_id"
+          ],
+          "columnsTo": [
+            "owner_id",
+            "id",
+            "parent_node_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "directory_entries_ciphertext_bounded": {
+          "name": "directory_entries_ciphertext_bounded",
+          "value": "length(\"directory_entries\".\"name_ciphertext\") BETWEEN 1 AND 4096\n    AND length(\"directory_entries\".\"order_ciphertext\") BETWEEN 1 AND 4096\n    AND length(\"directory_entries\".\"key_envelope\") BETWEEN 1 AND 16384"
+        }
+      }
+    },
+    "encryption_devices": {
+      "name": "encryption_devices",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "transport_public_key": {
+          "name": "transport_public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "assertion_public_key": {
+          "name": "assertion_public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approval_provenance": {
+          "name": "approval_provenance",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "label_ciphertext": {
+          "name": "label_ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revocation_reason": {
+          "name": "revocation_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "registry_epoch": {
+          "name": "registry_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_proof_at": {
+          "name": "last_proof_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "encryption_devices_account_idx": {
+          "name": "encryption_devices_account_idx",
+          "columns": [
+            "account_id",
+            "state"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "encryption_devices_account_id_accounts_id_fk": {
+          "name": "encryption_devices_account_id_accounts_id_fk",
+          "tableFrom": "encryption_devices",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "encryption_devices_state_valid": {
+          "name": "encryption_devices_state_valid",
+          "value": "\"encryption_devices\".\"state\" IN ('active', 'revoked', 'tombstoned')"
+        },
+        "encryption_devices_epoch_positive": {
+          "name": "encryption_devices_epoch_positive",
+          "value": "\"encryption_devices\".\"registry_epoch\" >= 1"
+        }
+      }
+    },
+    "file_representations": {
+      "name": "file_representations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "file_node_id": {
+          "name": "file_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content_key_id": {
+          "name": "content_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key_epoch": {
+          "name": "key_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ciphertext_size": {
+          "name": "ciphertext_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "file_representations_owner_pointer_idx": {
+          "name": "file_representations_owner_pointer_idx",
+          "columns": [
+            "owner_id",
+            "file_node_id",
+            "id",
+            "revision"
+          ],
+          "isUnique": true
+        },
+        "file_representations_file_revision_idx": {
+          "name": "file_representations_file_revision_idx",
+          "columns": [
+            "file_node_id",
+            "revision"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "file_representations_owner_id_file_node_id_files_owner_id_node_id_fk": {
+          "name": "file_representations_owner_id_file_node_id_files_owner_id_node_id_fk",
+          "tableFrom": "file_representations",
+          "tableTo": "files",
+          "columnsFrom": [
+            "owner_id",
+            "file_node_id"
+          ],
+          "columnsTo": [
+            "owner_id",
+            "node_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "file_representations_revision_positive": {
+          "name": "file_representations_revision_positive",
+          "value": "\"file_representations\".\"revision\" >= 1"
+        },
+        "file_representations_epoch_positive": {
+          "name": "file_representations_epoch_positive",
+          "value": "\"file_representations\".\"key_epoch\" >= 1"
+        },
+        "file_representations_ciphertext_bounded": {
+          "name": "file_representations_ciphertext_bounded",
+          "value": "length(\"file_representations\".\"ciphertext\") <= 524288 AND \"file_representations\".\"ciphertext_size\" = length(\"file_representations\".\"ciphertext\")"
+        }
+      }
+    },
+    "files": {
+      "name": "files",
+      "columns": {
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "current_representation_id": {
+          "name": "current_representation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "current_revision": {
+          "name": "current_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "files_owner_node_idx": {
+          "name": "files_owner_node_idx",
+          "columns": [
+            "owner_id",
+            "node_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "files_node_id_vault_nodes_id_fk": {
+          "name": "files_node_id_vault_nodes_id_fk",
+          "tableFrom": "files",
+          "tableTo": "vault_nodes",
+          "columnsFrom": [
+            "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "files_revision_positive": {
+          "name": "files_revision_positive",
+          "value": "\"files\".\"current_revision\" >= 1"
+        }
+      }
+    },
+    "key_envelopes": {
+      "name": "key_envelopes",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "object_id": {
+          "name": "object_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recipient_id": {
+          "name": "recipient_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key_epoch": {
+          "name": "key_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "superseded_at": {
+          "name": "superseded_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "key_envelopes_account_id_accounts_id_fk": {
+          "name": "key_envelopes_account_id_accounts_id_fk",
+          "tableFrom": "key_envelopes",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "key_envelopes_account_id_purpose_object_id_recipient_id_pk": {
+          "columns": [
+            "account_id",
+            "purpose",
+            "object_id",
+            "recipient_id"
+          ],
+          "name": "key_envelopes_account_id_purpose_object_id_recipient_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "key_envelopes_purpose_valid": {
+          "name": "key_envelopes_purpose_valid",
+          "value": "\"key_envelopes\".\"purpose\" IN ('vault-recovery', 'device-enrollment', 'owned-device')"
+        },
+        "key_envelopes_epoch_positive": {
+          "name": "key_envelopes_epoch_positive",
+          "value": "\"key_envelopes\".\"key_epoch\" >= 1"
+        }
+      }
+    },
+    "passkeys": {
+      "name": "passkeys",
+      "columns": {
+        "credential_id": {
+          "name": "credential_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "public_key": {
+          "name": "public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "counter": {
+          "name": "counter",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "transports": {
+          "name": "transports",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "device_type": {
+          "name": "device_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "backed_up": {
+          "name": "backed_up",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "passkeys_account_id_idx": {
+          "name": "passkeys_account_id_idx",
+          "columns": [
+            "account_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "passkeys_account_id_accounts_id_fk": {
+          "name": "passkeys_account_id_accounts_id_fk",
+          "tableFrom": "passkeys",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "passkeys_counter_nonnegative": {
+          "name": "passkeys_counter_nonnegative",
+          "value": "\"passkeys\".\"counter\" >= 0"
+        },
+        "passkeys_device_type_valid": {
+          "name": "passkeys_device_type_valid",
+          "value": "\"passkeys\".\"device_type\" IN ('singleDevice', 'multiDevice')"
+        }
+      }
+    },
+    "rate_limit_counters": {
+      "name": "rate_limit_counters",
+      "columns": {
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope_type": {
+          "name": "scope_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope_id": {
+          "name": "scope_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "window_ms": {
+          "name": "window_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "time_epoch": {
+          "name": "time_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "rate_limit_counters_expiry_idx": {
+          "name": "rate_limit_counters_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "rate_limit_counters_pk": {
+          "columns": [
+            "purpose",
+            "scope_type",
+            "scope_id",
+            "window_ms",
+            "time_epoch"
+          ],
+          "name": "rate_limit_counters_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "rate_limit_counters_purpose_valid": {
+          "name": "rate_limit_counters_purpose_valid",
+          "value": "\"rate_limit_counters\".\"purpose\" IN ('registration.challenge', 'registration.success', 'webauthn.sign_in', 'recovery.attempt', 'vault_recovery.start', 'session.refresh', 'public_comment.mutate', 'public_comment.report', 'publication.mutate')"
+        },
+        "rate_limit_counters_scope_valid": {
+          "name": "rate_limit_counters_scope_valid",
+          "value": "\"rate_limit_counters\".\"scope_type\" IN ('global', 'account', 'publication', 'account_publication', 'session', 'recovery_identifier', 'network')"
+        },
+        "rate_limit_counters_purpose_scope_valid": {
+          "name": "rate_limit_counters_purpose_scope_valid",
+          "value": "(\"rate_limit_counters\".\"purpose\" IN ('registration.challenge', 'registration.success') AND \"rate_limit_counters\".\"scope_type\" IN ('global', 'network'))\n        OR (\"rate_limit_counters\".\"purpose\" = 'webauthn.sign_in' AND \"rate_limit_counters\".\"scope_type\" IN ('global', 'network', 'account'))\n        OR (\"rate_limit_counters\".\"purpose\" = 'recovery.attempt' AND \"rate_limit_counters\".\"scope_type\" IN ('global', 'network', 'recovery_identifier'))\n        OR (\"rate_limit_counters\".\"purpose\" = 'vault_recovery.start' AND \"rate_limit_counters\".\"scope_type\" IN ('global', 'network', 'account'))\n        OR (\"rate_limit_counters\".\"purpose\" = 'session.refresh' AND \"rate_limit_counters\".\"scope_type\" = 'session')\n        OR (\"rate_limit_counters\".\"purpose\" = 'public_comment.mutate' AND \"rate_limit_counters\".\"scope_type\" IN ('global', 'network', 'account', 'publication', 'account_publication'))\n        OR (\"rate_limit_counters\".\"purpose\" = 'public_comment.report' AND \"rate_limit_counters\".\"scope_type\" = 'account')\n        OR (\"rate_limit_counters\".\"purpose\" = 'publication.mutate' AND \"rate_limit_counters\".\"scope_type\" = 'account')"
+        },
+        "rate_limit_counters_scope_id_valid": {
+          "name": "rate_limit_counters_scope_id_valid",
+          "value": "(\"rate_limit_counters\".\"scope_type\" = 'global' AND \"rate_limit_counters\".\"scope_id\" = '*')\n        OR (\"rate_limit_counters\".\"scope_type\" = 'network' AND length(\"rate_limit_counters\".\"scope_id\") = 72\n          AND substr(\"rate_limit_counters\".\"scope_id\", 1, 8) = 'network:'\n          AND substr(\"rate_limit_counters\".\"scope_id\", 9) NOT GLOB '*[^a-f0-9]*')\n        OR (\"rate_limit_counters\".\"scope_type\" = 'session' AND length(\"rate_limit_counters\".\"scope_id\") = 72\n          AND substr(\"rate_limit_counters\".\"scope_id\", 1, 8) = 'session:'\n          AND substr(\"rate_limit_counters\".\"scope_id\", 9) NOT GLOB '*[^a-f0-9]*')\n        OR (\"rate_limit_counters\".\"scope_type\" = 'recovery_identifier' AND length(\"rate_limit_counters\".\"scope_id\") = 84\n          AND substr(\"rate_limit_counters\".\"scope_id\", 1, 20) = 'recovery_identifier:'\n          AND substr(\"rate_limit_counters\".\"scope_id\", 21) NOT GLOB '*[^a-f0-9]*')\n        OR (\"rate_limit_counters\".\"scope_type\" = 'account_publication' AND length(\"rate_limit_counters\".\"scope_id\") = 84\n          AND substr(\"rate_limit_counters\".\"scope_id\", 1, 20) = 'account_publication:'\n          AND substr(\"rate_limit_counters\".\"scope_id\", 21) NOT GLOB '*[^a-f0-9]*')\n        OR (\"rate_limit_counters\".\"scope_type\" = 'account' AND length(\"rate_limit_counters\".\"scope_id\") = 36\n          AND substr(\"rate_limit_counters\".\"scope_id\", 9, 1) = '-' AND substr(\"rate_limit_counters\".\"scope_id\", 14, 1) = '-'\n          AND substr(\"rate_limit_counters\".\"scope_id\", 15, 1) = '7' AND substr(\"rate_limit_counters\".\"scope_id\", 19, 1) = '-'\n          AND substr(\"rate_limit_counters\".\"scope_id\", 20, 1) IN ('8', '9', 'a', 'b')\n          AND substr(\"rate_limit_counters\".\"scope_id\", 24, 1) = '-'\n          AND \"rate_limit_counters\".\"scope_id\" NOT GLOB '*[^0-9a-f-]*')\n        OR (\"rate_limit_counters\".\"scope_type\" = 'publication' AND length(\"rate_limit_counters\".\"scope_id\") = 43\n          AND \"rate_limit_counters\".\"scope_id\" NOT GLOB '*[^A-Za-z0-9_-]*')"
+        },
+        "rate_limit_counters_window_valid": {
+          "name": "rate_limit_counters_window_valid",
+          "value": "\"rate_limit_counters\".\"window_ms\" BETWEEN 1 AND 86400000"
+        },
+        "rate_limit_counters_epoch_nonnegative": {
+          "name": "rate_limit_counters_epoch_nonnegative",
+          "value": "\"rate_limit_counters\".\"time_epoch\" >= 0"
+        },
+        "rate_limit_counters_count_positive": {
+          "name": "rate_limit_counters_count_positive",
+          "value": "\"rate_limit_counters\".\"count\" >= 1"
+        },
+        "rate_limit_counters_expiry_matches_window": {
+          "name": "rate_limit_counters_expiry_matches_window",
+          "value": "\"rate_limit_counters\".\"expires_at\" = \"rate_limit_counters\".\"time_epoch\" + \"rate_limit_counters\".\"window_ms\""
+        }
+      }
+    },
+    "recovery_capsules": {
+      "name": "recovery_capsules",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recovery_salt": {
+          "name": "recovery_salt",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "verification_public_key": {
+          "name": "verification_public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "recovery_capsules_account_id_accounts_id_fk": {
+          "name": "recovery_capsules_account_id_accounts_id_fk",
+          "tableFrom": "recovery_capsules",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "recovery_capsules_generation_positive": {
+          "name": "recovery_capsules_generation_positive",
+          "value": "\"recovery_capsules\".\"generation\" >= 1"
+        }
+      }
+    },
+    "recovery_enrollments": {
+      "name": "recovery_enrollments",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "registry_epoch": {
+          "name": "registry_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "nonce": {
+          "name": "nonce",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_device_id": {
+          "name": "candidate_device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "transport_public_key": {
+          "name": "transport_public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "assertion_public_key": {
+          "name": "assertion_public_key",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "intent_digest": {
+          "name": "intent_digest",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "next_metadata_digest": {
+          "name": "next_metadata_digest",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "challenge_hash": {
+          "name": "challenge_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "recovery_enrollments_account_idx": {
+          "name": "recovery_enrollments_account_idx",
+          "columns": [
+            "account_id",
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "recovery_enrollments_account_id_accounts_id_fk": {
+          "name": "recovery_enrollments_account_id_accounts_id_fk",
+          "tableFrom": "recovery_enrollments",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "recovery_enrollments_session_id_sessions_id_fk": {
+          "name": "recovery_enrollments_session_id_sessions_id_fk",
+          "tableFrom": "recovery_enrollments",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "recovery_enrollments_state_valid": {
+          "name": "recovery_enrollments_state_valid",
+          "value": "\"recovery_enrollments\".\"state\" IN ('started', 'challenged')"
+        },
+        "recovery_enrollments_expiry_valid": {
+          "name": "recovery_enrollments_expiry_valid",
+          "value": "\"recovery_enrollments\".\"expires_at\" > \"recovery_enrollments\".\"created_at\""
+        },
+        "recovery_enrollments_generation_positive": {
+          "name": "recovery_enrollments_generation_positive",
+          "value": "\"recovery_enrollments\".\"generation\" >= 1"
+        },
+        "recovery_enrollments_epoch_positive": {
+          "name": "recovery_enrollments_epoch_positive",
+          "value": "\"recovery_enrollments\".\"registry_epoch\" >= 1"
+        }
+      }
+    },
+    "registration_challenges": {
+      "name": "registration_challenges",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "challenge": {
+          "name": "challenge",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "origin": {
+          "name": "origin",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "registration_challenges_challenge_unique": {
+          "name": "registration_challenges_challenge_unique",
+          "columns": [
+            "challenge"
+          ],
+          "isUnique": true
+        },
+        "registration_challenges_expiry_idx": {
+          "name": "registration_challenges_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "security_events": {
+      "name": "security_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "action_class": {
+          "name": "action_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "publication_id": {
+          "name": "publication_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "size_class": {
+          "name": "size_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "proof_state": {
+          "name": "proof_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "counter_state": {
+          "name": "counter_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "retry_at": {
+          "name": "retry_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "network_bucket": {
+          "name": "network_bucket",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "network_bucket_expires_at": {
+          "name": "network_bucket_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "security_events_expiry_idx": {
+          "name": "security_events_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        },
+        "security_events_network_expiry_idx": {
+          "name": "security_events_network_expiry_idx",
+          "columns": [
+            "network_bucket_expires_at"
+          ],
+          "isUnique": false
+        },
+        "security_events_account_created_idx": {
+          "name": "security_events_account_created_idx",
+          "columns": [
+            "account_id",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "security_events_publication_created_idx": {
+          "name": "security_events_publication_created_idx",
+          "columns": [
+            "publication_id",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "security_events_expiry_after_created": {
+          "name": "security_events_expiry_after_created",
+          "value": "\"security_events\".\"expires_at\" > \"security_events\".\"created_at\""
+        },
+        "security_events_retention_bounded": {
+          "name": "security_events_retention_bounded",
+          "value": "\"security_events\".\"expires_at\" <= \"security_events\".\"created_at\" + 2592000000"
+        },
+        "security_events_action_valid": {
+          "name": "security_events_action_valid",
+          "value": "\"security_events\".\"action_class\" IN ('registration_challenge', 'registration', 'sign_in', 'recovery', 'session_refresh', 'device_removal', 'public_comment', 'public_comment_report', 'publication')"
+        },
+        "security_events_outcome_valid": {
+          "name": "security_events_outcome_valid",
+          "value": "\"security_events\".\"outcome\" IN ('allow', 'deny')"
+        },
+        "security_events_reason_valid": {
+          "name": "security_events_reason_valid",
+          "value": "\"security_events\".\"reason\" IN ('allowed', 'rate_limited', 'honeypot-filled', 'proof_invalid', 'proof_spent', 'policy_denied', 'capacity_exhausted')"
+        },
+        "security_events_size_class_valid": {
+          "name": "security_events_size_class_valid",
+          "value": "\"security_events\".\"size_class\" IS NULL OR \"security_events\".\"size_class\" IN ('unknown', 'zero', 'under_1_kib', '1_to_4_kib', '4_to_16_kib', 'over_16_kib')"
+        },
+        "security_events_proof_state_valid": {
+          "name": "security_events_proof_state_valid",
+          "value": "\"security_events\".\"proof_state\" IN ('not_applicable', 'issued', 'valid', 'invalid', 'spent')"
+        },
+        "security_events_counter_state_valid": {
+          "name": "security_events_counter_state_valid",
+          "value": "\"security_events\".\"counter_state\" IN ('not_checked', 'allowed', 'denied')"
+        },
+        "security_events_account_id_opaque": {
+          "name": "security_events_account_id_opaque",
+          "value": "\"security_events\".\"account_id\" IS NULL OR (length(\"security_events\".\"account_id\") = 36\n        AND substr(\"security_events\".\"account_id\", 9, 1) = '-' AND substr(\"security_events\".\"account_id\", 14, 1) = '-'\n        AND substr(\"security_events\".\"account_id\", 15, 1) = '7' AND substr(\"security_events\".\"account_id\", 19, 1) = '-'\n        AND substr(\"security_events\".\"account_id\", 20, 1) IN ('8', '9', 'a', 'b')\n        AND substr(\"security_events\".\"account_id\", 24, 1) = '-'\n        AND \"security_events\".\"account_id\" NOT GLOB '*[^0-9a-f-]*')"
+        },
+        "security_events_publication_id_opaque": {
+          "name": "security_events_publication_id_opaque",
+          "value": "\"security_events\".\"publication_id\" IS NULL OR (length(\"security_events\".\"publication_id\") = 43\n        AND \"security_events\".\"publication_id\" NOT GLOB '*[^A-Za-z0-9_-]*')"
+        },
+        "security_events_network_bucket_bounded": {
+          "name": "security_events_network_bucket_bounded",
+          "value": "(\"security_events\".\"network_bucket\" IS NULL AND \"security_events\".\"network_bucket_expires_at\" IS NULL)\n        OR (\"security_events\".\"network_bucket\" IS NOT NULL AND length(\"security_events\".\"network_bucket\") = 72\n          AND substr(\"security_events\".\"network_bucket\", 1, 8) = 'network:'\n          AND substr(\"security_events\".\"network_bucket\", 9) NOT GLOB '*[^a-f0-9]*'\n          AND \"security_events\".\"network_bucket_expires_at\" >= \"security_events\".\"created_at\"\n          AND \"security_events\".\"network_bucket_expires_at\" <= \"security_events\".\"created_at\" + 86400000\n          AND \"security_events\".\"network_bucket_expires_at\" <= \"security_events\".\"expires_at\")"
+        }
+      }
+    },
+    "sessions": {
+      "name": "sessions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authenticated_passkey_id": {
+          "name": "authenticated_passkey_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idle_expires_at": {
+          "name": "idle_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "absolute_expires_at": {
+          "name": "absolute_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fresh_asserted_at": {
+          "name": "fresh_asserted_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "refreshed_at": {
+          "name": "refreshed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "sessions_account_live_idx": {
+          "name": "sessions_account_live_idx",
+          "columns": [
+            "account_id",
+            "revoked_at",
+            "idle_expires_at",
+            "absolute_expires_at"
+          ],
+          "isUnique": false
+        },
+        "sessions_authenticated_passkey_idx": {
+          "name": "sessions_authenticated_passkey_idx",
+          "columns": [
+            "authenticated_passkey_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "sessions_account_id_accounts_id_fk": {
+          "name": "sessions_account_id_accounts_id_fk",
+          "tableFrom": "sessions",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "sessions_purpose_valid": {
+          "name": "sessions_purpose_valid",
+          "value": "\"sessions\".\"purpose\" IN ('normal', 'recovery')"
+        },
+        "sessions_absolute_after_created": {
+          "name": "sessions_absolute_after_created",
+          "value": "\"sessions\".\"absolute_expires_at\" > \"sessions\".\"created_at\""
+        },
+        "sessions_idle_within_absolute": {
+          "name": "sessions_idle_within_absolute",
+          "value": "\"sessions\".\"idle_expires_at\" <= \"sessions\".\"absolute_expires_at\""
+        }
+      }
+    },
+    "vault_nodes": {
+      "name": "vault_nodes",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "parent_node_id": {
+          "name": "parent_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "import_id": {
+          "name": "import_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "vault_nodes_one_root_idx": {
+          "name": "vault_nodes_one_root_idx",
+          "columns": [
+            "owner_id"
+          ],
+          "isUnique": true,
+          "where": "\"vault_nodes\".\"parent_node_id\" IS NULL"
+        },
+        "vault_nodes_owner_edge_idx": {
+          "name": "vault_nodes_owner_edge_idx",
+          "columns": [
+            "owner_id",
+            "id",
+            "parent_node_id"
+          ],
+          "isUnique": true
+        },
+        "vault_nodes_parent_idx": {
+          "name": "vault_nodes_parent_idx",
+          "columns": [
+            "parent_node_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "vault_nodes_owner_id_accounts_id_fk": {
+          "name": "vault_nodes_owner_id_accounts_id_fk",
+          "tableFrom": "vault_nodes",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "owner_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "vault_nodes_kind_valid": {
+          "name": "vault_nodes_kind_valid",
+          "value": "\"vault_nodes\".\"kind\" IN ('directory', 'file')"
+        },
+        "vault_nodes_root_directory": {
+          "name": "vault_nodes_root_directory",
+          "value": "\"vault_nodes\".\"parent_node_id\" IS NOT NULL OR \"vault_nodes\".\"kind\" = 'directory'"
+        },
+        "vault_nodes_no_self_parent": {
+          "name": "vault_nodes_no_self_parent",
+          "value": "\"vault_nodes\".\"parent_node_id\" IS NULL OR \"vault_nodes\".\"parent_node_id\" != \"vault_nodes\".\"id\""
+        }
+      }
+    },
+    "webauthn_challenges": {
+      "name": "webauthn_challenges",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "challenge": {
+          "name": "challenge",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "origin": {
+          "name": "origin",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rp_id": {
+          "name": "rp_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "transport_challenge_hash": {
+          "name": "transport_challenge_hash",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "webauthn_challenges_challenge_unique": {
+          "name": "webauthn_challenges_challenge_unique",
+          "columns": [
+            "challenge"
+          ],
+          "isUnique": true
+        },
+        "webauthn_challenges_expiry_idx": {
+          "name": "webauthn_challenges_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        },
+        "webauthn_challenges_session_idx": {
+          "name": "webauthn_challenges_session_idx",
+          "columns": [
+            "session_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "webauthn_challenges_account_id_accounts_id_fk": {
+          "name": "webauthn_challenges_account_id_accounts_id_fk",
+          "tableFrom": "webauthn_challenges",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "webauthn_challenges_session_id_sessions_id_fk": {
+          "name": "webauthn_challenges_session_id_sessions_id_fk",
+          "tableFrom": "webauthn_challenges",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "webauthn_challenges_purpose_valid": {
+          "name": "webauthn_challenges_purpose_valid",
+          "value": "\"webauthn_challenges\".\"purpose\" IN ('sign_in', 'fresh_assertion', 'passkey_registration', 'signup')"
+        },
+        "webauthn_challenges_expiry_after_created": {
+          "name": "webauthn_challenges_expiry_after_created",
+          "value": "\"webauthn_challenges\".\"expires_at\" > \"webauthn_challenges\".\"created_at\""
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

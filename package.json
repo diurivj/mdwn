@@ -38,7 +38,10 @@
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router": "^8.4.0"
+    "react-markdown": "10.1.0",
+    "react-router": "^8.4.0",
+    "rehype-sanitize": "6.0.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.56.0",

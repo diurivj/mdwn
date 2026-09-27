@@ -19,6 +19,10 @@ export default defineConfig({
   ],
   test: {
     include: ["tests/worker/**/*.test.ts"],
+    // Real crypto, D1 migrations, and route startup vary across CI runners;
+    // bound workerd concurrency and allow integration tests enough time to finish.
+    maxWorkers: 2,
+    testTimeout: 15_000,
     globals: false,
   },
   resolve: {
