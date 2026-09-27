@@ -7,6 +7,7 @@ const DIRECT_MARKDOWN = "DIRECT_FILE_CONTENT_THAT_MUST_STAY_ENCRYPTED";
 const COLLABORATOR_MARKDOWN = "COLLABORATOR_CONTENT_OWNED_BY_THE_OWNER";
 
 test.setTimeout(360_000);
+test.use({ trace: "off", screenshot: "off", video: "off" });
 
 type TestEnv = { DB: D1Database };
 type FileState = { revision: number; representationId: string; contentKeyId: string; contentEpoch: number;
