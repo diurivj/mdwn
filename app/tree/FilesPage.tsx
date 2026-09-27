@@ -104,6 +104,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       if (!parent || !key) throw new Error("private tree unavailable");
       if (current.operation === "create") {
         const payload = await prepareTreeCreate({ vaultId: snapshot.access.vaultId,
+          actorAccountId: snapshot.access.actorAccountId,
           parentId: current.parentId, parentKey: key, entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.map((entry) => entry.name), requestedName: current.requestedName,
           kind: current.kind });
