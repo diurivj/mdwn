@@ -11,8 +11,8 @@ describe("exact Share addressing", () => {
     });
   });
 
-  it("preserves an opaque UUIDv7 share identifier byte-for-byte", async () => {
-    const shareId = "018f0000-0000-7000-8000-000000000001";
+  it("preserves a canonical randomB64(32) share identifier byte-for-byte", async () => {
+    const shareId = "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I4";
     await expect(encodeRecipientAddress(shareId)).resolves.toEqual({
       kind: "share-id",
       value: shareId,
@@ -30,8 +30,15 @@ describe("exact Share addressing", () => {
     "@álîce",
     "@Ａlice",
     "@alice@other",
-    "018f0000-0000-7000-8000-00000000000 ",
-    "018f0000-0000-7000-8000-00000000000é",
+    "018f0000-0000-7000-8000-000000000001",
+    "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I",
+    "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I4A",
+    "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I=",
+    "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I+",
+    "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I/",
+    `${"A".repeat(42)}B`,
+    "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I4 ",
+    "RBu3TIMurZzzy3FngAkwqs1kNanHdgJ9VgTqjDNq9I4é",
     "not-an-opaque-share-id",
   ])("rejects malformed address %j before it can be looked up", async (address) => {
     await expect(encodeRecipientAddress(address)).rejects.toThrow();

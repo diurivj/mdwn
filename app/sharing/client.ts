@@ -3,7 +3,6 @@ import { openFileContentKeyFromReceiving, openFileReceivingKey } from "~/crypto/
 import { privateRequest } from "~/device/private-client";
 import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
-import { isV7 } from "~/tree/wire";
 import { authenticateFileHead, type FileHeadWire } from "~/tree/client";
 import { signFileHead, verifyFileParentEnvelope,
   type DirectRecipientDescriptor, type FileHeadStatement } from "~/tree/file-head";
@@ -25,6 +24,8 @@ export type ShareItem = { id: string; kind: "file" | "directory"; permission: "r
 
 type StagedShareInviteAction = (signal: AbortSignal) => Promise<string>;
 const stagedShareInviteActions = new Map<string, StagedShareInviteAction>();
+// Signup persists 32 random bytes as canonical unpadded base64url (43 chars).
+const ACCOUNT_SHARE_ID_PATTERN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 
 /** Keep browser-only invitation preparation out of form fields and execute it once. */
 export function stageShareInviteAction(action: StagedShareInviteAction): string {
@@ -64,7 +65,7 @@ export async function encodeRecipientAddress(value: string, signal?: AbortSignal
     signal?.throwIfAborted();
     return { kind: "handle", value: token };
   }
-  if (!isV7(value)) throw new TypeError("Invalid share address");
+  if (!ACCOUNT_SHARE_ID_PATTERN.test(value)) throw new TypeError("Invalid share address");
   return { kind: "share-id", value };
 }
 
