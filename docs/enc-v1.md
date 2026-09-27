@@ -55,12 +55,14 @@ same **current** head repeatedly is permitted; this is rollback detection, not
 single-use consumption. Persisting/advancing the head and distributing it to
 other devices belongs to the caller's authenticated manifest/registry protocol.
 Never initialize it from the envelope or from unauthenticated server claims.
-Ticket 14's Directory protocol persists the head in the same proof-guarded D1
-transaction as the parent revision and entry mutations. The browser signs the
-head's ciphertext digest with its non-extractable Device assertion key, binding
-Account, Directory, Device, and revision under `mdwn/directory-listing/v1`.
-The encrypted head commits to every child ID, kind, and complete encrypted
-name/order/capability bytes. On read the browser verifies the signature against
+**Currently implemented v1 Directory listing (ticket 14):** the Directory
+protocol persists the head in the same proof-guarded D1 transaction as the
+parent revision and entry mutations. The browser signs the head's ciphertext
+digest with its non-extractable Device assertion key, binding Account,
+Directory, Device, and revision under `mdwn/directory-listing/v1`. The
+encrypted head commits to every child ID, kind, and **complete encrypted entry
+bytes**, including encrypted name/order and each File entry's `keyEnvelope`
+for its current File content key. On read the browser verifies the signature against
 the approved Device registry public key supplied by the authenticated private
 resource, then passes that verified digest as `expected.manifestDigest` and
 compares the opened member commitment with the returned entries. Initial empty
@@ -73,6 +75,71 @@ service forging both a registry key and its head; a stateless envelope library
 cannot solve that problem. Content
 key epochs and Device registry epochs are distinct; callers bind the applicable
 current content authority, not merely a number supplied beside ciphertext.
+
+### Approved listing v2 and File receiving keys — not implemented by ticket 03/14
+
+[ADR-0008](adr/0008-file-scoped-receiving-keys-and-signed-file-heads.md) amends the
+*listing protocol*, not `mdwn/enc-v1` binary framing. A `directory-metadata`
+self-addressed listing still needs the externally authenticated exact current
+`manifestDigest`; a v2 signed encrypted structural head uses a distinct
+`mdwn/directory-listing/v2` signing/context domain and commits membership, kind,
+complete encrypted names/order, and stable parent-wrapped File receiving-key
+material. Its explicitly tagged unmigrated v1 File entries remain byte-complete
+in the commitment, including `keyEnvelope`. There is no v1 decoder fallback,
+removed v1 commitment field, or implicit change to an existing v1 ciphertext.
+
+A v2 File has one independent P-256 HPKE receiving key pair per File/capability
+epoch. A symmetric `file-receiving-key` envelope (appended purpose 20 below)
+under its containing Directory capability carries the private key; its
+`keyEpoch` names the receiving-key epoch and its envelope revision is the
+creation/rewrap revision authenticated by the structural entry, **not** the
+revision of each later File save. The public key, opaque File-scoped receiving
+key identity/epoch, and authenticated write target are available to authorized
+File editors; no Directory-wide receiving target or parent capability is given
+to direct File editors. Each successful save generates a fresh random File
+content key: `file-content-key` now has a v2 **HPKE** envelope to the File
+receiving public key (`recipientId` binds the receiving-key identity, `keyEpoch`
+binds the new content-key epoch, `revision` binds the new File revision). Each
+currently eligible direct-Grant device gets a separate constrained device
+`grant` envelope for that same current File key, bound to the protected File/key
+and device recipient. The signed current File head binds both receiving-key
+identity/**epoch** and content-key identity/**epoch**, the public-key digest,
+representation and every relevant envelope digest, and the exact recipient-set
+version/commitment. An inherited Directory reader opens the private-key wrapper
+and the changing HPKE envelope, verifying the private key matches the signed
+public target; a direct File reader opens only its authorized device envelope. `inspectEnvelope` cannot authenticate a target, recipient set,
+head or plaintext equality; the Worker can validate the signed bytes and exact
+current descriptors but **cannot prove** opaque envelopes carry equal keys.
+
+The File head has its own Device signature domain and File revision/digest
+checkpoint, separate from the Directory structural checkpoint. A same-File-
+revision head update requires a guarded monotonic receiving-key epoch advance
+(rotation) or recipient-set version advance (including Grant/device changes);
+a different digest at the same File revision, receiving-key epoch and
+recipient-set version is a fork. Directory readers verify both signed heads
+and committed bytes; direct File readers see only File-scoped head/material.
+The service checks the signer's **effective authority at commit** for that
+transition (write authority on save); retain approved signing-key provenance
+so later revocation does not invalidate an otherwise authentic historical
+committed head. The previously documented
+fresh-device/service-registry trust limit still applies. First removing
+Directory-scope authority and blocking writes, then replacing an exposed
+receiving **pair** through a bounded resumable rotation, is required before
+future writes. Account-owned recovery traverses the owned hierarchy (or uses
+strictly owned auxiliary recovery for unreachable keys), never a recipient's
+Vault-root/recovery/enrollment envelope for Grant-derived material.
+
+Only a write-authorized parent-capability browser can atomically migrate an existing
+v1 File before direct-write sharing. It verifies the v1 complete-entry
+commitment and structural/File revisions, installs the private wrapper and
+public target, current-key HPKE/device envelopes, a new structural listing and
+File head, and establishes a one-time version-transition checkpoint. It may
+keep the current representation/key/File revision during this guarded
+transition; later v2 saves advance revision with a new random key, and
+same-revision heads without a guarded recipient-set or receiving-key epoch
+advance fail. Unmigrated v1 remains readable. Purpose
+20 and these v2 rules are **approved pending work**, not assertions that the
+current parser, Directory routes or save flow already implement them.
 
 Inputs used across an asynchronous operation are snapshotted. The module does
 not persist, log, send, or SSR keys/plaintext. It provides no export of derived
@@ -196,10 +263,13 @@ version, not a permissive v1 decoder.
 | 17 | `account-profile` |
 | 18 | `owned-device` |
 | 19 | `device-label` |
+| 20 | `file-receiving-key` (approved v2; pending implementation) |
 
 Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
- key`, `Comment audience epoch`); only the numeric ID is serialized. Every HPKE
-envelope, `grant`, and `device-enrollment` requires a recipient ID.
+ key`, `File receiving key pair`, `Comment audience epoch`); only the numeric ID
+is serialized. Every HPKE envelope, `grant`, and `device-enrollment` requires a
+recipient ID. Purpose 20 is appended, **not yet accepted by the current v1
+implementation**; older purpose IDs and framing do not change.
 `public-representation` and `public-comment-audience-epoch` require a Publication ID.
 Callers must supply the optional bindings for all other cases where applicable;
 for example a public Comment's content must bind its Publication, whereas a
@@ -239,7 +309,8 @@ Their purpose names are pinned here:
 | 08 Signup bootstrap | `device-enrollment`, `vault-recovery` |
 | 11 Vault recovery | `owned-device` |
 | 12 Routine device enrollment | `device-enrollment`, `owned-device`, `device-label` |
-| 14 Private tree | `directory-capability`, `file-content-key`, `directory-metadata` |
+| 14 Private tree (implemented v1) | `directory-capability`, `file-content-key`, `directory-metadata` |
+| 17–19 direct-write amendment (approved, pending) | `file-receiving-key`; v2 HPKE `file-content-key`, device `grant`, v2 structural/File heads |
 | 18 Grant envelopes | `grant`, `private-comment-thread`, `public-comment-audience-epoch` |
 | 19 Key rotation, 20 Provisioning fulfillment | any affected purpose |
 | 21 Private comment threads | `private-comment-thread`, `comment-content`, `attribution` |
@@ -256,7 +327,9 @@ Two decisions stay open, and later tickets own them:
    the two distinguishable in the authenticated context.
 2. **Purpose-to-suite enforcement.** The module does not stop a producer sealing
    any purpose with either suite. Tickets 18, 21, 22, and 23 should add a
-   purpose-to-suite table once every purpose has exactly one suite.
+   protocol-version/purpose-to-suite policy: `file-content-key` is symmetric
+   for v1 parent entries but HPKE for v2 File receiving targets. Do not assume
+   every numeric purpose has exactly one suite across listing versions.
 
 ## Sources
 
