@@ -1,6 +1,6 @@
 import {
   loadAncestors, loadDirectory, loadFile, openChildDirectory, openRoot, TreeNotFoundError,
-  type DirectoryListing, type RootAccess, type TreeKind,
+  type DirectoryListing, type LoadedFile, type RootAccess, type TreeKind,
 } from "./client";
 
 export type Crumb = { id: string; name: string };
@@ -9,7 +9,7 @@ export type FilesSnapshot = {
   listings: Record<string, DirectoryListing>;
   keys: Record<string, Uint8Array>;
   crumbs: Crumb[];
-  markdown: string | null;
+  file: LoadedFile | null;
 };
 export type FilesPageData = { status: "ready"; snapshot: FilesSnapshot } |
   { status: "not-found" | "unavailable"; snapshot: null };
@@ -29,7 +29,7 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
   const listings: Record<string, DirectoryListing> = {};
   const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
   const crumbs: Crumb[] = [{ id: access.rootId, name: "Files" }];
-  let markdown: string | null = null;
+  let file: LoadedFile | null = null;
   for (let index = 0; index < path.length; index++) {
     const parent = path[index]!;
     // A File is the final path member, not a Directory with a capability.
@@ -49,9 +49,9 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
   if (kind === "file") {
     const parent = path.at(-2);
     if (!parent || !keys[parent]) throw new TreeNotFoundError();
-    const file = await loadFile(access, nodeId, keys[parent], signal);
-    if (file.parentId !== parent) throw new TreeNotFoundError();
-    markdown = file.markdown;
+    const entry = listings[parent]?.entries.find((child) => child.nodeId === nodeId);
+    if (!entry || entry.kind !== "file") throw new TreeNotFoundError();
+    file = await loadFile(access, nodeId, parent, keys[parent], entry, signal);
   }
   // Preferences are browser-only, never encoded in a deep link. Restore only
   // descendants discoverable through a decrypted Directory in this Account.
@@ -73,7 +73,7 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
     }
     if (!progressed) break;
   }
-  return { access, listings, keys, crumbs, markdown };
+  return { access, listings, keys, crumbs, file };
 }
 
 /** Browser-only clientLoader data; SSR renders a public HydrateFallback instead. */

@@ -7,7 +7,7 @@ import {
   openChildDirectory, prepareTreeCreate, prepareTreeRename, renameTreeChild, TreeCommitUncertainError, TreeNotFoundError,
   type DirectoryListing, type TreeEntry, type TreeKind,
 } from "./client";
-import { MarkdownPreview } from "./MarkdownPreview";
+import { FileEditor } from "./FileEditor";
 import { expandedPreferenceKey, savedExpanded, type FilesPageData, type FilesSnapshot } from "./navigation-client";
 
 type Dialog = {
@@ -23,11 +23,11 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [status, setStatus] = useState<FilesPageData["status"]>(initial.status);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [drawer, setDrawer] = useState(false);
-  const [view, setView] = useState<"edit" | "preview">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const nameInput = useRef<HTMLInputElement>(null);
+  const flushEditor = useRef<(() => Promise<boolean>) | null>(null);
   const busy = submitting || revalidator.state !== "idle" || navigation.state !== "idle";
   const recoveryPending = isSignupRecoveryConfirmationPending();
 
@@ -35,7 +35,6 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     setSnapshot(initial.snapshot);
     setStatus(initial.status);
     setDialog(null);
-    setView("edit");
     if (initial.snapshot) setExpanded(Array.from(new Set([
       ...savedExpanded(initial.snapshot.access.vaultId),
       ...initial.snapshot.crumbs.slice(0, -1).map((item) => item.id), initial.snapshot.access.rootId,
@@ -89,8 +88,14 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     setSubmitting(true);
     setMessage("");
     try {
-      const parent = listing ?? snapshot.listings[current.parentId];
+      // A structural change to the selected File's parent must not race its pending save.
+      if (flushEditor.current && !await flushEditor.current()) {
+        setMessage("Your File could not be saved. Keep or explicitly discard its draft before changing this folder.");
+        return;
+      }
       const key = snapshot.keys[current.parentId];
+      const parent = listing ?? (flushEditor.current && key
+        ? await loadDirectory(snapshot.access, current.parentId, key) : snapshot.listings[current.parentId]);
       if (!parent || !key) throw new Error("private tree unavailable");
       if (current.operation === "create") {
         const payload = await prepareTreeCreate({ vaultId: snapshot.access.vaultId,
@@ -193,25 +198,16 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       {recoveryPending && <p role="status" className="mt-3">Confirm your saved recovery phrase and codes before creating Files.</p>}
       {busy && <p role="status" className="mt-3">Updating Files…</p>}
       {message && <p role="alert" className="mt-3 text-rose-700">{message}</p>}
-      {kind === "file" ? <>
-        <div className="mt-6 flex gap-2 lg:hidden"><button type="button" onClick={() => setView("edit")}
-          aria-pressed={view === "edit"}>Edit</button><button type="button" onClick={() => setView("preview")}
-          aria-pressed={view === "preview"}>Preview</button></div>
-        <div className="mt-4 grid min-h-[50vh] gap-4 lg:grid-cols-2">
-          <section className={`${view === "preview" ? "hidden lg:block" : ""}`} aria-label="Editor">
-            <h2 className="mb-2 font-medium">Markdown source</h2>
-            <textarea readOnly value={snapshot.markdown ?? ""} aria-label="Markdown source (read only)"
-              className="h-[50vh] w-full resize-none rounded border border-stone-300 bg-white p-3 font-mono text-sm" />
-            <p className="text-xs text-stone-500">Editing and autosave arrive in the next milestone.</p>
-          </section>
-          <section className={`${view === "edit" ? "hidden lg:block" : ""}`} aria-label="Preview">
-            <h2 className="mb-2 font-medium">Preview</h2>
-            <div className="min-h-[50vh] rounded border border-stone-300 bg-white p-3">
-              <MarkdownPreview source={snapshot.markdown ?? ""} />
-            </div>
-          </section>
-        </div>
-      </> : <p className="mt-8 text-stone-500">Choose a File from the tree or create one here.</p>}
+      {kind === "file" && snapshot.file && snapshot.crumbs.at(-2)?.id && snapshot.keys[snapshot.crumbs.at(-2)!.id]
+        ? <FileEditor fileId={nodeId} access={snapshot.access} file={snapshot.file}
+          listing={snapshot.listings[snapshot.file.parentId]!} parentKey={snapshot.keys[snapshot.file.parentId]!}
+          flushRef={flushEditor} onCommitted={(file, listing) => setSnapshot((old) => old && ({ ...old, file,
+            listings: { ...old.listings, [listing.directoryId]: listing },
+            crumbs: old.crumbs.map((crumb) => crumb.id === nodeId
+              ? { ...crumb, name: listing.entries.find((entry) => entry.nodeId === nodeId)?.name ?? crumb.name }
+              : crumb),
+          }))} />
+        : <p className="mt-8 text-stone-500">Choose a File from the tree or create one here.</p>}
     </section>
     {dialog && <div role="dialog" aria-modal="true" aria-label={dialog.operation === "create" ? "Create a name" : "Rename"}
       className="fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4">

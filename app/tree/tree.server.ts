@@ -1,9 +1,9 @@
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
-import { digestEnvelope } from "~/crypto/enc-v1";
 import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitDirectoryMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
-import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./listing";
+import { signedListing } from "./listing.server";
+import { saveFile } from "./save.server";
 
 const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -105,27 +105,6 @@ type Create = { nodeId: string; expectedRevision: number; kind: "directory" | "f
 
 function exact(value: Record<string, unknown>, fields: readonly string[]): boolean {
   return Object.keys(value).length === fields.length && fields.every((key) => Object.hasOwn(value, key));
-}
-
-async function signedListing(value: unknown, auth: AuthorizedDevice, directoryId: string,
-  expectedRevision: number): Promise<{ ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array }> {
-  const input = record(value);
-  if (!input || !exact(input, ["ciphertext", "digest", "signature"])) throw new Error("invalid listing head");
-  const revision = expectedRevision + 1;
-  const ciphertext = treeEnvelope(input.ciphertext, MAX_LISTING_BYTES, {
-    purpose: "directory-metadata", vaultId: auth.accountId, objectId: directoryId,
-    keyId: directoryId, keyEpoch: 1, revision,
-  });
-  const digest = decodeTreeBytes(input.digest, 32);
-  const signature = decodeTreeBytes(input.signature, 64);
-  const computed = await digestEnvelope(ciphertext);
-  if (digest.length !== 32 || signature.length !== 64 ||
-      !computed.every((byte, i) => byte === digest[i]) ||
-      !await verifyListingSignature(input as ListingHead, {
-        vaultId: auth.accountId, directoryId, deviceId: auth.deviceId, revision,
-        publicKey: auth.assertionPublicKey,
-      })) throw new Error("invalid listing head");
-  return { ciphertext, digest, signature };
 }
 
 function createPayload(value: unknown, accountId: string, parentId: string): Create {
@@ -239,12 +218,12 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   const pathToNode = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/ancestors$/.exec(path);
   if (!(directory || create || file || rename || pathToNode) ||
       !((directory || file || pathToNode) && request.method === "POST" || create && request.method === "PUT" ||
-        rename && request.method === "PATCH")) return notFound();
+        (rename || file) && request.method === "PATCH")) return notFound();
   const nodeId = (directory || create || file || rename || pathToNode)![1]!;
   if (!isV7(nodeId)) return notFound();
   let raw = "", value: unknown;
   try {
-    if (directory || file || pathToNode) {
+    if ((directory || file || pathToNode) && request.method === "POST") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
       const parsed = await readAuthJsonText(request, 1536 * 1024);
@@ -257,7 +236,7 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   const auth = await authorizePrivateRequest(request, env, proof, raw);
   if (!auth) return denied();
   if (directory) return listDirectory(env, auth, nodeId);
-  if (file) return readFile(env, auth, nodeId);
+  if (file) return request.method === "POST" ? readFile(env, auth, nodeId) : saveFile(env, auth, nodeId, value);
   if (pathToNode) return ancestors(env, auth, nodeId);
   if (create) return createChild(env, auth, nodeId, value);
   return renameChild(env, auth, nodeId, value);

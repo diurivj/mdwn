@@ -105,6 +105,26 @@ describe("Vault key hierarchy", () => {
     });
   });
 
+  it("reads legacy over-limit Markdown without allowing a new over-limit representation", async () => {
+    const directoryKey = new Uint8Array(32).fill(7);
+    const source = "🙂".repeat(65_537); // 262,148 UTF-8 bytes, not 65,537 bytes.
+    const markdown = new TextEncoder().encode(source);
+    const magic = new TextEncoder().encode("mdwn/file-representation/v1\0");
+    const legacy = new Uint8Array(magic.length + 4 + markdown.length + 4);
+    legacy.set(magic);
+    new DataView(legacy.buffer).setUint32(magic.length, markdown.length);
+    legacy.set(markdown, magic.length + 4);
+    const stored = await createFileRepresentation(directoryKey, legacy,
+      { vaultId: accountId, fileId: "legacy-file" });
+    const opened = await openSymmetric(stored.contentEnvelope, stored.fileContentKey,
+      { context: stored.contentContext });
+    expect(decodeFileRepresentation(opened).markdown).toBe(source);
+    await expect(createFileRepresentation(directoryKey,
+      { markdown: source, metadata: new Uint8Array() },
+      { vaultId: accountId, fileId: "legacy-file", keyId: "new-key", revision: 2 }))
+      .rejects.toMatchObject({ code: "malformed" });
+  });
+
   it("uses HPKE device-enrollment envelopes for the Vault root", async () => {
     const hierarchy = await createVaultKeyHierarchy({ accountId, rootDirectoryId: "directory-root" });
     const device = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);

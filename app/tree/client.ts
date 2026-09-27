@@ -29,6 +29,8 @@ export type TreeKind = "directory" | "file";
 export type TreeEntry = SealedEntry & { name: string; order: string };
 export type DirectoryListing = { directoryId: string; entriesRevision: number; entries: TreeEntry[] };
 export type RootAccess = { vaultId: string; rootId: string; rootKey: Uint8Array<ArrayBuffer> };
+export type LoadedFile = { parentId: string; revision: number; representationId: string;
+  contentKeyId: string; keyEpoch: number; markdown: string; metadata: Uint8Array };
 
 function nameAgainstNamespace(name: string, existingNames: readonly string[]): string {
   const canonical = canonicalizeSegment(name);
@@ -173,18 +175,23 @@ export async function loadAncestors(nodeId: string, signal?: AbortSignal): Promi
   return result.ancestors;
 }
 
-export async function loadFile(access: RootAccess, fileId: string, parentKey: Uint8Array,
-  signal?: AbortSignal) {
+export async function loadFile(access: RootAccess, fileId: string, parentId: string, parentKey: Uint8Array,
+  expectedEntry: TreeEntry, signal?: AbortSignal): Promise<LoadedFile> {
   const file = await jsonResource<{ fileId: string; parentId: string; revision: number; representationId: string;
     contentKeyId: string; keyEpoch: number; ciphertext: string; keyEnvelope: string;
   }>(`/api/private/tree/files/${fileId}`, "POST", undefined, signal);
+  if (file.parentId !== parentId ||
+      expectedEntry.nodeId !== fileId || expectedEntry.keyEnvelope !== file.keyEnvelope ||
+      !Number.isSafeInteger(file.revision) || file.revision < 1 ||
+      !Number.isSafeInteger(file.keyEpoch) || file.keyEpoch < 1) throw new Error("invalid File listing");
   const context = { vaultId: access.vaultId, objectId: fileId,
     keyId: file.contentKeyId, keyEpoch: file.keyEpoch, revision: file.revision };
   const key = await openSymmetric(decodeTreeBytes(file.keyEnvelope), parentKey,
     { context: { ...context, purpose: "file-content-key" } });
   const content = await openSymmetric(decodeTreeBytes(file.ciphertext, 524_288), key,
     { context: { ...context, purpose: "file-content" } });
-  return { parentId: file.parentId, revision: file.revision, markdown: decodeFileRepresentation(content).markdown };
+  return { parentId: file.parentId, revision: file.revision, representationId: file.representationId,
+    contentKeyId: file.contentKeyId, keyEpoch: file.keyEpoch, ...decodeFileRepresentation(content) };
 }
 
 function listingCheckpointKey(vaultId: string, directoryId: string): string {

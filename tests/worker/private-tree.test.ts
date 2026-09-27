@@ -9,6 +9,7 @@ import { encodeBytes, decodeBytes } from "../../app/signup/protocol";
 import { createTreeChild, NameConflictError, prepareTreeCreate, prepareTreeRename, renameTreeChild } from "../../app/tree/client";
 import { RecoveryConfirmationPendingError } from "../../app/signup/recovery-gate";
 import { createListingHead, openListingHead, type SealedEntry, type StoredListingHead } from "../../app/tree/listing";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import { seedNormalSession } from "./auth-fixtures";
 
 declare global {
@@ -287,6 +288,208 @@ describe("private tree", () => {
     await expect(env.DB.prepare("UPDATE file_representations SET ciphertext = X'01' WHERE id = ?")
       .bind(created.body.representation.id).run()).rejects.toThrow();
     expect(await request(f, `/api/private/tree/files/${id()}`, "POST").then((r) => r.status)).toBe(404);
+  });
+
+  it("atomically saves a fresh File key and signed parent listing, and rejects stale or malformed saves", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "notes.md");
+    const fileId = created.body.nodeId;
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${fileId}`;
+    const before = await (await request(f, path, "POST")).json() as { revision: number; representationId: string; keyEnvelope: string };
+    const listing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[];
+    };
+    const freshKeyId = id(), freshId = id();
+    const fresh = await createFileRepresentation(f.rootKey,
+      { markdown: "# saved secret", metadata: new Uint8Array() },
+      { vaultId: f.accountId, fileId, keyId: freshKeyId, revision: 2 });
+    const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
+    const head = await createListingHead(f.rootKey, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
+      revision: listing.entriesRevision + 1,
+      entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope } : entry),
+    });
+    const value = { expectedRevision: 1, expectedEntriesRevision: listing.entriesRevision,
+      keyEnvelope, listingHead: head, representation: {
+        id: freshId, contentKeyId: freshKeyId, keyEpoch: 1, revision: 2,
+        ciphertext: encodeBytes(fresh.contentEnvelope),
+      } };
+    const saved = await request(f, path, "PATCH", value);
+    expect(saved.status, await saved.clone().text()).toBe(200);
+    const current = await (await request(f, path, "POST")).json() as {
+      revision: number; representationId: string; ciphertext: string; keyEnvelope: string;
+    };
+    expect(current.revision).toBe(2);
+    expect(current.representationId).toBe(freshId);
+    expect(decodeFileRepresentation(await openSymmetric(decodeBytes(current.ciphertext), fresh.fileContentKey,
+      { context: fresh.contentContext })).markdown).toBe("# saved secret");
+    const afterListing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[]; listingHead: StoredListingHead & { signerPublicKey: string };
+    };
+    await expect(openListingHead(f.rootKey, { vaultId: f.accountId, directoryId: f.rootId,
+      revision: afterListing.entriesRevision, entries: afterListing.entries,
+      head: { ...afterListing.listingHead, signerPublicKey: decodeBytes(afterListing.listingHead.signerPublicKey) },
+    })).resolves.toBeUndefined();
+    expect(afterListing.entries.find((entry) => entry.nodeId === fileId)?.keyEnvelope).toBe(keyEnvelope);
+    const stale = await request(f, path, "PATCH", value);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: "file_changed" });
+    const malformed = await request(f, path, "PATCH", { ...value, expectedRevision: 2,
+      expectedEntriesRevision: afterListing.entriesRevision, representation: { ...value.representation,
+        id: id(), revision: 3, ciphertext: "bad" } });
+    expect(malformed.status).toBe(400);
+    expect((await (await request(f, path, "POST")).json() as { representationId: string }).representationId).toBe(freshId);
+    expect((await env.DB.prepare("SELECT count(*) AS count FROM file_representations WHERE file_node_id = ?")
+      .bind(fileId).first<{ count: number }>())?.count).toBe(1);
+    expect(before.representationId).not.toBe(freshId);
+
+    // Explicitly confirming an overwrite must first fetch the latest revision
+    // and independently encrypt under yet another File key.
+    const overwriteKeyId = id();
+    const replacement = await createFileRepresentation(f.rootKey,
+      { markdown: "# explicitly overwritten", metadata: new Uint8Array() },
+      { vaultId: f.accountId, fileId, keyId: overwriteKeyId, revision: 3 });
+    const replacementEnvelope = encodeBytes(replacement.fileContentKeyEnvelope);
+    const replacementHead = await createListingHead(f.rootKey, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
+      revision: afterListing.entriesRevision + 1,
+      entries: afterListing.entries.map((entry) => entry.nodeId === fileId
+        ? { ...entry, keyEnvelope: replacementEnvelope } : entry),
+    });
+    const overwritten = await request(f, path, "PATCH", { expectedRevision: 2,
+      expectedEntriesRevision: afterListing.entriesRevision, keyEnvelope: replacementEnvelope,
+      listingHead: replacementHead, representation: { id: id(), contentKeyId: overwriteKeyId,
+        keyEpoch: 1, revision: 3, ciphertext: encodeBytes(replacement.contentEnvelope) } });
+    expect(overwritten.status, await overwritten.clone().text()).toBe(200);
+    const replaced = await (await request(f, path, "POST")).json() as { ciphertext: string; revision: number };
+    expect(replaced.revision).toBe(3);
+    expect(decodeFileRepresentation(await openSymmetric(decodeBytes(replaced.ciphertext), replacement.fileContentKey,
+      { context: replacement.contentContext })).markdown).toBe("# explicitly overwritten");
+  });
+
+  it("rejects an oversized encrypted File save without advancing either current pointer or signed listing", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "bounded.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const listing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[];
+    };
+    const contentKeyId = id();
+    const fresh = await createFileRepresentation(f.rootKey, new Uint8Array(32), {
+      vaultId: f.accountId, fileId: created.body.nodeId, keyId: contentKeyId, revision: 2,
+    });
+    const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
+    const listingHead = await createListingHead(f.rootKey, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
+      revision: 3, entries: listing.entries.map((entry) => ({ ...entry, keyEnvelope })),
+    });
+    // No browser producer can encode this through encodeTreeBytes; adversarial
+    // request bytes still reach the Worker size validator independently.
+    const oversizedBytes = new Uint8Array(524_289);
+    oversizedBytes.set(fresh.contentEnvelope);
+    const binary = Array.from({ length: Math.ceil(oversizedBytes.length / 8192) }, (_, index) =>
+      String.fromCharCode(...oversizedBytes.subarray(index * 8192, (index + 1) * 8192))).join("");
+    const ciphertext = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const response = await request(f, `/api/private/tree/files/${created.body.nodeId}`, "PATCH", {
+      expectedRevision: 1, expectedEntriesRevision: 2, keyEnvelope, listingHead,
+      representation: { id: id(), contentKeyId, keyEpoch: 1, revision: 2, ciphertext },
+    });
+    expect(response.status).toBe(400);
+    expect((await (await request(f, `/api/private/tree/files/${created.body.nodeId}`, "POST")).json() as {
+      revision: number;
+    }).revision).toBe(1);
+    const unchanged = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[];
+    };
+    expect(unchanged.entriesRevision).toBe(2);
+    expect(unchanged.entries[0]?.keyEnvelope).toBe(created.body.keyEnvelope);
+    expect((await env.DB.prepare("SELECT count(*) AS count FROM file_representations WHERE file_node_id = ?")
+      .bind(created.body.nodeId).first<{ count: number }>())?.count).toBe(1);
+  });
+
+  it("rolls back a failed insertion after the parent CAS, leaving both signed listing and File unchanged", async () => {
+    const f = await fixture();
+    const first = await fileRequest(f, "one.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", first.body)).status).toBe(201);
+    const second = await fileRequest(f, "two.md", id(), 2);
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", second.body)).status).toBe(201);
+    const listing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[];
+    };
+    const freshKeyId = id();
+    const fresh = await createFileRepresentation(f.rootKey,
+      { markdown: "# should not commit", metadata: new Uint8Array() },
+      { vaultId: f.accountId, fileId: first.body.nodeId, keyId: freshKeyId, revision: 2 });
+    const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
+    const head = await createListingHead(f.rootKey, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
+      revision: 4, entries: listing.entries.map((entry) => entry.nodeId === first.body.nodeId
+        ? { ...entry, keyEnvelope } : entry),
+    });
+    const response = await request(f, `/api/private/tree/files/${first.body.nodeId}`, "PATCH", {
+      expectedRevision: 1, expectedEntriesRevision: listing.entriesRevision, keyEnvelope,
+      listingHead: head, representation: { id: second.body.representation.id,
+        contentKeyId: freshKeyId, keyEpoch: 1, revision: 2,
+        ciphertext: encodeBytes(fresh.contentEnvelope) },
+    });
+    expect(response.status).toBe(400);
+    const unchanged = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[];
+    };
+    expect(unchanged.entriesRevision).toBe(3);
+    expect(unchanged.entries).toEqual(listing.entries);
+    for (const original of [first, second]) {
+      const data = await (await request(f, `/api/private/tree/files/${original.body.nodeId}`, "POST")).json() as {
+        revision: number; representationId: string;
+      };
+      expect(data.revision).toBe(1);
+      expect(data.representationId).toBe(original.body.representation.id);
+    }
+  });
+
+  it("keeps an oversized legacy File readable and permits only a reduced-source replacement", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "legacy.md");
+    const fileId = created.body.nodeId;
+    const legacySource = "🙂".repeat(65_537); // 262,148 UTF-8 bytes.
+    const markdown = new TextEncoder().encode(legacySource);
+    const magic = new TextEncoder().encode("mdwn/file-representation/v1\0");
+    const plain = new Uint8Array(magic.length + 4 + markdown.length + 4);
+    plain.set(magic);
+    new DataView(plain.buffer).setUint32(magic.length, markdown.byteLength);
+    plain.set(markdown, magic.length + 4);
+    const legacy = await createFileRepresentation(f.rootKey, plain, { vaultId: f.accountId, fileId });
+    const body = { ...created.body, keyEnvelope: encodeBytes(legacy.fileContentKeyEnvelope),
+      representation: { ...created.body.representation, ciphertext: encodeTreeBytes(legacy.contentEnvelope) } };
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", body)).status).toBe(201);
+    const path = `/api/private/tree/files/${fileId}`;
+    const readable = await (await request(f, path, "POST")).json() as { ciphertext: string; revision: number };
+    expect(decodeFileRepresentation(await openSymmetric(decodeTreeBytes(readable.ciphertext, 524_288), legacy.fileContentKey,
+      { context: legacy.contentContext })).markdown).toBe(legacySource);
+    await expect(createFileRepresentation(f.rootKey, { markdown: legacySource, metadata: new Uint8Array() },
+      { vaultId: f.accountId, fileId, keyId: id(), revision: 2 })).rejects.toThrow();
+    expect((await (await request(f, path, "POST")).json() as { revision: number }).revision).toBe(1);
+    const listing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entries: SealedEntry[]; entriesRevision: number;
+    };
+    const reduced = await createFileRepresentation(f.rootKey,
+      { markdown: "🙂".repeat(65_536), metadata: new Uint8Array() },
+      { vaultId: f.accountId, fileId, keyId: id(), revision: 2 });
+    const keyEnvelope = encodeBytes(reduced.fileContentKeyEnvelope);
+    const head = await createListingHead(f.rootKey, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId, revision: 3,
+      entries: listing.entries.map((entry) => ({ ...entry, keyEnvelope })),
+    });
+    const saved = await request(f, path, "PATCH", { expectedRevision: 1, expectedEntriesRevision: 2,
+      keyEnvelope, listingHead: head, representation: { id: id(),
+        contentKeyId: reduced.contentContext.keyId, keyEpoch: 1, revision: 2,
+        ciphertext: encodeTreeBytes(reduced.contentEnvelope) } });
+    expect(saved.status, await saved.clone().text()).toBe(200);
+    const current = await (await request(f, path, "POST")).json() as { ciphertext: string; revision: number };
+    expect(current.revision).toBe(2);
+    expect(decodeFileRepresentation(await openSymmetric(decodeTreeBytes(current.ciphertext, 524_288), reduced.fileContentKey,
+      { context: reduced.contentContext })).markdown).toBe("🙂".repeat(65_536));
   });
 
   it("renames only after its parent's revision wins, without changing the node edge or File content", async () => {

@@ -51,7 +51,7 @@ test("creates and opens signed private Directories and Files without leaking nam
     await fileDialog.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Draft.md" })).toBeVisible();
     const fileId = new URL(page.url()).pathname.split("/").at(-1)!;
-    await expect(page.getByRole("textbox", { name: "Markdown source (read only)" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Markdown source" })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Files" }).getByRole("link", { name: "Draft.md" }))
       .toBeVisible();
     await expect(page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Private folder" }))
