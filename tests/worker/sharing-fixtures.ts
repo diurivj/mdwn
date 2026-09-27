@@ -39,8 +39,8 @@ export async function node(owner: TestAccount, parentId: string, kind: "file" | 
     inserts.push(env.DB.prepare(`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id, key_epoch, ciphertext, ciphertext_size, created_at)
       VALUES (?, ?, ?, 1, ?, 1, X'01', 1, ?)`).bind(reprId, id, owner.accountId, fixtureId(), now));
   }
-  inserts.push(env.DB.prepare(`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext, order_ciphertext, key_envelope)
-    VALUES (?, ?, ?, X'01', X'01', X'01')`).bind(id, owner.accountId, parentId));
+  inserts.push(env.DB.prepare(`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext, order_ciphertext, key_envelope, encoding)
+    VALUES (?, ?, ?, X'01', X'01', X'01', ?)`).bind(id, owner.accountId, parentId, kind === "directory" ? "directory" : "legacy-file"));
   await env.DB.batch(inserts);
   return id;
 }

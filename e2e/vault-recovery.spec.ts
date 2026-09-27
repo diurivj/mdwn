@@ -46,6 +46,20 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
     });
     const phrase = saved.phrase.map((word) => word.replace(/^\d+\.\s*/, "").trim()).join(" ");
     await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    // The receiving private key is reachable via the owned Directory, not a
+    // device-enrollment or Grant envelope. Keep its File identity across cutover.
+    const root = await env.DB.prepare("SELECT root_directory_id FROM account_encryption_identities WHERE account_id = ?")
+      .bind(identifier).first<{ root_directory_id: string }>();
+    expect(root).toBeTruthy();
+    await original.page.goto(`${origin}/d/${root!.root_directory_id}`);
+    await original.page.getByRole("button", { name: "New File" }).click();
+    const dialog = original.page.getByRole("dialog", { name: "Create a name" });
+    await dialog.getByRole("textbox", { name: "Name" }).fill("Recovered.md");
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(original.page.getByRole("heading", { name: "Recovered.md" })).toBeVisible();
+    const recoveredFileId = new URL(original.page.url()).pathname.split("/").at(-1)!;
+    await original.page.getByRole("textbox", { name: "Markdown source" }).fill("# Owned after recovery");
+    await expect(original.page.getByRole("status", { name: "Save status" })).toHaveText("Saved", { timeout: 30_000 });
     const firstDevice = await env.DB.prepare("SELECT id FROM encryption_devices WHERE account_id = ?")
       .bind(identifier).first<{ id: string }>();
     expect(firstDevice?.id).toBeTruthy();
@@ -161,6 +175,9 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
     expect(sessions.results.filter((session) => session.revoked_at === null)).toEqual([
       { device_id: devices.results.find((device) => device.state === "active")!.id, revoked_at: null },
     ]);
+    await replacement.page.goto(`${origin}/f/${recoveredFileId}`);
+    await expect(replacement.page.getByRole("textbox", { name: "Markdown source" }))
+      .toHaveValue("# Owned after recovery", { timeout: 120_000 });
   } finally {
     await replacement?.context.close();
     await original.context.close();

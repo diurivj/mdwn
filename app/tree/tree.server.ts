@@ -4,6 +4,9 @@ import { authorizePrivateRequest, commitDirectoryMutation, privateReadGuard, typ
 import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
 import { signedListing } from "./listing.server";
 import { saveFile } from "./save.server";
+import { directoryAccessGuard, fileAccessGuard, structuralAccessGuard } from "~/sharing/access.server";
+import { createV2Child, fileWriteContext, migrateV1File, migrationRecipients, readV2File, saveV2File,
+  unblocked } from "./file-v2.server";
 
 const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -13,7 +16,10 @@ const denied = () => Response.json({ error: "device_proof_required" }, { status:
 
 type EntryRow = {
   node_id: string | null; kind: "directory" | "file" | null;
-  parent_node_id: string | null; entries_revision: number;
+  parent_node_id: string | null; entries_revision: number; listing_version: number;
+  capability_key_id: string; capability_epoch: number;
+  encoding: "directory" | "legacy-file" | "receiving-file" | null;
+  receiving_key_id: string | null; receiving_epoch: number | null; wrap_revision: number | null;
   name_ciphertext: ArrayBuffer | null; order_ciphertext: ArrayBuffer | null;
   key_envelope: ArrayBuffer | null;
   listing_ciphertext: ArrayBuffer | null; listing_digest: ArrayBuffer | null;
@@ -23,17 +29,22 @@ type EntryRow = {
 
 /** Read and authorize in the same ciphertext SELECT; never return private data from SSR. */
 async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: string): Promise<Response> {
+  const ownerId = (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM directories
+    WHERE node_id = ${directoryId}`))?.owner_id;
+  if (!ownerId) return notFound();
   const rows = await createDb(env.DB).all<EntryRow>(sql`
-    SELECT d.entries_revision, e.child_node_id AS node_id, n.kind, n.parent_node_id,
-      e.name_ciphertext, e.order_ciphertext, e.key_envelope,
+    SELECT d.entries_revision, d.listing_version, d.capability_key_id, d.capability_epoch,
+      e.child_node_id AS node_id, n.kind, n.parent_node_id,
+      e.name_ciphertext, e.order_ciphertext, e.key_envelope, e.encoding,
+      e.receiving_key_id, e.receiving_epoch, e.wrap_revision,
       d.listing_ciphertext, d.listing_digest, d.listing_signature, d.listing_device_id,
       signer.assertion_public_key AS signer_public_key
     FROM directories d JOIN vault_nodes parent ON parent.id = d.node_id AND parent.owner_id = d.owner_id
-    LEFT JOIN encryption_devices signer ON signer.id = d.listing_device_id AND signer.account_id = d.owner_id
+    LEFT JOIN encryption_devices signer ON signer.id = d.listing_device_id
     LEFT JOIN directory_entries e ON e.parent_node_id = d.node_id AND e.owner_id = d.owner_id
     LEFT JOIN vault_nodes n ON n.id = e.child_node_id AND n.owner_id = d.owner_id
-    WHERE d.node_id = ${directoryId} AND d.owner_id = ${auth.accountId}
-      AND ${privateReadGuard(auth)}
+    WHERE d.node_id = ${directoryId} AND d.owner_id = ${ownerId}
+      AND ${directoryAccessGuard(auth, ownerId, directoryId, "directory_read")}
     ORDER BY e.child_node_id`);
   if (!rows.length) return notFound();
   if (rows.some((row) => row.node_id && (!row.kind || !row.name_ciphertext || !row.order_ciphertext || !row.key_envelope))) return denied();
@@ -42,6 +53,8 @@ async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: stri
       (current.entries_revision > 1 && (!current.listing_ciphertext || !current.listing_digest ||
         !current.listing_signature || !current.listing_device_id || !current.signer_public_key))) return denied();
   return Response.json({ directoryId, entriesRevision: current.entries_revision,
+    listingVersion: current.listing_version,
+    capabilityKeyId: current.capability_key_id, capabilityEpoch: current.capability_epoch,
     listingHead: current.listing_ciphertext ? {
       ciphertext: encodeTreeBytes(new Uint8Array(current.listing_ciphertext)),
       digest: encodeTreeBytes(new Uint8Array(current.listing_digest!)),
@@ -54,6 +67,9 @@ async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: stri
       nameCiphertext: encodeTreeBytes(new Uint8Array(row.name_ciphertext!)),
       orderCiphertext: encodeTreeBytes(new Uint8Array(row.order_ciphertext!)),
       keyEnvelope: encodeTreeBytes(new Uint8Array(row.key_envelope!)),
+      ...(current.listing_version === 2 ? { encoding: row.encoding,
+        ...(row.encoding === "receiving-file" ? { receivingKeyId: row.receiving_key_id,
+          receivingEpoch: row.receiving_epoch, wrapRevision: row.wrap_revision } : {}) } : {}),
     })),
   }, { headers });
 }
@@ -74,22 +90,30 @@ async function ancestors(env: Env, auth: AuthorizedDevice, nodeId: string): Prom
 }
 
 type FileRow = {
-  parent_node_id: string; revision: number; representation_id: string;
+  parent_node_id: string; has_parent_capability: number; revision: number; representation_id: string;
   ciphertext: ArrayBuffer; key_epoch: number; content_key_id: string;
   name_ciphertext: ArrayBuffer; order_ciphertext: ArrayBuffer; key_envelope: ArrayBuffer;
 };
 
 async function readFile(env: Env, auth: AuthorizedDevice, fileId: string): Promise<Response> {
+  const coordinates = await createDb(env.DB).get<{ owner_id: string; parent_node_id: string }>(sql`
+    SELECT owner_id, parent_node_id FROM vault_nodes WHERE id = ${fileId} AND kind = 'file'`);
+  if (!coordinates) return notFound();
+  const { owner_id: ownerId, parent_node_id: parentId } = coordinates;
   const row = await createDb(env.DB).get<FileRow>(sql`
-    SELECT n.parent_node_id, f.current_revision AS revision, r.id AS representation_id,
+    SELECT n.parent_node_id, CASE WHEN ${directoryAccessGuard(auth, ownerId, parentId, "directory_read")}
+      THEN 1 ELSE 0 END AS has_parent_capability,
+      f.current_revision AS revision, r.id AS representation_id,
       r.ciphertext, r.key_epoch, r.content_key_id,
       e.name_ciphertext, e.order_ciphertext, e.key_envelope
     FROM vault_nodes n JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
     JOIN file_representations r ON r.id = f.current_representation_id
       AND r.file_node_id = f.node_id AND r.owner_id = f.owner_id AND r.revision = f.current_revision
     JOIN directory_entries e ON e.child_node_id = n.id AND e.parent_node_id = n.parent_node_id
-    WHERE n.id = ${fileId} AND n.owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}`);
+    WHERE n.id = ${fileId} AND n.owner_id = ${ownerId} AND n.parent_node_id = ${parentId}
+      AND ${fileAccessGuard(auth, ownerId, fileId, "file_read")}`);
   if (!row) return notFound();
+  if (!row.has_parent_capability) return Response.json({ error: "provisioning_required" }, { status: 202, headers });
   return Response.json({ fileId, parentId: row.parent_node_id, revision: row.revision,
     representationId: row.representation_id, contentKeyId: row.content_key_id, keyEpoch: row.key_epoch,
     ciphertext: encodeTreeBytes(new Uint8Array(row.ciphertext)),
@@ -139,26 +163,34 @@ function createPayload(value: unknown, accountId: string, parentId: string): Cre
 }
 
 async function createChild(env: Env, auth: AuthorizedDevice, parentId: string, value: unknown): Promise<Response> {
+  if (record(value)?.encoding === "receiving-file") return createV2Child(env, auth, parentId, value);
+  const contentOwner = (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM vault_nodes
+    WHERE id = ${parentId} AND kind = 'directory'`))?.owner_id;
+  if (!contentOwner) return notFound();
   let input: Create;
-  try { input = createPayload(value, auth.accountId, parentId); }
+  try { input = createPayload(value, contentOwner, parentId); }
   catch { return badRequest(); }
-  const exists = await createDb(env.DB).get<{ id: string }>(sql`
-    SELECT id FROM vault_nodes WHERE id = ${parentId} AND owner_id = ${auth.accountId}
-      AND kind = 'directory' AND ${privateReadGuard(auth)}`);
+  const exists = await createDb(env.DB).get<{ id: string; listing_version: 1 | 2 }>(sql`
+    SELECT n.id, d.listing_version FROM vault_nodes n JOIN directories d ON d.node_id = n.id
+    WHERE n.id = ${parentId} AND n.owner_id = ${contentOwner}
+      AND n.kind = 'directory' AND ${directoryAccessGuard(auth, contentOwner, parentId, "child_create")}`);
   if (!exists) return notFound();
-  const { accountId } = auth;
+  const accountId = contentOwner;
   const now = Date.now();
   try {
-    const head = await signedListing(record(value)?.listingHead, auth, parentId, input.expectedRevision);
+    const head = await signedListing(record(value)?.listingHead, auth, parentId, input.expectedRevision,
+      contentOwner, exists.listing_version);
     const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision, head,
       sql`EXISTS (SELECT 1 FROM vault_nodes WHERE id = ${parentId}
-        AND owner_id = ${accountId} AND kind = 'directory')`,
+        AND owner_id = ${accountId} AND kind = 'directory')
+        AND ${directoryAccessGuard(auth, accountId, parentId, "child_create")}
+        AND ${unblocked(accountId, parentId)}`,
       (previous) => [
         sql`INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at)
           SELECT ${input.nodeId}, ${input.kind}, ${accountId}, ${parentId}, ${now}, ${now} WHERE ${previous}`,
         ...(input.kind === "directory" ? [
-          sql`INSERT INTO directories (node_id, owner_id, entries_revision)
-            SELECT ${input.nodeId}, ${accountId}, 1 WHERE ${previous}`,
+          sql`INSERT INTO directories (node_id, owner_id, entries_revision, listing_version, capability_key_id)
+            SELECT ${input.nodeId}, ${accountId}, 1, ${exists.listing_version}, ${input.nodeId} WHERE ${previous}`,
         ] : [
           sql`INSERT INTO files (node_id, owner_id, current_representation_id, current_revision)
             SELECT ${input.nodeId}, ${accountId}, ${input.representation!.id}, 1 WHERE ${previous}`,
@@ -170,10 +202,11 @@ async function createChild(env: Env, auth: AuthorizedDevice, parentId: string, v
             WHERE ${previous}`,
         ]),
         sql`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id,
-          name_ciphertext, order_ciphertext, key_envelope)
+          name_ciphertext, order_ciphertext, key_envelope, encoding)
           SELECT ${input.nodeId}, ${accountId}, ${parentId}, ${input.nameCiphertext},
-            ${input.orderCiphertext}, ${input.keyEnvelope} WHERE ${previous}`,
-      ]);
+            ${input.orderCiphertext}, ${input.keyEnvelope},
+            ${input.kind === "directory" ? "directory" : "legacy-file"} WHERE ${previous}`,
+      ], { ownerId: accountId, previousVersion: exists.listing_version });
     return committed ? Response.json({ nodeId: input.nodeId, entriesRevision: input.expectedRevision + 1 },
       { status: 201, headers }) : changed();
   } catch { return badRequest(); }
@@ -183,28 +216,37 @@ async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
   const input = record(value);
   if (!input || !exact(input, ["expectedRevision", "nameCiphertext", "orderCiphertext", "listingHead"]) ||
       !Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 1) return badRequest();
-  const row = await createDb(env.DB).get<{ parent_node_id: string }>(sql`
-    SELECT n.parent_node_id FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
-    WHERE n.id = ${nodeId} AND n.owner_id = ${auth.accountId}
-      AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id AND ${privateReadGuard(auth)}`);
+  const ownerId = (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM vault_nodes
+    WHERE id = ${nodeId}`))?.owner_id;
+  if (!ownerId) return notFound();
+  const row = await createDb(env.DB).get<{ parent_node_id: string; listing_version: 1 | 2 }>(sql`
+    SELECT n.parent_node_id, d.listing_version FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
+    JOIN directories d ON d.node_id = n.parent_node_id
+    WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId}
+      AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
+      AND ${structuralAccessGuard(auth, ownerId, nodeId, "rename")}`);
   if (!row) return notFound(); // The hidden root cannot be renamed.
   const parentId = row.parent_node_id;
   let name: Uint8Array, order: Uint8Array;
   try {
-    const context = { purpose: "directory-metadata" as const, vaultId: auth.accountId,
+    const context = { purpose: "directory-metadata" as const, vaultId: ownerId,
       objectId: nodeId, keyId: parentId, keyEpoch: 1, revision: 1 };
     name = treeEnvelope(input.nameCiphertext, 1024, context);
     order = treeEnvelope(input.orderCiphertext, 4096, context);
   } catch { return badRequest(); }
   let head: Awaited<ReturnType<typeof signedListing>>;
-  try { head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision as number); }
+  try { head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision as number,
+    ownerId, row.listing_version); }
   catch { return badRequest(); }
   const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision as number, head,
     sql`EXISTS (SELECT 1 FROM directory_entries WHERE child_node_id = ${nodeId}
-      AND owner_id = ${auth.accountId} AND parent_node_id = ${parentId})`,
+      AND owner_id = ${ownerId} AND parent_node_id = ${parentId})
+      AND ${structuralAccessGuard(auth, ownerId, nodeId, "rename")}
+      AND ${unblocked(ownerId, nodeId)}`,
     (previous) => [sql`UPDATE directory_entries SET name_ciphertext = ${name}, order_ciphertext = ${order}
-      WHERE child_node_id = ${nodeId} AND owner_id = ${auth.accountId}
-        AND parent_node_id = ${parentId} AND ${previous}`]);
+      WHERE child_node_id = ${nodeId} AND owner_id = ${ownerId}
+        AND parent_node_id = ${parentId} AND ${previous}`],
+    { ownerId, previousVersion: row.listing_version });
   return committed ? Response.json({ entriesRevision: (input.expectedRevision as number) + 1 }, { headers }) : changed();
 }
 
@@ -214,16 +256,19 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   const directory = /^\/api\/private\/tree\/directories\/([0-9a-f-]+)$/.exec(path);
   const create = /^\/api\/private\/tree\/directories\/([0-9a-f-]+)\/children$/.exec(path);
   const file = /^\/api\/private\/tree\/files\/([0-9a-f-]+)$/.exec(path);
+  const fileContext = /^\/api\/private\/tree\/files\/([0-9a-f-]+)\/context$/.exec(path);
+  const migrateFile = /^\/api\/private\/tree\/files\/([0-9a-f-]+)\/migrate$/.exec(path);
+  const migrationDevices = /^\/api\/private\/tree\/files\/([0-9a-f-]+)\/migration-recipients$/.exec(path);
   const rename = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/name$/.exec(path);
   const pathToNode = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/ancestors$/.exec(path);
-  if (!(directory || create || file || rename || pathToNode) ||
-      !((directory || file || pathToNode) && request.method === "POST" || create && request.method === "PUT" ||
-        (rename || file) && request.method === "PATCH")) return notFound();
-  const nodeId = (directory || create || file || rename || pathToNode)![1]!;
+  if (!(directory || create || file || fileContext || migrateFile || migrationDevices || rename || pathToNode) ||
+      !((directory || file || fileContext || migrationDevices || pathToNode) && request.method === "POST" || create && request.method === "PUT" ||
+        (rename || file || migrateFile) && request.method === "PATCH")) return notFound();
+  const nodeId = (directory || create || file || fileContext || migrateFile || migrationDevices || rename || pathToNode)![1]!;
   if (!isV7(nodeId)) return notFound();
   let raw = "", value: unknown;
   try {
-    if ((directory || file || pathToNode) && request.method === "POST") {
+    if ((directory || file || fileContext || migrationDevices || pathToNode) && request.method === "POST") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
       const parsed = await readAuthJsonText(request, 1536 * 1024);
@@ -236,7 +281,15 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   const auth = await authorizePrivateRequest(request, env, proof, raw);
   if (!auth) return denied();
   if (directory) return listDirectory(env, auth, nodeId);
-  if (file) return request.method === "POST" ? readFile(env, auth, nodeId) : saveFile(env, auth, nodeId, value);
+  if (fileContext) return fileWriteContext(env, auth, nodeId);
+  if (migrationDevices) return migrationRecipients(env, auth, nodeId);
+  if (migrateFile) return migrateV1File(env, auth, nodeId, value);
+  if (file) {
+    const row = await createDb(env.DB).get<{ encoding: string }>(sql`SELECT encoding FROM directory_entries WHERE child_node_id = ${nodeId}`);
+    if (row?.encoding === "receiving-file") return request.method === "POST" ?
+      readV2File(env, auth, nodeId) : saveV2File(env, auth, nodeId, value);
+    return request.method === "POST" ? readFile(env, auth, nodeId) : saveFile(env, auth, nodeId, value);
+  }
   if (pathToNode) return ancestors(env, auth, nodeId);
   if (create) return createChild(env, auth, nodeId, value);
   return renameChild(env, auth, nodeId, value);
