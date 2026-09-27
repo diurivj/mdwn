@@ -23,6 +23,14 @@ export type ResolvedRecipient = { accountId: string; registryEpoch: number;
 export type ShareItem = { id: string; kind: "file" | "directory"; permission: "read_only" | "read_write"; createdAt: number };
 
 type StagedShareInviteAction = (signal: AbortSignal) => Promise<string>;
+export type ShareInvitePreparationStage = "recipient-key-import" | "label-sealing" | "file-key-reading" |
+  "content-key-validation" | "content-sealing" | "material-digests" | "file-head-signing" |
+  "offer-signing" | "share-submit";
+export class ShareInvitePreparationFailure extends Error {
+  constructor(readonly stage: ShareInvitePreparationStage) {
+    super("Share invitation preparation failed");
+  }
+}
 const stagedShareInviteActions = new Map<string, StagedShareInviteAction>();
 // Signup persists 32 random bytes as canonical unpadded base64url (43 chars).
 const ACCOUNT_SHARE_ID_PATTERN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
@@ -117,30 +125,38 @@ export async function inviteSharedRoot(snapshot: FilesSnapshot, targetId: string
     revision: number; recipients?: { accountId: string; deviceId: string; registryEpoch: number;
       publicKey: string; grants: { id: string; generation: number }[] }[]; head?: FileHeadWire }>(
     "/api/private/sharing/target", "POST", { targetId, kind, recipientId: recipient.accountId }, signal);
-  const targets = await Promise.all(recipient.devices.map(async (d) => ({ ...d,
-    encodedPublicKey: d.publicKey, publicKeyBytes: decodeTreeBytes(d.publicKey, 65),
-    publicKey: await crypto.subtle.importKey("raw", decodeTreeBytes(d.publicKey, 65),
-      { name: "ECDH", namedCurve: "P-256" }, false, []) })));
-  const labels = await sealShareLabel(name, ownerId, targetId, labelId, targets, snapshot.access.vaultRoot);
-  const fileKey = kind === "file" ? await currentOwnedFileKey(snapshot, targetId, signal) : null;
-  const key = fileKey?.key ?? snapshot.keys[targetId];
-  if (!key || key.length !== 32 || (kind === "file" && (fileKey?.contentKeyId !== prep.targetKeyId ||
-      fileKey.contentEpoch !== prep.targetEpoch || fileKey.head.digest !== prep.headDigest))) {
-    throw new Error("Content changed; refresh before inviting");
-  }
+  let failureStage: ShareInvitePreparationStage = "recipient-key-import";
+  let fileKey: Awaited<ReturnType<typeof currentOwnedFileKey>> | null = null;
   try {
+    const targets = await Promise.all(recipient.devices.map(async (d) => ({ ...d,
+      encodedPublicKey: d.publicKey, publicKeyBytes: decodeTreeBytes(d.publicKey, 65),
+      publicKey: await crypto.subtle.importKey("raw", decodeTreeBytes(d.publicKey, 65),
+        { name: "ECDH", namedCurve: "P-256" }, false, []) })));
+    failureStage = "label-sealing";
+    const labels = await sealShareLabel(name, ownerId, targetId, labelId, targets, snapshot.access.vaultRoot);
+    failureStage = "file-key-reading";
+    fileKey = kind === "file" ? await currentOwnedFileKey(snapshot, targetId, signal) : null;
+    const key = fileKey?.key ?? snapshot.keys[targetId];
+    failureStage = "content-key-validation";
+    if (!key || key.length !== 32 || (kind === "file" && (fileKey?.contentKeyId !== prep.targetKeyId ||
+        fileKey.contentEpoch !== prep.targetEpoch || fileKey.head.digest !== prep.headDigest))) {
+      throw new Error("Content changed; refresh before inviting");
+    }
+    failureStage = "content-sealing";
     const content = await Promise.all(targets.map(async (d) => ({ deviceId: d.deviceId,
       envelope: await sealToRecipient(key, d.publicKey, {
         purpose: "grant", vaultId: ownerId, objectId: targetId, keyId: prep.targetKeyId,
         keyEpoch: prep.targetEpoch, revision: kind === "file" ? prep.revision : 1,
         recipientId: d.deviceId,
       }) })));
+    failureStage = "material-digests";
     const devices = await Promise.all(targets.map(async (d) => ({ accountId: recipient.accountId,
       deviceId: d.deviceId, registryEpoch: d.registryEpoch,
       publicKeyDigest: await digest(d.publicKeyBytes), contentDigest: await digest(content.find((c) => c.deviceId === d.deviceId)!.envelope),
       labelDigest: await digest(labels.deliveries.find((c) => c.deviceId === d.deviceId)!.envelope) })));
     let candidate: ReturnType<typeof headWire> | null = null;
     if (kind === "file") {
+      failureStage = "file-head-signing";
       if (!prep.head || !prep.recipients || !fileKey) throw new Error("File must be upgraded before inviting");
       const before = await authenticateFileHead(prep.head, ownerId, targetId, prep.revision);
       const old = before.statement;
@@ -154,6 +170,7 @@ export async function inviteSharedRoot(snapshot: FilesSnapshot, targetId: string
         recipientSetVersion: old.recipientSetVersion + 1, signerDeviceId: device.deviceId };
       candidate = headWire(await signFileHead(statement, device.assertionKeyPair.privateKey));
     }
+    failureStage = "offer-signing";
     const offer: Offer = { shareId, grantId, ownerId, recipientId: recipient.accountId, targetId, kind,
       permission, materialRevision: 1, targetKeyId: prep.targetKeyId, targetEpoch: prep.targetEpoch,
       contentRevision: prep.revision, headDigest: hex(decodeTreeBytes(prep.headDigest, 32)), labelId,
@@ -161,6 +178,7 @@ export async function inviteSharedRoot(snapshot: FilesSnapshot, targetId: string
       devices, candidateDigest: candidate?.digest ? await digest(decodeTreeBytes(candidate.bytes, 131072)) : null,
       signerDeviceId: device.deviceId };
     const signed = await signOffer(offer, device.assertionKeyPair.privateKey);
+    failureStage = "share-submit";
     await resource("/api/private/sharing/shares", "PUT", { ...offer,
       ownerCopy: encodeTreeBytes(labels.ownerCopy), offerBytes: encodeTreeBytes(signed.bytes),
       offerDigest: encodeTreeBytes(signed.digest), offerSignature: encodeTreeBytes(signed.signature), candidate,
@@ -168,6 +186,8 @@ export async function inviteSharedRoot(snapshot: FilesSnapshot, targetId: string
         publicKey: d.encodedPublicKey, ciphertext: encodeTreeBytes(content.find((c) => c.deviceId === d.deviceId)!.envelope),
         labelCiphertext: encodeTreeBytes(labels.deliveries.find((c) => c.deviceId === d.deviceId)!.envelope) })) }, signal);
     return shareId;
+  } catch {
+    throw new ShareInvitePreparationFailure(failureStage);
   } finally { if (fileKey) fileKey.key.fill(0); }
 }
 
