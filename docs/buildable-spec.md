@@ -151,14 +151,15 @@ The browser client is part of the trusted computing base. End-to-end content pri
 - Every Directory has an independently random Directory capability key.
 - A parent Directory capability wraps each child Directory capability.
 - Every persisted current File representation has a fresh independently random File content key.
-- The File content key encrypts Markdown and File metadata and is wrapped by the containing Directory capability.
-- Each successful File save uses a fresh File content key; replacing the prior representation is not version history.
-- An Account has a client-generated encryption identity separate from WebAuthn credentials. The identity is account-scoped and realized by its registered Encryption devices: every capability envelope that grants access targets a specific device's transport public key (or a Publication link capability for public epochs), so no separate account-wide decryption key exists.
+- For an unmigrated v1 File entry, the containing Directory capability symmetrically wraps the current File content key; the v1 signed listing commits the complete encrypted entry, including that wrapper.
+- For a v2 File entry, the Directory capability instead protects the **private** half of that File's independent P-256 HPKE receiving key pair in a purpose-bound symmetric Key envelope. Each File/capability epoch has its own pair; never use a Directory-wide receiving target. The matching public key with opaque File-scoped identity/epoch is an authenticated write target available to authorized File editors, including direct File read/write Collaborators.
+- Each successful File save generates a fresh random File content key for Markdown and File metadata. The editor HPKE-wraps it to the File receiving public key in a dynamic parent-entry envelope and wraps the **same** current key separately to each currently eligible direct-Grant device. An authorized Directory reader unwraps the receiving private key through the parent hierarchy, verifies it matches the signed public target, and opens the dynamic envelope; a direct File reader opens only its own constrained device envelope. Replacing the prior representation is not version history.
+- An Account has a client-generated encryption identity separate from WebAuthn credentials. The identity is account-scoped and realized by its registered Encryption devices: HPKE envelopes delivering access to an Account device target that device's transport public key; parent Directory, v2 File receiving, and Publication capability wrappers are separately purpose-bound. No separate account-wide decryption key exists.
 - Each enrolled device has separate P-256 HPKE transport and device-assertion signing key pairs plus an approved-device registry entry. A current device proof—not a passkey alone—authorizes private operations. In the normal enrollment flow, an existing approved device must approve a new device through a QR-bound ceremony; the service cannot substitute an unapproved public key. Signup is the one exception: the Account-creation transaction is the trust anchor that creates the first device (section 5.2).
 - A separately generated 256-bit Vault recovery secret is represented as a checksum-protected 24-word phrase. It is shown only at creation, recovery, or explicit reissue; it is never user-chosen, sent to the service, logged, or used as a password.
 - The browser derives a 256-bit recovery wrapping key with `HKDF-SHA-256` from that secret, a random public recovery salt, and the domain-separated `mdwn/vault-recovery-capsule/v1` context containing the Account ID and recovery generation.
 - A versioned AES-256-GCM `mdwn/enc-v1` Recovery capsule contains the stable Vault root key and a dedicated P-256 recovery-enrollment signing private key. The service stores only its opaque ciphertext/metadata, current generation and salt, and the matching public recovery-verification key.
-- Every Account-owned root capability not reached through the encrypted Directory hierarchy—including the hidden root Directory capability and needed owned-File/Comment auxiliary capabilities—has a current `vault-recovery` Key envelope under the Vault root key. A capability received only through a Grant is explicitly excluded.
+- Every Account-owned root capability not reached through the encrypted Directory hierarchy—including the hidden root Directory capability and needed owned-File/Comment auxiliary capabilities—has a current `vault-recovery` Key envelope under the Vault root key. An owned File receiving private key is recovered through that Directory hierarchy or, only if unreachable from it, through a strictly Account-owned auxiliary recovery envelope. A capability received only through a Grant is explicitly excluded from Vault-root, recovery, and enrollment envelopes.
 
 Authentication recovery codes and the Vault recovery phrase are separate artifacts. Recovering authentication does not itself recover encrypted content. The phrase becomes encrypted-content recovery/enrollment authority only alongside a live normal Session with a recent Passkey assertion; it never authenticates an Account.
 
@@ -172,15 +173,17 @@ Authentication recovery codes and the Vault recovery phrase are separate artifac
 - Canonical authenticated context binds every envelope to its Vault/object, purpose, epoch, recipient where applicable, and Publication where applicable.
 - Clients reject unsupported versions/suites, malformed envelopes, stale epochs, replayed manifests, context mismatch, and algorithm downgrade.
 
-The exact maintained HPKE package and internal binary serialization are implementation choices, but the selected representation must be deterministic where authenticated context or digest comparison requires it and must pass shared browser/server test vectors.
+The selected maintained HPKE package and canonical `mdwn/enc-v1` binary envelope (including its appended File receiving private-key purpose) are pinned in [`enc-v1.md`](enc-v1.md). Listing v2 is a **separate versioned commitment/signature protocol**, not a permissive decoder change to `mdwn/enc-v1` envelopes or a weakening of v1 listing commitments. [ADR-0008](adr/0008-file-scoped-receiving-keys-and-signed-file-heads.md) is accepted as a **pending implementation contract**; current v1 code does not implement v2.
+
+Under `mdwn/directory-listing/v2`, the encrypted signed structural head commits child membership/kind, complete encrypted names/order, and stable parent-wrapped receiving-key material for v2 Files, **not** each changing File-key envelope. It also commits complete v1 entry bytes for explicitly tagged unmigrated legacy entries; no v1 byte is silently omitted. An independently signed current File head binds File identity/revision, content-key identity/epoch, receiving-public-key identity/epoch and public-key digest, current representation digest, dynamic parent and direct-device envelope digests, and exact File-scoped recipient-set version/commitment (and the paired Public representation digest when active). Directory readers verify the structural listing **and** each v2 File head and all committed returned bytes; direct File readers receive and verify only the File-scoped head/material. The browser checks signatures against approved Device registry signing-key provenance, retains Directory structural revision/digest and File revision/digest checkpoints, and rejects rollback and same-revision forks. At unchanged File revision, only a guarded monotonic receiving-key epoch advance (rotation) or recipient-set version advance (including Grant-generation/device-provisioning changes) may change the head; a different digest at the same revision, receiving-key epoch and recipient-set version is a fork. The service validates effective signer authority **at commit** for the specific transition (write for a save); it retains committed signer provenance so later device/Grant revocation does not retroactively invalidate an authentic prior head. The existing fresh-device limitation remains: without an independent trusted checkpoint, a fresh device cannot detect a service replaying its whole history or forging its registry and heads. Non-save Grant/device provisioning changes the File head's recipient-set version/commitment under a current-head guard without changing the File representation; an eligible device missing material remains explicitly pending and cannot be represented as provisioned or receive content before its envelope is installed.
 
 ### 4.3 Key envelopes and revocation
 
 A Key envelope is the only persisted mechanism that grants one capability access to another key. Required purposes cover:
 
 - parent Directory to child Directory;
-- parent Directory to current File key;
-- active direct File/Directory Grant to recipient device;
+- v1 parent Directory to current File key; for v2, parent Directory to File receiving **private** key and File receiving **public** key to the dynamic current File key;
+- active direct File/Directory Grant to recipient device, including current File-key envelopes to each eligible direct-Grant device;
 - device enrollment;
 - Vault recovery;
 - Publication/Public representation;
@@ -188,9 +191,9 @@ A Key envelope is the only persisted mechanism that grants one capability access
 - Public Comment audience epoch; and
 - encrypted attribution.
 
-Capability, Grant, or shared-subtree revocation first removes server authorization in a short transaction, advances the affected capability/key epoch, and blocks new writes beneath the affected root. It then creates a browser-driven, resumable, bounded Key-rotation job that rewraps current capabilities only for remaining authorized devices. It cannot recall previously downloaded plaintext, ciphertext, or keys. Routine Encryption-device removal is deliberately narrower: it supersedes only the target's Sessions and device envelopes and advances the device-registry epoch; it does not rotate Vault, Directory/File, Grant, or representation keys.
+Capability, Grant, or shared-subtree revocation first removes server authorization in a short transaction, advances affected capability/key epochs, and blocks new writes beneath the affected root. It then creates a browser-driven, resumable, bounded Key-rotation job for remaining authorized devices. When a removed party may have learned a File receiving **private** key—especially after loss of Directory scope or a move out of a shared subtree—rotation replaces the receiving key **pair**, not merely its wrapper; the new parent wrapper, public target, and signed heads become current before writes resume. It cannot recall previously downloaded plaintext, ciphertext, or keys. Routine Encryption-device removal is deliberately narrower: it supersedes only the target's Sessions and device envelopes and advances the device-registry epoch; it does not rotate Vault, Directory/File, Grant, or representation keys.
 
-A move out of a shared subtree must complete required rekeying within its bounded operation or be rejected/deferred; it may never expose future writes under an old capability.
+A move out of a shared subtree must complete required rekeying within its bounded operation or be rejected/deferred; it may never expose future writes under an old capability. An existing v1 File stays explicitly versioned and readable. Before a direct-write File Share is completed, a write-authorized browser with the parent Directory capability must atomically migrate its wrapper/listing/head under structural and File revision guards; SQL cannot decrypt it, and future direct saves require no Owner online.
 
 ### 4.4 Public-link capabilities
 
@@ -368,7 +371,7 @@ A Collaborator can edit or hard-delete only their own Comment. The Owner may har
 - A pending Share is unique per Owner, recipient, and target. The Owner may cancel it; the recipient may accept or decline it.
 - Acceptance creates one active Grant per Owner, recipient, and target and provisions the required recipient-device Key envelopes.
 - A Directory Grant covers the current subtree and future descendants.
-- A direct File Grant follows File identity through Owner-controlled rename/move and exposes no path or parent.
+- A direct File Grant follows File identity through Owner-controlled rename/move and exposes no path or parent. Its read/write endpoint returns only File-scoped signed head, current representation, permitted device envelopes, authenticated public receiving write target and necessary File-scoped recipient descriptors—never the parent ID/path, Directory capability, siblings, or Directory-wide correlation key.
 - Direct File read/write permits Markdown edits, but never rename, move, delete, import targeting, or structural access.
 - Overlapping Grants remain independent and are deduplicated when deriving effective authority.
 - The Owner may change permission or revoke. A Collaborator may leave.
@@ -543,9 +546,9 @@ Physical table factoring may vary only if all relationships, constraints, visibi
 #### Private hierarchy
 
 - `vault_nodes`: node ID, `directory | file` kind, Owner Account, nullable parent node, nullable immutable Import ID, and lifecycle metadata.
-- `directories`: Directory node key and monotonic `entries_revision`.
-- `files`: File node key, current representation pointer, and current revision.
-- `directory_entries`: one current parent/child edge with encrypted display name and ordering plus, directly or by constrained reference, the parent capability's envelope for the child Directory capability/current File key.
+- `directories`: Directory node key, monotonic `entries_revision`, and an explicitly versioned current signed listing head/digest. V1 remains readable; v2 structural commitments preserve complete bytes of tagged unmigrated v1 entries.
+- `files`: File node key, current representation pointer and revision; for v2, the current signed File head/digest and File-scoped receiving-public-key target/epoch and recipient-set version/commitment. No File head is invented for an unmigrated v1 entry. Same-File-revision head changes for a guarded recipient-set or receiving-key epoch transition do not create a new representation or user-visible history.
+- `directory_entries`: one current parent/child edge with encrypted display name and ordering plus, directly or by constrained reference, the parent capability's envelope for the child Directory capability or (v1) current File key or (v2) stable File receiving private key. A v2 File's changing parent-entry File-key envelope is stored/committed through its File head, independently of the structural listing.
 - `file_representations`: one decoded encrypted private Markdown/File-metadata payload, content-key/epoch identity, ciphertext size, revision, and lifecycle metadata. It has no chunk or manifest rows, and its stored BLOB is at most 524,288 bytes. The browser measures decrypted source against 262,144 UTF-8 bytes; an over-limit legacy source remains readable/exportable but is ineligible for save or conflict overwrite until reduced within the limit.
 
 Required constraints:
@@ -638,20 +641,19 @@ A create, rename, reorder, delete, or move transaction:
 
 #### File save
 
-Before submission, the browser checks the 262,144-byte UTF-8 Markdown source bound. After decryption it measures the source too: an over-limit legacy representation remains readable/exportable but cannot save or confirm a conflict overwrite until reduced within the limit. The Worker independently rejects an oversized decoded representation BLOB, and D1 enforces the 524,288-byte `CHECK` bound. A File save transaction:
+Before submission, the browser checks the 262,144-byte UTF-8 Markdown source bound. After decryption it measures the source too: an over-limit legacy representation remains readable/exportable but cannot save or confirm a conflict overwrite until reduced within the limit. The Worker independently rejects an oversized decoded representation BLOB, and D1 enforces the 524,288-byte `CHECK` bound. Under listing v2, a File save transaction:
 
-1. checks current effective write authority and expected File revision;
-2. validates every submitted private/Public representation payload before inserting a fresh private representation/key identity;
-3. replaces the parent-entry envelope and every active direct-Grant envelope for the fresh File key;
-4. when a Publication is active, conditionally installs the matching freshly encrypted Public representation in the same operation;
-5. conditionally swaps both current pointers/revision; and
-6. removes the superseded private/Public representation after it is no longer referenced.
+1. rechecks effective write authority of the signing device **at commit**, current Session/Device proof and Device registry epoch, expected File revision/current head, authenticated File receiving target/epoch, and absence of a write-blocking rotation;
+2. rechecks the exact set/version of currently eligible direct-Grant device descriptors against active Grants, their generations and current device registries (deduplicating overlapping access); the browser submits a device-scoped envelope for **each** descriptor, without needing parent material;
+3. validates the submitted new private representation, fresh content-key identity, HPKE dynamic parent-entry envelope to the File receiving key, every direct-device envelope, the recipient-set commitment, and signed File head's byte digests; when a Publication is active, it validates the paired freshly encrypted Public representation too;
+4. atomically installs all fresh representations, wrappers and signed File head, conditionally swaps current private/Public pointers and advances the File revision, or installs **nothing**; and
+5. removes superseded representations only after they are no longer referenced.
 
-A malformed, oversize, or stale save changes no current pointer or revision and leaves no partial private/Public update. A stale revision returns the conflict needed by the UI.
+A successful save always uses a fresh random File content key and does **not** mutate the v2 Directory structural listing. The Worker can check envelope framing, signed bytes, recipient completeness and digests, but cannot prove that opaque wrappers contain the same plaintext key. A malformed/oversize payload, stale File head/revision, changed device registry/Grant generation/recipient set, revoked signer, target mismatch, or rotation block leaves no new envelope, head, pointer, revision, or partial private/Public update. A stale revision returns the conflict needed by the UI. An unmigrated v1 File instead retains the versioned v1 complete-entry Directory-commitment rule; it may not be treated as v2 by dropping committed bytes.
 
 #### Share acceptance/revocation
 
-Acceptance verifies pending state and recipient, creates/activates the Grant, and installs constrained recipient-device envelopes. Revocation/leave removes server authority and supersedes affected envelopes in a short transaction, advances the relevant epoch, cancels any affected provisioning need, and starts required browser-driven rotation.
+Acceptance verifies pending state and recipient, creates/activates the Grant, and installs constrained recipient-device envelopes. For v2 direct File access, adding or fulfilling eligible recipients advances the File head's committed recipient-set version under current-head/Grant/device guards; an unprovisioned device has only an opaque pending need and receives no File content until its envelope and head commitment are current. A direct File read/write Share cannot finish acceptance until a **write-authorized parent-capability browser**, not SQL, has atomically upgraded an existing v1 File: validate the v1 full-entry commitment, expected structural and File revisions, install its receiving pair/private wrapper and current-key HPKE/direct-device wrappers, sign the v2 listing and File head, and establish the version transition checkpoint. A v2 listing may retain other Files as explicitly tagged legacy entries. The one-time transition may retain the existing current ciphertext/key/revision; its first v2 File head establishes the checkpoint, and every subsequent successful v2 save advances revision with a fresh key. Later recipient provisioning or receiving-pair rotation may change the signed head at an unchanged File revision only with a monotonic recipient-set version or receiving-key epoch advance guarded by the current head, proper transition authority and current Grants/registry/rotation state. Races or missing parent material leave v1 readable and direct-write sharing incomplete. New Files may start v2 when implemented. Revocation/leave removes server authority and supersedes affected envelopes in a short transaction, advances the relevant epoch, cancels any affected provisioning need, and starts required browser-driven rotation, including new receiving **pairs** when departing parties may know their private keys.
 
 #### Recovery enrollment
 
@@ -715,7 +717,7 @@ Directory hard deletion:
 2. Resolve the recipient by exact unique handle or opaque identifier without discovery.
 3. Owner selects read-only/read-write and sends the pending Share.
 4. Recipient accepts or declines.
-5. On acceptance, current recipient devices receive purpose-bound envelope material.
+5. On acceptance, current recipient devices receive purpose-bound envelope material. If the File is still v1, direct-write acceptance waits for a write-authorized parent-capability browser to commit its guarded v2 upgrade; later direct File editors need no Owner/parent capability to save.
 6. The active Grant controls server access; cryptographic material alone is insufficient.
 7. New Directory descendants inherit access through the Directory capability.
 8. Owner permission change/revoke or Collaborator leave updates authorization immediately and starts required rotation.
@@ -951,7 +953,9 @@ The MVP is conformant only when automated tests plus required manual/security ch
 - Immutable `mdwn/namespace-v1` fixtures assert display/comparison-key bytes in Chromium, Firefox, WebKit, and the Worker test target for composed/decomposed `Amélie`, `Straße`/`STRASSE`, Greek sigma/final-sigma, default `I`/`i` versus distinct `İ`, and intentionally distinct full-width `Ａ` versus ASCII `A`. A package/UCD version mismatch fails CI.
 - Tests reject every unsafe segment/path boundary, including traversal, slash/backslash, Bidi controls, device stems, unpaired surrogates, and a one-byte-over-limit name; Unicode 17 normalization conformance vectors run in CI.
 - Tests cover deterministic suffix placement, literal suffixes, folded collisions, source-duplicate rejection, direct-name reservation, and a generated over-limit name. A same-revision two-client mutation proves exactly one commit; the loser gets `409 namespace_changed`, no visible partial Import, and must refresh/review before retrying.
-- Direct File Grants reveal no tree/path data.
+- Direct File Grants reveal no parent ID/path, Directory capability, siblings or Directory-wide write/correlation key; a direct File editor can save a v2 File with only File-scoped material.
+- Tests verify v1 complete-entry commitments and reads, guarded atomic v1→v2 migration (including mixed legacy/v2 listings), v2 structural and File signatures/checkpoints, rollback/same-revision fork rejection (with only guarded epoch/recipient-set-version head transitions at unchanged File revision), and authenticated signer authority at commit without retroactive invalidation after revoke.
+- Tests reject stale recipient sets, device registries, Grant generations, receiving epochs and rotation states with no partial save; both inherited Directory and direct-Grant readers can open the same honest-client current File representation without implying Worker proof of equal plaintext keys.
 - The complete permission matrix is covered, including read-only Private Comment participation and direct-File structural denial.
 - Overlapping Grant union/revocation behaves independently.
 - Revocation denies server access before rotation and blocks affected new writes until safe.
