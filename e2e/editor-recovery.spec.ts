@@ -1,6 +1,7 @@
 import { test, expect } from "./fixtures";
 import { filePatch, openEditor, warnsOnUnload } from "./editor-workspace.fixture";
 import { seedLegacyOversizedFile } from "./editor-legacy.fixture";
+import { commitConcurrentFileRevision } from "./editor-conflict.fixture";
 
 test.setTimeout(240_000);
 
@@ -45,21 +46,34 @@ test("reload keeps a failed draft safe while verified reads are delayed", async 
 });
 
 test("explicit overwrite serializes a delayed write and saves subsequent typing", async ({ browser, server, baseURL }, testInfo) => {
-  const { context, page, fileId } = await openEditor(browser, server, baseURL!);
+  const { context, page, fileId, accountId, deviceId } = await openEditor(browser, server, baseURL!);
   try {
     const editor = page.getByRole("textbox", { name: "Markdown source" });
     const status = page.getByRole("status", { name: "Save status" });
     const other = await context.newPage();
     try {
       await other.goto(new URL(`/f/${fileId}`, baseURL!).href);
-      await other.getByRole("button", { name: "Rename", exact: true }).click();
-      const dialog = other.getByRole("dialog", { name: "Rename" });
-      await dialog.getByRole("textbox", { name: "Name" }).fill("Elsewhere.md");
-      await dialog.getByRole("button", { name: "Rename", exact: true }).click();
-      await expect(other.getByRole("heading", { name: "Elsewhere.md" })).toBeVisible();
-      await editor.fill("# overwrite B");
-      await expect(status).toHaveText("Couldn't save", { timeout: 20_000 });
-      await expect(page.getByRole("button", { name: "Confirm overwrite" })).toBeVisible();
+      let releaseStale!: () => void;
+      const staleGate = new Promise<void>((resolve) => { releaseStale = resolve; });
+      await page.route(`**/api/private/tree/files/${fileId}`, async (route) => {
+        if (filePatch(route.request(), fileId)) await staleGate;
+        await route.continue();
+      });
+      try {
+        const staleRequest = page.waitForRequest((request) => filePatch(request, fileId));
+        const staleResponse = page.waitForResponse((response) => filePatch(response.request(), fileId) && response.status() === 409);
+        await editor.fill("# overwrite B");
+        await staleRequest;
+        await commitConcurrentFileRevision({ server, page: other, accountId, deviceId, fileId,
+          source: "# committed A by another editor" });
+        await other.reload();
+        await expect(other.getByRole("textbox", { name: "Markdown source" })).toHaveValue("# committed A by another editor");
+        releaseStale();
+        await staleResponse;
+        await expect(status).toHaveText("Couldn't save", { timeout: 20_000 });
+        await expect(editor).toHaveValue("# overwrite B");
+        await expect(page.getByRole("button", { name: "Confirm overwrite" })).toBeVisible();
+      } finally { releaseStale(); await page.unroute(`**/api/private/tree/files/${fileId}`); }
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
       let committed!: () => void;
@@ -97,11 +111,16 @@ test("explicit overwrite serializes a delayed write and saves subsequent typing"
 });
 
 test("an encrypted legacy oversized File is readable, exportable and only saves after reduction", async ({ browser, server, baseURL }) => {
-  const opened = await openEditor(browser, server, baseURL!, "Legacy.md");
-  const { context, page, fileId } = opened;
+  const opened = await openEditor(browser, server, baseURL!);
+  const { context, page } = opened;
+  const db = (await server.getWorker<{ DB: D1Database }>().getEnv()).DB;
   try {
-    const source = await seedLegacyOversizedFile({ ...opened, server });
-    await page.reload();
+    const { source, fileId } = await seedLegacyOversizedFile({ ...opened, server });
+    expect(await db.prepare("SELECT encoding FROM directory_entries WHERE child_node_id = ?")
+      .bind(fileId).first()).toEqual({ encoding: "legacy-file" });
+    expect(await db.prepare("SELECT revision FROM file_heads WHERE file_node_id = ?")
+      .bind(fileId).first()).toBeNull();
+    await page.goto(new URL(`/f/${fileId}`, baseURL!).href);
     const editor = page.getByRole("textbox", { name: "Markdown source" });
     const status = page.getByRole("status", { name: "Save status" });
     await expect(editor).toHaveValue(source);
@@ -140,6 +159,8 @@ test("an encrypted legacy oversized File is readable, exportable and only saves 
     await expect(editor).toHaveValue("a".repeat(262_144));
     await expect(status).toHaveText("Saved", { timeout: 30_000 });
     expect(patches).toBe(1);
+    expect(await db.prepare("SELECT encoding FROM directory_entries WHERE child_node_id = ?")
+      .bind(fileId).first()).toEqual({ encoding: "receiving-file" });
     await page.reload();
     await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("a".repeat(262_144));
     await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Saved");
