@@ -18,7 +18,8 @@
     "app/device/proof.ts",
     "app/device/private-client.ts",
     "app/signup/protocol.ts",
-    "app/namespace-v1/**/*.ts"
+    "app/namespace-v1/**/*.ts",
+    "app/sharing/share-handle.ts"
   ],
   "exclude": ["tests/worker/**/*"],
   "compilerOptions": {
