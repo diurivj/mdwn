@@ -141,7 +141,78 @@ describe("Directory scope and structural confinement", () => {
     expect(await allowed(structuralAccessGuard(owner.device, owner.accountId, root, "delete"))).toBe(true);
     expect(await allowed(structuralAccessGuard(owner.device, owner.accountId, owner.rootId, "delete"))).toBe(false);
     await grant(owner, recipient, file, "file", "read_only");
-    expect(await allowed(structuralAccessGuard(recipient.device, owner.accountId, file, "delete"))).toBe(false);
+    expect(await allowed(structuralAccessGuard(recipient.device, owner.accountId, file, "delete"))).toBe(true);
+  });
+
+  it("keeps broad structural authority when another recipient is granted the target Directory", async () => {
+    const owner = await account(), alice = await account(), bob = await account();
+    const a = await node(owner, owner.rootId, "directory");
+    const b = await node(owner, a, "directory");
+    await grant(owner, alice, a, "directory", "read_write");
+    for (const action of ["rename", "reorder", "delete"] as const) {
+      expect(await allowed(structuralAccessGuard(alice.device, owner.accountId, b, action)), action).toBe(true);
+    }
+    await grant(owner, bob, b, "directory", "read_write");
+    for (const action of ["rename", "reorder", "delete"] as const) {
+      expect(await allowed(structuralAccessGuard(alice.device, owner.accountId, b, action)), action).toBe(true);
+      expect(await allowed(structuralAccessGuard(bob.device, owner.accountId, b, action)), action).toBe(false);
+    }
+  });
+
+  it("keeps a move inside a broad Directory Grant when another recipient is granted its source", async () => {
+    const owner = await account(), alice = await account(), bob = await account();
+    const a = await node(owner, owner.rootId, "directory");
+    const b = await node(owner, a, "directory");
+    const c = await node(owner, a, "directory");
+    await grant(owner, alice, a, "directory", "read_write");
+    expect(await allowed(moveAccessGuard(alice.device, owner.accountId, b, c))).toBe(true);
+    await grant(owner, bob, b, "directory", "read_write");
+    expect(await allowed(moveAccessGuard(alice.device, owner.accountId, b, c))).toBe(true);
+    expect(await allowed(moveAccessGuard(bob.device, owner.accountId, b, c))).toBe(false);
+  });
+
+  it("does not let a direct read-only File Grant subtract inherited structural authority", async () => {
+    const owner = await account(), alice = await account();
+    const a = await node(owner, owner.rootId, "directory");
+    const b = await node(owner, a, "file");
+    const c = await node(owner, a, "directory");
+    const broad = await grant(owner, alice, a, "directory", "read_write");
+    async function expectStructure(expected: boolean) {
+      for (const action of ["rename", "reorder", "delete"] as const) {
+        expect(await allowed(structuralAccessGuard(alice.device, owner.accountId, b, action)), action).toBe(expected);
+      }
+      expect(await allowed(moveAccessGuard(alice.device, owner.accountId, b, c))).toBe(expected);
+    }
+    await expectStructure(true);
+    const direct = await grant(owner, alice, b, "file", "read_only");
+    await expectStructure(true);
+    await env.DB.prepare("DELETE FROM grants WHERE id = ?").bind(broad).run();
+    expect(await allowed(fileAccessGuard(alice.device, owner.accountId, b, "file_read"))).toBe(true);
+    await expectStructure(false);
+    await env.DB.prepare(`UPDATE grants SET permission = 'read_write', generation = 2, updated_at = ? WHERE id = ?`)
+      .bind(Date.now(), direct).run();
+    expect(await allowed(fileAccessGuard(alice.device, owner.accountId, b, "file_edit"))).toBe(true);
+    await expectStructure(false);
+  });
+
+  it("does not let a narrower read-only Directory Grant subtract broad structural authority", async () => {
+    const owner = await account(), alice = await account();
+    const a = await node(owner, owner.rootId, "directory");
+    const b = await node(owner, a, "directory");
+    const c = await node(owner, a, "directory");
+    const broad = await grant(owner, alice, a, "directory", "read_write");
+    expect(await allowed(structuralAccessGuard(alice.device, owner.accountId, b, "rename"))).toBe(true);
+    expect(await allowed(moveAccessGuard(alice.device, owner.accountId, b, c))).toBe(true);
+    await grant(owner, alice, b, "directory", "read_only");
+    for (const action of ["rename", "reorder", "delete"] as const) {
+      expect(await allowed(structuralAccessGuard(alice.device, owner.accountId, b, action)), action).toBe(true);
+    }
+    expect(await allowed(moveAccessGuard(alice.device, owner.accountId, b, c))).toBe(true);
+    await env.DB.prepare("DELETE FROM grants WHERE id = ?").bind(broad).run();
+    expect(await getEffectiveDirectoryAccess(env.DB, alice.device, owner.accountId, b))
+      .toMatchObject({ canReadDirectory: true, canCreateChild: false });
+    expect(await allowed(structuralAccessGuard(alice.device, owner.accountId, b, "delete"))).toBe(false);
+    expect(await allowed(moveAccessGuard(alice.device, owner.accountId, b, c))).toBe(false);
   });
 
   it("requires one common read/write subtree for moves, same Owner and no cycle", async () => {
@@ -177,6 +248,27 @@ describe("Directory scope and structural confinement", () => {
     expect(row?.owner_id).toBe(owner.accountId);
     expect((await getEffectiveFileAccess(env.DB, recipient.device, owner.accountId, newFile))?.canEditMarkdown).toBe(true);
     expect(await allowed(directoryAccessGuard(recipient.device, owner.accountId, newDirectory, "import_target"))).toBe(true);
+  });
+
+  it("rechecks live device and session authority for structural writes and moves", async () => {
+    const owner = await account(), revokedDevice = await account(), revokedSession = await account();
+    const a = await node(owner, owner.rootId, "directory");
+    const b = await node(owner, a, "directory");
+    const c = await node(owner, a, "directory");
+    await grant(owner, revokedDevice, a, "directory", "read_write");
+    await grant(owner, revokedSession, a, "directory", "read_write");
+    for (const recipient of [revokedDevice, revokedSession]) {
+      expect(await allowed(structuralAccessGuard(recipient.device, owner.accountId, b, "rename"))).toBe(true);
+      expect(await allowed(moveAccessGuard(recipient.device, owner.accountId, b, c))).toBe(true);
+    }
+    await env.DB.prepare(`UPDATE encryption_devices SET state = 'revoked', revocation_reason = 'test' WHERE id = ?`)
+      .bind(revokedDevice.device.deviceId).run();
+    await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?")
+      .bind(Date.now(), revokedSession.device.sessionId).run();
+    for (const recipient of [revokedDevice, revokedSession]) {
+      expect(await allowed(structuralAccessGuard(recipient.device, owner.accountId, b, "rename"))).toBe(false);
+      expect(await allowed(moveAccessGuard(recipient.device, owner.accountId, b, c))).toBe(false);
+    }
   });
 
   it("denies more than 100 ancestor edges rather than granting a truncated path", async () => {
