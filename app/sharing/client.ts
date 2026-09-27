@@ -3,6 +3,7 @@ import { openFileContentKeyFromReceiving, openFileReceivingKey } from "~/crypto/
 import { privateRequest } from "~/device/private-client";
 import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
+import { isV7 } from "~/tree/wire";
 import { authenticateFileHead, type FileHeadWire } from "~/tree/client";
 import { signFileHead, verifyFileParentEnvelope,
   type DirectRecipientDescriptor, type FileHeadStatement } from "~/tree/file-head";
@@ -10,6 +11,7 @@ import type { FilesSnapshot } from "~/tree/navigation-client";
 import { decodeTreeBytes, encodeTreeBytes } from "~/tree/wire";
 import { sealShareLabel, openShareLabel } from "./label";
 import { digestBytes, hex, signOffer, verifyOffer, type Offer } from "./offer";
+import { deriveShareHandleLookupToken } from "./share-handle";
 
 export type GrantRoot = { grantId: string; ownerId: string; targetId: string;
   kind: "file" | "directory"; permission: "read_only" | "read_write";
@@ -32,10 +34,26 @@ const headWire = (head: { bytes: Uint8Array; digest: Uint8Array; signature: Uint
   ({ bytes: encodeTreeBytes(head.bytes), digest: encodeTreeBytes(head.digest), signature: encodeTreeBytes(head.signature) });
 
 /** Exact addressing only. The service never returns a browseable Account directory. */
+export async function encodeRecipientAddress(value: string, signal?: AbortSignal):
+  Promise<{ kind: "share-id" | "handle"; value: string }> {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256 || /\s/u.test(value)) {
+    throw new TypeError("Invalid share address");
+  }
+  if (value.startsWith("@")) {
+    // Remove exactly one marker. The reviewed helper rejects a second @, spaces,
+    // non-ASCII spellings and every other non-canonical handle before any request.
+    const token = await deriveShareHandleLookupToken(value.slice(1));
+    signal?.throwIfAborted();
+    return { kind: "handle", value: token };
+  }
+  if (!isV7(value)) throw new TypeError("Invalid share address");
+  return { kind: "share-id", value };
+}
+
 export async function resolveRecipient(value: string, signal?: AbortSignal): Promise<ResolvedRecipient> {
-  return resource("/api/private/sharing/resolve", "POST", {
-    kind: value.startsWith("@") ? "handle" : "share-id", value: value.startsWith("@") ? value.slice(1) : value,
-  }, signal);
+  const address = await encodeRecipientAddress(value, signal);
+  signal?.throwIfAborted();
+  return resource("/api/private/sharing/resolve", "POST", address, signal);
 }
 
 async function currentOwnedFileKey(snapshot: FilesSnapshot, targetId: string): Promise<{

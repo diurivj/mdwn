@@ -82,7 +82,7 @@ export function SharePanel({ snapshot, nodeId, kind, name, onUpdated }: {
         current = { ...snapshot, file: migrated.file, listings: { ...snapshot.listings, [parentId]: migrated.listing } };
         onUpdated(current);
       }
-      const recipient = await resolveRecipient(address.trim());
+      const recipient = await resolveRecipient(address);
       await inviteSharedRoot(current, nodeId, kind, name, recipient, permission);
       setAddress("");
       setMessage("Invitation sent. The recipient sees no name until accepting and provisioning completes.");
@@ -101,7 +101,7 @@ export function SharePanel({ snapshot, nodeId, kind, name, onUpdated }: {
         <select value={permission} onChange={(event) => setPermission(event.target.value as "read_only" | "read_write")}
           className="ml-2 rounded border p-1"><option value="read_only">Read-only</option>
           <option value="read_write">Read/write</option></select></label>
-      <button type="button" disabled={working || !address.trim()} onClick={() => void invite()} className="mt-3 rounded bg-stone-900 px-3 py-1 text-white">Invite</button>
+      <button type="button" disabled={working || !address} onClick={() => void invite()} className="mt-3 rounded bg-stone-900 px-3 py-1 text-white">Invite</button>
       <h3 className="mt-4 font-medium">Outgoing invitations</h3>
       {outgoing.map((item) => <div key={item.id} className="mt-1 text-sm">Pending ({item.permission})
         <button type="button" className="ml-2 underline" onClick={() => void cancelInvitation(item.id).then(refresh).catch(() => setMessage("Try again."))}>Cancel</button></div>)}
