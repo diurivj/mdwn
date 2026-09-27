@@ -297,6 +297,35 @@ for an active device during bounded provisioning. `device-label` (purpose 19)
 protects an optional device label under the Vault root key; its context binds
 the Account and exact device ID. Neither purpose carries a Grant capability.
 
+## Shared-as snapshot and detached offer (purpose 21)
+
+`app/sharing/label.ts` encodes a single `namespace-v1` display segment as
+canonical UTF-8 JSON `["mdwn/share-root-label/namespace-v1", segment]`. The
+segment is NFC-normalized on seal; opening rejects malformed UTF-8, a BOM,
+noncanonical JSON/segments, and invalid names. Both the Owner's symmetric copy
+(under **that Owner's** 32-byte Vault root) and every recipient-device HPKE
+copy are at most 4 KiB as complete envelopes. They bind the opaque Owner,
+target and independent label ID at epoch/revision 1; only recipient copies also
+bind the device ID. The encrypted name is an **immutable per-Grant Shared-as
+snapshot**, not a capability or a derived name hash. Neither parent/path nor
+File-content revision is part of its context. Zero current recipient devices
+still permits preparing an Owner copy; actual readiness and later delivery are
+separate server-authority/provisioning decisions. Recipient Vault recovery or
+enrollment must never receive a Grant-derived copy.
+
+`app/sharing/offer.ts` uses the distinct canonical 19-field JSON
+`mdwn/share-offer/v1` statement (at most 128 KiB), with sorted, unique current
+recipient-device descriptors, bounded lowercase SHA-256 ciphertext/public-key
+digests and safe positive counters. The Owner device signs its exact canonical
+bytes with a detached P-256 ECDSA/SHA-256 signature; the digest and signature
+are verified over one synchronous snapshot of caller input, including the
+signer's supplied public key. HPKE **base mode does not authenticate the
+sender**. An authentic historical offer only proves provenance/integrity, not
+current Share/Grant authority, recipient eligibility, head or key currency:
+the live Worker transaction and client-current-head checks must establish those
+independently. Structural envelope inspection also never proves plaintext
+parity between recipient and Owner copies.
+
 ## Consumers and open decisions
 
 Future tickets that build envelopes must use this module rather than a new format.
