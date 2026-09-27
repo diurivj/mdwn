@@ -152,10 +152,13 @@ const EXPECTED_FOREIGN_KEYS = [
   "file_heads:signer_device_id:encryption_devices:id:RESTRICT",
   "file_device_envelopes:file_node_id:files:node_id:RESTRICT",
   "grant_device_envelopes:grant_id:grants:id:RESTRICT",
-  "provisioning_needs:grant_id:grants:id:CASCADE",
-  "share_material:share_id:shares:id:CASCADE",
+  "provisioning_needs:grant_id:grants:id:RESTRICT",
+  "provisioning_needs:owner_id:grants:owner_id:RESTRICT",
+  "provisioning_needs:recipient_id:grants:recipient_id:RESTRICT",
+  "share_material:share_id:shares:id:RESTRICT",
   "share_material:candidate_signer_device_id:encryption_devices:id:RESTRICT",
-  "share_device_material:share_id:share_material:share_id:CASCADE",
+  "share_device_material:share_id:share_material:share_id:RESTRICT",
+  "share_device_material:material_revision:share_material:material_revision:RESTRICT",
   "rotation_barriers:target_node_id:vault_nodes:id:RESTRICT",
   "file_write_witnesses:file_node_id:files:node_id:RESTRICT",
   "directory_entries:child_node_id:vault_nodes:id:RESTRICT",
@@ -233,6 +236,12 @@ function verifySchema(bindArgs, label) {
   for (const fact of required) {
     if (!facts.has(fact)) failNow(`${label}: missing schema fact ${fact}`);
   }
+  for (const fact of facts) {
+    if (["fk:share_material:", "fk:share_device_material:", "fk:provisioning_needs:"].some((prefix) =>
+      fact.startsWith(prefix)) && !fact.endsWith(":RESTRICT")) {
+      failNow(`${label}: unexpected non-restrictive relationship ${fact}`);
+    }
+  }
   console.log(`✓ ${label}: schema matches the committed migration set`);
 }
 
@@ -240,6 +249,57 @@ function verifySchema(bindArgs, label) {
 function failNow(message) {
   console.error(`✘ smoke test failed: ${message}`);
   process.exit(1);
+}
+
+// Only exercise parent deletion against the fresh disposable *local* database;
+// remote smoke remains read-only apart from applying reviewed migrations.
+/** @param {string[]} localArgs */
+function verifyRestrictiveDeletion(localArgs) {
+  const setup = `
+    INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES
+      ('smoke-owner', 'smoke-share-owner', 1, 1), ('smoke-recipient', 'smoke-share-recipient', 1, 1);
+    INSERT INTO account_encryption_identities (account_id, root_directory_id, registry_epoch) VALUES
+      ('smoke-owner', 'smoke-root-owner', 1), ('smoke-recipient', 'smoke-root-recipient', 1);
+    INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key,
+      state, approval_provenance, registry_epoch, created_at)
+      VALUES ('smoke-device', 'smoke-recipient', X'01', X'01', 'active', 'signup', 1, 1);
+    INSERT INTO shares (id, owner_id, recipient_id, target_node_id, target_kind, permission, created_at)
+      VALUES ('smoke-share', 'smoke-owner', 'smoke-recipient', 'smoke-root-owner', 'directory', 'read_only', 1);
+    INSERT INTO share_material (share_id, material_revision, anticipated_grant_id, target_key_id,
+      target_epoch, head_digest, registry_epoch)
+      VALUES ('smoke-share', 1, 'smoke-grant', 'smoke-root-owner', 1, zeroblob(32), 1);
+    INSERT INTO share_device_material (share_id, material_revision, device_id, registry_epoch,
+      public_key_digest, ciphertext, digest)
+      VALUES ('smoke-share', 1, 'smoke-device', 1, zeroblob(32), X'01', zeroblob(32));
+    INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
+      generation, created_at, updated_at)
+      VALUES ('smoke-grant', 'smoke-owner', 'smoke-recipient', 'smoke-root-owner', 'directory', 'read_only', 1, 1, 1);
+    INSERT INTO provisioning_needs (grant_id, owner_id, recipient_id, device_id,
+      generation, registry_epoch, created_at, updated_at)
+      VALUES ('smoke-grant', 'smoke-owner', 'smoke-recipient', 'smoke-device', 1, 1, 1, 1);
+  `;
+  runCmd(["d1", "execute", BINDING, ...localArgs, "--command", setup], "local restrictive-FK fixtures");
+  for (const statement of [
+    "DELETE FROM shares WHERE id = 'smoke-share'",
+    "DELETE FROM share_material WHERE share_id = 'smoke-share'",
+    "DELETE FROM grants WHERE id = 'smoke-grant'",
+  ]) {
+    const result = spawnWrangler(["d1", "execute", BINDING, ...localArgs, "--command", statement]);
+    if (result.status === 0 || !/FOREIGN KEY constraint failed/i.test(result.stdout + result.stderr)) {
+      failNow(`expected a restrictive FK to block: ${statement}`);
+    }
+  }
+  const surviving = queryResults(localArgs, `SELECT 'share:' || id AS name FROM shares WHERE id = 'smoke-share'
+    UNION ALL SELECT 'grant:' || id FROM grants WHERE id = 'smoke-grant'`);
+  if (surviving.length !== 2) failNow("a failed parent-only delete changed the parent rows");
+  runCmd(["d1", "execute", BINDING, ...localArgs, "--command", `
+    DELETE FROM share_device_material WHERE share_id = 'smoke-share';
+    DELETE FROM share_material WHERE share_id = 'smoke-share';
+    DELETE FROM shares WHERE id = 'smoke-share';
+    DELETE FROM provisioning_needs WHERE grant_id = 'smoke-grant';
+    DELETE FROM grants WHERE id = 'smoke-grant';
+  `], "local explicit dependent cleanup");
+  console.log("✓ parent-only deletion is blocked; ordered Share/Grant cleanup succeeds");
 }
 
 function localSmoke() {
@@ -250,6 +310,7 @@ function localSmoke() {
     runCmd(["d1", "migrations", "apply", BINDING, ...localArgs], "local migration apply");
     console.log("✓ migrations applied to a fresh empty local D1");
     verifySchema(localArgs, "local");
+    verifyRestrictiveDeletion(localArgs);
 
     runCmd(["d1", "migrations", "apply", BINDING, ...localArgs], "local re-apply");
     console.log("✓ re-applying migrations is a no-op (idempotent)");

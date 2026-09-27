@@ -699,7 +699,7 @@ export const grantDeviceEnvelopes = sqliteTable("grant_device_envelopes", {
 
 /** Presealed pending offer material cannot confer access until a current acceptance. */
 export const shareMaterial = sqliteTable("share_material", {
-  shareId: text("share_id").primaryKey().references(() => shares.id, { onDelete: "cascade" }),
+  shareId: text("share_id").primaryKey().references(() => shares.id, { onDelete: "restrict" }),
   materialRevision: integer("material_revision").notNull(),
   anticipatedGrantId: text("anticipated_grant_id").notNull(),
   targetKeyId: text("target_key_id").notNull(),
@@ -721,7 +721,7 @@ export const shareMaterial = sqliteTable("share_material", {
     OR (length(${table.candidateHead}) BETWEEN 1 AND 131072 AND length(${table.candidateDigest}) = 32
     AND length(${table.candidateSignature}) = 64 AND ${table.candidateSignerDeviceId} IS NOT NULL))`)]);
 export const shareDeviceMaterial = sqliteTable("share_device_material", {
-  shareId: text("share_id").notNull().references(() => shareMaterial.shareId, { onDelete: "cascade" }),
+  shareId: text("share_id").notNull().references(() => shareMaterial.shareId, { onDelete: "restrict" }),
   materialRevision: integer("material_revision").notNull(),
   deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
   registryEpoch: integer("registry_epoch").notNull(),
@@ -730,7 +730,7 @@ export const shareDeviceMaterial = sqliteTable("share_device_material", {
   digest: blob("digest").notNull(),
 }, (table) => [primaryKey({ columns: [table.shareId, table.deviceId] }),
   foreignKey({ columns: [table.shareId, table.materialRevision],
-    foreignColumns: [shareMaterial.shareId, shareMaterial.materialRevision] }).onDelete("cascade"),
+    foreignColumns: [shareMaterial.shareId, shareMaterial.materialRevision] }).onDelete("restrict"),
   check("share_device_material_bounded", sql`${table.materialRevision} BETWEEN 1 AND 9007199254740991
     AND ${table.registryEpoch} BETWEEN 1 AND 9007199254740991
     AND length(${table.publicKeyDigest}) = 32
@@ -738,7 +738,7 @@ export const shareDeviceMaterial = sqliteTable("share_device_material", {
 
 /** Opaque outstanding Grant/device pair: NEVER a ciphertext, capability or name. */
 export const provisioningNeeds = sqliteTable("provisioning_needs", {
-  grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "cascade" }),
+  grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "restrict" }),
   ownerId: text("owner_id").notNull(),
   recipientId: text("recipient_id").notNull(),
   deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
@@ -755,7 +755,7 @@ export const provisioningNeeds = sqliteTable("provisioning_needs", {
     AND ${table.createdAt} BETWEEN 0 AND 9007199254740991
     AND ${table.updatedAt} BETWEEN ${table.createdAt} AND 9007199254740991`),
   foreignKey({ columns: [table.grantId, table.ownerId, table.recipientId],
-    foreignColumns: [grants.id, grants.ownerId, grants.recipientId] }).onDelete("cascade")]);
+    foreignColumns: [grants.id, grants.ownerId, grants.recipientId] }).onDelete("restrict")]);
 
 /** Ticket 19 removes authority and installs this barrier before starting rekeying. */
 export const rotationBarriers = sqliteTable("rotation_barriers", {

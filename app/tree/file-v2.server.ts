@@ -1,3 +1,4 @@
+import type { SQL } from "drizzle-orm";
 import { record } from "~/auth/request.server";
 import { inspectEnvelope } from "~/crypto/enc-v1";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
@@ -80,10 +81,11 @@ async function fileOwner(env: Env, fileId: string): Promise<string | null> {
   return (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM vault_nodes
     WHERE id = ${fileId} AND kind = 'file'`))?.owner_id ?? null;
 }
-async function headRow(env: Env, fileId: string): Promise<HeadRow | undefined> {
+async function headRow(env: Env, auth: AuthorizedDevice, ownerId: string, fileId: string): Promise<HeadRow | undefined> {
   return createDb(env.DB).get<HeadRow>(sql`SELECT h.*, signer.assertion_public_key, signer.account_id AS signer_account_id
     FROM file_heads h JOIN encryption_devices signer ON signer.id = h.signer_device_id
-    WHERE h.file_node_id = ${fileId}`);
+    WHERE h.file_node_id = ${fileId} AND h.owner_id = ${ownerId}
+      AND ${fileAccessGuard(auth, ownerId, fileId, "file_edit")}`);
 }
 
 /** A File-only response never carries parent, path, sibling bytes or Directory correlation material. */
@@ -234,25 +236,58 @@ async function verifySubmitted(env: Env, auth: AuthorizedDevice, ownerId: string
   return next;
 }
 
-/** Current live recipient set is rechecked inside the witness INSERT. A preflight is never authority. */
-function exactRecipientGuard(ownerId: string, fileId: string, expected: Recipient[]) {
-  const devices = expected.map((r) => r.deviceId);
-  const membership = devices.length ? sql`d.id NOT IN (${sql.join(devices.map((id) => sql`${id}`), sql`, `)})` : sql`1 = 1`;
-  const matches = expected.flatMap((r) => [
-    sql`EXISTS (SELECT 1 FROM encryption_devices d JOIN account_encryption_identities registry
-      ON registry.account_id = d.account_id WHERE d.id = ${r.deviceId} AND d.account_id = ${r.accountId}
-      AND d.state = 'active' AND registry.registry_epoch = ${r.registryEpoch}
-      AND d.transport_public_key = ${decodeTreeBytes(r.publicKey, 65)})`,
-    sql`(SELECT COUNT(*) FROM grants g WHERE g.owner_id = ${ownerId} AND g.target_node_id = ${fileId}
-      AND g.target_kind = 'file' AND g.recipient_id = ${r.accountId}) = ${r.grants.length}`,
-    ...r.grants.map((g) => sql`EXISTS (SELECT 1 FROM grants current_grant WHERE current_grant.id = ${g.id}
-      AND current_grant.owner_id = ${ownerId} AND current_grant.target_node_id = ${fileId}
-      AND current_grant.target_kind = 'file' AND current_grant.recipient_id = ${r.accountId}
-      AND current_grant.generation = ${g.generation})`),
-  ]);
-  return sql`NOT EXISTS (SELECT 1 FROM grants g JOIN encryption_devices d ON d.account_id = g.recipient_id
-    AND d.state = 'active' WHERE g.owner_id = ${ownerId} AND g.target_node_id = ${fileId}
-    AND g.target_kind = 'file' AND ${membership}) ${matches.length ? sql`AND ${sql.join(matches, sql` AND `)}` : sql``}`;
+/** One bounded JSON binding represents the *complete* expected relation. Compare both
+ * directions in the witness, including registered public keys/epochs and every
+ * Grant identity/generation. Preflight descriptors alone confer no authority.
+ */
+function exactRecipientGuard(ownerId: string, fileId: string, expected: Recipient[]): SQL {
+  const descriptors = JSON.stringify(expected.map((r) => ({ accountId: r.accountId, deviceId: r.deviceId,
+    registryEpoch: r.registryEpoch, publicKeyHex: Array.from(decodeTreeBytes(r.publicKey, 65),
+      (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase(), grants: r.grants })));
+  return sql`NOT EXISTS (WITH expected AS (
+    SELECT json_extract(device.value, '$.accountId') AS account_id,
+      json_extract(device.value, '$.deviceId') AS device_id,
+      json_extract(device.value, '$.registryEpoch') AS registry_epoch,
+      json_extract(device.value, '$.publicKeyHex') AS public_key_hex,
+      json_extract(grant.value, '$.id') AS grant_id,
+      json_extract(grant.value, '$.generation') AS generation
+    FROM json_each(${descriptors}) device JOIN json_each(device.value, '$.grants') grant
+  ), live AS (
+    SELECT g.recipient_id AS account_id, d.id AS device_id,
+      registry.registry_epoch, hex(d.transport_public_key) AS public_key_hex,
+      g.id AS grant_id, g.generation
+    FROM grants g JOIN encryption_devices d ON d.account_id = g.recipient_id AND d.state = 'active'
+    JOIN account_encryption_identities registry ON registry.account_id = d.account_id
+    WHERE g.owner_id = ${ownerId} AND g.target_node_id = ${fileId} AND g.target_kind = 'file'
+  )
+  SELECT 1 FROM live l WHERE NOT EXISTS (SELECT 1 FROM expected e WHERE
+    e.account_id = l.account_id AND e.device_id = l.device_id AND e.registry_epoch = l.registry_epoch
+    AND e.public_key_hex = l.public_key_hex AND e.grant_id = l.grant_id AND e.generation = l.generation)
+  UNION ALL
+  SELECT 1 FROM expected e WHERE NOT EXISTS (SELECT 1 FROM live l WHERE
+    l.account_id = e.account_id AND l.device_id = e.device_id AND l.registry_epoch = e.registry_epoch
+    AND l.public_key_hex = e.public_key_hex AND l.grant_id = e.grant_id AND l.generation = e.generation))`;
+}
+
+/** Ten BLOB/identity bindings per row, two for the witness: nine rows stay at
+ * 92 bindings per query. Chunking changes neither the one D1 batch nor its CAS.
+ */
+function recipientInserts(ownerId: string, fileId: string, current: Recipient[],
+  wrapped: readonly { deviceId: string; ciphertext: Uint8Array }[], head: VerifiedFileHead,
+  revision: number, contentKeyId: string, contentEpoch: number, witness: SQL): SQL[] {
+  const envelopes = new Map(wrapped.map((r) => [r.deviceId, r.ciphertext]));
+  const digests = new Map(head.statement.recipients.map((r) => [r.deviceId, r.envelopeDigest]));
+  const inserts: SQL[] = [];
+  for (let i = 0; i < current.length; i += 9) {
+    const rows = current.slice(i, i + 9).map((r) => sql`(${fileId}, ${ownerId}, ${r.accountId},
+      ${r.deviceId}, ${revision}, ${contentKeyId}, ${contentEpoch}, ${r.registryEpoch},
+      ${envelopes.get(r.deviceId)!}, ${digests.get(r.deviceId)!})`);
+    inserts.push(sql`INSERT INTO file_device_envelopes (file_node_id, owner_id, recipient_id, device_id,
+      revision, content_key_id, content_epoch, registry_epoch, ciphertext, digest)
+      SELECT column1, column2, column3, column4, column5, column6, column7, column8, column9, column10
+      FROM (VALUES ${sql.join(rows, sql`, `)}) WHERE ${witness}`);
+  }
+  return inserts;
 }
 /** An active ticket-19 barrier on the File or any ancestor prevents all current writes. */
 export function unblocked(ownerId: string, fileId: string) {
@@ -263,10 +298,11 @@ export function unblocked(ownerId: string, fileId: string) {
   ) SELECT 1 FROM ancestors a JOIN rotation_barriers b ON b.target_node_id = a.id AND b.owner_id = ${ownerId})`;
 }
 
-export async function saveV2File(env: Env, auth: AuthorizedDevice, fileId: string, value: unknown): Promise<Response> {
+export async function saveV2File(env: Env, auth: AuthorizedDevice, ownerId: string, fileId: string,
+  value: unknown): Promise<Response> {
   let input: ReturnType<typeof parsePayload>;
   try { input = parsePayload(value); } catch { return invalid(); }
-  const current = await headRow(env, fileId);
+  const current = await headRow(env, auth, ownerId, fileId);
   if (!current) return absent();
   try {
     const before = await verified(current), expected = await recipients(env, current.owner_id, fileId);
@@ -317,15 +353,8 @@ export async function saveV2File(env: Env, auth: AuthorizedDevice, fileId: strin
         current_representation_id = ${input.representation.id} WHERE node_id = ${fileId}
         AND owner_id = ${ownerId} AND ${marker}`,
       sql`DELETE FROM file_device_envelopes WHERE file_node_id = ${fileId} AND ${marker}`,
-      ...expected.map((r) => {
-        const ciphertext = input.direct.find((e) => e.deviceId === r.deviceId)!.ciphertext;
-        return sql`INSERT INTO file_device_envelopes (file_node_id, owner_id, recipient_id, device_id,
-            revision, content_key_id, content_epoch, registry_epoch, ciphertext, digest)
-          SELECT ${fileId}, ${ownerId}, ${r.accountId}, ${r.deviceId}, ${input.representation.revision},
-            ${input.representation.contentKeyId}, ${input.representation.keyEpoch}, ${r.registryEpoch},
-            ${ciphertext}, ${after.statement.recipients.find((e) => e.deviceId === r.deviceId)!.envelopeDigest}
-          WHERE ${marker}`;
-      }),
+      ...recipientInserts(ownerId, fileId, expected, input.direct, after,
+        input.representation.revision, input.representation.contentKeyId, input.representation.keyEpoch, marker),
       sql`DELETE FROM file_representations WHERE id = ${current.representation_id} AND file_node_id = ${fileId}
         AND owner_id = ${ownerId} AND ${marker}`,
       sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
@@ -535,15 +564,8 @@ export async function migrateV1File(env: Env, auth: AuthorizedDevice, fileId: st
         SELECT ${fileId}, ${row.owner_id}, ${signed.bytes}, ${signed.digest}, ${signed.signature},
           ${auth.deviceId}, ${publicKey}, ${v.receivingKeyId}, 1, 1, ${row.current_revision},
           ${repr.id}, ${repr.contentKeyId}, ${repr.keyEpoch}, ${parentEnvelope} WHERE ${witness}`,
-      ...current.map((r) => {
-        const ciphertext = wrapped.find((item) => item.deviceId === r.deviceId)!.ciphertext;
-        return sql`INSERT INTO file_device_envelopes (file_node_id, owner_id, recipient_id, device_id,
-          revision, content_key_id, content_epoch, registry_epoch, ciphertext, digest)
-          SELECT ${fileId}, ${row.owner_id}, ${r.accountId}, ${r.deviceId}, ${row.current_revision},
-          ${repr.contentKeyId}, ${repr.keyEpoch}, ${r.registryEpoch}, ${ciphertext},
-          ${next.statement.recipients.find((item) => item.deviceId === r.deviceId)!.envelopeDigest}
-          WHERE ${witness}`;
-      }),
+      ...recipientInserts(row.owner_id, fileId, current, wrapped, next,
+        row.current_revision, repr.contentKeyId as string, repr.keyEpoch as number, witness),
       sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
         SELECT ${auth.accountId}, ${auth.proofId}, ${auth.sessionId}, ${auth.expiresAt} WHERE ${witness}`,
       sql`UPDATE encryption_devices SET last_proof_at = ${coarseProofTime(now)} WHERE id = ${auth.deviceId}

@@ -2182,7 +2182,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "provisioning_needs_grant_id_owner_id_recipient_id_grants_id_owner_id_recipient_id_fk": {
@@ -2191,7 +2191,7 @@
           "tableTo": "grants",
           "columnsFrom": ["grant_id", "owner_id", "recipient_id"],
           "columnsTo": ["id", "owner_id", "recipient_id"],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "provisioning_needs_device_id_encryption_devices_id_fk": {
@@ -3069,7 +3069,7 @@
           "columnsTo": [
             "share_id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "share_device_material_share_id_material_revision_share_material_share_id_material_revision_fk": {
@@ -3078,7 +3078,7 @@
           "tableTo": "share_material",
           "columnsFrom": ["share_id", "material_revision"],
           "columnsTo": ["share_id", "material_revision"],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "share_device_material_device_id_encryption_devices_id_fk": {
@@ -3220,7 +3220,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },

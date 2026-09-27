@@ -91,8 +91,8 @@ CREATE TABLE `provisioning_needs` (
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
 	PRIMARY KEY(`grant_id`, `device_id`),
-	FOREIGN KEY (`grant_id`) REFERENCES `grants`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`grant_id`,`owner_id`,`recipient_id`) REFERENCES `grants`(`id`,`owner_id`,`recipient_id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`grant_id`) REFERENCES `grants`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`grant_id`,`owner_id`,`recipient_id`) REFERENCES `grants`(`id`,`owner_id`,`recipient_id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`device_id`) REFERENCES `encryption_devices`(`id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "provisioning_needs_bounded" CHECK("provisioning_needs"."generation" BETWEEN 1 AND 9007199254740991
     AND "provisioning_needs"."registry_epoch" BETWEEN 1 AND 9007199254740991
@@ -125,8 +125,8 @@ CREATE TABLE `share_device_material` (
 	`ciphertext` blob NOT NULL,
 	`digest` blob NOT NULL,
 	PRIMARY KEY(`share_id`, `device_id`),
-	FOREIGN KEY (`share_id`) REFERENCES `share_material`(`share_id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`share_id`,`material_revision`) REFERENCES `share_material`(`share_id`,`material_revision`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`share_id`) REFERENCES `share_material`(`share_id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`share_id`,`material_revision`) REFERENCES `share_material`(`share_id`,`material_revision`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`device_id`) REFERENCES `encryption_devices`(`id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "share_device_material_bounded" CHECK("share_device_material"."material_revision" BETWEEN 1 AND 9007199254740991
     AND "share_device_material"."registry_epoch" BETWEEN 1 AND 9007199254740991
@@ -147,7 +147,7 @@ CREATE TABLE `share_material` (
 	`candidate_digest` blob,
 	`candidate_signature` blob,
 	`candidate_signer_device_id` text,
-	FOREIGN KEY (`share_id`) REFERENCES `shares`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`share_id`) REFERENCES `shares`(`id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`candidate_signer_device_id`) REFERENCES `encryption_devices`(`id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "share_material_bounded" CHECK("share_material"."material_revision" BETWEEN 1 AND 9007199254740991
   AND "share_material"."target_epoch" BETWEEN 1 AND 9007199254740991

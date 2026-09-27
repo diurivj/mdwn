@@ -35,8 +35,9 @@ async function setup() {
   const session = await seedNormalSession({ accountId: ownerId, credentialIds: [credentialId] });
   await env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(deviceId, session.id).run();
   const rootKey = generateDirectoryCapabilityKey();
-  async function request(path: string, method: "POST" | "PUT" | "PATCH", value?: object, proofId?: string) {
-    const url = `https://mdwn.test${path}`, body = value === undefined ? undefined : JSON.stringify(value);
+  async function request(path: string, method: "POST" | "PUT" | "PATCH", value?: object | string, proofId?: string) {
+    const url = `https://mdwn.test${path}`, body = value === undefined ? undefined :
+      typeof value === "string" ? value : JSON.stringify(value);
     const proof = await signDeviceProof(assertion.privateKey, { sessionBinding: await sessionBindingDigest(session.id),
       deviceId, registryEpoch: 1, method, url, body, ...(proofId ? { proofId } : {}) });
     return SELF.fetch(url, { method, headers: { cookie: session.cookie, origin: "https://mdwn.test",
@@ -59,7 +60,7 @@ async function setup() {
     ...entry, expectedRevision: 1, representation: { id: representationId, contentKeyId: fileId,
       keyEpoch: 1, revision: 1, ciphertext: encode(content.contentEnvelope) }, listingHead });
   expect(created.status, await created.clone().text()).toBe(201);
-  return { ownerId, rootId, deviceId, assertion, rootKey, fileId, entry, representationId, content, request };
+  return { ownerId, rootId, deviceId, assertion, transport, rootKey, fileId, entry, representationId, content, request };
 }
 
 async function prepareMigration(f: Awaited<ReturnType<typeof setup>>) {
@@ -105,7 +106,158 @@ async function prepareMigration(f: Awaited<ReturnType<typeof setup>>) {
   receiver, prior, signed, currentKey };
 }
 
+async function directDevices(f: Awaited<ReturnType<typeof setup>>, count: number) {
+  const recipient = await setup(), deviceIds = [recipient.deviceId];
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", recipient.transport.publicKey));
+  const assertionKey = new Uint8Array(await crypto.subtle.exportKey("raw", recipient.assertion.publicKey));
+  for (let i = 1; i < count; i += 20) {
+    const statements = Array.from({ length: Math.min(20, count - i) }, (_, index) => {
+      const deviceId = id();
+      deviceIds.push(deviceId);
+      return env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key,
+        assertion_public_key, state, approval_provenance, registry_epoch, created_at)
+        VALUES (?, ?, ?, ?, 'active', 'signup', ?, ?)`).bind(deviceId, recipient.ownerId, publicKey,
+          assertionKey, i + index + 1, Date.now());
+    });
+    await env.DB.batch(statements);
+  }
+  const grantId = id(), now = Date.now();
+  await env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind,
+    permission, generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'file', 'read_write', 1, ?, ?)`)
+    .bind(grantId, f.ownerId, recipient.ownerId, f.fileId, now, now).run();
+  return { accountId: recipient.ownerId, deviceIds, publicKey, grantId, transport: recipient.transport,
+    registryEpoch: count };
+}
+
+async function recipientWrappers(key: Uint8Array, f: Awaited<ReturnType<typeof setup>>,
+  devices: Awaited<ReturnType<typeof directDevices>>, contentKeyId: string, epoch: number, revision: number) {
+  const result = [];
+  for (const deviceId of devices.deviceIds) {
+    const envelope = await sealToRecipient(key, devices.transport.publicKey, { purpose: "grant",
+      vaultId: f.ownerId, objectId: f.fileId, keyId: contentKeyId, keyEpoch: epoch,
+      revision, recipientId: deviceId });
+    result.push({ accountId: devices.accountId, deviceId, registryEpoch: devices.registryEpoch,
+      publicKeyDigest: await hash(devices.publicKey), grants: [{ id: devices.grantId, generation: 1 }],
+      envelopeDigest: await hash(envelope), envelope });
+  }
+  return result.sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+}
+
 describe("v2 File storage over proof-guarded resources", () => {
+  it("does not reveal a File's encoding or revision before read/write authorization", async () => {
+    const f = await setup(), outsider = await setup(), migration = await prepareMigration(f);
+    expect((await f.request(`/api/private/tree/files/${f.fileId}/migrate`, "PATCH", migration.value)).status).toBe(200);
+    const missingId = id();
+    const dummy = { expectedHeadDigest: encode(new Uint8Array(32)), expectedRevision: 1,
+      expectedRecipientSetVersion: 1, parentEnvelope: encode(new Uint8Array([1])), recipientEnvelopes: [],
+      representation: { id: id(), contentKeyId: id(), keyEpoch: 2, revision: 2,
+        ciphertext: encode(new Uint8Array([1])) },
+      signedHead: { bytes: encode(new Uint8Array([1])), digest: encode(new Uint8Array(32)),
+        signature: encode(new Uint8Array(64)) } };
+    const path = (fileId: string) => `/api/private/tree/files/${fileId}`;
+    const inaccessible = await outsider.request(path(f.fileId), "PATCH", dummy);
+    const missing = await outsider.request(path(missingId), "PATCH", dummy);
+    const oldFormat = await outsider.request(path(outsider.fileId), "PATCH", dummy);
+    expect([inaccessible.status, missing.status]).toEqual([404, 404]);
+    const notFoundBody = await missing.text();
+    expect(await inaccessible.text()).toBe(notFoundBody);
+    expect(inaccessible.headers.get("cache-control")).toBe("no-store");
+    expect(oldFormat.status).toBe(400); // Authorized malformed payload remains 400.
+    const now = Date.now(), grantId = id();
+    await env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind,
+      permission, generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'file', 'read_only', 1, ?, ?) `)
+      .bind(grantId, f.ownerId, outsider.ownerId, f.fileId, now, now).run();
+    expect((await outsider.request(path(f.fileId), "POST")).status).toBe(202);
+    const deniedSave = await outsider.request(path(f.fileId), "PATCH", dummy);
+    expect([deniedSave.status, await deniedSave.text()]).toEqual([404, notFoundBody]);
+    const malformedKnown = await outsider.request(path(f.fileId), "PATCH", "{");
+    const malformedMissing = await outsider.request(path(missingId), "PATCH", "{");
+    expect([malformedKnown.status, malformedMissing.status]).toEqual([400, 400]);
+    expect(await malformedKnown.text()).toBe(await malformedMissing.text());
+  });
+  it.each([5, 256])("migrates and saves with every one of %i direct File devices in one atomic operation", async (count) => {
+    const f = await setup(), migration = await prepareMigration(f), devices = await directDevices(f, count);
+    const first = await recipientWrappers(migration.currentKey, f, devices,
+      f.fileId, 1, 1);
+    const migrateHead = await signFileHead({ ...(await verifyFileHead(migration.signed, {
+      ownerId: f.ownerId, vaultId: f.ownerId, fileId: f.fileId, signerDeviceId: f.deviceId,
+      publicKey: new Uint8Array(await crypto.subtle.exportKey("raw", f.assertion.publicKey)), revision: 1
+    })).statement, recipients: first.map(({ envelope, ...descriptor }) => descriptor) }, f.assertion.privateKey);
+    const route = `/api/private/tree/files/${f.fileId}`;
+    const migrate = await f.request(`${route}/migrate`, "PATCH", {
+      ...migration.value, signedHead: wire(migrateHead), recipientEnvelopes: first.map((r) => ({
+        deviceId: r.deviceId, ciphertext: encode(r.envelope) })) });
+    expect(migrate.status, await migrate.clone().text()).toBe(200);
+    const context = await (await f.request(`${route}/context`, "POST")).json() as {
+      recipients: { deviceId: string }[]; currentHead: { digest: string } };
+    expect(context.recipients).toHaveLength(count);
+    const keyId = id(), representationId = id();
+    const next = await createFileSave({ markdown: "fully provisioned", metadata: new Uint8Array() },
+      migration.receiver.publicKey, { vaultId: f.ownerId, fileId: f.fileId,
+        receivingKeyId: migration.receiver.receivingKeyId, receivingEpoch: 1,
+        publicKeyDigest: migration.receiver.publicKeyDigest },
+      { vaultId: f.ownerId, fileId: f.fileId, contentKeyId: keyId, contentEpoch: 2, revision: 2 },
+      devices.deviceIds.map((deviceId) => ({ deviceId, publicKey: devices.transport.publicKey })));
+    const second = await signFileHead({ ...(await verifyFileHead(migrateHead, {
+      ownerId: f.ownerId, vaultId: f.ownerId, fileId: f.fileId, signerDeviceId: f.deviceId,
+      publicKey: new Uint8Array(await crypto.subtle.exportKey("raw", f.assertion.publicKey)), revision: 1
+    })).statement, revision: 2, contentKey: { id: keyId, epoch: 2 },
+    representation: { id: representationId, digest: await hash(next.contentEnvelope) },
+    parentEnvelopeDigest: await hash(next.parentEnvelope),
+    recipients: await Promise.all(first.map(async ({ envelope: _envelope, ...descriptor }) => ({ ...descriptor,
+      envelopeDigest: await hash(next.recipientEnvelopes.find((e) => e.deviceId === descriptor.deviceId)!.envelope) }))),
+    signerDeviceId: f.deviceId }, f.assertion.privateKey);
+    const save = await f.request(route, "PATCH", { expectedHeadDigest: context.currentHead.digest,
+      expectedRevision: 1, expectedRecipientSetVersion: 1, parentEnvelope: encode(next.parentEnvelope),
+      recipientEnvelopes: next.recipientEnvelopes.map((e) => ({ deviceId: e.deviceId, ciphertext: encode(e.envelope) })),
+      representation: { id: representationId, contentKeyId: keyId, keyEpoch: 2, revision: 2,
+        ciphertext: encode(next.contentEnvelope) }, signedHead: wire(second) });
+    expect(save.status, await save.clone().text()).toBe(200);
+    expect((await (await f.request(route, "POST")).json() as { revision: number }).revision).toBe(2);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM file_device_envelopes WHERE file_node_id = ?")
+      .bind(f.fileId).first()).toEqual({ count });
+    if (count === 5) {
+      const staleKeyId = id(), staleRepresentationId = id();
+      const stale = await createFileSave({ markdown: "stale set", metadata: new Uint8Array() },
+        migration.receiver.publicKey, { vaultId: f.ownerId, fileId: f.fileId,
+          receivingKeyId: migration.receiver.receivingKeyId, receivingEpoch: 1,
+          publicKeyDigest: migration.receiver.publicKeyDigest },
+        { vaultId: f.ownerId, fileId: f.fileId, contentKeyId: staleKeyId, contentEpoch: 3, revision: 3 },
+        devices.deviceIds.map((deviceId) => ({ deviceId, publicKey: devices.transport.publicKey })));
+      const before = (await verifyFileHead(second, { ownerId: f.ownerId, vaultId: f.ownerId,
+        fileId: f.fileId, signerDeviceId: f.deviceId,
+        publicKey: new Uint8Array(await crypto.subtle.exportKey("raw", f.assertion.publicKey)), revision: 2 })).statement;
+      const staleHead = await signFileHead({ ...before, revision: 3,
+        contentKey: { id: staleKeyId, epoch: 3 },
+        representation: { id: staleRepresentationId, digest: await hash(stale.contentEnvelope) },
+        parentEnvelopeDigest: await hash(stale.parentEnvelope),
+        recipients: await Promise.all(before.recipients.map(async (r) => ({ ...r,
+          envelopeDigest: await hash(stale.recipientEnvelopes.find((e) => e.deviceId === r.deviceId)!.envelope) })))
+      }, f.assertion.privateKey);
+      const staleSave = { expectedHeadDigest: encode(second.digest), expectedRevision: 2,
+        expectedRecipientSetVersion: 1, parentEnvelope: encode(stale.parentEnvelope),
+        recipientEnvelopes: stale.recipientEnvelopes.map((r) => ({ deviceId: r.deviceId,
+          ciphertext: encode(r.envelope) })),
+        representation: { id: staleRepresentationId, contentKeyId: staleKeyId, keyEpoch: 3,
+          revision: 3, ciphertext: encode(stale.contentEnvelope) }, signedHead: wire(staleHead) };
+      // A descriptor from an earlier context cannot authorize the newly eligible
+      // device or a later Grant generation (both sides of the recipient relation).
+      const extraDevice = id();
+      await env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key,
+        assertion_public_key, state, approval_provenance, registry_epoch, created_at)
+        VALUES (?, ?, ?, ?, 'active', 'signup', 6, ?)`)
+        .bind(extraDevice, devices.accountId, devices.publicKey,
+          new Uint8Array(await crypto.subtle.exportKey("raw", f.assertion.publicKey)), Date.now()).run();
+      expect((await f.request(route, "PATCH", staleSave)).status).toBe(400);
+      await env.DB.prepare("UPDATE grants SET generation = generation + 1, updated_at = ? WHERE id = ?")
+        .bind(Date.now(), devices.grantId).run();
+      expect((await f.request(route, "PATCH", staleSave)).status).toBe(400);
+      expect((await (await f.request(route, "POST")).json() as { revision: number }).revision).toBe(2);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM file_device_envelopes WHERE file_node_id = ?")
+        .bind(f.fileId).first()).toEqual({ count: 5 });
+    }
+  }, 120_000);
+
   it("commits mixed tagged legacy and receiving entries without v1 verification fallback", async () => {
     const f = await setup(), secondId = id(), secondRepresentationId = id();
     const writer = await createSymmetricWriter(f.rootKey);
@@ -219,6 +371,40 @@ describe("v2 File storage over proof-guarded resources", () => {
       .bind(f.fileId).first()).toEqual({ count: 1 });
   });
 
+  it("allows only one of two competing same-head v2 saves to commit", async () => {
+    const f = await setup(), migration = await prepareMigration(f);
+    expect((await f.request(`/api/private/tree/files/${f.fileId}/migrate`, "PATCH", migration.value)).status).toBe(200);
+    const route = `/api/private/tree/files/${f.fileId}`;
+    const current = await (await f.request(`${route}/context`, "POST")).json() as { currentHead: { digest: string } };
+    async function candidate(markdown: string) {
+      const keyId = id(), representationId = id();
+      const fresh = await createFileSave({ markdown, metadata: new Uint8Array() },
+        migration.receiver.publicKey, { vaultId: f.ownerId, fileId: f.fileId,
+          receivingKeyId: migration.receiver.receivingKeyId, receivingEpoch: 1,
+          publicKeyDigest: migration.receiver.publicKeyDigest },
+        { vaultId: f.ownerId, fileId: f.fileId, contentKeyId: keyId, contentEpoch: 2, revision: 2 }, []);
+      const head = await signFileHead({ ownerId: f.ownerId, vaultId: f.ownerId, fileId: f.fileId,
+        revision: 2, contentKey: { id: keyId, epoch: 2 },
+        receivingKey: { id: migration.receiver.receivingKeyId, epoch: 1,
+          publicKeyDigest: migration.receiver.publicKeyDigest },
+        representation: { id: representationId, digest: await hash(fresh.contentEnvelope) },
+        parentEnvelopeDigest: await hash(fresh.parentEnvelope), recipientSetVersion: 1,
+        recipients: [], publication: { status: "none" }, signerDeviceId: f.deviceId }, f.assertion.privateKey);
+      return { expectedHeadDigest: current.currentHead.digest, expectedRevision: 1,
+        expectedRecipientSetVersion: 1, parentEnvelope: encode(fresh.parentEnvelope), recipientEnvelopes: [],
+        representation: { id: representationId, contentKeyId: keyId, keyEpoch: 2, revision: 2,
+          ciphertext: encode(fresh.contentEnvelope) }, signedHead: wire(head) };
+    }
+    const a = await candidate("first"), b = await candidate("second");
+    const results = await Promise.all([f.request(route, "PATCH", a), f.request(route, "PATCH", b)]);
+    expect(results.map((response) => response.status).sort()).toEqual([200, 409]);
+    const winner = results[0]!.status === 200 ? a : b;
+    const read = await (await f.request(route, "POST")).json() as { revision: number; representationId: string };
+    expect([read.revision, read.representationId]).toEqual([2, winner.representation.id]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM file_representations WHERE file_node_id = ?")
+      .bind(f.fileId).first()).toEqual({ count: 1 });
+  });
+
   it("rejects a tampered or stale migration without advancing File or structural heads", async () => {
     const f = await setup(), migration = await prepareMigration(f);
     const route = `/api/private/tree/files/${f.fileId}/migrate`;
@@ -280,6 +466,35 @@ describe("v2 File storage over proof-guarded resources", () => {
       .bind(f.fileId).first()).toEqual({ count: 0 });
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM file_representations WHERE file_node_id = ?")
       .bind(f.fileId).first()).toEqual({ count: 1 });
+  });
+
+  it("requires dependency-ordered cleanup of Share material and Grant provisioning needs", async () => {
+    const f = await setup(), recipient = await seedRecipient(), now = Date.now(), shareId = id(), grantId = id();
+    await env.DB.prepare(`INSERT INTO shares (id, owner_id, recipient_id, target_node_id, target_kind,
+      permission, created_at) VALUES (?, ?, ?, ?, 'file', 'read_only', ?)`)
+      .bind(shareId, f.ownerId, recipient.accountId, f.fileId, now).run();
+    await env.DB.prepare(`INSERT INTO share_material (share_id, material_revision, anticipated_grant_id,
+      target_key_id, target_epoch, head_digest, registry_epoch) VALUES (?, 1, ?, ?, 1, ?, 1)`)
+      .bind(shareId, grantId, id(), new Uint8Array(32)).run();
+    await env.DB.prepare(`INSERT INTO share_device_material (share_id, material_revision, device_id,
+      registry_epoch, public_key_digest, ciphertext, digest) VALUES (?, 1, ?, 1, ?, X'01', ?)`)
+      .bind(shareId, recipient.device.deviceId, new Uint8Array(32), new Uint8Array(32)).run();
+    await expect(env.DB.prepare("DELETE FROM shares WHERE id = ?").bind(shareId).run()).rejects.toThrow();
+    await expect(env.DB.prepare("DELETE FROM share_material WHERE share_id = ?").bind(shareId).run()).rejects.toThrow();
+    await env.DB.prepare("DELETE FROM share_device_material WHERE share_id = ?").bind(shareId).run();
+    await env.DB.prepare("DELETE FROM share_material WHERE share_id = ?").bind(shareId).run();
+    await env.DB.prepare("DELETE FROM shares WHERE id = ?").bind(shareId).run();
+    await env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind,
+      permission, generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'file', 'read_only', 1, ?, ?)`)
+      .bind(grantId, f.ownerId, recipient.accountId, f.fileId, now, now).run();
+    await env.DB.prepare(`INSERT INTO provisioning_needs (grant_id, owner_id, recipient_id, device_id,
+      generation, registry_epoch, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)`)
+      .bind(grantId, f.ownerId, recipient.accountId, recipient.device.deviceId, now, now).run();
+    await expect(env.DB.prepare("DELETE FROM grants WHERE id = ?").bind(grantId).run()).rejects.toThrow();
+    await env.DB.prepare("DELETE FROM provisioning_needs WHERE grant_id = ?").bind(grantId).run();
+    await env.DB.prepare("DELETE FROM grants WHERE id = ?").bind(grantId).run();
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM provisioning_needs WHERE grant_id = ?")
+      .bind(grantId).first()).toEqual({ count: 0 });
   });
 
   it("pins pending Share device material to its precise offer revision", async () => {

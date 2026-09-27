@@ -285,9 +285,20 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   if (migrationDevices) return migrationRecipients(env, auth, nodeId);
   if (migrateFile) return migrateV1File(env, auth, nodeId, value);
   if (file) {
-    const row = await createDb(env.DB).get<{ encoding: string }>(sql`SELECT encoding FROM directory_entries WHERE child_node_id = ${nodeId}`);
-    if (row?.encoding === "receiving-file") return request.method === "POST" ?
-      readV2File(env, auth, nodeId) : saveV2File(env, auth, nodeId, value);
+    // Select the representation only after checking current File authority. A
+    // missing, deleted or inaccessible File must not reveal its encoding or
+    // current revision via a representation-specific parser or conflict.
+    const ownerId = (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM vault_nodes
+      WHERE id = ${nodeId} AND kind = 'file'`))?.owner_id;
+    if (!ownerId) return notFound();
+    const row = await createDb(env.DB).get<{ encoding: string }>(sql`
+      SELECT e.encoding FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
+        AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
+      WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId} AND n.kind = 'file'
+        AND ${fileAccessGuard(auth, ownerId, nodeId, request.method === "POST" ? "file_read" : "file_edit")}`);
+    if (!row) return notFound();
+    if (row.encoding === "receiving-file") return request.method === "POST" ?
+      readV2File(env, auth, nodeId) : saveV2File(env, auth, ownerId, nodeId, value);
     return request.method === "POST" ? readFile(env, auth, nodeId) : saveFile(env, auth, nodeId, value);
   }
   if (pathToNode) return ancestors(env, auth, nodeId);
