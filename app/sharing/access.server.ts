@@ -151,10 +151,11 @@ export async function getEffectiveDirectoryAccess(db: D1Database, auth: Authoriz
     canUseAsImportTarget: row.level >= 2, canManageShares: row.is_owner === 1 };
 }
 
-/** The changed node cannot be a recipient's own shared root. For a collaborator,
- * structural power comes from a read/write Directory Grant covering the PARENT,
- * not a direct File Grant covering the child. The valid rooted lineage also
- * checks the target's current Owner and containment at the commit statement.
+/** A collaborator needs a read/write Directory Grant covering the PARENT:
+ * a Grant on the changed node (including a direct File Grant) cannot authorize
+ * its own root mutation. Other overlapping target Grants do not subtract that
+ * ancestor's authority. Rooted lineage checks current Owner and containment
+ * in the commit statement.
  */
 export function structuralAccessGuard(auth: AuthorizedDevice, ownerId: string,
   nodeId: string, action: StructuralAction): SQL {
@@ -165,9 +166,7 @@ export function structuralAccessGuard(auth: AuthorizedDevice, ownerId: string,
     SELECT 1 FROM lineage target WHERE target.depth = 0 AND target.parent_node_id IS NOT NULL
       AND ${privateReadGuard(auth)} AND ${rooted(ownerId)}
       AND (${auth.accountId} = ${ownerId} OR (
-        NOT EXISTS (SELECT 1 FROM grants shared_root
-          WHERE shared_root.owner_id = ${ownerId} AND shared_root.target_node_id = ${nodeId})
-        AND EXISTS (SELECT 1 FROM lineage ancestor JOIN grants g
+        EXISTS (SELECT 1 FROM lineage ancestor JOIN grants g
           ON g.owner_id = ${ownerId} AND g.recipient_id = ${auth.accountId}
             AND g.target_node_id = ancestor.id AND g.target_kind = 'directory'
             AND g.permission = 'read_write' WHERE ancestor.depth > 0)
@@ -176,9 +175,11 @@ export function structuralAccessGuard(auth: AuthorizedDevice, ownerId: string,
 
 /** One SAME read/write Directory Grant must cover the source's parent AND the
  * destination; independently unioned source/destination writes are insufficient.
- * Both chains must end at the same Owner's root; moving into one's descendant
- * or moving a shared-root Directory is denied. The caller must still CAS both
- * Directory revisions and apply rekey/rotation requirements before a real move.
+ * Source depth > 0 prevents a Grant rooted on the source from moving its own
+ * root, but other overlapping Grants cannot veto an authorizing ancestor Grant.
+ * Both chains must reach the same Owner's root; moving into one's descendant is
+ * denied. The caller must still CAS both Directory revisions and apply
+ * rekey/rotation requirements before a real move.
  */
 export function moveAccessGuard(auth: AuthorizedDevice, ownerId: string,
   nodeId: string, destinationDirectoryId: string): SQL {
@@ -205,9 +206,7 @@ export function moveAccessGuard(auth: AuthorizedDevice, ownerId: string,
       WHERE root.role = 'destination' AND root.kind = 'directory' AND root.parent_node_id IS NULL)
     AND NOT EXISTS (SELECT 1 FROM walk d WHERE d.role = 'destination' AND d.id = ${nodeId})
     AND (${auth.accountId} = ${ownerId} OR (
-      NOT EXISTS (SELECT 1 FROM grants shared_root WHERE shared_root.owner_id = ${ownerId}
-        AND shared_root.target_node_id = ${nodeId})
-      AND EXISTS (SELECT 1 FROM grants g
+      EXISTS (SELECT 1 FROM grants g
         JOIN walk source ON source.role = 'source' AND source.depth > 0
           AND source.id = g.target_node_id AND source.kind = 'directory'
         JOIN walk destination ON destination.role = 'destination' AND destination.id = g.target_node_id
