@@ -77,6 +77,32 @@ export const cases = [{
       "Owner's original Vault root must open its saved snapshot");
   },
 }, {
+  name: "HPKE Shared-as sealing requires an extractable imported P-256 public key",
+  async run() {
+    const ownerId = id(1), directoryId = id(3), labelId = id(6), deviceId = id(7);
+    const vaultRoot = crypto.getRandomValues(new Uint8Array(32));
+    const recipient = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+    const rawPublicKey = await crypto.subtle.exportKey("raw", recipient.publicKey);
+    const nonExtractablePublicKey = await crypto.subtle.importKey("raw", rawPublicKey,
+      { name: "ECDH", namedCurve: "P-256" }, false, []);
+    assert(nonExtractablePublicKey.type === "public" && !nonExtractablePublicKey.extractable,
+      "first import exactly matches the original resolved-device caller");
+    await rejectsAsync(sealShareLabel("Directory", ownerId, directoryId, labelId,
+      [{ deviceId, publicKey: nonExtractablePublicKey }], vaultRoot),
+      "HPKE cannot serialize a non-extractable recipient public key");
+    const resolvedPublicKey = await crypto.subtle.importKey("raw", rawPublicKey,
+      { name: "ECDH", namedCurve: "P-256" }, true, []);
+    assert(resolvedPublicKey.type === "public" && resolvedPublicKey.extractable,
+      "the corrected caller imports only the public recipient key as extractable");
+    const sealed = await sealShareLabel("Directory", ownerId, directoryId, labelId,
+      [{ deviceId, publicKey: resolvedPublicKey }], vaultRoot);
+    assert(sealed.deliveries.length === 1 && sealed.deliveries[0]!.deviceId === deviceId,
+      "resolved device receives a Shared-as envelope");
+    assert(await openShareLabel(sealed.deliveries[0]!.envelope, recipient,
+      ownerId, directoryId, labelId, deviceId) === "Directory",
+      "resolved device opens its Shared-as envelope");
+  },
+}, {
   name: "offer encoding refuses wrong identities, device counters and inconsistent material",
   async run() {
     const base = directoryOffer();

@@ -131,7 +131,7 @@ export async function inviteSharedRoot(snapshot: FilesSnapshot, targetId: string
     const targets = await Promise.all(recipient.devices.map(async (d) => ({ ...d,
       encodedPublicKey: d.publicKey, publicKeyBytes: decodeTreeBytes(d.publicKey, 65),
       publicKey: await crypto.subtle.importKey("raw", decodeTreeBytes(d.publicKey, 65),
-        { name: "ECDH", namedCurve: "P-256" }, false, []) })));
+        { name: "ECDH", namedCurve: "P-256" }, true, []) })));
     failureStage = "label-sealing";
     const labels = await sealShareLabel(name, ownerId, targetId, labelId, targets, snapshot.access.vaultRoot);
     failureStage = "file-key-reading";
