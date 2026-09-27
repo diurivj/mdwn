@@ -37,8 +37,9 @@ export type TreeKind = "directory" | "file";
 export type TreeEntry = SealedEntry & { name: string; order: string };
 export type DirectoryListing = { directoryId: string; entriesRevision: number; entries: TreeEntry[];
   listingVersion?: ListingVersion }; // Omitted only by older in-tab v1 clients.
-export type RootAccess = { vaultId: string; actorAccountId?: string;
-  rootId: string; rootKey: Uint8Array<ArrayBuffer> };
+export type RootAccess = { scope?: "owned" | "directory-grant"; vaultId: string; actorAccountId?: string;
+  rootId: string; rootKey: Uint8Array<ArrayBuffer>; vaultRoot?: Uint8Array<ArrayBuffer>;
+  grantId?: string; rootLabel?: string };
 export type LoadedFile = { parentId: string; revision: number; representationId: string;
   contentKeyId: string; keyEpoch: number; markdown: string; metadata: Uint8Array;
   v2?: { head: VerifiedFileHead; receivingPublicKey: string; signedHead: FileHeadWire } };
@@ -188,7 +189,9 @@ export async function openRoot(signal?: AbortSignal): Promise<RootAccess> {
   const rootKey = await openVaultRecoveryEnvelope(decodeTreeBytes(bootstrap.rootRecoveryEnvelope), vaultRoot,
     { purpose: "vault-recovery", vaultId: accountId, objectId: bootstrap.rootDirectoryId,
       keyId: bootstrap.rootDirectoryId, keyEpoch: 1, revision: 1 });
-  return { vaultId: accountId, actorAccountId: accountId, rootId: bootstrap.rootDirectoryId, rootKey };
+  signal?.throwIfAborted();
+  return { scope: "owned", vaultId: accountId, actorAccountId: accountId,
+    rootId: bootstrap.rootDirectoryId, rootKey, vaultRoot };
 }
 
 export async function loadDirectory(access: RootAccess, directoryId: string, key: Uint8Array,
@@ -211,7 +214,7 @@ export async function loadDirectory(access: RootAccess, directoryId: string, key
       head: { ...listing.listingHead, signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) },
     });
   }
-  rememberListing(access.vaultId, directoryId, listing.entriesRevision, listing.listingHead?.digest ?? "");
+  signal?.throwIfAborted();
   const entries = await Promise.all(listing.entries.map(async (entry): Promise<TreeEntry> => {
     const context = metadataContext(access.vaultId, directoryId, entry.nodeId);
     const name = decoder.decode(await openSymmetric(decodeTreeBytes(entry.nameCiphertext), key, { context }));
@@ -227,6 +230,8 @@ export async function loadDirectory(access: RootAccess, directoryId: string, key
     }
   }
   entries.sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : a.nodeId.localeCompare(b.nodeId));
+  signal?.throwIfAborted();
+  rememberListing(access.vaultId, directoryId, listing.entriesRevision, listing.listingHead?.digest ?? "");
   return { directoryId, entriesRevision: listing.entriesRevision, listingVersion: listing.listingVersion, entries };
 }
 
@@ -312,7 +317,7 @@ export async function loadDirectFile(actorAccountId: string, fileId: string,
   signal?: AbortSignal): Promise<LoadedDirectFile> {
   const device = await getDevice(actorAccountId);
   if (!device) throw new Error("private File unavailable");
-  const response = await privateRequest(`/api/private/tree/files/${fileId}`, { method: "POST", signal });
+  const response = await privateRequest(`/api/private/sharing/direct-files/${fileId}`, { method: "POST", signal });
   if (response.status === 202) throw new SharedProvisioningError();
   if (response.status === 404) throw new TreeNotFoundError();
   if (!response.ok) throw new Error("private File unavailable");

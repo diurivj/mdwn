@@ -1,5 +1,5 @@
 import { FilesPage } from "~/tree/FilesPage";
-import { loadFilesPage } from "~/tree/navigation-client";
+import { loadFilesPage, type RootFilesPageData } from "~/tree/navigation-client";
 
 import type { Route } from "./+types/directory";
 
@@ -16,5 +16,5 @@ export function HydrateFallback() {
 
 export default function DirectoryRoute({ params, loaderData }: Route.ComponentProps) {
   return <FilesPage key={params.directoryId} nodeId={params.directoryId}
-    kind="directory" initial={loaderData} />;
+    kind="directory" initial={loaderData as RootFilesPageData} />;
 }

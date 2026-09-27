@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
+import { SharedNavigation, SharePanel } from "~/sharing/SharingUI";
 
 import {
   createTreeChild, loadDirectory, NameConflictError, NamespaceChangedError,
@@ -8,19 +9,19 @@ import {
   type DirectoryListing, type TreeEntry, type TreeKind,
 } from "./client";
 import { FileEditor } from "./FileEditor";
-import { expandedPreferenceKey, savedExpanded, type FilesPageData, type FilesSnapshot } from "./navigation-client";
+import { expandedPreferenceKey, savedExpanded, type RootFilesPageData, type FilesSnapshot } from "./navigation-client";
 
 type Dialog = {
   operation: "create" | "rename"; kind: TreeKind; parentId: string; nodeId?: string;
   requestedName: string; review?: "local" | "changed";
 };
 
-export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: TreeKind; initial: FilesPageData }) {
+export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: TreeKind; initial: RootFilesPageData }) {
   const navigate = useNavigate();
   const revalidator = useRevalidator();
   const navigation = useNavigation();
   const [snapshot, setSnapshot] = useState<FilesSnapshot | null>(initial.snapshot);
-  const [status, setStatus] = useState<FilesPageData["status"]>(initial.status);
+  const [status, setStatus] = useState<RootFilesPageData["status"]>(initial.status);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [drawer, setDrawer] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -35,7 +36,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const recoveryPending = isSignupRecoveryConfirmationPending();
 
   useEffect(() => {
-    setSnapshot((previous) => initial.snapshot ?? (previous?.crumbs.at(-1)?.id === nodeId ? previous : null));
+    setSnapshot((previous) => initial.snapshot ?? (initial.status !== "provisioning" &&
+      previous?.crumbs.at(-1)?.id === nodeId ? previous : null));
     setStatus(initial.status);
     setDialog(null);
     if (initial.snapshot) setExpanded(Array.from(new Set([
@@ -70,7 +72,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }
 
   function startCreate(createKind: TreeKind) {
-    if (!snapshot || !authorityVerified) return;
+    if (!snapshot || !authorityVerified || !snapshot.canCreateChild) return;
     const parentId = kind === "directory" ? nodeId : snapshot.crumbs.at(-2)?.id;
     if (!parentId || !snapshot.listings[parentId]) return;
     setMessage("");
@@ -78,7 +80,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }
 
   function startRename() {
-    if (!snapshot || !authorityVerified || nodeId === snapshot.access.rootId) return;
+    if (!snapshot || !authorityVerified || !snapshot.canCreateChild || nodeId === snapshot.access.rootId) return;
     const parentId = snapshot.crumbs.at(-2)?.id;
     const entry = parentId && snapshot.listings[parentId]?.entries.find((item) => item.nodeId === nodeId);
     if (!entry || !parentId) return;
@@ -177,6 +179,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
 
   if (status === "not-found" && !snapshot) return <main className="p-8"><h1 className="text-xl font-semibold">Not found</h1>
     <p>This File or folder is unavailable.</p><Link to="/account/device-access" className="underline">Files access</Link></main>;
+  if (status === "provisioning") return <main className="p-8" role="status">Shared content is being securely provisioned</main>;
   if (!snapshot || snapshot.crumbs.at(-1)?.id !== nodeId) return <main className="p-8"><h1 className="text-xl font-semibold">Files unavailable</h1>
     <p>Check this device’s access or try again.</p><Link to="/account/device-access" className="underline">Device access</Link></main>;
 
@@ -187,8 +190,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     <aside className={`${drawer ? "block" : "hidden"} fixed inset-y-0 left-0 z-20 w-72 overflow-y-auto border-r border-stone-200 bg-stone-50 p-4 shadow-lg lg:static lg:block lg:w-auto lg:shadow-none`} aria-label="Files tree">
       <div className="mb-4 flex items-center justify-between"><Link to="/" className="font-semibold">mdwn</Link>
         <button type="button" onClick={() => setDrawer(false)} className="lg:hidden">Close tree</button></div>
-      <Link to={`/d/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">Files</Link>
+      <Link to={`/d/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">{snapshot.access.rootLabel ?? "Files"}</Link>
       <nav aria-label="Files">{directoryItems(snapshot.access.rootId)}</nav>
+      <SharedNavigation actorAccountId={snapshot.access.actorAccountId ?? snapshot.access.vaultId} />
     </aside>
     <section className="min-w-0 p-4 md:p-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -202,9 +206,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         </nav>
       </div>
       <div className="mt-6 flex flex-wrap items-center gap-2"><h1 className="mr-auto text-2xl font-semibold">{selected}</h1>
-        <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
-        <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button>
-        {nodeId !== snapshot.access.rootId && <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
+        {snapshot.canCreateChild && <><button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
+        <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button></>}
+        {nodeId !== snapshot.access.rootId && snapshot.canCreateChild && <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
+        {snapshot.scope === "owned" && nodeId !== snapshot.access.rootId && <SharePanel
+          snapshot={snapshot} nodeId={nodeId} kind={kind} name={selected}
+          onUpdated={(next) => setSnapshot(next)} />}
       </div>
       {recoveryPending && <p role="status" className="mt-3">Confirm your saved recovery phrase and codes before creating Files.</p>}
       {busy && <p role="status" className="mt-3">Updating Files…</p>}
@@ -217,7 +224,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       {kind === "file" && snapshot.file && snapshot.crumbs.at(-2)?.id && snapshot.keys[snapshot.crumbs.at(-2)!.id]
         ? <FileEditor fileId={nodeId} access={snapshot.access} file={snapshot.file}
           listing={snapshot.listings[snapshot.file.parentId]!} parentKey={snapshot.keys[snapshot.file.parentId]!}
-          flushRef={flushEditor} editingFrozen={busy || !authorityVerified} authorityVerified={authorityVerified} onCommitted={(file, listing) => setSnapshot((old) => old && ({ ...old, file,
+          flushRef={flushEditor} editingFrozen={busy || !authorityVerified} authorityVerified={authorityVerified}
+          writable={snapshot.canEditMarkdown} onCommitted={(file, listing) => setSnapshot((old) => old && ({ ...old, file,
             listings: { ...old.listings, [listing.directoryId]: listing },
             crumbs: old.crumbs.map((crumb) => crumb.id === nodeId
               ? { ...crumb, name: listing.entries.find((entry) => entry.nodeId === nodeId)?.name ?? crumb.name }

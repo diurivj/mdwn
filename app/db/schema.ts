@@ -736,6 +736,72 @@ export const shareDeviceMaterial = sqliteTable("share_device_material", {
     AND length(${table.publicKeyDigest}) = 32
     AND length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.digest}) = 32`)]);
 
+/** Detached signed offer: pending Share remains ciphertext-free to its recipient. */
+export const shareOffers = sqliteTable("share_offers", {
+  shareId: text("share_id").primaryKey().references(() => shareMaterial.shareId, { onDelete: "restrict" }),
+  labelId: text("label_id").notNull(),
+  ownerCopy: blob("owner_copy").notNull(),
+  bytes: blob("bytes").notNull(),
+  digest: blob("digest").notNull(),
+  signature: blob("signature").notNull(),
+  signerDeviceId: text("signer_device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+}, (table) => [check("share_offers_bounded", sql`length(${table.labelId}) BETWEEN 1 AND 256
+  AND length(${table.ownerCopy}) BETWEEN 1 AND 4096 AND length(${table.bytes}) BETWEEN 1 AND 131072
+  AND length(${table.digest}) = 32 AND length(${table.signature}) = 64`)]);
+
+export const shareOfferLabels = sqliteTable("share_offer_labels", {
+  shareId: text("share_id").notNull().references(() => shareOffers.shareId, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  ciphertext: blob("ciphertext").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [primaryKey({ columns: [table.shareId, table.deviceId] }),
+  check("share_offer_labels_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 4096
+    AND length(${table.digest}) = 32`)]);
+
+/** Immutable per-Grant Shared-as identity and Owner-owned recovery copy. */
+export const grantLabels = sqliteTable("grant_labels", {
+  grantId: text("grant_id").primaryKey().references(() => grants.id, { onDelete: "restrict" }),
+  labelId: text("label_id").notNull(),
+  ownerCopy: blob("owner_copy").notNull(),
+  offerBytes: blob("offer_bytes").notNull(),
+  offerDigest: blob("offer_digest").notNull(),
+  offerSignature: blob("offer_signature").notNull(),
+  signerDeviceId: text("signer_device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+}, (table) => [check("grant_labels_bounded", sql`length(${table.labelId}) BETWEEN 1 AND 256
+  AND length(${table.ownerCopy}) BETWEEN 1 AND 4096 AND length(${table.offerBytes}) BETWEEN 1 AND 131072
+  AND length(${table.offerDigest}) = 32 AND length(${table.offerSignature}) = 64`)]);
+
+/** Only actual eligible devices receive encrypted names; no plaintext or name hashes. */
+export const grantLabelDeliveries = sqliteTable("grant_label_deliveries", {
+  grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  registryEpoch: integer("registry_epoch").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [primaryKey({ columns: [table.grantId, table.deviceId] }),
+  index("grant_label_deliveries_device_idx").on(table.deviceId),
+  check("grant_label_deliveries_bounded", sql`${table.registryEpoch} BETWEEN 1 AND 9007199254740991
+    AND length(${table.ciphertext}) BETWEEN 1 AND 4096 AND length(${table.digest}) = 32`)]);
+
+/** Current presealed File-key material survives consumption of the pending Share.
+ * Not a committed recipient envelope until a current signed File head includes it.
+ */
+export const grantRetainedMaterial = sqliteTable("grant_retained_material", {
+  grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  registryEpoch: integer("registry_epoch").notNull(),
+  contentKeyId: text("content_key_id").notNull(),
+  contentEpoch: integer("content_epoch").notNull(),
+  revision: integer("revision").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [primaryKey({ columns: [table.grantId, table.deviceId] }),
+  index("grant_retained_material_device_idx").on(table.deviceId),
+  check("grant_retained_material_bounded", sql`${table.registryEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.contentEpoch} BETWEEN 1 AND 9007199254740991 AND ${table.revision} BETWEEN 1 AND 9007199254740991
+    AND length(${table.contentKeyId}) BETWEEN 1 AND 256
+    AND length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.digest}) = 32`)]);
+
 /** Opaque outstanding Grant/device pair: NEVER a ciphertext, capability or name. */
 export const provisioningNeeds = sqliteTable("provisioning_needs", {
   grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "restrict" }),

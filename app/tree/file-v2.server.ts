@@ -27,7 +27,7 @@ export type Recipient = { accountId: string; deviceId: string; registryEpoch: nu
 type GrantRow = { account_id: string; device_id: string; registry_epoch: number; transport_public_key: ArrayBuffer;
   grant_id: string; generation: number };
 /** Only direct File Grants require individual device envelopes. Directory Grants traverse their own capability. */
-async function recipients(env: Env, ownerId: string, fileId: string): Promise<Recipient[]> {
+export async function recipients(env: Env, ownerId: string, fileId: string): Promise<Recipient[]> {
   const rows = await createDb(env.DB).all<GrantRow>(sql`SELECT g.recipient_id AS account_id, d.id AS device_id,
       registry.registry_epoch, d.transport_public_key, g.id AS grant_id, g.generation
     FROM grants g JOIN encryption_devices d ON d.account_id = g.recipient_id AND d.state = 'active'
@@ -126,7 +126,8 @@ type FileRow = HeadRow & { parent_node_id: string; has_parent_capability: number
   order_ciphertext: ArrayBuffer; encoding: string; receiving_entry_id: string | null;
   receiving_entry_epoch: number | null; wrap_revision: number | null; device_ciphertext: ArrayBuffer | null;
   device_digest: ArrayBuffer | null; device_registry_epoch: number | null };
-export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: string): Promise<Response> {
+export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: string,
+  directOnly = false): Promise<Response> {
   const ownerId = await fileOwner(env, fileId);
   if (!ownerId) return absent();
   const parentId = (await createDb(env.DB).get<{ parent_node_id: string }>(sql`
@@ -150,7 +151,10 @@ export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: strin
       AND own.content_key_id = h.content_key_id AND own.content_epoch = h.content_epoch
     WHERE n.id = ${fileId} AND n.owner_id = ${ownerId} AND n.parent_node_id = ${parentId}
       AND e.encoding = 'receiving-file'
-      AND ${fileAccessGuard(auth, ownerId, fileId, "file_read")}`);
+      AND ${fileAccessGuard(auth, ownerId, fileId, "file_read")}
+      AND ${directOnly ? sql`EXISTS (SELECT 1 FROM grants g WHERE g.owner_id = ${ownerId}
+        AND g.target_node_id = ${fileId} AND g.target_kind = 'file'
+        AND g.recipient_id = ${auth.accountId})` : sql`1=1`}`);
   if (!row) return absent();
   try {
     const head = await verified(row);
@@ -162,7 +166,7 @@ export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: strin
       representationId: row.representation_id, contentKeyId: row.content_key_id, keyEpoch: row.content_epoch,
       ciphertext: encode(row.ciphertext), receivingPublicKey: encode(row.receiving_public_key),
       fileHead: wireHead(row) };
-    if (row.has_parent_capability === 1) {
+    if (row.has_parent_capability === 1 && !directOnly) {
       return Response.json({ ...result, parentId: row.parent_node_id, nameCiphertext: encode(row.name_ciphertext),
         orderCiphertext: encode(row.order_ciphertext), keyEnvelope: encode(row.key_envelope),
         receivingKeyId: row.receiving_entry_id, receivingEpoch: row.receiving_entry_epoch,
@@ -240,7 +244,7 @@ async function verifySubmitted(env: Env, auth: AuthorizedDevice, ownerId: string
  * directions in the witness, including registered public keys/epochs and every
  * Grant identity/generation. Preflight descriptors alone confer no authority.
  */
-function exactRecipientGuard(ownerId: string, fileId: string, expected: Recipient[]): SQL {
+export function exactRecipientGuard(ownerId: string, fileId: string, expected: Recipient[]): SQL {
   const descriptors = JSON.stringify(expected.map((r) => ({ accountId: r.accountId, deviceId: r.deviceId,
     registryEpoch: r.registryEpoch, publicKeyHex: Array.from(decodeTreeBytes(r.publicKey, 65),
       (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase(), grants: r.grants })));

@@ -4,8 +4,8 @@ import { openSymmetric, sealToRecipient } from "~/crypto/enc-v1";
 import { privateRequest } from "~/device/private-client";
 import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
-import { authenticateFileHead, loadDirectory, loadFile,
-  type DirectoryListing, type FileHeadWire, type LoadedFile, type RootAccess } from "./client";
+import { authenticateFileHead, loadDirectFile, loadDirectory, loadFile,
+  type DirectoryListing, type FileHeadWire, type LoadedDirectFile, type LoadedFile, type RootAccess } from "./client";
 import { createListingHead } from "./listing";
 import { parseFileHeadBytes, signFileHead, type DirectRecipientDescriptor, type FileHeadStatement } from "./file-head";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
@@ -148,6 +148,7 @@ export async function migrateOwnedFile(options: { access: RootAccess; fileId: st
 /** Parent-free save request usable by an authenticated direct File editor. */
 export async function saveWithFileContext(options: { actorAccountId: string; fileId: string;
   source: string; metadata: Uint8Array; trustedHead: FileHeadWire; receivingPublicKey: string;
+  expectedOwnerId?: string;
 }): Promise<{ revision: number; headDigest: string }> {
   const { actorAccountId, fileId, source, metadata, trustedHead, receivingPublicKey } = options;
   if (!withinFileLimit(source)) throw new Error("File limit reached");
@@ -156,7 +157,9 @@ export async function saveWithFileContext(options: { actorAccountId: string; fil
   const response = await privateRequest(`/api/private/tree/files/${fileId}/context`, { method: "POST" });
   if (!response.ok) throw new Error("File write context unavailable");
   const context = await response.json() as WriteContext;
-  if (context.fileId !== fileId || context.currentHead.digest !== trustedHead.digest ||
+  if (context.fileId !== fileId ||
+      (options.expectedOwnerId && context.ownerId !== options.expectedOwnerId) ||
+      context.currentHead.digest !== trustedHead.digest ||
       context.receivingPublicKey !== receivingPublicKey) throw new FileChangedError();
   const revisionFromTrustedBytes = parseFileHeadBytes(decodeTreeBytes(trustedHead.bytes, 131_072)).revision;
   await authenticateFileHead(trustedHead, context.ownerId, fileId, revisionFromTrustedBytes);
@@ -199,6 +202,17 @@ export async function saveWithFileContext(options: { actorAccountId: string; fil
     throw new FileSaveUncertainError();
   }
   return result;
+}
+
+/** A direct File editor never loads a Directory, parent ID or owned Vault root. */
+export async function commitDirectFileSave(actorAccountId: string, fileId: string,
+  file: LoadedDirectFile, source: string): Promise<LoadedDirectFile> {
+  const saved = await saveWithFileContext({ actorAccountId, fileId, source, metadata: file.metadata,
+    expectedOwnerId: file.ownerId, trustedHead: file.signedHead, receivingPublicKey: file.receivingPublicKey });
+  const fresh = await loadDirectFile(actorAccountId, fileId);
+  if (fresh.revision !== saved.revision || encodeTreeBytes(fresh.head.digest) !== saved.headDigest ||
+      fresh.markdown !== source || fresh.ownerId !== file.ownerId) throw new FileSaveUncertainError();
+  return fresh;
 }
 
 /** Only the browser sees source and metadata. The signed head also commits to the new parent envelope. */

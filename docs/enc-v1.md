@@ -263,13 +263,13 @@ version, not a permissive v1 decoder.
 | 17 | `account-profile` |
 | 18 | `owned-device` |
 | 19 | `device-label` |
-| 20 | `file-receiving-key` (approved v2; pending implementation) |
+| 20 | `file-receiving-key` (v2 receiving private-key wrapper) |
+| 21 | `share-root-label` (immutable per-Grant Shared-as snapshot; HPKE device delivery or symmetric Owner copy) |
 
 Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
  key`, `File receiving key pair`, `Comment audience epoch`); only the numeric ID
 is serialized. Every HPKE envelope, `grant`, and `device-enrollment` requires a
-recipient ID. Purpose 20 is appended, **not yet accepted by the current v1
-implementation**; older purpose IDs and framing do not change.
+recipient ID. Purposes 20 and 21 are appended; older purpose IDs and framing do not change. Purpose 21 carries a versioned canonical `namespace-v1` snapshot segment under an explicit Owner/target/random-label-ID/epoch-1/revision-1 context, with a recipient device ID for HPKE. It is metadata, **not** a 32-byte content capability. Owner recovery keeps a symmetric copy under the Owner's own Vault root; recipient Vault recovery/enrollment never receives it.
 `public-representation` and `public-comment-audience-epoch` require a Publication ID.
 Callers must supply the optional bindings for all other cases where applicable;
 for example a public Comment's content must bind its Publication, whereas a

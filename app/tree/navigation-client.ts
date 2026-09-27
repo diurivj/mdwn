@@ -1,18 +1,29 @@
 import {
-  loadAncestors, loadDirectory, loadFile, openChildDirectory, openRoot, TreeNotFoundError,
-  type DirectoryListing, type LoadedFile, type RootAccess, type TreeKind,
+  loadAncestors, loadDirectory, loadDirectFile, loadFile, openChildDirectory, openRoot,
+  SharedProvisioningError, TreeNotFoundError,
+  type DirectoryListing, type LoadedDirectFile, type LoadedFile, type RootAccess, type TreeKind,
 } from "./client";
+import { privateRequest } from "~/device/private-client";
+import { namedRoot, openGrantedDirectory, sharedRoots, type GrantRoot } from "~/sharing/client";
 
 export type Crumb = { id: string; name: string };
 export type FilesSnapshot = {
+  scope: "owned" | "directory-grant";
+  canEditMarkdown: boolean; canCreateChild: boolean;
   access: RootAccess;
   listings: Record<string, DirectoryListing>;
   keys: Record<string, Uint8Array>;
   crumbs: Crumb[];
   file: LoadedFile | null;
 };
-export type FilesPageData = { status: "ready"; snapshot: FilesSnapshot } |
-  { status: "not-found" | "unavailable"; snapshot: null };
+export type DirectFilesSnapshot = { scope: "direct-file"; actorAccountId: string;
+  ownerId: string; grantId: string; name: string; permission: "read_only" | "read_write";
+  canEditMarkdown: boolean;
+  file: LoadedDirectFile };
+export type RootFilesPageData = { status: "ready"; snapshot: FilesSnapshot } |
+  { status: "not-found" | "unavailable" | "provisioning"; snapshot: null };
+export type FilesPageData = { status: "ready"; snapshot: FilesSnapshot | DirectFilesSnapshot } |
+  { status: "not-found" | "unavailable" | "provisioning"; snapshot: null };
 
 export const expandedPreferenceKey = (accountId: string) => `mdwn:files-expanded:${accountId}`;
 export function savedExpanded(accountId: string): string[] {
@@ -22,13 +33,12 @@ export function savedExpanded(accountId: string): string[] {
   } catch { return []; }
 }
 
-async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesSnapshot> {
-  const access = await openRoot(signal);
-  const path = await loadAncestors(nodeId, signal);
+async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal,
+  access: RootAccess, path: string[], canEditMarkdown = true, canCreateChild = true): Promise<FilesSnapshot> {
   if (path[0] !== access.rootId) throw new TreeNotFoundError();
   const listings: Record<string, DirectoryListing> = {};
   const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
-  const crumbs: Crumb[] = [{ id: access.rootId, name: "Files" }];
+  const crumbs: Crumb[] = [{ id: access.rootId, name: access.rootLabel ?? "Files" }];
   let file: LoadedFile | null = null;
   for (let index = 0; index < path.length; index++) {
     const parent = path[index]!;
@@ -73,14 +83,56 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
     }
     if (!progressed) break;
   }
-  return { access, listings, keys, crumbs, file };
+  signal.throwIfAborted();
+  return { scope: access.scope === "directory-grant" ? "directory-grant" : "owned",
+    canEditMarkdown, canCreateChild, access, listings, keys, crumbs, file };
 }
 
-/** Browser-only clientLoader data; SSR renders a public HydrateFallback instead. */
+/** Browser-only clientLoader data; direct File scopes never request ancestry/bootstrap. */
 export async function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesPageData> {
-  try { return { status: "ready", snapshot: await selectedPath(nodeId, kind, signal) }; }
-  catch (error) {
+  try {
+    const response = await privateRequest("/api/private/sharing/scope", { method: "POST",
+      body: JSON.stringify({ nodeId, kind }), signal });
+    if (response.status === 404) throw new TreeNotFoundError();
+    if (!response.ok) throw new Error("Files unavailable");
+    const scope = await response.json() as { scope: "owned" | "directory-grant" | "direct-file";
+      grantId?: string; path?: string[]; canEditMarkdown?: boolean; canCreateChild?: boolean };
+    signal.throwIfAborted();
+    if (scope.scope === "owned") {
+      const access = await openRoot(signal);
+      return { status: "ready", snapshot: await selectedPath(nodeId, kind, signal,
+        access, await loadAncestors(nodeId, signal)) };
+    }
+    if (!scope.grantId) throw new TreeNotFoundError();
+    const state = await fetch("/api/device/state", { cache: "no-store", signal });
+    if (!state.ok) throw new Error("Device unavailable");
+    const { accountId: actorAccountId } = await state.json() as { accountId: string };
+    const roots = await sharedRoots(signal);
+    const root: GrantRoot | undefined = roots.find((r) => r.grantId === scope.grantId);
+    if (!root || root.status !== "ready") throw new SharedProvisioningError();
+    const name = await namedRoot(root, actorAccountId);
+    signal.throwIfAborted();
+    if (scope.scope === "direct-file") {
+      if (kind !== "file" || root.kind !== "file" || root.targetId !== nodeId) throw new TreeNotFoundError();
+      const file = await loadDirectFile(actorAccountId, nodeId, signal);
+      signal.throwIfAborted();
+      return { status: "ready", snapshot: { scope: "direct-file", actorAccountId,
+        ownerId: root.ownerId, grantId: root.grantId, permission: root.permission,
+        canEditMarkdown: scope.canEditMarkdown === true, name, file } };
+    }
+    if (scope.scope !== "directory-grant" || root.kind !== "directory" ||
+        !scope.path || scope.path[0] !== root.targetId || scope.path.at(-1) !== nodeId ||
+        scope.path.length > 101) throw new TreeNotFoundError();
+    const key = await openGrantedDirectory(root, actorAccountId);
+    signal.throwIfAborted();
+    const access: RootAccess = { scope: "directory-grant", vaultId: root.ownerId,
+      actorAccountId, rootId: root.targetId, rootKey: new Uint8Array(key),
+      grantId: root.grantId, rootLabel: name };
+    return { status: "ready", snapshot: await selectedPath(nodeId, kind, signal, access, scope.path,
+      scope.canEditMarkdown === true, scope.canCreateChild === true) };
+  } catch (error) {
     if (signal.aborted) throw error;
-    return { status: error instanceof TreeNotFoundError ? "not-found" : "unavailable", snapshot: null };
+    return { status: error instanceof SharedProvisioningError ? "provisioning" :
+      error instanceof TreeNotFoundError ? "not-found" : "unavailable", snapshot: null };
   }
 }

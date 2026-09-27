@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useBlocker, useNavigation } from "react-router";
 
-import { loadDirectory, loadFile, type DirectoryListing, type LoadedFile, type RootAccess } from "./client";
-import { commitFileSave, FileChangedError, FILE_LIMIT_FEEDBACK, FILE_SOURCE_LIMIT,
+import { loadDirectFile, loadDirectory, loadFile, type DirectoryListing, type LoadedDirectFile,
+  type LoadedFile, type RootAccess } from "./client";
+import { commitDirectFileSave, commitFileSave, FileChangedError, FILE_LIMIT_FEEDBACK, FILE_SOURCE_LIMIT,
   sourceBytes, withinFileLimit } from "./editor-client";
 import { useFileLease } from "./edit-lease";
 import { MarkdownPreview } from "./MarkdownPreview";
 
 type SaveStatus = "Unsaved" | "Saving" | "Saved" | "Couldn't save";
 type Operation = "save" | "overwrite" | "reload";
-type EditorState = { source: string; savedSource: string; file: LoadedFile;
-  listing: DirectoryListing; status: SaveStatus; conflict: boolean; rejected: boolean; busy: Operation | null };
+type EditorState = { source: string; savedSource: string; file: LoadedFile | LoadedDirectFile;
+  listing: DirectoryListing | null; status: SaveStatus; conflict: boolean; rejected: boolean; busy: Operation | null };
 
 type Pending = { kind: Operation; promise: Promise<boolean> };
 
@@ -19,13 +20,41 @@ function acceptableEdit(proposed: string, previous: string): boolean {
   return size <= FILE_SOURCE_LIMIT || (before > FILE_SOURCE_LIMIT && size < before);
 }
 
-export function FileEditor({ fileId, access, file, listing, parentKey, onCommitted, flushRef,
-  editingFrozen, authorityVerified }: {
-  fileId: string; access: RootAccess; file: LoadedFile; listing: DirectoryListing;
-  parentKey: Uint8Array; onCommitted: (file: LoadedFile, listing: DirectoryListing) => void;
-  flushRef: React.RefObject<(() => Promise<boolean>) | null>;
-  editingFrozen: boolean; authorityVerified: boolean;
-}) {
+type Common = { fileId: string; flushRef: React.RefObject<(() => Promise<boolean>) | null>;
+  editingFrozen: boolean; authorityVerified: boolean; writable?: boolean };
+type Props = Common & ({ direct: true; actorAccountId: string; file: LoadedDirectFile;
+  onCommitted: (file: LoadedDirectFile) => void; access?: never; listing?: never; parentKey?: never } |
+  { direct?: false; access: RootAccess; file: LoadedFile; listing: DirectoryListing;
+    parentKey: Uint8Array; onCommitted: (file: LoadedFile, listing: DirectoryListing) => void;
+    actorAccountId?: never });
+
+export function FileEditor(props: Props) {
+  const { fileId, file, flushRef, editingFrozen, authorityVerified } = props;
+  const listing = props.direct ? null : props.listing;
+  const writable = props.writable !== false;
+  function committed(next: LoadedFile | LoadedDirectFile, head: DirectoryListing | null) {
+    if (props.direct && "ownerId" in next) props.onCommitted(next);
+    else if (!props.direct && "parentId" in next && head) props.onCommitted(next, head);
+  }
+  async function latest(): Promise<{ file: LoadedFile | LoadedDirectFile; listing: DirectoryListing | null }> {
+    if (props.direct) return { file: await loadDirectFile(props.actorAccountId, fileId), listing: null };
+    const parentId = current.current.file;
+    if (!("parentId" in parentId)) throw new Error("File unavailable");
+    const currentListing = await loadDirectory(props.access, parentId.parentId, props.parentKey);
+    const entry = currentListing.entries.find((item) => item.nodeId === fileId);
+    if (!entry || entry.kind !== "file") throw new Error("File unavailable");
+    return { file: await loadFile(props.access, fileId, parentId.parentId, props.parentKey, entry),
+      listing: currentListing };
+  }
+  async function commit(draft: EditorState, source: string) {
+    if (props.direct) {
+      if (!("ownerId" in draft.file)) throw new Error("File unavailable");
+      return { file: await commitDirectFileSave(props.actorAccountId, fileId, draft.file, source), listing: null };
+    }
+    if (!("parentId" in draft.file) || !draft.listing) throw new Error("File unavailable");
+    return commitFileSave({ access: props.access, fileId, file: draft.file,
+      source, listing: draft.listing, parentKey: props.parentKey });
+  }
   const [state, setState] = useState<EditorState>(() => ({ source: file.markdown,
     savedSource: file.markdown, file, listing, busy: null,
     status: withinFileLimit(file.markdown) ? "Saved" : "Couldn't save", conflict: false, rejected: false }));
@@ -40,8 +69,8 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   const pending = useRef<Pending | null>(null);
   const alive = useRef(true);
   // Async saves and window shortcuts must use today's verified authority, not their starting render.
-  const currentAuthority = useRef(authorityVerified);
-  currentAuthority.current = authorityVerified;
+  const currentAuthority = useRef(authorityVerified && writable);
+  currentAuthority.current = authorityVerified && writable;
   const lease = useFileLease(fileId, () => pending.current?.promise);
   const wasOwner = useRef(false);
   const needsFreshRead = useRef(false);
@@ -51,7 +80,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   const navigation = useNavigation();
   // An approved navigation leaves the old route mounted while its clientLoader runs.
   // Neither a visual control nor a synthetic late input may accept a disposable draft.
-  const editingLocked = editingFrozen || !authorityVerified || navigation.state !== "idle" ||
+  const editingLocked = editingFrozen || !authorityVerified || !writable || navigation.state !== "idle" ||
     blocker.state === "proceeding" || !lease.owner || refreshingLease || state.busy === "reload";
 
   function update(fn: (old: EditorState) => EditorState) {
@@ -64,14 +93,22 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   // Never take a stale listing, and never replace an in-memory draft with a changed representation.
   useEffect(() => {
     const old = current.current;
-    if (file.parentId !== old.file.parentId || listing.directoryId !== file.parentId) return;
+    if (("parentId" in file) !== ("parentId" in old.file)) return;
+    if ("parentId" in file && ("parentId" in old.file &&
+        (file.parentId !== old.file.parentId || listing?.directoryId !== file.parentId))) return;
     if (file.revision < old.file.revision) return;
-    if (file.representationId === old.file.representationId && file.revision === old.file.revision) {
-      const oldEntry = old.listing.entries.find((entry) => entry.nodeId === fileId);
-      const entry = listing.entries.find((candidate) => candidate.nodeId === fileId);
-      if (entry?.kind === "file" && entry.keyEnvelope === oldEntry?.keyEnvelope &&
-          listing.entriesRevision > old.listing.entriesRevision) {
-        update((previous) => ({ ...previous, listing }));
+    const same = "parentId" in file && "parentId" in old.file ?
+      file.representationId === old.file.representationId && file.revision === old.file.revision :
+      "ownerId" in file && "ownerId" in old.file &&
+        file.signedHead.digest === old.file.signedHead.digest && file.revision === old.file.revision;
+    if (same) {
+      if (listing && old.listing && "parentId" in file) {
+        const oldEntry = old.listing.entries.find((entry) => entry.nodeId === fileId);
+        const entry = listing.entries.find((candidate) => candidate.nodeId === fileId);
+        if (entry?.kind === "file" && entry.keyEnvelope === oldEntry?.keyEnvelope &&
+            listing.entriesRevision > old.listing.entriesRevision) {
+          update((previous) => ({ ...previous, listing }));
+        }
       }
     } else if (!pending.current && !composing.current) {
       if (old.source === old.savedSource && old.status === "Saved") {
@@ -106,17 +143,14 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
     if (pending.current) return pending.current.promise;
     return exclusive("reload", async () => {
       try {
-        const parentId = current.current.file.parentId;
-        const freshListing = await loadDirectory(access, parentId, parentKey);
-        const entry = freshListing.entries.find((candidate) => candidate.nodeId === fileId);
-        if (!entry || entry.kind !== "file") throw new Error("File unavailable");
-        const freshFile = await loadFile(access, fileId, parentId, parentKey, entry);
-        if (!alive.current || !lease.isOwner()) return false;
+        const fresh = await latest();
+        const freshFile = fresh.file;
+        if (!alive.current || !lease.isOwner() || !currentAuthority.current) return false;
         update((old) => ({ ...old, source: freshFile.markdown, savedSource: freshFile.markdown,
-          file: freshFile, listing: freshListing,
+          file: freshFile, listing: fresh.listing,
           status: withinFileLimit(freshFile.markdown) ? "Saved" : "Couldn't save",
           conflict: false, rejected: false }));
-        onCommitted(freshFile, freshListing);
+        committed(freshFile, fresh.listing);
         setNotice("");
         return true;
       } catch {
@@ -135,12 +169,11 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
       }
       if (draft.source === draft.savedSource && draft.status !== "Couldn't save") return true;
       try {
-        const saved = await commitFileSave({ access, fileId, file: draft.file, source: draft.source,
-          listing: draft.listing, parentKey });
+        const saved = await commit(draft, draft.source);
         if (!alive.current || !lease.isOwner()) return false;
         update((old) => ({ ...old, file: saved.file, listing: saved.listing,
           savedSource: draft.source, status: "Saving" }));
-        onCommitted(saved.file, saved.listing);
+        committed(saved.file, saved.listing);
         setNotice("");
       } catch (error) {
         if (alive.current) {
@@ -261,17 +294,13 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
     return exclusive("overwrite", async () => {
       const source = current.current.source;
       try {
-        const parentId = current.current.file.parentId;
-        const latestListing = await loadDirectory(access, parentId, parentKey);
-        const entry = latestListing.entries.find((item) => item.nodeId === fileId);
-        if (!entry || entry.kind !== "file") throw new Error("File unavailable");
-        const latestFile = await loadFile(access, fileId, parentId, parentKey, entry);
+        const fresh = await latest();
         if (!alive.current || !currentAuthority.current || !lease.isOwner()) return false;
-        const saved = await commitFileSave({ access, fileId, file: latestFile, listing: latestListing, parentKey, source });
+        const saved = await commit({ ...current.current, file: fresh.file, listing: fresh.listing }, source);
         if (!alive.current || !lease.isOwner()) return false;
         update((old) => ({ ...old, file: saved.file, listing: saved.listing, savedSource: source,
           conflict: false, status: "Saving" }));
-        onCommitted(saved.file, saved.listing);
+        committed(saved.file, saved.listing);
         setNotice("");
         // Editing may have continued while the overwrite was in flight; flush that draft next.
         return true;
@@ -289,6 +318,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   const oversized = bytes > FILE_SOURCE_LIMIT;
   const busy = state.busy !== null;
   return <>
+    {!writable && <p className="mt-3 text-sm">Read-only — you can comment</p>}
     <p className="mt-3 text-sm" role="status" aria-label="Save status">{state.status}</p>
     {(bytes >= FILE_LIMIT_FEEDBACK || state.rejected) && <p className="text-sm" role="status">
       {bytes} / {FILE_SOURCE_LIMIT} bytes{bytes >= FILE_SOURCE_LIMIT || state.rejected ? " — File limit reached" : ""}
