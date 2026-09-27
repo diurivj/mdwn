@@ -122,8 +122,8 @@ test("a failed same-File rename revalidation preserves the editor but freezes ed
     await expect(status).toHaveText("Saved", { timeout: 20_000 });
     await page.reload();
     await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("after verified retry");
-    // A different File identity has no permission to inherit this tab's old snapshot.
-    await page.goto(new URL("/f/00000000-0000-4000-8000-000000000000", baseURL!).href);
+    // A well-formed but missing File identity cannot inherit this tab's old snapshot.
+    await page.goto(new URL("/f/00000000-0000-7000-8000-000000000000", baseURL!).href);
     await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveCount(0);
   } finally { release(); releaseRetry?.(); await page.unroute(ancestors); await context.close(); }
