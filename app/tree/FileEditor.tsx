@@ -39,6 +39,9 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   const composing = useRef(false);
   const pending = useRef<Pending | null>(null);
   const alive = useRef(true);
+  // Async saves and window shortcuts must use today's verified authority, not their starting render.
+  const currentAuthority = useRef(authorityVerified);
+  currentAuthority.current = authorityVerified;
   const lease = useFileLease(fileId, () => pending.current?.promise);
   const wasOwner = useRef(false);
   const needsFreshRead = useRef(false);
@@ -124,7 +127,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   }
 
   async function doFlush(): Promise<boolean> {
-    while (alive.current && lease.isOwner()) {
+    while (alive.current && currentAuthority.current && lease.isOwner()) {
       const draft = current.current;
       if (draft.conflict || !withinFileLimit(draft.source)) {
         update((old) => ({ ...old, status: "Couldn't save" }));
@@ -153,8 +156,9 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   }
 
   function flush(): Promise<boolean> {
-    if (pending.current) return pending.current.promise.then(() => flush());
-    if (!authorityVerified || !alive.current || composing.current) return Promise.resolve(false);
+    if (!currentAuthority.current || !alive.current || composing.current) return Promise.resolve(false);
+    if (pending.current) return pending.current.promise.then(() =>
+      alive.current && currentAuthority.current ? flushRef.current?.() ?? false : false);
     if (current.current.source === current.current.savedSource && current.current.status === "Saved") return Promise.resolve(true);
     if (!lease.isOwner()) return Promise.resolve(false);
     return exclusive("save", doFlush);
@@ -177,7 +181,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
     function keydown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        if (lease.isOwner()) void flush();
+        if (lease.isOwner()) void flushRef.current?.();
       }
     }
     window.addEventListener("keydown", keydown);
@@ -251,7 +255,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   }
 
   function overwrite(): Promise<boolean> {
-    if (!authorityVerified || editingFrozen) return Promise.resolve(false);
+    if (!currentAuthority.current || editingFrozen) return Promise.resolve(false);
     if (pending.current) return pending.current.promise;
     if (!withinFileLimit(current.current.source) || !lease.isOwner() || composing.current) return Promise.resolve(false);
     return exclusive("overwrite", async () => {
@@ -262,7 +266,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
         const entry = latestListing.entries.find((item) => item.nodeId === fileId);
         if (!entry || entry.kind !== "file") throw new Error("File unavailable");
         const latestFile = await loadFile(access, fileId, parentId, parentKey, entry);
-        if (!alive.current || !lease.isOwner()) return false;
+        if (!alive.current || !currentAuthority.current || !lease.isOwner()) return false;
         const saved = await commitFileSave({ access, fileId, file: latestFile, listing: latestListing, parentKey, source });
         if (!alive.current || !lease.isOwner()) return false;
         update((old) => ({ ...old, file: saved.file, listing: saved.listing, savedSource: source,
