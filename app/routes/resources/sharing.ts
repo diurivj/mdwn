@@ -3,6 +3,7 @@ import {
   invitations, leaveGrant, revokeGrant, sharedRootsPage,
   type InvitationCursors,
 } from "~/sharing/client";
+import { provisionDirectFile } from "~/sharing/provisioning-client";
 import { isV7 } from "~/tree/wire";
 import type { Route } from "./+types/sharing";
 
@@ -45,6 +46,12 @@ function actionError(intent: string) {
   return { state: "error", intent, message: unavailable } as const;
 }
 
+function hasExactFormFields(form: FormData, names: readonly string[]): boolean {
+  const submitted = [...form.keys()];
+  return submitted.length === names.length && names.every((name) =>
+    submitted.filter((field) => field === name).length === 1);
+}
+
 export async function clientAction({ request }: Route.ClientActionArgs) {
   let form: FormData;
   try {
@@ -54,6 +61,20 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
   }
   const intent = formString(form, "intent");
   if (!intent) return actionError("unknown");
+
+  if (intent === "provision-direct-file") {
+    if (!hasExactFormFields(form, ["intent", "fileId"])) return { state: "error", intent } as const;
+    const fileId = formString(form, "fileId");
+    if (!fileId || !isV7(fileId)) return { state: "error", intent } as const;
+    try {
+      request.signal.throwIfAborted();
+      const state = await provisionDirectFile(fileId, request.signal);
+      return { state, intent } as const;
+    } catch (error) {
+      if (request.signal.aborted) throw error;
+      return { state: "error", intent } as const;
+    }
+  }
 
   if (intent === "invite") {
     const operationId = formString(form, "operationId");

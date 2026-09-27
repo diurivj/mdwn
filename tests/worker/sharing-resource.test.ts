@@ -244,6 +244,32 @@ describe("browser sharing resource route", () => {
     });
   }
 
+  for (const [status, state] of [[202, "provisioning"], [409, "stale"], [200, "provisioning"]] as const) {
+    it(`maps direct File completion ${status} to a safe action result`, async () => {
+      const current = await directProvisioningFixture();
+      const calls = await stubPrivateWorker((call) => {
+        if (call.path.endsWith("/bootstrap")) return Response.json(current.bootstrap);
+        if (call.path.endsWith("/complete")) return status === 200
+          ? Response.json({ status: "provisioning", headDigest: "must stay private" })
+          : new Response("{}", { status });
+        throw new Error(`Unexpected private request: ${call.path}`);
+      }, current.device);
+      const form = new FormData();
+      form.set("intent", "provision-direct-file");
+      form.set("fileId", current.fileId);
+
+      const result = await callRouteHandler(clientAction, new Request(
+        "https://mdwn.test/resources/sharing", { method: "POST", body: form },
+      ));
+
+      expect(result).toEqual({ state, intent: "provision-direct-file" });
+      expect(calls.map((call) => call.path.endsWith("/bootstrap") ? "bootstrap" : "complete"))
+        .toEqual(["bootstrap", "complete"]);
+      expect(JSON.stringify(result)).not.toContain("must stay private");
+      expect(JSON.stringify(result)).not.toContain(current.fileId);
+    });
+  }
+
   it("rejects malformed direct File provisioning form fields before any network request", async () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
@@ -251,6 +277,22 @@ describe("browser sharing resource route", () => {
     form.set("intent", "provision-direct-file");
     form.set("fileId", "not-a-v7-id");
     form.set("name", "must not cross the resource boundary");
+
+    const result = await callRouteHandler(clientAction, new Request(
+      "https://mdwn.test/resources/sharing", { method: "POST", body: form },
+    ));
+
+    expect(result).toEqual({ state: "error", intent: "provision-direct-file" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["name", "key", "path"])('rejects a client-supplied "%s" field before any network request', async (field) => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const form = new FormData();
+    form.set("intent", "provision-direct-file");
+    form.set("fileId", id(21));
+    form.set(field, "must not cross the resource boundary");
 
     const result = await callRouteHandler(clientAction, new Request(
       "https://mdwn.test/resources/sharing", { method: "POST", body: form },

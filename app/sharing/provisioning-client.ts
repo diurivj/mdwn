@@ -1,6 +1,7 @@
 import { inspectEnvelope, openForRecipient, sealToRecipient } from "~/crypto/enc-v1";
 import { HPKE_SUITE } from "~/crypto/enc-v1/format";
-import type { StoredDevice } from "~/device/store";
+import { privateRequest } from "~/device/private-client";
+import { getDevice, type StoredDevice } from "~/device/store";
 import { assertExactFileRecipientDescriptors, assertFileHeadCommitTransition,
   signFileHead, verifyDirectFileRecipientEnvelope, verifyFileHead,
   type DirectRecipientDescriptor, type FileHeadStatement } from "~/tree/file-head";
@@ -257,4 +258,66 @@ export async function prepareDirectFileProvisioning(input: FileProvisioningBoots
   } finally {
     contentKey.fill(0);
   }
+}
+
+export type DirectFileProvisioningState = "ready" | "provisioning" | "stale" | "error";
+
+/** Resolve the currently authenticated, locally-held device without exposing its keys. */
+async function currentStoredDevice(signal: AbortSignal): Promise<StoredDevice> {
+  signal.throwIfAborted();
+  const response = await fetch("/api/device/state", { cache: "no-store", signal });
+  if (!response.ok) throw new Error("Device state unavailable");
+  const value: unknown = await response.json();
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Device state unavailable");
+  }
+  const state = value as Record<string, unknown>;
+  const accountId = state.accountId;
+  const deviceId = state.deviceId;
+  const registryEpoch = state.registryEpoch;
+  if (!isV7(accountId) || !isV7(deviceId) || typeof registryEpoch !== "number" ||
+      !Number.isSafeInteger(registryEpoch) || registryEpoch < 1 ||
+      typeof state.sessionBinding !== "string" || !state.sessionBinding) {
+    throw new Error("Device state unavailable");
+  }
+  const device = await getDevice(accountId);
+  signal.throwIfAborted();
+  if (!device || device.deviceId !== deviceId || device.registryEpoch !== registryEpoch) {
+    throw new Error("Local device unavailable");
+  }
+  return device;
+}
+
+/**
+ * Run one proof-bound browser provisioning attempt. The only response data is a
+ * safe UI state; bootstrap material and the signed completion stay in this call.
+ */
+export async function provisionDirectFile(fileId: string, signal: AbortSignal):
+  Promise<DirectFileProvisioningState> {
+  if (!isV7(fileId)) return "error";
+
+  signal.throwIfAborted();
+  const bootstrapResponse = await privateRequest(
+    `/api/private/sharing/direct-files/${fileId}/bootstrap`, { method: "POST", signal });
+  if (bootstrapResponse.status === 202) return "provisioning";
+  if (bootstrapResponse.status === 409) return "stale";
+  if (bootstrapResponse.status !== 200) return "error";
+
+  const bootstrap = await bootstrapResponse.json() as FileProvisioningBootstrap;
+  const device = await currentStoredDevice(signal);
+  signal.throwIfAborted();
+  const completion = await prepareDirectFileProvisioning(bootstrap, device);
+
+  signal.throwIfAborted();
+  const response = await privateRequest(`/api/private/sharing/direct-files/${fileId}/complete`, {
+    method: "PATCH", body: JSON.stringify(completion), signal,
+  });
+  if (response.status === 202) return "provisioning";
+  if (response.status === 409) return "stale";
+  if (response.status !== 200) return "error";
+
+  const result: unknown = await response.json();
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return "error";
+  const status = (result as Record<string, unknown>).status;
+  return status === "ready" || status === "provisioning" ? status : "error";
 }

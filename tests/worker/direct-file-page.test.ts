@@ -66,6 +66,16 @@ describe("nameless direct File provisioning page", () => {
     expect(revalidating).toContain("disabled=\"\"");
   });
 
+  it("keeps completion data private and the retry disabled until authoritative revalidation", () => {
+    routerState.fetcherData = { state: "ready", intent: "provision-direct-file",
+      name: "secret File name", headDigest: "secret digest", ciphertext: "secret ciphertext" };
+    const html = renderProvisioning();
+
+    expect(html).toContain("Shared content is being securely provisioned");
+    expect(html).toContain("disabled=\"\"");
+    expect(html).not.toContain("secret");
+  });
+
   it("never renders a retry form for a non-UUIDv7 target", () => {
     const html = renderProvisioning("../../private-name");
     expect(html).toContain("Shared content is being securely provisioned");
