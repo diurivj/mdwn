@@ -140,6 +140,15 @@ function normalized(statement: FileHeadStatement): FileHeadStatement {
   };
 }
 
+function recipientDescriptorTuple(r: Omit<DirectRecipientDescriptor, "envelopeDigest">) {
+  return [r.accountId, r.deviceId, r.registryEpoch, toHex(r.publicKeyDigest),
+    r.grants.map((g) => [g.id, g.generation])] as const;
+}
+
+function recipientCommitmentTuple(r: DirectRecipientDescriptor) {
+  return [...recipientDescriptorTuple(r), toHex(r.envelopeDigest)] as const;
+}
+
 /** Deterministic JSON array, strict fields and sizes; input is snapshotted synchronously. */
 export function canonicalFileHeadBytes(input: FileHeadStatement): Bytes {
   const s = normalized(input);
@@ -147,8 +156,7 @@ export function canonicalFileHeadBytes(input: FileHeadStatement): Bytes {
     FILE_HEAD_DOMAIN, s.ownerId, s.vaultId, s.fileId, s.revision,
     s.contentKey.id, s.contentKey.epoch, s.receivingKey.id, s.receivingKey.epoch, toHex(s.receivingKey.publicKeyDigest),
     s.representation.id, toHex(s.representation.digest), toHex(s.parentEnvelopeDigest), s.recipientSetVersion,
-    s.recipients.map((r) => [r.accountId, r.deviceId, r.registryEpoch, toHex(r.publicKeyDigest),
-      r.grants.map((g) => [g.id, g.generation]), toHex(r.envelopeDigest)]),
+    s.recipients.map(recipientCommitmentTuple),
     s.publication.status === "none" ? ["none"] :
       ["active", s.publication.id, s.publication.representationId, toHex(s.publication.digest)],
     s.signerDeviceId,
@@ -304,36 +312,19 @@ export function assertExactFileRecipientDescriptors(head: VerifiedFileHead,
   if (new Set(normalizedExpected.map((item) => item.deviceId)).size !== normalizedExpected.length) {
     throw new FileHeadError("malformed");
   }
-  const descriptor = (r: Omit<DirectRecipientDescriptor, "envelopeDigest">) =>
-    [r.accountId, r.deviceId, r.registryEpoch, toHex(r.publicKeyDigest), r.grants.map((g) => [g.id, g.generation])];
-  if (JSON.stringify(normalizedExpected.map(descriptor)) !== JSON.stringify(head.statement.recipients.map(descriptor))) {
+  if (JSON.stringify(normalizedExpected.map(recipientDescriptorTuple)) !==
+      JSON.stringify(head.statement.recipients.map(recipientDescriptorTuple))) {
     throw new FileHeadError("context-mismatch");
   }
 }
 
-export async function verifyFilePublicationRepresentation(head: VerifiedFileHead, representationId: string,
-  envelope: Uint8Array): Promise<void> {
-  const s = head.statement;
-  if (s.publication.status !== "active" || id(representationId) !== s.publication.representationId) {
-    throw new FileHeadError("context-mismatch");
-  }
-  const encrypted = copy(envelope);
-  let header: ReturnType<typeof inspectEnvelope>;
-  try { header = inspectEnvelope(encrypted); } catch { throw new FileHeadError("malformed"); }
-  if (header.suite !== SYMMETRIC_SUITE || header.context.purpose !== "public-representation" ||
-      header.context.vaultId !== s.vaultId || header.context.objectId !== s.fileId ||
-      header.context.revision !== s.revision || header.context.publicationId !== s.publication.id ||
-      header.context.recipientId !== undefined) throw new FileHeadError("context-mismatch");
-  await matchDigest(encrypted, copy(s.publication.digest, 32));
-}
+type SameRevisionTransition = "receiving-rotation" | "recipient-set-update" | "both";
 
-/** The caller must first verify signatures and retain the previous checkpoint independently.
- * `authenticatedSameRevision` is an assertion by the caller about a guarded transition,
- * NOT a claim that this pure module can establish server permission or rotation state.
+/** Pure endpoint-shape checks shared by two distinct trust boundaries. Neither a
+ * verified signature nor an expected transition establishes current Grant authority.
  */
-export function assertFileHeadAdvance(previous: VerifiedFileHead, next: VerifiedFileHead, options: {
-  authenticatedSameRevision?: "receiving-rotation" | "recipient-set-update" | "both";
-} = {}): void {
+function assertFileHeadTransition(previous: VerifiedFileHead, next: VerifiedFileHead,
+  mode: "commit" | "checkpoint", expectedSameRevisionTransition?: SameRevisionTransition): void {
   const before = normalized(previous.statement);
   const after = normalized(next.statement);
   const priorDigest = copy(previous.digest, 32);
@@ -357,15 +348,14 @@ export function assertFileHeadAdvance(previous: VerifiedFileHead, next: Verified
       equal(before.receivingKey.publicKeyDigest, after.receivingKey.publicKeyDigest))) {
     throw new FileHeadError("transition-required");
   }
-  const recipientCommitment = (s: FileHeadStatement, includeEnvelopes: boolean) => JSON.stringify(s.recipients.map((r) =>
-    [r.accountId, r.deviceId, r.registryEpoch, toHex(r.publicKeyDigest),
-      r.grants.map((g) => [g.id, g.generation]), ...(includeEnvelopes ? [toHex(r.envelopeDigest)] : [])]));
-  const descriptorsEqual = recipientCommitment(before, false) === recipientCommitment(after, false);
-  const commitmentsEqual = recipientCommitment(before, true) === recipientCommitment(after, true);
+  const descriptorsEqual = JSON.stringify(before.recipients.map(recipientDescriptorTuple)) ===
+    JSON.stringify(after.recipients.map(recipientDescriptorTuple));
+  const commitmentsEqual = JSON.stringify(before.recipients.map(recipientCommitmentTuple)) ===
+    JSON.stringify(after.recipients.map(recipientCommitmentTuple));
   if (after.revision > before.revision) {
     // A normal save re-envelopes the fresh File key to the SAME authorized devices,
     // without bumping the recipient-set version. Only descriptor changes require it.
-    if ((!recipientsChanged && !descriptorsEqual) || (recipientsChanged && descriptorsEqual)) {
+    if ((!recipientsChanged && !descriptorsEqual) || (mode === "commit" && recipientsChanged && descriptorsEqual)) {
       throw new FileHeadError("transition-required");
     }
     if (after.contentKey.epoch <= before.contentKey.epoch) throw new FileHeadError("rollback");
@@ -376,7 +366,7 @@ export function assertFileHeadAdvance(previous: VerifiedFileHead, next: Verified
           equal(old.envelopeDigest, recipient.envelopeDigest)))) throw new FileHeadError("transition-required");
     return;
   }
-  if ((!recipientsChanged && !commitmentsEqual) || (recipientsChanged && commitmentsEqual)) {
+  if ((!recipientsChanged && !commitmentsEqual) || (mode === "commit" && recipientsChanged && commitmentsEqual)) {
     throw new FileHeadError("transition-required");
   }
   if (!receivingChanged && !recipientsChanged) {
@@ -384,7 +374,7 @@ export function assertFileHeadAdvance(previous: VerifiedFileHead, next: Verified
     return;
   }
   const transition = receivingChanged ? (recipientsChanged ? "both" : "receiving-rotation") : "recipient-set-update";
-  if (options.authenticatedSameRevision !== transition ||
+  if ((mode === "commit" && expectedSameRevisionTransition !== transition) ||
       after.contentKey.epoch !== before.contentKey.epoch || after.contentKey.id !== before.contentKey.id ||
       after.representation.id !== before.representation.id ||
       !equal(after.representation.digest, before.representation.digest) ||
@@ -393,4 +383,29 @@ export function assertFileHeadAdvance(previous: VerifiedFileHead, next: Verified
         !equal(before.parentEnvelopeDigest, after.parentEnvelopeDigest))) {
     throw new FileHeadError("transition-required");
   }
+}
+
+/** Writer/Worker ONLY: `previous` must be the actual immediately prior committed
+ * head under the service's current-head guard; both heads need verified signatures
+ * and approved signing-key provenance. The service must separately enforce current
+ * signer/Grant/device authority, exact recipient descriptors, revision/rotation
+ * guards and atomicity. `expectedSameRevisionTransition` selects a shape to check,
+ * NOT authorization to perform it. No skipped commits are permitted here.
+ */
+export function assertFileHeadCommitTransition(previous: VerifiedFileHead, next: VerifiedFileHead, options: {
+  expectedSameRevisionTransition?: SameRevisionTransition;
+} = {}): void {
+  assertFileHeadTransition(previous, next, "commit", options.expectedSameRevisionTransition);
+}
+
+/** Reader ONLY: `previous` is an independently retained verified checkpoint and
+ * `next` must be an authenticated CURRENT File head with approved signer-key
+ * provenance (not merely arbitrary signed bytes). Skipped committed updates may
+ * return the recipients/commitments to their original values; monotonic coordinates
+ * and immutable same-revision representation/key still apply. This pure check
+ * establishes neither service-history honesty nor current Grant authorization;
+ * a new device without a trusted checkpoint cannot detect whole-history replay.
+ */
+export function assertFileHeadCheckpointAdvance(previous: VerifiedFileHead, next: VerifiedFileHead): void {
+  assertFileHeadTransition(previous, next, "checkpoint");
 }
