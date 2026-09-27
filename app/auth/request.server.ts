@@ -41,7 +41,7 @@ export async function readAuthJsonText(request: Request, maxBytes = 64 * 1024): 
     throw new AuthRequestError(400, "bad_request");
   }
   const declaredLength = Number(request.headers.get("content-length"));
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 768 * 1024 ||
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1536 * 1024 ||
       (Number.isFinite(declaredLength) && declaredLength > maxBytes)) {
     throw new AuthRequestError(400, "bad_request");
   }

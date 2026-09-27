@@ -493,8 +493,14 @@ export const directories = sqliteTable("directories", {
   nodeId: text("node_id").primaryKey().references(() => vaultNodes.id, { onDelete: "restrict" }),
   ownerId: text("owner_id").notNull(),
   entriesRevision: integer("entries_revision").notNull(),
+  /** Device-signed, encrypted commitment to the current entry ciphertexts (migration 0009). */
+  listingCiphertext: blob("listing_ciphertext"),
+  listingDigest: blob("listing_digest"),
+  listingSignature: blob("listing_signature"),
+  listingDeviceId: text("listing_device_id").references(() => encryptionDevices.id, { onDelete: "restrict" }),
 }, (table) => [
   uniqueIndex("directories_owner_node_idx").on(table.ownerId, table.nodeId),
+  index("directories_listing_device_idx").on(table.listingDeviceId),
   check("directories_revision_positive", sql`${table.entriesRevision} >= 1`),
 ]);
 
@@ -521,6 +527,9 @@ export const directoryEntries = sqliteTable("directory_entries", {
 }, (table) => [
   uniqueIndex("directory_entries_owner_edge_idx").on(table.ownerId, table.childNodeId, table.parentNodeId),
   index("directory_entries_parent_idx").on(table.ownerId, table.parentNodeId),
+  check("directory_entries_ciphertext_bounded", sql`length(${table.nameCiphertext}) BETWEEN 1 AND 4096
+    AND length(${table.orderCiphertext}) BETWEEN 1 AND 4096
+    AND length(${table.keyEnvelope}) BETWEEN 1 AND 16384`),
   foreignKey({ columns: [table.ownerId, table.parentNodeId],
     foreignColumns: [directories.ownerId, directories.nodeId] }).onDelete("restrict"),
   foreignKey({ columns: [table.ownerId, table.childNodeId, table.parentNodeId],

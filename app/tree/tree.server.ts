@@ -1,7 +1,9 @@
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
+import { digestEnvelope } from "~/crypto/enc-v1";
 import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitDirectoryMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
+import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
+import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./listing";
 
 const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -14,14 +16,20 @@ type EntryRow = {
   parent_node_id: string | null; entries_revision: number;
   name_ciphertext: ArrayBuffer | null; order_ciphertext: ArrayBuffer | null;
   key_envelope: ArrayBuffer | null;
+  listing_ciphertext: ArrayBuffer | null; listing_digest: ArrayBuffer | null;
+  listing_signature: ArrayBuffer | null; listing_device_id: string | null;
+  signer_public_key: ArrayBuffer | null;
 };
 
 /** Read and authorize in the same ciphertext SELECT; never return private data from SSR. */
 async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: string): Promise<Response> {
   const rows = await createDb(env.DB).all<EntryRow>(sql`
     SELECT d.entries_revision, e.child_node_id AS node_id, n.kind, n.parent_node_id,
-      e.name_ciphertext, e.order_ciphertext, e.key_envelope
+      e.name_ciphertext, e.order_ciphertext, e.key_envelope,
+      d.listing_ciphertext, d.listing_digest, d.listing_signature, d.listing_device_id,
+      signer.assertion_public_key AS signer_public_key
     FROM directories d JOIN vault_nodes parent ON parent.id = d.node_id AND parent.owner_id = d.owner_id
+    LEFT JOIN encryption_devices signer ON signer.id = d.listing_device_id AND signer.account_id = d.owner_id
     LEFT JOIN directory_entries e ON e.parent_node_id = d.node_id AND e.owner_id = d.owner_id
     LEFT JOIN vault_nodes n ON n.id = e.child_node_id AND n.owner_id = d.owner_id
     WHERE d.node_id = ${directoryId} AND d.owner_id = ${auth.accountId}
@@ -29,7 +37,18 @@ async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: stri
     ORDER BY e.child_node_id`);
   if (!rows.length) return notFound();
   if (rows.some((row) => row.node_id && (!row.kind || !row.name_ciphertext || !row.order_ciphertext || !row.key_envelope))) return denied();
-  return Response.json({ directoryId, entriesRevision: rows[0]!.entries_revision,
+  const current = rows[0]!;
+  if ((current.entries_revision === 1 && (rows.length !== 1 || current.node_id || current.listing_ciphertext)) ||
+      (current.entries_revision > 1 && (!current.listing_ciphertext || !current.listing_digest ||
+        !current.listing_signature || !current.listing_device_id || !current.signer_public_key))) return denied();
+  return Response.json({ directoryId, entriesRevision: current.entries_revision,
+    listingHead: current.listing_ciphertext ? {
+      ciphertext: encodeTreeBytes(new Uint8Array(current.listing_ciphertext)),
+      digest: encodeTreeBytes(new Uint8Array(current.listing_digest!)),
+      signature: encodeTreeBytes(new Uint8Array(current.listing_signature!)),
+      signerDeviceId: current.listing_device_id,
+      signerPublicKey: encodeTreeBytes(new Uint8Array(current.signer_public_key!)),
+    } : null,
     entries: rows.filter((row) => row.node_id).map((row) => ({
       nodeId: row.node_id, kind: row.kind,
       nameCiphertext: encodeTreeBytes(new Uint8Array(row.name_ciphertext!)),
@@ -88,13 +107,34 @@ function exact(value: Record<string, unknown>, fields: readonly string[]): boole
   return Object.keys(value).length === fields.length && fields.every((key) => Object.hasOwn(value, key));
 }
 
+async function signedListing(value: unknown, auth: AuthorizedDevice, directoryId: string,
+  expectedRevision: number): Promise<{ ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array }> {
+  const input = record(value);
+  if (!input || !exact(input, ["ciphertext", "digest", "signature"])) throw new Error("invalid listing head");
+  const revision = expectedRevision + 1;
+  const ciphertext = treeEnvelope(input.ciphertext, MAX_LISTING_BYTES, {
+    purpose: "directory-metadata", vaultId: auth.accountId, objectId: directoryId,
+    keyId: directoryId, keyEpoch: 1, revision,
+  });
+  const digest = decodeTreeBytes(input.digest, 32);
+  const signature = decodeTreeBytes(input.signature, 64);
+  const computed = await digestEnvelope(ciphertext);
+  if (digest.length !== 32 || signature.length !== 64 ||
+      !computed.every((byte, i) => byte === digest[i]) ||
+      !await verifyListingSignature(input as ListingHead, {
+        vaultId: auth.accountId, directoryId, deviceId: auth.deviceId, revision,
+        publicKey: auth.assertionPublicKey,
+      })) throw new Error("invalid listing head");
+  return { ciphertext, digest, signature };
+}
+
 function createPayload(value: unknown, accountId: string, parentId: string): Create {
   const input = record(value);
   if (!input || !isV7(input.nodeId) || (input.kind !== "directory" && input.kind !== "file") ||
       !Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 1 ||
       !exact(input, input.kind === "file" ? ["nodeId", "kind", "expectedRevision", "nameCiphertext",
-        "orderCiphertext", "keyEnvelope", "representation"] : ["nodeId", "kind", "expectedRevision",
-        "nameCiphertext", "orderCiphertext", "keyEnvelope"])) throw new Error("invalid tree request");
+        "orderCiphertext", "keyEnvelope", "representation", "listingHead"] : ["nodeId", "kind", "expectedRevision",
+        "nameCiphertext", "orderCiphertext", "keyEnvelope", "listingHead"])) throw new Error("invalid tree request");
   const nodeId = input.nodeId;
   const context = { vaultId: accountId, objectId: nodeId, keyId: parentId, keyEpoch: 1, revision: 1 };
   const nameCiphertext = treeEnvelope(input.nameCiphertext, 1024, { ...context, purpose: "directory-metadata" });
@@ -130,7 +170,8 @@ async function createChild(env: Env, auth: AuthorizedDevice, parentId: string, v
   const { accountId } = auth;
   const now = Date.now();
   try {
-    const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision,
+    const head = await signedListing(record(value)?.listingHead, auth, parentId, input.expectedRevision);
+    const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision, head,
       sql`EXISTS (SELECT 1 FROM vault_nodes WHERE id = ${parentId}
         AND owner_id = ${accountId} AND kind = 'directory')`,
       (previous) => [
@@ -161,7 +202,7 @@ async function createChild(env: Env, auth: AuthorizedDevice, parentId: string, v
 
 async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, value: unknown): Promise<Response> {
   const input = record(value);
-  if (!input || !exact(input, ["expectedRevision", "nameCiphertext", "orderCiphertext"]) ||
+  if (!input || !exact(input, ["expectedRevision", "nameCiphertext", "orderCiphertext", "listingHead"]) ||
       !Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 1) return badRequest();
   const row = await createDb(env.DB).get<{ parent_node_id: string }>(sql`
     SELECT n.parent_node_id FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
@@ -176,7 +217,10 @@ async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
     name = treeEnvelope(input.nameCiphertext, 1024, context);
     order = treeEnvelope(input.orderCiphertext, 4096, context);
   } catch { return badRequest(); }
-  const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision as number,
+  let head: Awaited<ReturnType<typeof signedListing>>;
+  try { head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision as number); }
+  catch { return badRequest(); }
+  const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision as number, head,
     sql`EXISTS (SELECT 1 FROM directory_entries WHERE child_node_id = ${nodeId}
       AND owner_id = ${auth.accountId} AND parent_node_id = ${parentId})`,
     (previous) => [sql`UPDATE directory_entries SET name_ciphertext = ${name}, order_ciphertext = ${order}
@@ -203,7 +247,7 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
     if (directory || file || pathToNode) {
       if (!await hasEmptyBody(request)) return denied();
     } else {
-      const parsed = await readAuthJsonText(request, 768 * 1024);
+      const parsed = await readAuthJsonText(request, 1536 * 1024);
       raw = parsed.raw; value = parsed.value;
     }
   } catch { return badRequest(); }

@@ -16,7 +16,10 @@ CREATE TABLE `directory_entries` (
 	`key_envelope` blob NOT NULL,
 	FOREIGN KEY (`child_node_id`) REFERENCES `vault_nodes`(`id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`owner_id`,`parent_node_id`) REFERENCES `directories`(`owner_id`,`node_id`) ON UPDATE no action ON DELETE restrict,
-	FOREIGN KEY (`owner_id`,`child_node_id`,`parent_node_id`) REFERENCES `vault_nodes`(`owner_id`,`id`,`parent_node_id`) ON UPDATE no action ON DELETE restrict
+	FOREIGN KEY (`owner_id`,`child_node_id`,`parent_node_id`) REFERENCES `vault_nodes`(`owner_id`,`id`,`parent_node_id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "directory_entries_ciphertext_bounded" CHECK(length(`name_ciphertext`) BETWEEN 1 AND 4096
+	  AND length(`order_ciphertext`) BETWEEN 1 AND 4096
+	  AND length(`key_envelope`) BETWEEN 1 AND 16384)
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `directory_entries_owner_edge_idx` ON `directory_entries` (`owner_id`,`child_node_id`,`parent_node_id`);--> statement-breakpoint

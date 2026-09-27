@@ -829,7 +829,12 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "checkConstraints": {
+        "directory_entries_ciphertext_bounded": {
+          "name": "directory_entries_ciphertext_bounded",
+          "value": "length(\"directory_entries\".\"name_ciphertext\") BETWEEN 1 AND 4096\n    AND length(\"directory_entries\".\"order_ciphertext\") BETWEEN 1 AND 4096\n    AND length(\"directory_entries\".\"key_envelope\") BETWEEN 1 AND 16384"
+        }
+      }
     },
     "encryption_devices": {
       "name": "encryption_devices",

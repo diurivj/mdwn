@@ -1,91 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useNavigation, useRevalidator } from "react-router";
+import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 
 import {
-  createTreeChild, loadAncestors, loadDirectory, loadFile, NameConflictError, NamespaceChangedError,
-  openChildDirectory, openRoot, prepareTreeCreate, prepareTreeRename, renameTreeChild, TreeNotFoundError,
-  type DirectoryListing, type RootAccess, type TreeEntry, type TreeKind,
+  createTreeChild, loadDirectory, NameConflictError, NamespaceChangedError,
+  openChildDirectory, prepareTreeCreate, prepareTreeRename, renameTreeChild, TreeCommitUncertainError, TreeNotFoundError,
+  type DirectoryListing, type TreeEntry, type TreeKind,
 } from "./client";
+import { MarkdownPreview } from "./MarkdownPreview";
+import { expandedPreferenceKey, savedExpanded, type FilesPageData, type FilesSnapshot } from "./navigation-client";
 
-type Crumb = { id: string; name: string };
-type Snapshot = {
-  access: RootAccess;
-  listings: Record<string, DirectoryListing>;
-  keys: Record<string, Uint8Array>;
-  crumbs: Crumb[];
-  markdown: string | null;
-};
 type Dialog = {
   operation: "create" | "rename"; kind: TreeKind; parentId: string; nodeId?: string;
   requestedName: string; review?: "local" | "changed";
 };
 
-const prefKey = (accountId: string) => `mdwn:files-expanded:${accountId}`;
-function savedExpanded(accountId: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(prefKey(accountId)) ?? "[]");
-    return Array.isArray(parsed) ? parsed.slice(0, 200).filter((value): value is string => typeof value === "string") : [];
-  } catch { return []; }
-}
-
-async function selectedPath(nodeId: string, kind: TreeKind): Promise<Snapshot> {
-  const access = await openRoot();
-  const path = await loadAncestors(nodeId);
-  if (path[0] !== access.rootId) throw new TreeNotFoundError();
-  const listings: Record<string, DirectoryListing> = {};
-  const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
-  const crumbs: Crumb[] = [{ id: access.rootId, name: "Files" }];
-  let markdown: string | null = null;
-  for (let index = 0; index < path.length; index++) {
-    const parent = path[index]!;
-    const key = keys[parent];
-    if (!key) throw new TreeNotFoundError();
-    if (index === path.length - 1 && kind === "file") break;
-    const listing = await loadDirectory(access, parent, key);
-    listings[parent] = listing;
-    const next = path[index + 1];
-    if (!next) continue;
-    const entry = listing.entries.find((child) => child.nodeId === next);
-    if (!entry || (index < path.length - 2 && entry.kind !== "directory") ||
-        (index === path.length - 2 && entry.kind !== kind)) throw new TreeNotFoundError();
-    crumbs.push({ id: next, name: entry.name });
-    if (entry.kind === "directory") keys[next] = await openChildDirectory(access, key, entry);
-  }
-  if (kind === "file") {
-    const parent = path.at(-2);
-    if (!parent || !keys[parent]) throw new TreeNotFoundError();
-    const file = await loadFile(access, nodeId, keys[parent]);
-    if (file.parentId !== parent) throw new TreeNotFoundError();
-    markdown = file.markdown;
-  }
-  // Preferences are browser-only, never encoded in a deep link. Restore only
-  // descendants discoverable through a decrypted Directory in this Account.
-  const pending = new Set(savedExpanded(access.vaultId));
-  for (let pass = 0; pass < 201 && pending.size; pass++) {
-    let progressed = false;
-    for (const id of pending) {
-      if (listings[id]) { pending.delete(id); continue; }
-      const parent = Object.values(listings).find((listing) => listing.entries.some((entry) => entry.nodeId === id));
-      const entry = parent?.entries.find((item) => item.nodeId === id);
-      if (!parent || !entry || entry.kind !== "directory" || !keys[parent.directoryId]) continue;
-      pending.delete(id);
-      try {
-        const key = await openChildDirectory(access, keys[parent.directoryId], entry);
-        keys[id] = key;
-        listings[id] = await loadDirectory(access, id, key);
-        progressed = true;
-      } catch { /* An old local preference must not block opening the selected object. */ }
-    }
-    if (!progressed) break;
-  }
-  return { access, listings, keys, crumbs, markdown };
-}
-
-/** No loader serializes private ciphertext or decrypted names into SSR HTML. */
-export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKind }) {
+export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: TreeKind; initial: FilesPageData }) {
   const navigate = useNavigate();
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "not-found" | "unavailable">("loading");
+  const revalidator = useRevalidator();
+  const navigation = useNavigation();
+  const [snapshot, setSnapshot] = useState<FilesSnapshot | null>(initial.snapshot);
+  const [status, setStatus] = useState<FilesPageData["status"]>(initial.status);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [drawer, setDrawer] = useState(false);
   const [view, setView] = useState<"edit" | "preview">("edit");
@@ -93,48 +28,26 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const nameInput = useRef<HTMLInputElement>(null);
+  const busy = submitting || revalidator.state !== "idle" || navigation.state !== "idle";
+  const recoveryPending = isSignupRecoveryConfirmationPending();
 
-  async function reload() {
-    setStatus("loading");
-    try {
-      const next = await selectedPath(nodeId, kind);
-      setSnapshot(next);
-      setExpanded((previous) => Array.from(new Set([
-        ...savedExpanded(next.access.vaultId), ...previous, ...next.crumbs.slice(0, -1).map((item) => item.id),
-        next.access.rootId,
-      ])));
-      setStatus("ready");
-    } catch (error) {
-      setSnapshot(null);
-      setStatus(error instanceof TreeNotFoundError ? "not-found" : "unavailable");
-    }
-  }
   useEffect(() => {
-    let active = true;
-    setStatus("loading");
-    void selectedPath(nodeId, kind).then((next) => {
-      if (!active) return;
-      setSnapshot(next);
-      setExpanded(Array.from(new Set([
-        ...savedExpanded(next.access.vaultId), ...next.crumbs.slice(0, -1).map((item) => item.id),
-        next.access.rootId,
-      ])));
-      setStatus("ready");
-      setView("edit");
-    }).catch((error: unknown) => {
-      if (!active) return;
-      setSnapshot(null);
-      setStatus(error instanceof TreeNotFoundError ? "not-found" : "unavailable");
-    });
-    return () => { active = false; };
-  }, [nodeId, kind]);
+    setSnapshot(initial.snapshot);
+    setStatus(initial.status);
+    setDialog(null);
+    setView("edit");
+    if (initial.snapshot) setExpanded(Array.from(new Set([
+      ...savedExpanded(initial.snapshot.access.vaultId),
+      ...initial.snapshot.crumbs.slice(0, -1).map((item) => item.id), initial.snapshot.access.rootId,
+    ])));
+  }, [initial, nodeId, kind]);
 
   async function toggle(entry: TreeEntry) {
     if (!snapshot || entry.kind !== "directory") return;
     if (expanded.includes(entry.nodeId)) {
       const next = expanded.filter((id) => id !== entry.nodeId);
       setExpanded(next);
-      localStorage.setItem(prefKey(snapshot.access.vaultId), JSON.stringify(next));
+      localStorage.setItem(expandedPreferenceKey(snapshot.access.vaultId), JSON.stringify(next));
       return;
     }
     try {
@@ -150,7 +63,7 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
       }));
       const next = [...expanded, entry.nodeId];
       setExpanded(next);
-      localStorage.setItem(prefKey(snapshot.access.vaultId), JSON.stringify(next));
+      localStorage.setItem(expandedPreferenceKey(snapshot.access.vaultId), JSON.stringify(next));
     } catch { setMessage("This folder could not be opened. Refresh and try again."); }
   }
 
@@ -172,7 +85,7 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
   }
 
   async function submit(current: Dialog, listing?: DirectoryListing) {
-    if (!snapshot || submitting) return;
+    if (!snapshot || busy) return;
     setSubmitting(true);
     setMessage("");
     try {
@@ -184,7 +97,7 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
           parentId: current.parentId, parentKey: key, entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.map((entry) => entry.name), requestedName: current.requestedName,
           kind: current.kind });
-        const created = await createTreeChild(snapshot.access, current.parentId, payload);
+        const created = await createTreeChild(snapshot.access, current.parentId, payload, parent, key);
         setDialog(null);
         navigate(`/${current.kind === "directory" ? "d" : "f"}/${created.nodeId}`);
       } else {
@@ -195,20 +108,26 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
           entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.filter((item) => item.nodeId !== entry.nodeId).map((item) => item.name),
           requestedName: current.requestedName, order: entry.order });
-        await renameTreeChild(entry.nodeId, payload);
+        await renameTreeChild(snapshot.access, current.parentId, entry.nodeId, payload, parent, key);
         setDialog(null);
-        await reload();
+        revalidator.revalidate();
       }
     } catch (error) {
       if (error instanceof NameConflictError) setDialog({ ...current, review: "local" });
       else if (error instanceof NamespaceChangedError) setDialog({ ...current, review: "changed" });
       else if (error instanceof TreeNotFoundError) { setDialog(null); setStatus("not-found"); }
-      else setMessage("The change could not be completed. Nothing was added or renamed.");
+      else if (error instanceof TreeCommitUncertainError) {
+        setDialog(null);
+        setMessage("The change may have been saved, but its local checkpoint failed. Refresh Files before trying again.");
+      } else if (error instanceof RecoveryConfirmationPendingError) {
+        setDialog(null);
+        setMessage("Confirm your saved recovery phrase and codes before creating Files.");
+      } else setMessage("The change could not be confirmed. Refresh Files before trying again.");
     } finally { setSubmitting(false); }
   }
 
   async function refreshAndRetry(current: Dialog) {
-    if (!snapshot || submitting) return;
+    if (!snapshot || busy) return;
     setSubmitting(true);
     try {
       const listing = await loadDirectory(snapshot.access, current.parentId, snapshot.keys[current.parentId]!);
@@ -240,23 +159,24 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
     </div>);
   }
 
-  if (status === "loading") return <main className="p-8" role="status">Opening Files…</main>;
   if (status === "not-found") return <main className="p-8"><h1 className="text-xl font-semibold">Not found</h1>
     <p>This File or folder is unavailable.</p><Link to="/account/device-access" className="underline">Files access</Link></main>;
   if (status !== "ready" || !snapshot) return <main className="p-8"><h1 className="text-xl font-semibold">Files unavailable</h1>
     <p>Check this device’s access or try again.</p><Link to="/account/device-access" className="underline">Device access</Link></main>;
 
   const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
-  return <main className="mx-auto min-h-dvh max-w-screen-2xl md:grid md:grid-cols-[18rem_minmax(0,1fr)]">
-    <aside className={`${drawer ? "block" : "hidden"} border-r border-stone-200 bg-stone-50 p-4 md:block`} aria-label="Files tree">
+  return <main className="mx-auto min-h-dvh max-w-screen-2xl lg:grid lg:grid-cols-[18rem_minmax(0,1fr)]">
+    {drawer && <button type="button" aria-label="Close Files tree" onClick={() => setDrawer(false)}
+      className="fixed inset-0 z-10 bg-black/30 lg:hidden" />}
+    <aside className={`${drawer ? "block" : "hidden"} fixed inset-y-0 left-0 z-20 w-72 overflow-y-auto border-r border-stone-200 bg-stone-50 p-4 shadow-lg lg:static lg:block lg:w-auto lg:shadow-none`} aria-label="Files tree">
       <div className="mb-4 flex items-center justify-between"><Link to="/" className="font-semibold">mdwn</Link>
-        <button type="button" onClick={() => setDrawer(false)} className="md:hidden">Close tree</button></div>
+        <button type="button" onClick={() => setDrawer(false)} className="lg:hidden">Close tree</button></div>
       <Link to={`/d/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">Files</Link>
       <nav aria-label="Files">{directoryItems(snapshot.access.rootId)}</nav>
     </aside>
     <section className="min-w-0 p-4 md:p-6">
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={() => setDrawer(true)} className="rounded border px-2 py-1 md:hidden">Tree</button>
+        <button type="button" onClick={() => setDrawer(true)} className="rounded border px-2 py-1 lg:hidden">Tree</button>
         <nav aria-label="Breadcrumbs" className="flex min-w-0 flex-wrap gap-2 text-sm">
           {snapshot.crumbs.map((crumb, index) => <span key={crumb.id} className="min-w-0">
             {index > 0 && <span aria-hidden="true" className="mr-2 text-stone-400">/</span>}
@@ -266,28 +186,28 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
         </nav>
       </div>
       <div className="mt-6 flex flex-wrap items-center gap-2"><h1 className="mr-auto text-2xl font-semibold">{selected}</h1>
-        <button type="button" onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
-        <button type="button" onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button>
-        {nodeId !== snapshot.access.rootId && <button type="button" onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
+        <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
+        <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button>
+        {nodeId !== snapshot.access.rootId && <button type="button" disabled={busy || recoveryPending} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
       </div>
+      {recoveryPending && <p role="status" className="mt-3">Confirm your saved recovery phrase and codes before creating Files.</p>}
+      {busy && <p role="status" className="mt-3">Updating Files…</p>}
       {message && <p role="alert" className="mt-3 text-rose-700">{message}</p>}
       {kind === "file" ? <>
-        <div className="mt-6 flex gap-2 md:hidden"><button type="button" onClick={() => setView("edit")}
+        <div className="mt-6 flex gap-2 lg:hidden"><button type="button" onClick={() => setView("edit")}
           aria-pressed={view === "edit"}>Edit</button><button type="button" onClick={() => setView("preview")}
           aria-pressed={view === "preview"}>Preview</button></div>
         <div className="mt-4 grid min-h-[50vh] gap-4 lg:grid-cols-2">
-          <section className={`${view === "preview" ? "hidden md:block" : ""}`} aria-label="Editor">
+          <section className={`${view === "preview" ? "hidden lg:block" : ""}`} aria-label="Editor">
             <h2 className="mb-2 font-medium">Markdown source</h2>
             <textarea readOnly value={snapshot.markdown ?? ""} aria-label="Markdown source (read only)"
               className="h-[50vh] w-full resize-none rounded border border-stone-300 bg-white p-3 font-mono text-sm" />
             <p className="text-xs text-stone-500">Editing and autosave arrive in the next milestone.</p>
           </section>
-          <section className={`${view === "edit" ? "hidden md:block" : ""}`} aria-label="Preview">
+          <section className={`${view === "edit" ? "hidden lg:block" : ""}`} aria-label="Preview">
             <h2 className="mb-2 font-medium">Preview</h2>
             <div className="min-h-[50vh] rounded border border-stone-300 bg-white p-3">
-              {(snapshot.markdown ?? "").split("\n").map((line, index) => line.startsWith("# ")
-                ? <h3 className="mb-3 text-xl font-semibold" key={index}>{line.slice(2)}</h3>
-                : <p className="whitespace-pre-wrap" key={index}>{line || "\u00a0"}</p>)}
+              <MarkdownPreview source={snapshot.markdown ?? ""} />
             </div>
           </section>
         </div>
@@ -305,11 +225,11 @@ export function FilesWorkspace({ nodeId, kind }: { nodeId: string; kind: TreeKin
         {dialog.review === "changed" && <p role="alert" className="mt-3">This folder changed on another device. Nothing was added, replaced, or overwritten.</p>}
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <button type="button" onClick={() => setDialog(null)} className="rounded border px-3 py-1">Cancel</button>
-          {dialog.review === "changed" && <button type="button" disabled={submitting}
+          {dialog.review === "changed" && <button type="button" disabled={busy}
             onClick={() => void refreshAndRetry(dialog)} className="rounded border px-3 py-1">Refresh and retry</button>}
           {dialog.review && <button type="button" onClick={() => { setDialog({ ...dialog, review: undefined }); nameInput.current?.focus(); }}
             className="rounded border px-3 py-1">Rename</button>}
-          {!dialog.review && <button type="submit" disabled={submitting} className="rounded bg-stone-900 px-3 py-1 text-white">
+          {!dialog.review && <button type="submit" disabled={busy} className="rounded bg-stone-900 px-3 py-1 text-white">
             {submitting ? "Working…" : dialog.operation === "create" ? "Create" : "Rename"}</button>}
         </div>
       </form>

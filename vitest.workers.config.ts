@@ -19,6 +19,9 @@ export default defineConfig({
   ],
   test: {
     include: ["tests/worker/**/*.test.ts"],
+    // Too many parallel workerd instances make unrelated route tests exceed
+    // Vitest's five-second timeout on the full suite, even though they pass alone.
+    maxWorkers: 2,
     globals: false,
   },
   resolve: {
