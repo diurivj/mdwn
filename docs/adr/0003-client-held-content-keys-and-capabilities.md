@@ -9,7 +9,7 @@ An Account has one logical **Vault**: its complete personal Markdown space. The 
 The hierarchy is:
 
 - Each directory has an independently random directory capability key. A parent directory capability wraps child-directory keys, so a capability covers the existing subtree and descendants added later.
-- Each current file representation has an independently random file content key. The content key encrypts the Markdown and encrypted file metadata; the containing directory capability wraps the current content key. A saved edit receives a fresh content key. This does not create user-visible version history.
+- Each current file representation has an independently random file content key. The content key encrypts the Markdown and encrypted file metadata; a saved edit receives a fresh content key without creating user-visible version history. In the original v1 Directory listing, the containing directory capability directly wraps that current File key. For independent direct File edits, [ADR-0008](0008-file-scoped-receiving-keys-and-signed-file-heads.md) amends this to a File-scoped HPKE receiving key pair, parent-wrapped private key, and independently signed v2 File head. This amendment is approved but not yet implemented; v1 remains explicitly readable pending migration.
 - The Account has a client-generated encryption identity separate from its passkeys. Each device has its own encryption key pair, and an authenticated device registry controls enrollment and removal. An existing device approves a new device; the service cannot substitute an unapproved public key.
 - A separate high-entropy Vault recovery secret unwraps the Account’s own Vault key material in the browser. It is not a recovery code, is never sent to the service, and cannot restore content merely received through another Account’s share.
 
@@ -21,7 +21,7 @@ The `mdwn/enc-v1` envelope family carries an explicit version, purpose, algorith
 
 A directory share gives the recipient Account’s encryption identity an envelope for the directory capability key. The capability covers existing descendants and files added later. Permission levels and onward sharing remain policy decisions in the sharing ticket; this decision defines the cryptographic authority only.
 
-Revocation removes the Account’s current server authorization, advances the directory key epoch, and rewraps current descendant keys for remaining authorized Accounts. Old downloaded plaintext or keys cannot be recalled. The MVP does not promise cryptographic erasure of data that a collaborator already downloaded; all future object access must pass current server authorization and epoch checks.
+Revocation removes the Account’s current server authorization, advances the affected key epoch, and rotates current descendant key material for remaining authorized Accounts. Under [ADR-0008](0008-file-scoped-receiving-keys-and-signed-file-heads.md), that includes replacing a File receiving key *pair* where a departing Directory-capability holder may know its private key. Old downloaded plaintext or keys cannot be recalled. The MVP does not promise cryptographic erasure of data that a collaborator already downloaded; all future object access must pass current server authorization and epoch checks.
 
 ## Public links
 
