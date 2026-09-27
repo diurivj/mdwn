@@ -483,6 +483,8 @@ export const vaultNodes = sqliteTable("vault_nodes", {
   check("vault_nodes_no_self_parent", sql`${table.parentNodeId} IS NULL OR ${table.parentNodeId} != ${table.id}`),
   uniqueIndex("vault_nodes_one_root_idx").on(table.ownerId).where(sql`${table.parentNodeId} IS NULL`),
   uniqueIndex("vault_nodes_owner_edge_idx").on(table.ownerId, table.id, table.parentNodeId),
+  // Composite Share/Grant FK also verifies that the target kind and Owner agree.
+  uniqueIndex("vault_nodes_owner_target_kind_idx").on(table.ownerId, table.id, table.kind),
   index("vault_nodes_parent_idx").on(table.parentNodeId),
   // The reciprocal, deferred FKs to directories and directory_entries are in
   // the reviewed migration: Drizzle cannot express this circular relationship.
@@ -556,3 +558,50 @@ export const fileRepresentations = sqliteTable("file_representations", {
   foreignKey({ columns: [table.ownerId, table.fileNodeId],
     foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
 ]);
+
+/** Pending invitations only. Cancellation/decline deletes the row, never an audit tombstone. */
+export const shares = sqliteTable("shares", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  recipientId: text("recipient_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  targetNodeId: text("target_node_id").notNull(),
+  targetKind: text("target_kind").notNull(),
+  permission: text("permission").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("shares_pending_target_recipient_idx").on(table.ownerId, table.targetNodeId, table.recipientId),
+  index("shares_recipient_idx").on(table.recipientId, table.createdAt),
+  check("shares_target_kind_valid", sql`${table.targetKind} IN ('file', 'directory')`),
+  check("shares_permission_valid", sql`${table.permission} IN ('read_only', 'read_write')`),
+  check("shares_not_self", sql`${table.ownerId} != ${table.recipientId}`),
+  check("shares_created_nonnegative", sql`${table.createdAt} >= 0`),
+  foreignKey({ columns: [table.ownerId, table.targetNodeId, table.targetKind],
+    foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.kind] }).onDelete("restrict"),
+]);
+
+/** Active authorization only. Its generation advances with any permission/recipient-set change. */
+export const grants = sqliteTable("grants", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  recipientId: text("recipient_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  targetNodeId: text("target_node_id").notNull(),
+  targetKind: text("target_kind").notNull(),
+  permission: text("permission").notNull(),
+  /** CAS for current-recipient descriptors and later rotation, never a cached access decision. */
+  generation: integer("generation").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("grants_active_target_recipient_idx").on(table.ownerId, table.targetNodeId, table.recipientId),
+  index("grants_recipient_idx").on(table.recipientId, table.ownerId, table.targetNodeId),
+  check("grants_target_kind_valid", sql`${table.targetKind} IN ('file', 'directory')`),
+  check("grants_permission_valid", sql`${table.permission} IN ('read_only', 'read_write')`),
+  check("grants_not_self", sql`${table.ownerId} != ${table.recipientId}`),
+  check("grants_generation_positive", sql`${table.generation} >= 1`),
+  check("grants_timestamps_valid", sql`${table.createdAt} >= 0 AND ${table.updatedAt} >= ${table.createdAt}`),
+  foreignKey({ columns: [table.ownerId, table.targetNodeId, table.targetKind],
+    foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.kind] }).onDelete("restrict"),
+]);
+
+export type Share = typeof shares.$inferSelect;
+export type Grant = typeof grants.$inferSelect;
