@@ -52,17 +52,26 @@ export async function authenticateFileHead(wire: FileHeadWire, ownerId: string, 
 }
 
 async function rememberFileHead(ownerId: string, fileId: string, wire: FileHeadWire,
-  head: VerifiedFileHead): Promise<void> {
-  if (typeof window === "undefined") return;
+  head: VerifiedFileHead, signal?: AbortSignal): Promise<void> {
+  // The lock name is the same opaque owner/File identity as the persisted checkpoint.
+  // Web Locks serialize read/verify/compare/write across tabs, not merely this JS context.
+  if (typeof window === "undefined" || !navigator.locks?.request) throw new Error("File checkpoint unavailable");
   const key = `mdwn:file-head:${ownerId}:${fileId}`;
-  const saved = localStorage.getItem(key);
-  if (saved) {
-    const old = JSON.parse(saved) as { wire: FileHeadWire; revision: number };
-    if (!old.wire || !Number.isSafeInteger(old.revision)) throw new Error("invalid File checkpoint");
-    const previous = await authenticateFileHead(old.wire, ownerId, fileId, old.revision);
-    assertFileHeadCheckpointAdvance(previous, head);
-  }
-  localStorage.setItem(key, JSON.stringify({ wire, revision: head.statement.revision }));
+  signal?.throwIfAborted();
+  await navigator.locks.request(key, { mode: "exclusive", ...(signal ? { signal } : {}) }, async () => {
+    signal?.throwIfAborted();
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      const old = JSON.parse(saved) as { wire: FileHeadWire; revision: number };
+      if (!old.wire || !Number.isSafeInteger(old.revision)) throw new Error("invalid File checkpoint");
+      const previous = await authenticateFileHead(old.wire, ownerId, fileId, old.revision);
+      signal?.throwIfAborted();
+      assertFileHeadCheckpointAdvance(previous, head);
+    }
+    // Aborted clientLoaders must not change browser integrity state after async verification.
+    signal?.throwIfAborted();
+    localStorage.setItem(key, JSON.stringify({ wire, revision: head.statement.revision }));
+  });
 }
 
 function nameAgainstNamespace(name: string, existingNames: readonly string[]): string {
@@ -278,7 +287,7 @@ export async function loadFile(access: RootAccess, fileId: string, parentId: str
     const content = await openSymmetric(decodeTreeBytes(file.ciphertext, 524_288), key,
       { context: { ...context, purpose: "file-content" } });
     const plaintext = decodeFileRepresentation(content);
-    await rememberFileHead(access.vaultId, fileId, file.fileHead, head);
+    await rememberFileHead(access.vaultId, fileId, file.fileHead, head, signal);
     return { parentId, revision: file.revision, representationId: file.representationId,
       contentKeyId: file.contentKeyId, keyEpoch: file.keyEpoch, ...plaintext,
       v2: { head, receivingPublicKey: file.receivingPublicKey, signedHead: file.fileHead } };
@@ -332,7 +341,7 @@ export async function loadDirectFile(actorAccountId: string, fileId: string,
     { context: { purpose: "file-content", vaultId: data.ownerId, objectId: fileId,
       keyId: data.contentKeyId, keyEpoch: data.keyEpoch, revision: data.revision } });
   const plaintext = decodeFileRepresentation(content);
-  await rememberFileHead(data.ownerId, fileId, data.fileHead, head);
+  await rememberFileHead(data.ownerId, fileId, data.fileHead, head, signal);
   return { ownerId: data.ownerId, fileId, revision: data.revision, ...plaintext,
     head, signedHead: data.fileHead, receivingPublicKey: data.receivingPublicKey };
 }
