@@ -261,7 +261,7 @@ export const securityEvents = sqliteTable(
     ),
     check(
       "security_events_action_valid",
-      sql`${table.actionClass} IN ('registration_challenge', 'registration', 'sign_in', 'recovery', 'session_refresh', 'public_comment', 'public_comment_report', 'publication')`,
+      sql`${table.actionClass} IN ('registration_challenge', 'registration', 'sign_in', 'recovery', 'session_refresh', 'device_removal', 'public_comment', 'public_comment_report', 'publication')`,
     ),
     check("security_events_outcome_valid", sql`${table.outcome} IN ('allow', 'deny')`),
     check(

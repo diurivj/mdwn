@@ -115,6 +115,10 @@ export async function commitPrivateMutation(
     mutation(guard),
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
       SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt} WHERE changes() = 1`,
+    // Coarse successful mutation-proof use only. Read proofs must never write D1.
+    sql`UPDATE encryption_devices SET last_proof_at = ${Math.floor(now / 86_400_000) * 86_400_000}
+      WHERE id = ${deviceId} AND account_id = ${accountId} AND changes() = 1
+        AND (last_proof_at IS NULL OR last_proof_at < ${Math.floor(now / 86_400_000) * 86_400_000})`,
   ]);
   return changed.meta.changes === 1 && consumed.meta.changes === 1;
 }

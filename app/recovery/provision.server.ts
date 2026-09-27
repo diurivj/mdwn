@@ -112,8 +112,12 @@ export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevi
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
       SELECT ${authorized.accountId}, ${authorized.proofId}, ${authorized.sessionId},
         ${authorized.expiresAt} WHERE changes() = 1`,
+    sql`UPDATE encryption_devices SET last_proof_at = ${Math.floor(now / 86_400_000) * 86_400_000}
+      WHERE id = ${authorized.deviceId} AND account_id = ${authorized.accountId}
+        AND changes() = 1
+        AND (last_proof_at IS NULL OR last_proof_at < ${Math.floor(now / 86_400_000) * 86_400_000})`,
   ]);
-  if (results.every((result) => result.meta.changes === 1)) {
+  if (results.slice(0, 3).every((result) => result.meta.changes === 1)) {
     return Response.json({ ok: true }, { headers: noStore });
   }
   // A completed retry is harmless and must never reset the cursor or rewrite an envelope.

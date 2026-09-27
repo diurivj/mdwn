@@ -45,6 +45,7 @@ const SECURITY_ACTIONS = new Set<SecurityEventActionClass>([
   "sign_in",
   "recovery",
   "session_refresh",
+  "device_removal",
   "public_comment",
   "public_comment_report",
   "publication",
