@@ -151,9 +151,27 @@ export async function inviteSharedRoot(snapshot: FilesSnapshot, targetId: string
 }
 
 export type OwnerGrant = { grantId: string; targetId: string; permission: "read_only" | "read_write" };
-export async function invitations(): Promise<{ incoming: ShareItem[];
-  outgoing: (ShareItem & { targetId: string })[]; grants: OwnerGrant[] }> {
-  return resource("/api/private/sharing/invitations", "POST");
+export type InvitationCursors = { incomingCursor?: string | null; outgoingCursor?: string | null;
+  grantsCursor?: string | null };
+export type InvitationsPage = { incoming: ShareItem[]; outgoing: (ShareItem & { targetId: string })[];
+  grants: OwnerGrant[]; next: { incomingCursor: string | null; outgoingCursor: string | null;
+    grantsCursor: string | null } };
+export type SharedRootsPage = { roots: GrantRoot[]; nextCursor: string | null };
+
+/** Merge a bounded cursor page by stable identity, replacing stale copies without dropping records. */
+export function mergeSharingPage<T>(current: readonly T[], next: readonly T[], identity: (item: T) => string): T[] {
+  const items = new Map(current.map((item) => [identity(item), item]));
+  for (const item of next) items.set(identity(item), item);
+  return [...items.values()];
+}
+
+export async function invitations(signal?: AbortSignal, cursors: InvitationCursors = {}): Promise<InvitationsPage> {
+  const input: Record<string, string> = {};
+  for (const [key, value] of Object.entries(cursors)) {
+    if (typeof value === "string") input[key] = value;
+  }
+  return resource("/api/private/sharing/invitations", "POST",
+    Object.keys(input).length ? input : undefined, signal);
 }
 export async function acceptInvitation(shareId: string): Promise<void> {
   await resource(`/api/private/sharing/shares/${shareId}/accept`, "POST", { materialRevision: 1 });
@@ -173,8 +191,14 @@ export async function revokeGrant(grantId: string): Promise<void> {
 export async function changeGrantPermission(grantId: string, permission: "read_only" | "read_write"): Promise<void> {
   await resource(`/api/private/sharing/grants/${grantId}`, "PATCH", { permission });
 }
+export async function sharedRootsPage(signal?: AbortSignal, cursor?: string | null): Promise<SharedRootsPage> {
+  const input = cursor ? { cursor } : undefined;
+  return resource("/api/private/sharing/roots", "POST", input, signal);
+}
+
+/** First-page convenience for route resolution; the sharing UI uses sharedRootsPage for continuation. */
 export async function sharedRoots(signal?: AbortSignal): Promise<GrantRoot[]> {
-  return (await resource<{ roots: GrantRoot[] }>("/api/private/sharing/roots", "POST", undefined, signal)).roots;
+  return (await sharedRootsPage(signal)).roots;
 }
 async function verifiedRoot(root: GrantRoot, actorId: string) {
   const device = await getDevice(actorId);
