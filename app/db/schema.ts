@@ -483,6 +483,7 @@ export const vaultNodes = sqliteTable("vault_nodes", {
   check("vault_nodes_no_self_parent", sql`${table.parentNodeId} IS NULL OR ${table.parentNodeId} != ${table.id}`),
   uniqueIndex("vault_nodes_one_root_idx").on(table.ownerId).where(sql`${table.parentNodeId} IS NULL`),
   uniqueIndex("vault_nodes_owner_edge_idx").on(table.ownerId, table.id, table.parentNodeId),
+  uniqueIndex("vault_nodes_owner_id_idx").on(table.ownerId, table.id),
   // Composite Share/Grant FK also verifies that the target kind and Owner agree.
   uniqueIndex("vault_nodes_owner_target_kind_idx").on(table.ownerId, table.id, table.kind),
   index("vault_nodes_parent_idx").on(table.parentNodeId),
@@ -495,6 +496,9 @@ export const directories = sqliteTable("directories", {
   nodeId: text("node_id").primaryKey().references(() => vaultNodes.id, { onDelete: "restrict" }),
   ownerId: text("owner_id").notNull(),
   entriesRevision: integer("entries_revision").notNull(),
+  listingVersion: integer("listing_version").notNull().default(1),
+  capabilityKeyId: text("capability_key_id").notNull().default('legacy'),
+  capabilityEpoch: integer("capability_epoch").notNull().default(1),
   /** Device-signed, encrypted commitment to the current entry ciphertexts (migration 0009). */
   listingCiphertext: blob("listing_ciphertext"),
   listingDigest: blob("listing_digest"),
@@ -504,6 +508,8 @@ export const directories = sqliteTable("directories", {
   uniqueIndex("directories_owner_node_idx").on(table.ownerId, table.nodeId),
   index("directories_listing_device_idx").on(table.listingDeviceId),
   check("directories_revision_positive", sql`${table.entriesRevision} >= 1`),
+  check("directories_listing_version_valid", sql`${table.listingVersion} IN (1, 2)`),
+  check("directories_capability_epoch_positive", sql`${table.capabilityEpoch} BETWEEN 1 AND 9007199254740991`),
 ]);
 
 /** One File has exactly one current encrypted representation, not a version history. */
@@ -526,7 +532,17 @@ export const directoryEntries = sqliteTable("directory_entries", {
   nameCiphertext: blob("name_ciphertext").notNull(),
   orderCiphertext: blob("order_ciphertext").notNull(),
   keyEnvelope: blob("key_envelope").notNull(),
+  encoding: text("encoding").notNull().default('legacy-file'),
+  receivingKeyId: text("receiving_key_id"),
+  receivingEpoch: integer("receiving_epoch"),
+  wrapRevision: integer("wrap_revision"),
 }, (table) => [
+  check("directory_entries_encoding_valid", sql`(${table.encoding} = 'receiving-file'
+    AND ${table.receivingKeyId} IS NOT NULL AND length(${table.receivingKeyId}) BETWEEN 1 AND 256
+    AND ${table.receivingEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.wrapRevision} BETWEEN 1 AND 9007199254740991)
+    OR (${table.encoding} IN ('directory', 'legacy-file') AND ${table.receivingKeyId} IS NULL
+    AND ${table.receivingEpoch} IS NULL AND ${table.wrapRevision} IS NULL)`),
   uniqueIndex("directory_entries_owner_edge_idx").on(table.ownerId, table.childNodeId, table.parentNodeId),
   index("directory_entries_parent_idx").on(table.ownerId, table.parentNodeId),
   check("directory_entries_ciphertext_bounded", sql`length(${table.nameCiphertext}) BETWEEN 1 AND 4096
@@ -593,6 +609,7 @@ export const grants = sqliteTable("grants", {
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [
   uniqueIndex("grants_active_target_recipient_idx").on(table.ownerId, table.targetNodeId, table.recipientId),
+  uniqueIndex("grants_id_owner_recipient_idx").on(table.id, table.ownerId, table.recipientId),
   index("grants_recipient_idx").on(table.recipientId, table.ownerId, table.targetNodeId),
   check("grants_target_kind_valid", sql`${table.targetKind} IN ('file', 'directory')`),
   check("grants_permission_valid", sql`${table.permission} IN ('read_only', 'read_write')`),
@@ -602,6 +619,158 @@ export const grants = sqliteTable("grants", {
   foreignKey({ columns: [table.ownerId, table.targetNodeId, table.targetKind],
     foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.kind] }).onDelete("restrict"),
 ]);
+
+/** Current authenticated File statement and dynamic parent envelope; old signers remain in the registry. */
+export const fileHeads = sqliteTable("file_heads", {
+  fileNodeId: text("file_node_id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  bytes: blob("bytes").notNull(),
+  digest: blob("digest").notNull(),
+  signature: blob("signature").notNull(),
+  signerDeviceId: text("signer_device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  receivingPublicKey: blob("receiving_public_key").notNull(),
+  receivingKeyId: text("receiving_key_id").notNull(),
+  receivingEpoch: integer("receiving_epoch").notNull(),
+  recipientSetVersion: integer("recipient_set_version").notNull(),
+  revision: integer("revision").notNull(),
+  representationId: text("representation_id").notNull(),
+  contentKeyId: text("content_key_id").notNull(),
+  contentEpoch: integer("content_epoch").notNull(),
+  parentEnvelope: blob("parent_envelope").notNull(),
+}, (table) => [
+  check("file_heads_bounded", sql`length(${table.bytes}) BETWEEN 1 AND 131072
+    AND length(${table.digest}) = 32 AND length(${table.signature}) = 64
+    AND length(${table.receivingPublicKey}) = 65 AND length(${table.parentEnvelope}) BETWEEN 1 AND 16384
+    AND length(${table.receivingKeyId}) BETWEEN 1 AND 256
+    AND length(${table.contentKeyId}) BETWEEN 1 AND 256
+    AND length(${table.representationId}) BETWEEN 1 AND 256
+    AND ${table.revision} BETWEEN 1 AND 9007199254740991
+    AND ${table.receivingEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.contentEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.recipientSetVersion} BETWEEN 1 AND 9007199254740991`),
+  foreignKey({ columns: [table.ownerId, table.fileNodeId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+  foreignKey({ columns: [table.ownerId, table.fileNodeId, table.representationId, table.revision],
+    foreignColumns: [fileRepresentations.ownerId, fileRepresentations.fileNodeId,
+      fileRepresentations.id, fileRepresentations.revision] }).onDelete("restrict"),
+]);
+
+/** Exactly one direct envelope per File/device; no Grant-derived root/recovery envelope. */
+export const fileDeviceEnvelopes = sqliteTable("file_device_envelopes", {
+  fileNodeId: text("file_node_id").notNull(),
+  ownerId: text("owner_id").notNull(),
+  recipientId: text("recipient_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  revision: integer("revision").notNull(),
+  contentKeyId: text("content_key_id").notNull(),
+  contentEpoch: integer("content_epoch").notNull(),
+  registryEpoch: integer("registry_epoch").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.fileNodeId, table.deviceId] }),
+  index("file_device_envelopes_recipient_idx").on(table.recipientId, table.deviceId),
+  check("file_device_envelopes_bounded", sql`${table.revision} BETWEEN 1 AND 9007199254740991
+    AND ${table.contentEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.registryEpoch} BETWEEN 1 AND 9007199254740991
+    AND length(${table.contentKeyId}) BETWEEN 1 AND 256
+    AND length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.digest}) = 32`),
+  foreignKey({ columns: [table.ownerId, table.fileNodeId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+]);
+
+/** Directory Grant's device-scoped current capability. */
+export const grantDeviceEnvelopes = sqliteTable("grant_device_envelopes", {
+  grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  generation: integer("generation").notNull(),
+  registryEpoch: integer("registry_epoch").notNull(),
+  targetKeyId: text("target_key_id").notNull(),
+  targetEpoch: integer("target_epoch").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.grantId, table.deviceId] }),
+  index("grant_device_envelopes_device_idx").on(table.deviceId),
+  check("grant_device_envelopes_bounded", sql`${table.generation} BETWEEN 1 AND 9007199254740991
+    AND ${table.registryEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.targetEpoch} BETWEEN 1 AND 9007199254740991
+    AND length(${table.targetKeyId}) BETWEEN 1 AND 256
+    AND length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.digest}) = 32`),
+]);
+
+/** Presealed pending offer material cannot confer access until a current acceptance. */
+export const shareMaterial = sqliteTable("share_material", {
+  shareId: text("share_id").primaryKey().references(() => shares.id, { onDelete: "cascade" }),
+  materialRevision: integer("material_revision").notNull(),
+  anticipatedGrantId: text("anticipated_grant_id").notNull(),
+  targetKeyId: text("target_key_id").notNull(),
+  targetEpoch: integer("target_epoch").notNull(),
+  headDigest: blob("head_digest").notNull(),
+  registryEpoch: integer("registry_epoch").notNull(),
+  candidateHead: blob("candidate_head"),
+  candidateDigest: blob("candidate_digest"),
+  candidateSignature: blob("candidate_signature"),
+  candidateSignerDeviceId: text("candidate_signer_device_id").references(() => encryptionDevices.id, { onDelete: "restrict" }),
+}, (table) => [
+  uniqueIndex("share_material_revision_idx").on(table.shareId, table.materialRevision),
+  check("share_material_bounded", sql`${table.materialRevision} BETWEEN 1 AND 9007199254740991
+  AND ${table.targetEpoch} BETWEEN 1 AND 9007199254740991
+  AND ${table.registryEpoch} BETWEEN 1 AND 9007199254740991 AND length(${table.headDigest}) = 32
+  AND length(${table.targetKeyId}) BETWEEN 1 AND 256 AND length(${table.anticipatedGrantId}) BETWEEN 1 AND 256
+  AND ((${table.candidateHead} IS NULL AND ${table.candidateDigest} IS NULL AND
+    ${table.candidateSignature} IS NULL AND ${table.candidateSignerDeviceId} IS NULL)
+    OR (length(${table.candidateHead}) BETWEEN 1 AND 131072 AND length(${table.candidateDigest}) = 32
+    AND length(${table.candidateSignature}) = 64 AND ${table.candidateSignerDeviceId} IS NOT NULL))`)]);
+export const shareDeviceMaterial = sqliteTable("share_device_material", {
+  shareId: text("share_id").notNull().references(() => shareMaterial.shareId, { onDelete: "cascade" }),
+  materialRevision: integer("material_revision").notNull(),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  registryEpoch: integer("registry_epoch").notNull(),
+  publicKeyDigest: blob("public_key_digest").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [primaryKey({ columns: [table.shareId, table.deviceId] }),
+  foreignKey({ columns: [table.shareId, table.materialRevision],
+    foreignColumns: [shareMaterial.shareId, shareMaterial.materialRevision] }).onDelete("cascade"),
+  check("share_device_material_bounded", sql`${table.materialRevision} BETWEEN 1 AND 9007199254740991
+    AND ${table.registryEpoch} BETWEEN 1 AND 9007199254740991
+    AND length(${table.publicKeyDigest}) = 32
+    AND length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.digest}) = 32`)]);
+
+/** Opaque outstanding Grant/device pair: NEVER a ciphertext, capability or name. */
+export const provisioningNeeds = sqliteTable("provisioning_needs", {
+  grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "cascade" }),
+  ownerId: text("owner_id").notNull(),
+  recipientId: text("recipient_id").notNull(),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  generation: integer("generation").notNull(),
+  registryEpoch: integer("registry_epoch").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.grantId, table.deviceId] }),
+  index("provisioning_needs_device_idx").on(table.deviceId),
+  index("provisioning_needs_recipient_idx").on(table.recipientId, table.deviceId),
+  index("provisioning_needs_owner_idx").on(table.ownerId, table.grantId),
+  check("provisioning_needs_bounded", sql`${table.generation} BETWEEN 1 AND 9007199254740991
+    AND ${table.registryEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.createdAt} BETWEEN 0 AND 9007199254740991
+    AND ${table.updatedAt} BETWEEN ${table.createdAt} AND 9007199254740991`),
+  foreignKey({ columns: [table.grantId, table.ownerId, table.recipientId],
+    foreignColumns: [grants.id, grants.ownerId, grants.recipientId] }).onDelete("cascade")]);
+
+/** Ticket 19 removes authority and installs this barrier before starting rekeying. */
+export const rotationBarriers = sqliteTable("rotation_barriers", {
+  ownerId: text("owner_id").notNull(),
+  targetNodeId: text("target_node_id").notNull(),
+  epoch: integer("epoch").notNull(),
+}, (table) => [primaryKey({ columns: [table.ownerId, table.targetNodeId] }),
+  foreignKey({ columns: [table.ownerId, table.targetNodeId], foreignColumns: [vaultNodes.ownerId, vaultNodes.id] }).onDelete("restrict"),
+  check("rotation_barriers_epoch_positive", sql`${table.epoch} BETWEEN 1 AND 9007199254740991`)]);
+
+/** Unique transaction witness, consumed at the end of a successful v2 write batch. */
+export const fileWriteWitnesses = sqliteTable("file_write_witnesses", {
+  fileNodeId: text("file_node_id").primaryKey().references(() => files.nodeId, { onDelete: "restrict" }),
+  proofId: text("proof_id").notNull(),
+}, (table) => [check("file_write_witnesses_proof_id_bounded", sql`length(${table.proofId}) BETWEEN 1 AND 256`)]);
 
 export type Share = typeof shares.$inferSelect;
 export type Grant = typeof grants.$inferSelect;
