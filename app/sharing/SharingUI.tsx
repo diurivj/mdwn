@@ -143,7 +143,7 @@ export function SharedNavigation({ actorAccountId }: { actorAccountId: string })
       onClick={() => loadRoots(nextRootCursor)} className="mt-2 text-sm underline disabled:opacity-60">
       Load more shared content
     </button>}
-    {pending.length > 0 && <div className="mt-4" aria-label="Invitations">
+    {pending.length > 0 && <div className="mt-4" role="region" aria-label="Invitations">
       <h3 className="font-medium">Invitations</h3>
       {pending.map((item) => <div key={item.id} className="mt-2 text-sm">
         <span>Invitation to a {item.kind === "file" ? "File" : "folder"} ({item.permission === "read_write" ? "read/write" : "read-only"})</span>
