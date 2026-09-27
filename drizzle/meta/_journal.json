@@ -57,6 +57,13 @@
       "when": 1790466768068,
       "tag": "0007_shallow_firestar",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1790469398741,
+      "tag": "0008_cheerful_photon",
+      "breakpoints": true
     }
   ]
 }

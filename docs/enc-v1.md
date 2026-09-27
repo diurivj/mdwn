@@ -45,8 +45,11 @@ algorithm negotiation, downgrade, or fallback. IDs are opaque, case-sensitive
 values, not file names or paths. The library does not infer authorization from
 an ID, key epoch, or successful decryption.
 
-`archive-manifest` and `import-staging-manifest` opens additionally require
+`archive-manifest`, `import-staging-manifest`, and self-addressed Directory
+listing envelopes (`directory-metadata` with `objectId === keyId`) additionally require
 `expected.manifestDigest`, the exact current 32-byte digest from a trusted head.
+Individual child-entry `directory-metadata` envelopes have distinct object/key IDs
+and do not act as listing heads.
 Old revisions and same-revision different ciphertext both fail. Reading the
 same **current** head repeatedly is permitted; this is rollback detection, not
 single-use consumption. Persisting/advancing the head and distributing it to

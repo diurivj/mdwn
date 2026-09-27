@@ -104,6 +104,21 @@ describe("mdwn/enc-v1 symmetric envelopes", () => {
     await expect(openSymmetric(current, key, { context: head })).rejects.toMatchObject({ code: "replayed-manifest" });
   });
 
+  it("requires a trusted current revision and digest for a Directory listing envelope", async () => {
+    const writer = await createSymmetricWriter(key);
+    const head: EnvelopeContext = { ...context, purpose: "directory-metadata",
+      objectId: "directory-id", keyId: "directory-id", revision: 4 };
+    const current = await writer.seal(plaintext, head);
+    const old = await writer.seal(plaintext, { ...head, revision: 3 });
+    const fork = await writer.seal(new TextEncoder().encode("fork"), head);
+    const expected = { context: head, manifestDigest: await digestEnvelope(current) };
+    expect(await openSymmetric(current, key, expected)).toEqual(plaintext);
+    for (const replay of [old, fork]) {
+      await expect(openSymmetric(replay, key, expected)).rejects.toMatchObject({ code: "replayed-manifest" });
+    }
+    await expect(openSymmetric(current, key, { context: head })).rejects.toMatchObject({ code: "replayed-manifest" });
+  });
+
   it("fails closed on malformed framing, unknown versions/suites, and tampering", async () => {
     const writer = await createSymmetricWriter(key);
     const envelope = await writer.seal(plaintext, context);

@@ -50,6 +50,11 @@ const EXPECTED_COLUMNS = {
   recovery_capsules: { account_id: "TEXT", generation: "INTEGER", recovery_salt: "BLOB", ciphertext: "BLOB", verification_public_key: "BLOB" },
   authentication_recovery_codes: { account_id: "TEXT", ordinal: "INTEGER", code_hash: "BLOB" },
   device_proof_uses: { account_id: "TEXT", proof_id: "TEXT", session_id: "TEXT", expires_at: "INTEGER" },
+  vault_nodes: { id: "TEXT", kind: "TEXT", owner_id: "TEXT", parent_node_id: "TEXT", import_id: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
+  directories: { node_id: "TEXT", owner_id: "TEXT", entries_revision: "INTEGER" },
+  files: { node_id: "TEXT", owner_id: "TEXT", current_representation_id: "TEXT", current_revision: "INTEGER" },
+  directory_entries: { child_node_id: "TEXT", owner_id: "TEXT", parent_node_id: "TEXT", name_ciphertext: "BLOB", order_ciphertext: "BLOB", key_envelope: "BLOB" },
+  file_representations: { id: "TEXT", file_node_id: "TEXT", owner_id: "TEXT", revision: "INTEGER", content_key_id: "TEXT", key_epoch: "INTEGER", ciphertext: "BLOB", ciphertext_size: "INTEGER", created_at: "INTEGER" },
   rate_limit_counters: { purpose: "TEXT", scope_type: "TEXT", scope_id: "TEXT", window_ms: "INTEGER", time_epoch: "INTEGER", count: "INTEGER", expires_at: "INTEGER" },
   security_events: { id: "TEXT", created_at: "INTEGER", expires_at: "INTEGER", action_class: "TEXT", outcome: "TEXT", reason: "TEXT", account_id: "TEXT", publication_id: "TEXT", size_class: "TEXT", proof_state: "TEXT", counter_state: "TEXT", retry_at: "INTEGER", network_bucket: "TEXT", network_bucket_expires_at: "INTEGER" },
 };
@@ -72,6 +77,14 @@ const EXPECTED_INDEXES = [
   ["account_encryption_identities", "account_encryption_identities_root_directory_id_unique", 1],
   ["encryption_devices", "encryption_devices_account_idx", 0],
   ["device_proof_uses", "device_proof_uses_expiry_idx", 0],
+  ["vault_nodes", "vault_nodes_one_root_idx", 1],
+  ["vault_nodes", "vault_nodes_owner_edge_idx", 1],
+  ["directories", "directories_owner_node_idx", 1],
+  ["directory_entries", "directory_entries_owner_edge_idx", 1],
+  ["directory_entries", "directory_entries_parent_idx", 0],
+  ["files", "files_owner_node_idx", 1],
+  ["file_representations", "file_representations_owner_pointer_idx", 1],
+  ["file_representations", "file_representations_file_revision_idx", 1],
 ];
 const EXPECTED_FOREIGN_KEYS = [
   "account_profiles:account_id:accounts:id:RESTRICT",
@@ -85,6 +98,14 @@ const EXPECTED_FOREIGN_KEYS = [
   "recovery_capsules:account_id:accounts:id:RESTRICT",
   "authentication_recovery_codes:account_id:accounts:id:RESTRICT",
   "device_proof_uses:account_id:accounts:id:RESTRICT",
+  "vault_nodes:owner_id:accounts:id:RESTRICT",
+  "vault_nodes:parent_node_id:directories:node_id:RESTRICT",
+  "vault_nodes:id:directory_entries:child_node_id:RESTRICT",
+  "directories:node_id:vault_nodes:id:RESTRICT",
+  "directory_entries:child_node_id:vault_nodes:id:RESTRICT",
+  "directory_entries:parent_node_id:directories:node_id:RESTRICT",
+  "file_representations:file_node_id:files:node_id:RESTRICT",
+  "files:current_representation_id:file_representations:id:RESTRICT",
 ];
 
 /**
