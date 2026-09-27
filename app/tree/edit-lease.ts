@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 /** Web Locks arbitrate ownership; BroadcastChannel only requests transfer, never grants it. */
-export function useFileLease(fileId: string) {
+export function useFileLease(fileId: string, inFlight?: () => Promise<unknown> | null | undefined) {
   const [owner, setOwner] = useState(false);
   const [transferRequested, setTransferRequested] = useState(false);
   const [requesting, setRequesting] = useState(false);
@@ -47,7 +47,12 @@ export function useFileLease(fileId: string) {
     return () => {
       mounted.current = false;
       waiting.current?.abort();
-      release.current?.();
+      // An unmounted owner's captured save may already be executing in the Worker.
+      // Keep the lock until its response and verification settle, even across navigation.
+      const unlock = release.current;
+      const work = inFlight?.();
+      if (work) void work.then(() => unlock?.(), () => unlock?.());
+      else unlock?.();
       channel.current?.close();
       channel.current = null;
     };
@@ -80,5 +85,6 @@ export function useFileLease(fileId: string) {
   }
 
   return { owner, requesting, transferRequested, requestTransfer, cancelRequest, finishTransfer,
+    isOwner: () => ownerRef.current,
     keepEditing: () => setTransferRequested(false) };
 }
