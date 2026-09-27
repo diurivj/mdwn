@@ -259,6 +259,7 @@ test("Owner-offline invitations keep an unprovisioned device nameless and allow 
     // to its Owner, while the direct File URL and Shared-as label remain stable.
     await owner.context.setOffline(false);
     await owner.page.goto(`${origin}/d/${directoryId}`);
+    await owner.page.getByRole("button", { name: "Expand Research", exact: true }).click();
     await expect(owner.page.getByRole("link", { name: "Collaborator note.md", exact: true })).toBeVisible();
     await owner.page.getByRole("link", { name: "Collaborator note.md", exact: true }).click();
     await expect(owner.page.getByRole("textbox", { name: "Markdown source" })).toHaveValue(COLLABORATOR_MARKDOWN);
@@ -278,8 +279,22 @@ test("Owner-offline invitations keep an unprovisioned device nameless and allow 
     const directRoot = recipient.page.getByLabel("Shared content")
       .getByRole("link", { name: "OwnerSeed.md (Shared as)", exact: true });
     await expect(directRoot).toBeVisible();
+    const leaveResponse = recipient.page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/resources/sharing" && response.request().method() === "POST",
+    { timeout: 30_000 });
     await directRoot.locator("..").getByRole("button", { name: "Leave", exact: true }).click();
-    await expect(recipient.page.getByText("Share left.", { exact: true })).toBeVisible();
+    expect((await leaveResponse).status()).toBe(200);
+    // Leaving revokes this direct URL, so the message-bearing SharedNavigation is
+    // replaced by the access-denied page during route revalidation.
+    await expect(recipient.page.getByRole("heading", { name: "Not found", exact: true })).toBeVisible();
+
+    const rootsResponse = recipient.page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/resources/sharing" && url.searchParams.get("collection") === "roots" &&
+        response.request().method() === "GET";
+    }, { timeout: 30_000 });
+    await recipient.page.goto(`${origin}/d/${recipient.rootId}`);
+    expect((await rootsResponse).status()).toBe(200);
     await expect(recipient.page.getByLabel("Shared content")
       .getByRole("link", { name: "OwnerSeed.md (Shared as)", exact: true })).toHaveCount(0);
     recipient.page.off("request", observeDirectRequest);
