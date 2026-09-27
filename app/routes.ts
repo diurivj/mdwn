@@ -20,6 +20,7 @@ export default [
   route("api/private/devices/*", "routes/api/private-devices.ts"),
   route("api/private/tree/*", "routes/api/private-tree.ts"),
   route("api/private/sharing/*", "routes/api/private-sharing.ts"),
+  route("resources/sharing", "routes/resources/sharing.ts"),
   route("api/auth/*", "routes/auth.ts"),
   route("api/signup/*", "routes/signup.ts"),
   route("api/device/state", "routes/device-state.ts"),
