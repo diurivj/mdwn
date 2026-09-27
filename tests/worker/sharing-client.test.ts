@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { encodeRecipientAddress, invitations, mergeSharingPage, sharedRootsPage,
-  type GrantRoot, type ShareItem } from "../app/sharing/client";
+  type GrantRoot, type ShareItem } from "../../app/sharing/client";
 
 describe("exact Share addressing", () => {
   it("removes one leading @ and sends the reviewed canonical handle token", async () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { clientAction, clientLoader } from "../app/routes/resources/sharing";
-import { stageShareInviteAction } from "../app/sharing/client";
+import { clientAction, clientLoader } from "../../app/routes/resources/sharing";
+import { stageShareInviteAction } from "../../app/sharing/client";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -80,27 +80,29 @@ describe("browser sharing resource route", () => {
       : { incoming: [], outgoing: [], grants: [], next: {
         incomingCursor: null, outgoingCursor: null, grantsCursor: null,
       } });
-    const rootsSignal = new AbortController().signal;
-    const invitationSignal = new AbortController().signal;
-    const roots = await callRouteHandler(clientLoader, new Request(
+    const rootsRequest = new Request(
       `https://mdwn.test/resources/sharing?collection=roots&cursor=${shareId}`,
-      { signal: rootsSignal },
-    ));
-    const invitations = await callRouteHandler(clientLoader, new Request(
+      { signal: new AbortController().signal },
+    );
+    const invitationsRequest = new Request(
       `https://mdwn.test/resources/sharing?collection=invitations&incomingCursor=${incomingCursor}` +
         `&outgoingCursor=${outgoingCursor}&grantsCursor=${grantsCursor}`,
-      { signal: invitationSignal },
-    ));
+      { signal: new AbortController().signal },
+    );
+    const roots = await callRouteHandler(clientLoader, rootsRequest);
+    const invitations = await callRouteHandler(clientLoader, invitationsRequest);
 
     expect(roots).toEqual({ state: "success", collection: "roots", roots: [], nextCursor: null });
     expect(invitations).toEqual({ state: "success", collection: "invitations", incoming: [], outgoing: [],
       grants: [], next: { incomingCursor: null, outgoingCursor: null, grantsCursor: null } });
-    expect(calls).toEqual([
-      { path: "/api/private/sharing/roots", method: "POST", body: { cursor: shareId }, signal: rootsSignal },
+    expect(calls.map(({ path, method, body }) => ({ path, method, body }))).toEqual([
+      { path: "/api/private/sharing/roots", method: "POST", body: { cursor: shareId } },
       { path: "/api/private/sharing/invitations", method: "POST", body: {
         incomingCursor, outgoingCursor, grantsCursor,
-      }, signal: invitationSignal },
+      } },
     ]);
+    expect(calls[0]?.signal).toBe(rootsRequest.signal);
+    expect(calls[1]?.signal).toBe(invitationsRequest.signal);
   });
 
   it("runs a staged Share invite once through clientAction using the router request signal", async () => {
@@ -144,18 +146,18 @@ describe("browser sharing resource route", () => {
         method: "DELETE", body: undefined },
       { intent: "change-permission", itemId: grantId, permission: "read_write",
         path: `/api/private/sharing/grants/${grantId}`, method: "PATCH", body: { permission: "read_write" } },
-    ];
+    ] as const;
 
     for (const action of actions) {
       const form = new FormData();
       form.set("intent", action.intent);
       form.set("itemId", action.itemId);
-      if ("permission" in action) form.set("permission", action.permission);
+      if (action.intent === "change-permission") form.set("permission", action.permission);
       const request = new Request("https://mdwn.test/resources/sharing", { method: "POST", body: form });
       const result = await callRouteHandler(clientAction, request);
       expect(result).toMatchObject({ state: "success", intent: action.intent, itemId: action.itemId });
-      expect(calls.at(-1)).toEqual({ path: action.path, method: action.method, body: action.body,
-        signal: request.signal });
+      expect(calls.at(-1)).toMatchObject({ path: action.path, method: action.method, body: action.body });
+      expect(calls.at(-1)?.signal).toBe(request.signal);
     }
   });
 });
