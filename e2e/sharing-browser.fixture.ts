@@ -203,19 +203,19 @@ export async function inviteFromCurrentPage(page: Page, shareId: string,
           `sanitized request evidence: ${trace.summary()}`);
       }
     }
-    const result = outcome.kind === "request" ? outcome.result : await creating;
-    const response = await requireInviteResponse(Promise.resolve(result), trace, panel,
+    const requestResult = outcome.kind === "request" ? outcome.result : await creating;
+    const response = await requireInviteResponse(Promise.resolve(requestResult), trace, panel,
       "PUT", "/api/private/sharing/shares", outcome.kind === "stage" ? outcome.stage ?? undefined : undefined);
     if (expectedPreparationFailure) {
       expect.fail(`Expected client preparation failure at ${expectedPreparationFailure}, but Share submission returned`);
     }
     requireInviteStatus(response, "PUT", "/api/private/sharing/shares", 201, trace);
-    const result = await response.json() as { shareId?: unknown };
-    if (typeof result.shareId !== "string" || !/^[0-9a-f-]{36}$/.test(result.shareId)) {
+    const responseBody = await response.json() as { shareId?: unknown };
+    if (typeof responseBody.shareId !== "string" || !/^[0-9a-f-]{36}$/.test(responseBody.shareId)) {
       throw new Error("PUT /api/private/sharing/shares did not return a valid Share identifier");
     }
     await expect(panel.getByText("Invitation sent.", { exact: false })).toBeVisible();
-    return result.shareId;
+    return responseBody.shareId;
   } finally {
     trace.stop();
   }
