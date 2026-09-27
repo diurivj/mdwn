@@ -28,6 +28,14 @@ describe("committed Drizzle migrations", () => {
     }
   });
 
+  it("0014 rebuilds retained child material without disabling foreign keys", () => {
+    const sql = readFileSync(join(DRIZZLE_DIR, "0014_abandoned_tusk.sql"), "utf8");
+    expect(sql).not.toMatch(/PRAGMA\s+foreign_keys\s*=\s*OFF/i);
+    expect(sql).toContain("INSERT INTO `__new_grant_retained_material`");
+    expect(sql).toContain("DROP TABLE `grant_retained_material`");
+    expect(sql).toContain("RENAME TO `grant_retained_material`");
+  });
+
   it("journal records every migration file (schema-drift guard)", () => {
     const journal = JSON.parse(
       readFileSync(join(DRIZZLE_DIR, "meta", "_journal.json"), "utf8"),

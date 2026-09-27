@@ -1,4 +1,3 @@
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
 CREATE TABLE `__new_grant_retained_material` (
 	`grant_id` text NOT NULL,
 	`device_id` text NOT NULL,
@@ -22,5 +21,4 @@ CREATE TABLE `__new_grant_retained_material` (
 INSERT INTO `__new_grant_retained_material`("grant_id", "device_id", "registry_epoch", "content_key_id", "content_epoch", "revision", "public_key_digest", "ciphertext", "digest") SELECT "grant_id", "device_id", "registry_epoch", "content_key_id", "content_epoch", "revision", NULL, "ciphertext", "digest" FROM `grant_retained_material`;--> statement-breakpoint
 DROP TABLE `grant_retained_material`;--> statement-breakpoint
 ALTER TABLE `__new_grant_retained_material` RENAME TO `grant_retained_material`;--> statement-breakpoint
-PRAGMA foreign_keys=ON;--> statement-breakpoint
 CREATE INDEX `grant_retained_material_device_idx` ON `grant_retained_material` (`device_id`);

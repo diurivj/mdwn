@@ -6,10 +6,19 @@ export type RecipientWire = { accountId: string; deviceId: string; registryEpoch
   publicKey: string; grants: { id: string; generation: number }[] };
 export type SignedHeadWire = { bytes: string; digest: string; signature: string;
   signerDeviceId: string; signerPublicKey: string };
+/* Owner-bound historical signer provenance for the exact retained device key.
+ * The canonical signed offer contains opaque label identifiers/digest commitments,
+ * not label ciphertext, Owner copy or plaintext. The browser must verify the
+ * signature and compare its device descriptor to the retained ciphertext and
+ * its own registered physical public key before opening/re-enveloping the key.
+ */
+export type RetainedKeyProvenanceWire = { grantId: string; offerBytes: string;
+  offerDigest: string; offerSignature: string; signerDeviceId: string;
+  signerPublicKey: string };
 export type FileProvisioningBootstrap = { ownerId: string; fileId: string;
   currentHead: SignedHeadWire; recipients: RecipientWire[];
   retained: { ciphertext: string; digest: string; contentKeyId: string;
-    contentEpoch: number; revision: number } };
+    contentEpoch: number; revision: number; provenance: RetainedKeyProvenanceWire } };
 export type FileProvisioningCompletion = { expectedHeadDigest: string;
   expectedRevision: number; expectedRecipientSetVersion: number;
   signedHead: { bytes: string; digest: string; signature: string };

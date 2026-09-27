@@ -5,9 +5,10 @@ import { createFileReceivingKey, createFileSave, openFileContentKeyFromDevice } 
 import { createChildDirectoryCapability, generateDirectoryCapabilityKey } from "../../app/crypto/vault";
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { sealShareLabel, openShareLabel } from "../../app/sharing/label";
-import { hex, signOffer, digestBytes, type Offer } from "../../app/sharing/offer";
+import { hex, signOffer, verifyOffer, parseOffer, digestBytes, type Offer } from "../../app/sharing/offer";
 import type { FileProvisioningBootstrap } from "../../app/sharing/provisioning-wire";
-import { signFileHead, verifyFileHead, type FileHeadStatement } from "../../app/tree/file-head";
+import { signFileHead, verifyFileHead, assertFileHeadCommitTransition,
+  assertExactFileRecipientDescriptors, verifyDirectFileRecipientEnvelope, type FileHeadStatement } from "../../app/tree/file-head";
 import { createListingHead, openListingHead, type SealedEntry } from "../../app/tree/listing";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import { seedNormalSession } from "./auth-fixtures";
@@ -240,6 +241,156 @@ async function inviteFile(owner: Account, recipient: Account,
 }
 
 describe("private sharing lifecycle through the built Worker", () => {
+  it("bootstraps a retained File key with independently verifiable Owner-signed sender provenance", async () => {
+    const owner = await account(), recipient = await account(), file = await createV2File(owner);
+    const invitation = await inviteFile(owner, recipient, file);
+    expect((await recipient.request(`/api/private/sharing/shares/${invitation.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    // The pre-invitation File head does not name this device. HPKE base mode
+    // and a self-consistent hash alone cannot authenticate who sealed its key.
+    const response = await recipient.request(`/api/private/sharing/direct-files/${file.fileId}/bootstrap`, "POST");
+    expect(response.status, await response.clone().text()).toBe(200);
+    const body = await response.json() as FileProvisioningBootstrap;
+    const proof = body.retained.provenance;
+    const signed = await verifyOffer(decodeTreeBytes(proof.offerBytes, 131072),
+      decodeTreeBytes(proof.offerDigest, 32), decodeTreeBytes(proof.offerSignature, 64),
+      decodeTreeBytes(proof.signerPublicKey, 65));
+    expect(signed).toMatchObject({ ownerId: owner.accountId, recipientId: recipient.accountId,
+      targetId: file.fileId, kind: "file", grantId: invitation.grantId, signerDeviceId: owner.deviceId,
+      targetKeyId: file.contentKeyId, targetEpoch: 1, contentRevision: 1 });
+    expect(proof).toMatchObject({ grantId: invitation.grantId, signerDeviceId: owner.deviceId });
+    const receiver = signed.devices.find((d) => d.accountId === recipient.accountId &&
+      d.deviceId === recipient.deviceId);
+    expect(receiver).toMatchObject({ publicKeyDigest: await digest(recipient.publicKey),
+      contentDigest: await digest(decodeTreeBytes(body.retained.ciphertext, 16384)) });
+    expect(body.retained.digest).toBe(enc(await hash(decodeTreeBytes(body.retained.ciphertext, 16384))));
+    expect(await openFileContentKeyFromDevice(decodeTreeBytes(body.retained.ciphertext, 16384),
+      recipient.transport, { vaultId: owner.accountId, fileId: file.fileId,
+        contentKeyId: file.contentKeyId, contentEpoch: 1, revision: 1,
+        deviceId: recipient.deviceId })).toEqual(file.saved.fileContentKey);
+    expect(JSON.stringify(body)).not.toMatch(/Private\.md|Shared File|ownerCopy|labelCiphertext|representationCiphertext|parentId/i);
+  });
+
+  it("fails closed on a retained cipher with a matching untrusted digest or substituted signed offer", async () => {
+    const owner = await account(), recipient = await account(), file = await createV2File(owner);
+    const invitation = await inviteFile(owner, recipient, file);
+    expect((await recipient.request(`/api/private/sharing/shares/${invitation.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    const path = `/api/private/sharing/direct-files/${file.fileId}/bootstrap`;
+    const original = parseOffer(invitation.signed.bytes);
+    const tampered = new Uint8Array(invitation.ciphertext);
+    tampered[tampered.length - 1] ^= 1;
+    await env.DB.prepare("UPDATE grant_retained_material SET ciphertext = ?, digest = ? WHERE grant_id = ?")
+      .bind(tampered, await hash(tampered), invitation.grantId).run();
+    expect((await recipient.request(path, "POST")).status).toBe(202);
+    await env.DB.prepare("UPDATE grant_retained_material SET ciphertext = ?, digest = ? WHERE grant_id = ?")
+      .bind(invitation.ciphertext, await hash(invitation.ciphertext), invitation.grantId).run();
+    for (const substituted of [
+      { ...original, targetId: id() },
+      { ...original, grantId: id() },
+      { ...original, contentRevision: original.contentRevision + 1 },
+      { ...original, devices: original.devices.map((d) => ({ ...d, deviceId: id() })) },
+      { ...original, devices: original.devices.map((d) => ({ ...d, publicKeyDigest: "a".repeat(64) })) },
+    ]) {
+      const signed = await signOffer(substituted, owner.signing.privateKey);
+      await env.DB.prepare(`UPDATE grant_labels SET offer_bytes = ?, offer_digest = ?,
+        offer_signature = ? WHERE grant_id = ?`)
+        .bind(signed.bytes, signed.digest, signed.signature, invitation.grantId).run();
+      expect((await recipient.request(path, "POST")).status).toBe(202);
+    }
+    await env.DB.prepare(`UPDATE grant_labels SET offer_bytes = ?, offer_digest = ?,
+      offer_signature = ? WHERE grant_id = ?`)
+      .bind(invitation.signed.bytes, invitation.signed.digest, invitation.signed.signature,
+        invitation.grantId).run();
+    expect((await recipient.request(path, "POST")).status).toBe(200);
+    const otherOwner = await account();
+    await env.DB.prepare("UPDATE grant_labels SET signer_device_id = ? WHERE grant_id = ?")
+      .bind(otherOwner.deviceId, invitation.grantId).run();
+    expect((await recipient.request(path, "POST")).status).toBe(202);
+    await env.DB.prepare("UPDATE grant_labels SET signer_device_id = ? WHERE grant_id = ?")
+      .bind(owner.deviceId, invitation.grantId).run();
+    const corruptedSignature = new Uint8Array(invitation.signed.signature);
+    corruptedSignature[0] ^= 1;
+    await env.DB.prepare("UPDATE grant_labels SET offer_signature = ? WHERE grant_id = ?")
+      .bind(corruptedSignature, invitation.grantId).run();
+    expect((await recipient.request(path, "POST")).status).toBe(202);
+    await env.DB.prepare("DELETE FROM grant_label_deliveries WHERE grant_id = ?")
+      .bind(invitation.grantId).run();
+    await env.DB.prepare("DELETE FROM grant_labels WHERE grant_id = ?")
+      .bind(invitation.grantId).run();
+    expect((await recipient.request(path, "POST")).status).toBe(202);
+  });
+
+  it("allows historical Owner signer and same physical key after registry advance, but only a current actor completes", async () => {
+    const owner = await account(), recipient = await account(), file = await createV2File(owner);
+    const invitation = await inviteFile(owner, recipient, file);
+    expect((await recipient.request(`/api/private/sharing/shares/${invitation.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    await env.DB.prepare("UPDATE encryption_devices SET state = 'revoked', revocation_reason = 'test' WHERE id = ?")
+      .bind(owner.deviceId).run();
+    const newcomer = { deviceId: id(), pair: await crypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]) };
+    await env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key,
+      assertion_public_key, state, approval_provenance, registry_epoch, created_at)
+      VALUES (?, ?, ?, ?, 'active', 'routine', 2, ?)`)
+      .bind(newcomer.deviceId, recipient.accountId,
+        new Uint8Array(await crypto.subtle.exportKey("raw", newcomer.pair.publicKey)),
+        new Uint8Array(await crypto.subtle.exportKey("raw", recipient.signing.publicKey)), Date.now()).run();
+    recipient.setRegistryEpoch(2);
+    const path = `/api/private/sharing/direct-files/${file.fileId}`;
+    const response = await recipient.request(`${path}/bootstrap`, "POST");
+    expect(response.status, await response.clone().text()).toBe(200);
+    const body = await response.json() as FileProvisioningBootstrap;
+    const verified = await verifyOffer(decodeTreeBytes(body.retained.provenance.offerBytes, 131072),
+      decodeTreeBytes(body.retained.provenance.offerDigest, 32),
+      decodeTreeBytes(body.retained.provenance.offerSignature, 64),
+      decodeTreeBytes(body.retained.provenance.signerPublicKey, 65));
+    expect(verified.registryEpoch).toBe(1);
+    expect(body.recipients).toHaveLength(2);
+    expect(body.retained.provenance.signerDeviceId).toBe(owner.deviceId);
+    const head = await verifyFileHead({ bytes: decodeTreeBytes(body.currentHead.bytes, 131072),
+      digest: decodeTreeBytes(body.currentHead.digest, 32),
+      signature: decodeTreeBytes(body.currentHead.signature, 64) },
+    { ownerId: owner.accountId, vaultId: owner.accountId, fileId: file.fileId,
+      signerDeviceId: body.currentHead.signerDeviceId,
+      publicKey: decodeTreeBytes(body.currentHead.signerPublicKey, 65) });
+    const sealed = await Promise.all(body.recipients.map(async (r) => ({ ...r,
+      ciphertext: await sealToRecipient(file.saved.fileContentKey,
+        await crypto.subtle.importKey("raw", decodeTreeBytes(r.publicKey, 65),
+          { name: "ECDH", namedCurve: "P-256" }, true, []),
+        { purpose: "grant", vaultId: owner.accountId, objectId: file.fileId,
+          keyId: file.contentKeyId, keyEpoch: 1, revision: 1, recipientId: r.deviceId }) })));
+    const signed = await signFileHead({ ...head.statement,
+      recipientSetVersion: head.statement.recipientSetVersion + 1,
+      recipients: await Promise.all(sealed.map(async (r) => ({ accountId: r.accountId,
+        deviceId: r.deviceId, registryEpoch: r.registryEpoch, grants: r.grants,
+        publicKeyDigest: await hash(decodeTreeBytes(r.publicKey, 65)),
+        envelopeDigest: await hash(r.ciphertext) }))), signerDeviceId: recipient.deviceId },
+    recipient.signing.privateKey);
+    const verifiedNext = await verifyFileHead(signed, { ownerId: owner.accountId, vaultId: owner.accountId,
+      fileId: file.fileId, revision: 1, signerDeviceId: recipient.deviceId,
+      publicKey: new Uint8Array(await crypto.subtle.exportKey("raw", recipient.signing.publicKey)) });
+    assertFileHeadCommitTransition(head, verifiedNext, { expectedSameRevisionTransition: "recipient-set-update" });
+    assertExactFileRecipientDescriptors(verifiedNext, await Promise.all(sealed.map(async (r) => ({
+      accountId: r.accountId, deviceId: r.deviceId, registryEpoch: r.registryEpoch, grants: r.grants,
+      publicKeyDigest: await hash(decodeTreeBytes(r.publicKey, 65)),
+    }))));
+    for (const r of sealed) await verifyDirectFileRecipientEnvelope(verifiedNext, r.accountId, r.deviceId,
+      decodeTreeBytes(r.publicKey, 65), r.ciphertext);
+    const complete = await recipient.request(`${path}/complete`, "PATCH", {
+      expectedHeadDigest: body.currentHead.digest, expectedRevision: 1,
+      expectedRecipientSetVersion: head.statement.recipientSetVersion, signedHead: wireHead(signed),
+      recipientEnvelopes: sealed.map((r) => ({ deviceId: r.deviceId, ciphertext: enc(r.ciphertext) })) });
+    expect(complete.status, await complete.clone().text()).toBe(200);
+    expect((await complete.json() as { status: string }).status).toBe("provisioning");
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM file_device_envelopes WHERE file_node_id = ?")
+      .bind(file.fileId).first<{ count: number }>())?.count).toBe(2);
+    // The original recipient no longer signs with the old epoch, and the new
+    // device has no retained provenance of its own yet.
+    recipient.setRegistryEpoch(1);
+    expect((await recipient.request(`${path}/bootstrap`, "POST")).status).not.toBe(200);
+  });
+
   it("rejects cross-Account retained material and label rows at the storage boundary", async () => {
     const owner = await account(), recipient = await account(), file = await createV2File(owner);
     const offer = await inviteFile(owner, recipient, file);

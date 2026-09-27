@@ -11,7 +11,7 @@ import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
 import { fileAccessGuard } from "./access.server";
 import { digestBytes, hex, sameBytes, verifyOffer } from "./offer";
 import { begin, finish, marker, proofTime, spent } from "./sharing.server";
-import type { FileProvisioningBootstrap, FileProvisioningCompletion } from "./provisioning-wire";
+import type { FileProvisioningBootstrap, FileProvisioningCompletion, RetainedKeyProvenanceWire } from "./provisioning-wire";
 
 const headers = { "Cache-Control": "no-store" };
 const absent = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -31,7 +31,10 @@ type BootstrapRow = { grant_id: string; generation: number; owner_id: string; re
   assertion_public_key: ArrayBuffer; signer_account_id: string; transport_public_key: ArrayBuffer;
   retained_ciphertext: ArrayBuffer | null; retained_digest: ArrayBuffer | null;
   retained_key_digest: ArrayBuffer | null; retained_revision: number | null;
-  retained_key_id: string | null; retained_epoch: number | null };
+  retained_key_id: string | null; retained_epoch: number | null;
+  label_id: string | null; offer_bytes: ArrayBuffer | null; offer_digest: ArrayBuffer | null;
+  offer_signature: ArrayBuffer | null; offer_signer_device_id: string | null;
+  offer_signer_public_key: ArrayBuffer | null };
 
 /** This query may read parent envelope for integrity verification; the response NEVER returns it.
  * A direct File Grant, current active device/registry, and current File must all coexist.
@@ -48,7 +51,10 @@ async function currentRow(env: Env, auth: AuthorizedDevice, fileId: string): Pro
     signer.assertion_public_key, signer.account_id AS signer_account_id, d.transport_public_key,
     m.ciphertext AS retained_ciphertext, m.digest AS retained_digest,
     m.public_key_digest AS retained_key_digest, m.revision AS retained_revision,
-    m.content_key_id AS retained_key_id, m.content_epoch AS retained_epoch
+    m.content_key_id AS retained_key_id, m.content_epoch AS retained_epoch,
+    label.label_id, label.offer_bytes, label.offer_digest, label.offer_signature,
+    label.signer_device_id AS offer_signer_device_id,
+    offer_signer.assertion_public_key AS offer_signer_public_key
     FROM grants g JOIN vault_nodes n ON n.id = g.target_node_id AND n.owner_id = g.owner_id
     JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
     JOIN file_heads h ON h.file_node_id = f.node_id AND h.owner_id = f.owner_id
@@ -57,6 +63,9 @@ async function currentRow(env: Env, auth: AuthorizedDevice, fileId: string): Pro
     JOIN encryption_devices d ON d.id = ${auth.deviceId} AND d.account_id = g.recipient_id
       AND d.state = 'active'
     LEFT JOIN grant_retained_material m ON m.grant_id = g.id AND m.device_id = d.id
+    LEFT JOIN grant_labels label ON label.grant_id = g.id
+    LEFT JOIN encryption_devices offer_signer ON offer_signer.id = label.signer_device_id
+      AND offer_signer.account_id = g.owner_id
     WHERE g.target_node_id = ${fileId} AND g.target_kind = 'file' AND n.kind = 'file'
       AND n.import_id IS NULL AND g.recipient_id = ${auth.accountId}
       AND g.owner_id = ${ownerId}
@@ -91,10 +100,31 @@ async function checked(env: Env, auth: AuthorizedDevice, fileId: string) {
   if (frame.suite !== HPKE_SUITE || context.purpose !== "grant" ||
       context.vaultId !== row.owner_id || context.objectId !== fileId ||
       context.keyId !== row.content_key_id || context.keyEpoch !== row.content_epoch ||
-      context.revision !== row.revision || context.recipientId !== auth.deviceId) {
+      context.revision !== row.revision || context.recipientId !== auth.deviceId ||
+      !row.offer_bytes || !row.offer_digest || !row.offer_signature ||
+      !row.offer_signer_device_id || !row.offer_signer_public_key || !row.label_id) {
     return { row, current: null };
   }
-  return { row, current: head };
+  // HPKE base mode has no sender authentication. The historical Owner-bound
+  // signer need not remain active; this proof authenticates old material, not a
+  // new write. A later registry epoch need not invalidate the same physical key.
+  try {
+    const offer = await verifyOffer(bytes(row.offer_bytes), bytes(row.offer_digest),
+      bytes(row.offer_signature), bytes(row.offer_signer_public_key));
+    const device = offer.devices.find((d) => d.accountId === auth.accountId && d.deviceId === auth.deviceId);
+    if (offer.grantId !== row.grant_id || offer.ownerId !== row.owner_id ||
+        offer.recipientId !== row.recipient_id || offer.targetId !== fileId || offer.kind !== "file" ||
+        offer.signerDeviceId !== row.offer_signer_device_id || offer.labelId !== row.label_id ||
+        offer.targetKeyId !== row.content_key_id || offer.targetEpoch !== row.content_epoch ||
+        offer.contentRevision !== row.revision || !device ||
+        device.publicKeyDigest !== hex(bytes(row.retained_key_digest)) ||
+        device.contentDigest !== hex(bytes(row.retained_digest))) return { row, current: null };
+  } catch { return { row, current: null }; }
+  const provenance: RetainedKeyProvenanceWire = { grantId: row.grant_id,
+    offerBytes: wire(row.offer_bytes), offerDigest: wire(row.offer_digest),
+    offerSignature: wire(row.offer_signature), signerDeviceId: row.offer_signer_device_id,
+    signerPublicKey: wire(row.offer_signer_public_key) };
+  return { row, current: head, provenance };
 }
 
 /** A read-only direct File holder can prepare a fresh recipient-set signature
@@ -106,7 +136,7 @@ export async function bootstrapFileProvisioning(env: Env, auth: AuthorizedDevice
   try {
     const state = await checked(env, auth, fileId);
     if (!state) return absent();
-    if (!state.current) return pending();
+    if (!state.current || !state.provenance) return pending();
     const { row } = state;
     const eligible = await recipients(env, row.owner_id, fileId);
     const response: FileProvisioningBootstrap = { ownerId: row.owner_id, fileId,
@@ -114,7 +144,7 @@ export async function bootstrapFileProvisioning(env: Env, auth: AuthorizedDevice
         signerDeviceId: row.signer_device_id, signerPublicKey: wire(row.assertion_public_key) },
       recipients: eligible, retained: { ciphertext: wire(row.retained_ciphertext!),
         digest: wire(row.retained_digest!), contentKeyId: row.content_key_id,
-        contentEpoch: row.content_epoch, revision: row.revision } };
+        contentEpoch: row.content_epoch, revision: row.revision, provenance: state.provenance } };
     return Response.json(response, { headers });
   } catch { return invalid(); }
 }
@@ -146,7 +176,7 @@ export async function completeFileProvisioning(env: Env, auth: AuthorizedDevice,
     if (new Set(submitted.map((item) => item.deviceId)).size !== submitted.length) return invalid();
     const state = await checked(env, auth, fileId);
     if (!state) return absent();
-    if (!state.current) return pending();
+    if (!state.current || !state.provenance) return pending();
     const { row, current } = state;
     if (!sameBytes(expectedDigest, bytes(row.digest)) || input.expectedRevision !== row.revision ||
         input.expectedRecipientSetVersion !== row.recipient_set_version) return changed();
@@ -187,6 +217,15 @@ export async function completeFileProvisioning(env: Env, auth: AuthorizedDevice,
         AND m.content_key_id = h.content_key_id AND m.content_epoch = h.content_epoch
         AND m.revision = h.revision AND m.ciphertext = ${bytes(row.retained_ciphertext!)}
         AND m.digest = ${bytes(row.retained_digest!)}
+        AND EXISTS (SELECT 1 FROM grant_labels label
+          JOIN encryption_devices offer_signer ON offer_signer.id = label.signer_device_id
+            AND offer_signer.account_id = g.owner_id
+          WHERE label.grant_id = g.id AND label.label_id = ${row.label_id}
+            AND label.offer_bytes = ${bytes(row.offer_bytes!)}
+            AND label.offer_digest = ${bytes(row.offer_digest!)}
+            AND label.offer_signature = ${bytes(row.offer_signature!)}
+            AND label.signer_device_id = ${row.offer_signer_device_id}
+            AND offer_signer.assertion_public_key = ${bytes(row.offer_signer_public_key!)})
         AND f.current_revision = h.revision AND f.current_representation_id = h.representation_id
         AND h.digest = ${expectedDigest} AND h.revision = ${row.revision}
         AND h.recipient_set_version = ${row.recipient_set_version}
