@@ -1,4 +1,5 @@
-import type { Browser, BrowserContext, Page } from "@playwright/test";
+import type { Browser, BrowserContext, Locator, Page, Request as PlaywrightRequest,
+  Response as PlaywrightResponse } from "@playwright/test";
 import type { TestHarness } from "wrangler";
 
 import { expect } from "./fixtures";
@@ -12,8 +13,113 @@ export async function accountShareId(server: TestHarness, accountId: string): Pr
   const db = (await server.getWorker<TestEnv>().getEnv()).DB;
   const row = await db.prepare("SELECT share_id FROM accounts WHERE id = ?")
     .bind(accountId).first<{ share_id: string }>();
-  if (!row?.share_id) throw new Error("Expected an existing opaque Account share ID");
+  if (!row?.share_id || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(row.share_id)) {
+    throw new Error("Expected an existing canonical opaque Account share ID");
+  }
   return row.share_id;
+}
+
+type InviteObservation = { method: string; path: string; status: number | "pending" | "failed";
+  response?: PlaywrightResponse };
+type InviteWaitResult = { response: PlaywrightResponse } | { failure: "request-failed" | "timed-out" };
+type InviteWaiter = { method: string; path: string; resolve: (result: InviteWaitResult) => void;
+  timer: ReturnType<typeof setTimeout> };
+
+/** Capture only fixed sharing endpoints and HTTP status; never inspect request or response bodies. */
+function watchInviteRequests(page: Page) {
+  const watchedPaths = new Set([
+    "/resources/sharing",
+    "/api/private/sharing/resolve",
+    "/api/private/sharing/target",
+    "/api/private/sharing/shares",
+  ]);
+  const observations: InviteObservation[] = [];
+  const byRequest = new Map<PlaywrightRequest, InviteObservation>();
+  const waiters: InviteWaiter[] = [];
+  let active = false;
+
+  const settle = (waiter: InviteWaiter, result: InviteWaitResult) => {
+    clearTimeout(waiter.timer);
+    const index = waiters.indexOf(waiter);
+    if (index !== -1) waiters.splice(index, 1);
+    waiter.resolve(result);
+  };
+  const onRequest = (request: PlaywrightRequest) => {
+    if (!active) return;
+    const path = new URL(request.url()).pathname;
+    if (!watchedPaths.has(path)) return;
+    const observation: InviteObservation = { method: request.method(), path, status: "pending" };
+    observations.push(observation);
+    byRequest.set(request, observation);
+  };
+  const onResponse = (response: PlaywrightResponse) => {
+    const observation = byRequest.get(response.request());
+    if (!observation) return;
+    observation.status = response.status();
+    observation.response = response;
+    const waiter = waiters.find((candidate) => candidate.method === observation.method &&
+      candidate.path === observation.path);
+    if (waiter) settle(waiter, { response });
+  };
+  const onRequestFailed = (request: PlaywrightRequest) => {
+    const observation = byRequest.get(request);
+    if (!observation) return;
+    observation.status = "failed";
+    const waiter = waiters.find((candidate) => candidate.method === observation.method &&
+      candidate.path === observation.path);
+    if (waiter) settle(waiter, { failure: "request-failed" });
+  };
+  page.on("request", onRequest);
+  page.on("response", onResponse);
+  page.on("requestfailed", onRequestFailed);
+
+  return {
+    start() { active = true; },
+    waitForResponse(method: string, path: string): Promise<InviteWaitResult> {
+      const existing = observations.find((item) => item.method === method && item.path === path && item.response);
+      if (existing?.response) return Promise.resolve({ response: existing.response });
+      if (observations.some((item) => item.method === method && item.path === path && item.status === "failed")) {
+        return Promise.resolve({ failure: "request-failed" });
+      }
+      return new Promise((resolve) => {
+        let waiter: InviteWaiter;
+        const timer = setTimeout(() => settle(waiter, { failure: "timed-out" }), 30_000);
+        waiter = { method, path, resolve, timer };
+        waiters.push(waiter);
+      });
+    },
+    summary() {
+      return observations.length
+        ? observations.slice(-12).map(({ method, path, status }) => `${method} ${path} ${status}`).join("; ")
+        : "no allowlisted sharing requests";
+    },
+    stop() {
+      active = false;
+      page.off("request", onRequest);
+      page.off("response", onResponse);
+      page.off("requestfailed", onRequestFailed);
+      for (const waiter of [...waiters]) settle(waiter, { failure: "timed-out" });
+    },
+  };
+}
+
+async function requireInviteResponse(wait: Promise<InviteWaitResult>, trace: ReturnType<typeof watchInviteRequests>,
+  panel: Locator, method: string, path: string): Promise<PlaywrightResponse> {
+  const result = await wait;
+  if ("failure" in result) {
+    const alertVisible = await panel.getByRole("alert").isVisible().catch(() => false);
+    throw new Error(`No ${method} ${path} response within 30s (${result.failure}); ` +
+      `sanitized request evidence: ${trace.summary()}; invite alert visible: ${alertVisible}`);
+  }
+  return result.response;
+}
+
+function requireInviteStatus(response: PlaywrightResponse, method: string, path: string, expected: number,
+  trace: ReturnType<typeof watchInviteRequests>) {
+  if (response.status() !== expected) {
+    throw new Error(`${method} ${path} returned HTTP ${response.status()} (expected ${expected}); ` +
+      `sanitized request evidence: ${trace.summary()}`);
+  }
 }
 
 /** Resolve an actual Account share ID and submit the application's real Share workflow. */
@@ -23,17 +129,31 @@ export async function inviteFromCurrentPage(page: Page, shareId: string,
   const panel = page.getByRole("region", { name: "Share this content" });
   await panel.getByLabel("Exact share ID or @handle").fill(shareId);
   await panel.getByLabel("Permission").selectOption(permission);
-  const responsePromise = page.waitForResponse((response) => {
-    const request = response.request();
-    return new URL(response.url()).pathname === "/api/private/sharing/shares" && request.method() === "PUT";
-  });
-  await panel.getByRole("button", { name: "Invite", exact: true }).click();
-  const response = await responsePromise;
-  expect(response.status()).toBe(201);
-  const result = await response.json() as { shareId: string };
-  expect(result.shareId).toMatch(/^[0-9a-f-]{36}$/);
-  await expect(panel.getByText("Invitation sent.", { exact: false })).toBeVisible();
-  return result.shareId;
+
+  const trace = watchInviteRequests(page);
+  trace.start();
+  try {
+    const resolving = trace.waitForResponse("POST", "/api/private/sharing/resolve");
+    await panel.getByRole("button", { name: "Invite", exact: true }).click();
+    const resolve = await requireInviteResponse(resolving, trace, panel, "POST", "/api/private/sharing/resolve");
+    requireInviteStatus(resolve, "POST", "/api/private/sharing/resolve", 200, trace);
+
+    const preparing = trace.waitForResponse("POST", "/api/private/sharing/target");
+    const target = await requireInviteResponse(preparing, trace, panel, "POST", "/api/private/sharing/target");
+    requireInviteStatus(target, "POST", "/api/private/sharing/target", 200, trace);
+
+    const creating = trace.waitForResponse("PUT", "/api/private/sharing/shares");
+    const response = await requireInviteResponse(creating, trace, panel, "PUT", "/api/private/sharing/shares");
+    requireInviteStatus(response, "PUT", "/api/private/sharing/shares", 201, trace);
+    const result = await response.json() as { shareId?: unknown };
+    if (typeof result.shareId !== "string" || !/^[0-9a-f-]{36}$/.test(result.shareId)) {
+      throw new Error("PUT /api/private/sharing/shares did not return a valid Share identifier");
+    }
+    await expect(panel.getByText("Invitation sent.", { exact: false })).toBeVisible();
+    return result.shareId;
+  } finally {
+    trace.stop();
+  }
 }
 
 /** Add a real second Encryption device with the existing QR + virtual-passkey ceremony. */
