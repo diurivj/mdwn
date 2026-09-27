@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { inspectEnvelope, openForRecipient, sealToRecipient } from "../../app/crypto/enc-v1";
+import { createSymmetricWriter, inspectEnvelope, openForRecipient, sealToRecipient } from "../../app/crypto/enc-v1";
 import { HPKE_SUITE } from "../../app/crypto/enc-v1/format";
 import type { StoredDevice } from "../../app/device/store";
-import { digestBytes, hex, signOffer, type Offer } from "../../app/sharing/offer";
+import { digestBytes, hex, offerBytes, signOffer, type Offer } from "../../app/sharing/offer";
 import { prepareDirectFileProvisioning } from "../../app/sharing/provisioning-client";
-import { assertFileHeadCommitTransition, verifyFileHead } from "../../app/tree/file-head";
-import { signFileHead } from "../../app/tree/file-head";
+import { assertFileHeadCommitTransition, signFileHead, verifyFileHead } from "../../app/tree/file-head";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import type { FileProvisioningBootstrap } from "../../app/sharing/provisioning-wire";
 
@@ -70,8 +69,25 @@ async function fixture(options: { registryEpoch?: number; retainedPurpose?: "gra
   const currentHead = await verifyFileHead(oldHead, { ownerId, vaultId: ownerId, fileId,
     signerDeviceId: ownerSignerId, publicKey: ownerPublicKey, revision: 7 });
   return { bootstrap, device, contentKey, currentHead, localTransport, localPublicKey,
-    otherTransport, otherPublicKey, ids: { ownerId, ownerSignerId, accountId, deviceId, grantId,
+    otherTransport, otherPublicKey, ownerAssertion, offer, ids: { ownerId, ownerSignerId, accountId, deviceId, grantId,
       fileId, contentKeyId, receivingKeyId, representationId, otherAccountId, otherDeviceId, otherGrantId } };
+}
+
+type ProvisioningFixture = Awaited<ReturnType<typeof fixture>>;
+
+async function installSignedOffer(current: ProvisioningFixture, offer: Offer): Promise<void> {
+  const signed = await signOffer(offer, current.ownerAssertion.privateKey);
+  current.bootstrap.retained.provenance.offerBytes = encodeTreeBytes(signed.bytes);
+  current.bootstrap.retained.provenance.offerDigest = encodeTreeBytes(signed.digest);
+  current.bootstrap.retained.provenance.offerSignature = encodeTreeBytes(signed.signature);
+}
+
+async function replaceRetainedEnvelope(current: ProvisioningFixture, ciphertext: Uint8Array): Promise<void> {
+  const digest = await digestBytes(ciphertext);
+  current.bootstrap.retained.ciphertext = encodeTreeBytes(ciphertext);
+  current.bootstrap.retained.digest = encodeTreeBytes(digest);
+  await installSignedOffer(current, { ...current.offer, devices: current.offer.devices.map((device) =>
+    device.deviceId === current.ids.deviceId ? { ...device, contentDigest: hex(digest) } : device) });
 }
 
 describe("direct File provisioning preparation", () => {
@@ -81,6 +97,10 @@ describe("direct File provisioning preparation", () => {
       otherTransport, otherPublicKey, ids } = current;
 
     expect(device.transportKeyPair.privateKey.extractable).toBe(false);
+    expect(current.offer.registryEpoch).toBe(1);
+    expect(device.registryEpoch).toBe(2);
+    expect(current.bootstrap.retained.provenance.signerDeviceId).toBe(ids.ownerSignerId);
+    expect(currentHead.statement.recipients.some((item) => item.deviceId === ids.otherDeviceId)).toBe(false);
     const completion = await prepareDirectFileProvisioning(bootstrap, device);
     const nextHead = await verifyFileHead({
       bytes: decodeTreeBytes(completion.signedHead.bytes, 131072),
@@ -96,6 +116,8 @@ describe("direct File provisioning preparation", () => {
     expect(completion.expectedHeadDigest).toBe(bootstrap.currentHead.digest);
     expect(completion.expectedRevision).toBe(7);
     expect(completion.expectedRecipientSetVersion).toBe(2);
+    expect(nextHead.statement.revision).toBe(7);
+    expect(nextHead.statement.signerDeviceId).toBe(ids.deviceId);
     expect(nextHead.statement.recipientSetVersion).toBe(3);
     expect(nextHead.statement.contentKey).toEqual(currentHead.statement.contentKey);
     expect(nextHead.statement.receivingKey).toEqual(currentHead.statement.receivingKey);
@@ -109,6 +131,21 @@ describe("direct File provisioning preparation", () => {
     expect(Object.keys(completion).sort()).toEqual([
       "expectedHeadDigest", "expectedRecipientSetVersion", "expectedRevision", "recipientEnvelopes", "signedHead",
     ]);
+
+    for (const { deviceId, accountId, registryEpoch, grants, publicKey } of [
+      { deviceId: ids.deviceId, accountId: ids.accountId, registryEpoch: 2,
+        grants: [{ id: ids.grantId, generation: 1 }], publicKey: localPublicKey },
+      { deviceId: ids.otherDeviceId, accountId: ids.otherAccountId, registryEpoch: 3,
+        grants: [{ id: ids.otherGrantId, generation: 4 }], publicKey: otherPublicKey },
+    ]) {
+      const descriptor = nextHead.statement.recipients.find((item) => item.deviceId === deviceId)!;
+      const envelope = decodeTreeBytes(completion.recipientEnvelopes.find((item) => item.deviceId === deviceId)!.ciphertext, 16384);
+      expect(descriptor.accountId).toBe(accountId);
+      expect(descriptor.registryEpoch).toBe(registryEpoch);
+      expect(descriptor.grants).toEqual(grants);
+      expect(descriptor.publicKeyDigest).toEqual(await digestBytes(publicKey));
+      expect(descriptor.envelopeDigest).toEqual(await digestBytes(envelope));
+    }
 
     for (const { deviceId, accountId, publicKey, transport } of [
       { deviceId: ids.deviceId, accountId: ids.accountId, publicKey: localPublicKey, transport: localTransport },
@@ -134,5 +171,148 @@ describe("direct File provisioning preparation", () => {
     tampered.retained.provenance.offerSignature = encodeTreeBytes(signature);
 
     await expect(prepareDirectFileProvisioning(tampered, current.device)).rejects.toThrow();
+  });
+
+  it("rejects a rewritten canonical Owner offer even when its replacement digest is correct", async () => {
+    const current = await fixture();
+    const rewritten = offerBytes({ ...current.offer, labelId: id(31) });
+    current.bootstrap.retained.provenance.offerBytes = encodeTreeBytes(rewritten);
+    current.bootstrap.retained.provenance.offerDigest = encodeTreeBytes(await digestBytes(rewritten));
+
+    await expect(prepareDirectFileProvisioning(current.bootstrap, current.device)).rejects.toThrow();
+  });
+
+  it("rejects changed retained ciphertext even when an attacker recomputes both untrusted hashes", async () => {
+    const current = await fixture();
+    const ciphertext = decodeTreeBytes(current.bootstrap.retained.ciphertext, 16384);
+    ciphertext[ciphertext.length - 1] ^= 1;
+    const attackerDigest = await digestBytes(ciphertext);
+    current.bootstrap.retained.ciphertext = encodeTreeBytes(ciphertext);
+    current.bootstrap.retained.digest = encodeTreeBytes(attackerDigest);
+    const rewrittenOffer = offerBytes({ ...current.offer, devices: current.offer.devices.map((device) =>
+      ({ ...device, contentDigest: hex(attackerDigest) })) });
+    current.bootstrap.retained.provenance.offerBytes = encodeTreeBytes(rewrittenOffer);
+    current.bootstrap.retained.provenance.offerDigest = encodeTreeBytes(await digestBytes(rewrittenOffer));
+
+    await expect(prepareDirectFileProvisioning(current.bootstrap, current.device)).rejects.toThrow();
+  });
+
+  it("rejects a valid Owner signature that binds a different identity or retained key", async () => {
+    const current = await fixture();
+    const otherPublicKeyDigest = hex(await digestBytes(current.otherPublicKey));
+    const cases: [string, Offer][] = [
+      ["Owner", { ...current.offer, ownerId: id(32) }],
+      ["Grant", { ...current.offer, grantId: id(33) }],
+      ["recipient Account", { ...current.offer, recipientId: id(34),
+        devices: current.offer.devices.map((device) => ({ ...device, accountId: id(34) })) }],
+      ["File", { ...current.offer, targetId: id(35) }],
+      ["signer", { ...current.offer, signerDeviceId: id(36) }],
+      ["key id", { ...current.offer, targetKeyId: id(37) }],
+      ["key epoch", { ...current.offer, targetEpoch: 2 }],
+      ["content revision", { ...current.offer, contentRevision: 8 }],
+      ["physical device", { ...current.offer, devices: current.offer.devices.map((device) =>
+        ({ ...device, deviceId: id(38) })) }],
+      ["transport public-key digest", { ...current.offer, devices: current.offer.devices.map((device) =>
+        ({ ...device, publicKeyDigest: otherPublicKeyDigest })) }],
+      ["retained-content digest", { ...current.offer, devices: current.offer.devices.map((device) =>
+        ({ ...device, contentDigest: hex(randomDigest()) })) }],
+    ];
+    for (const [_case, offer] of cases) {
+      await installSignedOffer(current, offer);
+      await expect(prepareDirectFileProvisioning(current.bootstrap, current.device)).rejects.toThrow();
+    }
+  });
+
+  it("rejects mismatched bootstrap identity and current-head commitments", async () => {
+    const current = await fixture();
+    const wrongOwner = jsonClone(current.bootstrap);
+    wrongOwner.ownerId = id(39);
+    await expect(prepareDirectFileProvisioning(wrongOwner, current.device)).rejects.toThrow();
+
+    const wrongFile = jsonClone(current.bootstrap);
+    wrongFile.fileId = id(40);
+    await expect(prepareDirectFileProvisioning(wrongFile, current.device)).rejects.toThrow();
+
+    const wrongRevision = jsonClone(current.bootstrap);
+    wrongRevision.retained.revision = 8;
+    await expect(prepareDirectFileProvisioning(wrongRevision, current.device)).rejects.toThrow();
+
+    const wrongKey = jsonClone(current.bootstrap);
+    wrongKey.retained.contentKeyId = id(41);
+    await expect(prepareDirectFileProvisioning(wrongKey, current.device)).rejects.toThrow();
+
+    const wrongEpoch = jsonClone(current.bootstrap);
+    wrongEpoch.retained.contentEpoch = 2;
+    await expect(prepareDirectFileProvisioning(wrongEpoch, current.device)).rejects.toThrow();
+  });
+
+  it("verifies the exact signed current head digest and signature before key opening", async () => {
+    const current = await fixture();
+    const wrongDigest = jsonClone(current.bootstrap);
+    const digest = decodeTreeBytes(wrongDigest.currentHead.digest, 32);
+    digest[0] ^= 1;
+    wrongDigest.currentHead.digest = encodeTreeBytes(digest);
+    await expect(prepareDirectFileProvisioning(wrongDigest, current.device)).rejects.toThrow();
+
+    const wrongSignature = jsonClone(current.bootstrap);
+    const signature = decodeTreeBytes(wrongSignature.currentHead.signature, 64);
+    signature[0] ^= 1;
+    wrongSignature.currentHead.signature = encodeTreeBytes(signature);
+    await expect(prepareDirectFileProvisioning(wrongSignature, current.device)).rejects.toThrow();
+  });
+
+  it("requires the current complete recipient list to uniquely contain this active physical device", async () => {
+    const current = await fixture();
+    const missing = jsonClone(current.bootstrap);
+    missing.recipients = missing.recipients.filter((item) => item.deviceId !== current.ids.deviceId);
+    await expect(prepareDirectFileProvisioning(missing, current.device)).rejects.toThrow();
+
+    const duplicate = jsonClone(current.bootstrap);
+    duplicate.recipients.push(jsonClone(duplicate.recipients[0]!));
+    await expect(prepareDirectFileProvisioning(duplicate, current.device)).rejects.toThrow();
+
+    const wrongPublicKey = jsonClone(current.bootstrap);
+    wrongPublicKey.recipients[0]!.publicKey = encodeTreeBytes(current.otherPublicKey);
+    await expect(prepareDirectFileProvisioning(wrongPublicKey, current.device)).rejects.toThrow();
+
+    const staleEpoch = jsonClone(current.bootstrap);
+    staleEpoch.recipients[0]!.registryEpoch += 1;
+    await expect(prepareDirectFileProvisioning(staleEpoch, current.device)).rejects.toThrow();
+
+    const missingGrant = jsonClone(current.bootstrap);
+    missingGrant.recipients[0]!.grants = [{ id: current.ids.otherGrantId, generation: 4 }];
+    await expect(prepareDirectFileProvisioning(missingGrant, current.device)).rejects.toThrow();
+  });
+
+  it("rejects an HPKE envelope whose recipient context names another physical device", async () => {
+    const current = await fixture();
+    const ciphertext = await sealToRecipient(current.contentKey, current.localTransport.publicKey, {
+      purpose: "grant", vaultId: current.ids.ownerId, objectId: current.ids.fileId,
+      keyId: current.ids.contentKeyId, keyEpoch: 1, revision: 7, recipientId: current.ids.otherDeviceId,
+    });
+    await replaceRetainedEnvelope(current, ciphertext);
+
+    await expect(prepareDirectFileProvisioning(current.bootstrap, current.device)).rejects.toThrow();
+  });
+
+  it("rejects an envelope from another suite even with a correctly signed retained digest", async () => {
+    const current = await fixture();
+    const writer = await createSymmetricWriter(current.contentKey);
+    const ciphertext = await writer.seal(current.contentKey, { purpose: "file-content", vaultId: current.ids.ownerId,
+      objectId: current.ids.fileId, keyId: current.ids.contentKeyId, keyEpoch: 1, revision: 7 });
+    await replaceRetainedEnvelope(current, ciphertext);
+
+    await expect(prepareDirectFileProvisioning(current.bootstrap, current.device)).rejects.toThrow();
+  });
+
+  it("rejects a retained HPKE plaintext that is not a 32-byte File content key", async () => {
+    const current = await fixture();
+    const ciphertext = await sealToRecipient(crypto.getRandomValues(new Uint8Array(31)),
+      current.localTransport.publicKey, { purpose: "grant", vaultId: current.ids.ownerId,
+        objectId: current.ids.fileId, keyId: current.ids.contentKeyId, keyEpoch: 1, revision: 7,
+        recipientId: current.ids.deviceId });
+    await replaceRetainedEnvelope(current, ciphertext);
+
+    await expect(prepareDirectFileProvisioning(current.bootstrap, current.device)).rejects.toThrow();
   });
 });
