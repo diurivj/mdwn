@@ -553,6 +553,20 @@ describe("private sharing lifecycle through the built Worker", () => {
     expect(fileAcceptedBudget.queries).toBeGreaterThan(15);
     expect(fileBootBudget.queries).toBeGreaterThan(3);
     expect(fileCompleteBudget.queries).toBeGreaterThan(10);
+
+    const wholeInvocationBudgets = {
+      directoryInvite: invitedBudget,
+      directoryAccept: acceptedBudget,
+      fileInvite: fileInvitedBudget,
+      fileAccept: fileAcceptedBudget,
+      fileBootstrap: fileBootBudget,
+      fileCompleteAfterFinalLabelRead: fileCompleteBudget,
+    };
+    for (const [operation, budget] of Object.entries(wholeInvocationBudgets)) {
+      expect(budget.queries, `${operation}: whole-invocation D1 queries`).toBeLessThanOrEqual(50);
+      expect(budget.maxBindings, `${operation}: maximum per-statement D1 bindings`).toBeLessThanOrEqual(100);
+    }
+    console.info("sharing-256-whole-invocation-budget", JSON.stringify(wholeInvocationBudgets));
   }, 120_000);
   it("keeps the current physical device ready while a newly enrolled device has only an opaque need", async () => {
     const owner = await account(), recipient = await account();
