@@ -19,9 +19,10 @@ export default defineConfig({
   ],
   test: {
     include: ["tests/worker/**/*.test.ts"],
-    // Too many parallel workerd instances make unrelated route tests exceed
-    // Vitest's five-second timeout on the full suite, even though they pass alone.
+    // Real crypto, D1 migrations, and route startup vary across CI runners;
+    // bound workerd concurrency and allow integration tests enough time to finish.
     maxWorkers: 2,
+    testTimeout: 15_000,
     globals: false,
   },
   resolve: {

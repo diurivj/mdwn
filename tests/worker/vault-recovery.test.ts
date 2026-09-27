@@ -169,7 +169,6 @@ async function oldPrivateRead(f: Fixture, registryEpoch = 1) {
 }
 
 describe("Vault recovery enrollment", () => {
-  // Real crypto and repeated D1/Worker requests can exceed 5s on shared CI runners.
   it("atomically replaces devices and Sessions, rotates the phrase, and preserves the owned root", async () => {
     const f = await fixture();
     expect((await oldPrivateRead(f)).status).toBe(200);
@@ -251,7 +250,7 @@ describe("Vault recovery enrollment", () => {
     expect((await commit(f, start, p, secret)).status).not.toBe(200);
     expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE account_id = ? AND state = 'active'")
       .bind(f.accountId).first<{ n: number }>())?.n).toBe(1);
-  }, 15_000);
+  });
 
   it("keeps a started or challenged ceremony invisible until commit and rejects substituted keys", async () => {
     const f = await fixture();
