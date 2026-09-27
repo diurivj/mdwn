@@ -78,26 +78,66 @@ export async function openFileReceivingKey(
   const publicKey = await importPublic(publicBytes);
   const plaintext = await openSymmetric(encrypted, parentKey, { context: receivingContext(details) });
   let privateKey: CryptoKey;
-  try {
-    privateKey = await crypto.subtle.importKey("pkcs8", plaintext, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
-  } catch { throw new EnvelopeError("malformed"); }
+  try { privateKey = await importReceivingPrivate(plaintext); }
   finally { plaintext.fill(0); }
   const keyPair = { publicKey, privateKey };
+  await verifyReceivingPair(keyPair, details);
+  return keyPair;
+}
+
+async function importReceivingPrivate(serialized: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  try {
+    return await crypto.subtle.importKey("pkcs8", serialized, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  } catch { throw new EnvelopeError("malformed"); }
+}
+
+async function verifyReceivingPair(keyPair: CryptoKeyPair, details: FileReceivingIdentity): Promise<void> {
   // HPKE base-mode challenge checks that the decrypted private handle matches the
   // externally trusted public target without implementing an ECDH transport protocol.
   const context: EnvelopeContext = { purpose: "file-content-key", vaultId: details.vaultId,
     objectId: details.fileId, keyId: details.receivingKeyId, keyEpoch: details.receivingEpoch,
     revision: details.wrapRevision, recipientId: details.receivingKeyId };
   const challenge = crypto.getRandomValues(new Uint8Array(32));
-  const probe = await sealToRecipient(challenge, publicKey, context);
   try {
+    const probe = await sealToRecipient(challenge, keyPair.publicKey, context);
     const opened = await openForRecipient(probe, keyPair, { context });
     if (opened.length !== challenge.length || !opened.every((value, index) => value === challenge[index])) {
       throw new EnvelopeError("authentication-failed");
     }
   } catch { throw new EnvelopeError("authentication-failed"); }
   finally { challenge.fill(0); }
-  return keyPair;
+}
+
+/**
+ * Rewraps the same File receiving pair under another Directory capability at a
+ * strictly newer structural wrapping revision (not a File-content revision).
+ * `expected` must come from a verified current structural entry and File public
+ * target. This helper does not authorize the move, detect loss of readership,
+ * rotate the pair, or revoke anyone holding the old wrapper and old Directory key.
+ * The caller must reject/defer moves that lose shared scope until required
+ * receiving-pair rotation is complete (ticket 19).
+ */
+export async function rewrapFileReceivingKey(
+  envelope: Uint8Array, sourceDirectoryCapability: Uint8Array, destinationDirectoryCapability: Uint8Array,
+  expected: FileReceivingIdentity & { publicKey: Uint8Array }, newWrapRevision: number,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const details = snapshot(expected);
+  const publicBytes = bytes(expected.publicKey);
+  const encrypted = bytes(envelope);
+  const sourceKey = bytes(sourceDirectoryCapability);
+  const destinationKey = bytes(destinationDirectoryCapability);
+  if (!Number.isSafeInteger(newWrapRevision) || newWrapRevision < 1) throw new EnvelopeError("malformed");
+  if (newWrapRevision <= details.wrapRevision) throw new EnvelopeError("context-mismatch");
+  const newContext = receivingContext({ ...details, wrapRevision: newWrapRevision });
+  encodeContext(newContext);
+  const publicKey = await importPublic(publicBytes);
+  const serialized = await openSymmetric(encrypted, sourceKey, { context: receivingContext(details) });
+  try {
+    const privateKey = await importReceivingPrivate(serialized);
+    await verifyReceivingPair({ publicKey, privateKey }, details);
+    const writer = await createSymmetricWriter(destinationKey);
+    return await writer.seal(serialized, newContext);
+  } finally { serialized.fill(0); }
 }
 
 /** Exact public target commitment from a verified File head (or locally generated first pair). */
