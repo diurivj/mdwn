@@ -4,7 +4,8 @@ import type { clientAction, clientLoader } from "~/routes/resources/sharing";
 import { migrateOwnedFile } from "~/tree/editor-client";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import { inviteSharedRoot, mergeSharingPage, namedRoot, resolveRecipient, stageShareInviteAction,
-  type GrantRoot, type InvitationCursors, type InvitationsPage, type OwnerGrant, type ShareItem } from "./client";
+  type GrantRoot, type InvitationCursors, type InvitationsPage, type OwnerGrant, type ShareInvitePreparationStage,
+  type ShareItem } from "./client";
 
 const sharingResource = "/resources/sharing";
 type InvitationList = "incoming" | "outgoing" | "grants";
@@ -181,6 +182,7 @@ export function SharePanel({ snapshot, nodeId, kind, name, onUpdated }: {
   const [permission, setPermission] = useState<"read_only" | "read_write">("read_only");
   const [page, setPage] = useState<InvitationsPage | null>(null);
   const [error, setError] = useState("");
+  const [preparationStage, setPreparationStage] = useState<ShareInvitePreparationStage | null>(null);
   const pageRequest = useRef<InvitationPageRequest>("first");
   const processedInvitations = useRef<unknown>(undefined);
   const processedAction = useRef<unknown>(undefined);
@@ -195,6 +197,7 @@ export function SharePanel({ snapshot, nodeId, kind, name, onUpdated }: {
   const refresh = useCallback(() => {
     setPage(null);
     setError("");
+    setPreparationStage(null);
     loadPage("first");
   }, [loadPage]);
 
@@ -235,9 +238,12 @@ export function SharePanel({ snapshot, nodeId, kind, name, onUpdated }: {
     processedAction.current = result;
     if (result.state === "success") {
       setError("");
+      setPreparationStage(null);
       if (result.intent === "invite") setAddress("");
       if (open) refresh();
     } else {
+      const stage = "preparationStage" in result ? result.preparationStage : null;
+      setPreparationStage(result.intent === "invite" ? stage : null);
       setError(result.intent === "invite"
         ? "This invitation could not be prepared. Refresh and try again."
         : "The Share could not be updated. Refresh and try again.");
@@ -248,6 +254,7 @@ export function SharePanel({ snapshot, nodeId, kind, name, onUpdated }: {
     event.preventDefault();
     if (actionFetcher.state !== "idle") return;
     setError("");
+    setPreparationStage(null);
     let operationId: string;
     try {
       operationId = stageShareInviteAction(async (signal) => {
@@ -340,7 +347,8 @@ export function SharePanel({ snapshot, nodeId, kind, name, onUpdated }: {
           ? " The recipient sees no name until accepting and provisioning completes."
           : ""}
       </p>}
-      {error && <p role="alert" className="mt-2 text-sm">{error}</p>}
+      {error && <p role="alert" data-preparation-stage={preparationStage ?? undefined}
+        className="mt-2 text-sm">{error}</p>}
     </div>}
   </div>;
 }

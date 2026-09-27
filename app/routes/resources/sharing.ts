@@ -1,7 +1,7 @@
 import {
   acceptInvitation, cancelInvitation, changeGrantPermission, declineInvitation, executeShareInviteAction,
-  invitations, leaveGrant, revokeGrant, sharedRootsPage,
-  type InvitationCursors,
+  invitations, leaveGrant, revokeGrant, sharedRootsPage, ShareInvitePreparationFailure,
+  type InvitationCursors, type ShareInvitePreparationStage,
 } from "~/sharing/client";
 import { provisionDirectFile } from "~/sharing/provisioning-client";
 import { isV7 } from "~/tree/wire";
@@ -42,8 +42,8 @@ const formString = (form: FormData, name: string): string | null => {
   return typeof value === "string" ? value : null;
 };
 
-function actionError(intent: string) {
-  return { state: "error", intent, message: unavailable } as const;
+function actionError(intent: string, preparationStage: ShareInvitePreparationStage | null = null) {
+  return { state: "error", intent, message: unavailable, preparationStage } as const;
 }
 
 function hasExactFormFields(form: FormData, names: readonly string[]): boolean {
@@ -85,7 +85,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
       return { state: "success", intent, itemId, message: "Invitation sent." } as const;
     } catch (error) {
       if (request.signal.aborted) throw error;
-      return actionError(intent);
+      return actionError(intent, error instanceof ShareInvitePreparationFailure ? error.stage : null);
     }
   }
 

@@ -4,6 +4,7 @@ import type { TestHarness } from "wrangler";
 
 import { expect } from "./fixtures";
 import { openEditor } from "./editor-workspace.fixture";
+import type { ShareInvitePreparationStage } from "../app/sharing/client";
 
 type TestAccount = Awaited<ReturnType<typeof openEditor>>;
 type Passkey = Awaited<ReturnType<BrowserContext["credentials"]["get"]>>[number];
@@ -88,6 +89,9 @@ function watchInviteRequests(page: Page) {
         waiters.push(waiter);
       });
     },
+    hasRequest(method: string, path: string) {
+      return observations.some((item) => item.method === method && item.path === path);
+    },
     summary() {
       return observations.length
         ? observations.slice(-12).map(({ method, path, status }) => `${method} ${path} ${status}`).join("; ")
@@ -103,13 +107,46 @@ function watchInviteRequests(page: Page) {
   };
 }
 
+async function waitForPreparationStage(panel: Locator, signal: AbortSignal): Promise<ShareInvitePreparationStage | null> {
+  const allowed = new Set<ShareInvitePreparationStage>([
+    "recipient-key-import", "label-sealing", "file-key-reading", "content-key-validation",
+    "content-sealing", "material-digests", "file-head-signing", "offer-signing", "share-submit",
+  ]);
+  const alert = panel.getByRole("alert");
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const finish = (stage: ShareInvitePreparationStage | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve(stage);
+    };
+    const onAbort = () => finish(null);
+    const deadline = Date.now() + 30_000;
+    const check = async () => {
+      if (signal.aborted) return finish(null);
+      const value = await alert.getAttribute("data-preparation-stage").catch(() => null);
+      if (value && allowed.has(value as ShareInvitePreparationStage)) {
+        return finish(value as ShareInvitePreparationStage);
+      }
+      if (Date.now() >= deadline) return finish(null);
+      timer = setTimeout(() => { void check(); }, 50);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void check();
+  });
+}
+
 async function requireInviteResponse(wait: Promise<InviteWaitResult>, trace: ReturnType<typeof watchInviteRequests>,
-  panel: Locator, method: string, path: string): Promise<PlaywrightResponse> {
+  panel: Locator, method: string, path: string, preparationStage?: ShareInvitePreparationStage): Promise<PlaywrightResponse> {
   const result = await wait;
   if ("failure" in result) {
     const alertVisible = await panel.getByRole("alert").isVisible().catch(() => false);
     throw new Error(`No ${method} ${path} response within 30s (${result.failure}); ` +
-      `sanitized request evidence: ${trace.summary()}; invite alert visible: ${alertVisible}`);
+      `sanitized request evidence: ${trace.summary()}; invite alert visible: ${alertVisible}` +
+      (preparationStage ? `; client preparation stage: ${preparationStage}` : ""));
   }
   return result.response;
 }
@@ -123,8 +160,12 @@ function requireInviteStatus(response: PlaywrightResponse, method: string, path:
 }
 
 /** Resolve an actual Account share ID and submit the application's real Share workflow. */
+export function inviteFromCurrentPage(page: Page, shareId: string,
+  permission: "read_only" | "read_write"): Promise<string>;
+export function inviteFromCurrentPage(page: Page, shareId: string,
+  permission: "read_only" | "read_write", expectedPreparationFailure: ShareInvitePreparationStage): Promise<null>;
 export async function inviteFromCurrentPage(page: Page, shareId: string,
-  permission: "read_only" | "read_write"): Promise<string> {
+  permission: "read_only" | "read_write", expectedPreparationFailure?: ShareInvitePreparationStage): Promise<string | null> {
   await page.getByRole("button", { name: "Share", exact: true }).click();
   const panel = page.getByRole("region", { name: "Share this content" });
   await panel.getByLabel("Exact share ID or @handle").fill(shareId);
@@ -143,7 +184,31 @@ export async function inviteFromCurrentPage(page: Page, shareId: string,
     requireInviteStatus(target, "POST", "/api/private/sharing/target", 200, trace);
 
     const creating = trace.waitForResponse("PUT", "/api/private/sharing/shares");
-    const response = await requireInviteResponse(creating, trace, panel, "PUT", "/api/private/sharing/shares");
+    const stageController = new AbortController();
+    const outcome = await Promise.race([
+      creating.then((result) => ({ kind: "request" as const, result })),
+      waitForPreparationStage(panel, stageController.signal).then((stage) => ({ kind: "stage" as const, stage })),
+    ]);
+    stageController.abort();
+    if (outcome.kind === "stage" && outcome.stage) {
+      if (trace.hasRequest("PUT", "/api/private/sharing/shares")) {
+        const response = await requireInviteResponse(creating, trace, panel, "PUT", "/api/private/sharing/shares",
+          outcome.stage);
+        requireInviteStatus(response, "PUT", "/api/private/sharing/shares", 201, trace);
+      } else if (expectedPreparationFailure) {
+        expect(outcome.stage).toBe(expectedPreparationFailure);
+        return null;
+      } else {
+        throw new Error(`Client invitation preparation failed at ${outcome.stage} before Share submission; ` +
+          `sanitized request evidence: ${trace.summary()}`);
+      }
+    }
+    const result = outcome.kind === "request" ? outcome.result : await creating;
+    const response = await requireInviteResponse(Promise.resolve(result), trace, panel,
+      "PUT", "/api/private/sharing/shares", outcome.kind === "stage" ? outcome.stage ?? undefined : undefined);
+    if (expectedPreparationFailure) {
+      expect.fail(`Expected client preparation failure at ${expectedPreparationFailure}, but Share submission returned`);
+    }
     requireInviteStatus(response, "PUT", "/api/private/sharing/shares", 201, trace);
     const result = await response.json() as { shareId?: unknown };
     if (typeof result.shareId !== "string" || !/^[0-9a-f-]{36}$/.test(result.shareId)) {
