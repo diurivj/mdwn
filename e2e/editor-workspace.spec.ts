@@ -1,10 +1,11 @@
 import { test, expect } from "./fixtures";
-import { openEditor, warnsOnUnload } from "./editor-workspace.fixture";
+import { openEditor, warnsOnUnload, filePatch } from "./editor-workspace.fixture";
+import { commitConcurrentFileRevision } from "./editor-conflict.fixture";
 
 test.setTimeout(240_000);
 
 test("edits and previews privately, flushes on shortcut/navigation, enforces bytes, and transfers the editing lease", async ({ browser, server, baseURL }, testInfo) => {
-  const { context, page, fileId } = await openEditor(browser, server, baseURL!);
+  const { context, page, fileId, accountId, deviceId } = await openEditor(browser, server, baseURL!);
   try {
     await expect(page.getByRole("heading", { name: "Workspace.md" })).toBeVisible();
     const editor = page.getByRole("textbox", { name: "Markdown source" });
@@ -107,9 +108,8 @@ test("edits and previews privately, flushes on shortcut/navigation, enforces byt
         await route.continue();
       });
       try {
-        const pendingSave = page.waitForRequest((request) => request.method() === "PATCH" &&
-          new URL(request.url()).pathname === `/api/private/tree/files/${fileId}`);
-        await page.getByRole("textbox", { name: "Markdown source" }).fill("# preserve this conflict draft");
+        const pendingSave = page.waitForRequest((request) => filePatch(request, fileId));
+        await page.getByRole("textbox", { name: "Markdown source" }).fill("# survives structural rename");
         await pendingSave;
         await other.getByRole("button", { name: "Rename", exact: true }).click();
         const rename = other.getByRole("dialog", { name: "Rename" });
@@ -117,14 +117,41 @@ test("edits and previews privately, flushes on shortcut/navigation, enforces byt
         await rename.getByRole("button", { name: "Rename", exact: true }).click();
         await expect(other.getByRole("heading", { name: "Renamed.md" })).toBeVisible();
         releaseSave();
-        await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Couldn't save");
-        await expect(page.getByText("This File changed elsewhere.", { exact: false })).toBeVisible();
-        await page.getByRole("button", { name: "Confirm overwrite" }).click();
         await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Saved");
-        await expect(page.getByRole("textbox", { name: "Markdown source" }))
-          .toHaveValue("# preserve this conflict draft");
+        await expect(page.getByRole("button", { name: "Confirm overwrite" })).toHaveCount(0);
+        await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("# survives structural rename");
         await expect(page.getByRole("heading", { name: "Renamed.md" })).toBeVisible();
       } finally { releaseSave(); await page.unroute("**/api/private/tree/files/*"); }
+
+      // A real concurrent File revision, not the Directory rename, must reject a
+      // PATCH based on the earlier File head. Keep the server request pending while
+      // the independently signed representation becomes current in migrated D1.
+      let releaseStale!: () => void;
+      const staleGate = new Promise<void>((resolve) => { releaseStale = resolve; });
+      await page.route(`**/api/private/tree/files/${fileId}`, async (route) => {
+        if (filePatch(route.request(), fileId)) await staleGate;
+        await route.continue();
+      });
+      try {
+        const staleRequest = page.waitForRequest((request) => filePatch(request, fileId));
+        const staleResponse = page.waitForResponse((response) => filePatch(response.request(), fileId) && response.status() === 409);
+        await page.getByRole("textbox", { name: "Markdown source" }).fill("# preserve this conflict draft");
+        await staleRequest;
+        await commitConcurrentFileRevision({ server, page: other, accountId, deviceId, fileId,
+          source: "# committed elsewhere" });
+        await other.reload();
+        await expect(other.getByRole("textbox", { name: "Markdown source" })).toHaveValue("# committed elsewhere");
+        releaseStale();
+        await staleResponse;
+        await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Couldn't save");
+        await expect(page.getByText("This File changed elsewhere.", { exact: false })).toBeVisible();
+        await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("# preserve this conflict draft");
+        await page.getByRole("button", { name: "Confirm overwrite" }).click();
+        await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Saved");
+        await other.reload();
+        await expect(other.getByRole("textbox", { name: "Markdown source" }))
+          .toHaveValue("# preserve this conflict draft");
+      } finally { releaseStale(); await page.unroute(`**/api/private/tree/files/${fileId}`); }
       await other.getByRole("button", { name: "Edit here" }).click();
       await expect(page.getByRole("dialog", { name: "Transfer editing" })).toBeVisible();
       await page.getByRole("dialog", { name: "Transfer editing" }).getByRole("button", { name: "Save and transfer" }).click();

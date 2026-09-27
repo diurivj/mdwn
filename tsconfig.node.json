@@ -13,6 +13,7 @@
     "app/db/**/*.ts",
     "app/security/**/*.ts",
     "app/crypto/**/*.ts",
+    "app/tree/file-head.ts",
     "app/device/store.ts",
     "app/device/proof.ts",
     "app/device/private-client.ts",
