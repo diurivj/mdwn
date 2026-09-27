@@ -1,7 +1,7 @@
 import { freshNormalSessionGuard } from "~/auth/fresh-session.server";
 import { hasFreshAssertion, type ActiveSession } from "~/auth/session.server";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
-import { privateReadGuard, type AuthorizedDevice } from "./proof.server";
+import { coarseProofTime, privateReadGuard, type AuthorizedDevice } from "./proof.server";
 import { sessionBindingDigest, verifyDeviceProof } from "./proof";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 import { MAX_EVENT_RETENTION_MS } from "~/security/abuse-control.server";
@@ -9,7 +9,6 @@ import { MAX_EVENT_RETENTION_MS } from "~/security/abuse-control.server";
 const noStore = { "Cache-Control": "no-store" };
 const denied = (status = 403, error = "device_proof_required") =>
   Response.json({ error }, { status, headers: noStore });
-const DAY_MS = 86_400_000;
 
 type DeviceRow = {
   id: string; label_ciphertext: ArrayBuffer | null; state: string;
@@ -30,10 +29,13 @@ export async function deviceInventory(env: Env, authorized: AuthorizedDevice): P
     devices: rows.map((row) => ({
       id: row.id, labelCiphertext: row.label_ciphertext ? encodeBytes(new Uint8Array(row.label_ciphertext)) : null,
       state: row.state, createdAt: row.created_at,
-      lastUseAt: row.last_proof_at === null ? null : Math.floor(row.last_proof_at / DAY_MS) * DAY_MS,
+      lastUseAt: row.last_proof_at === null ? null : coarseProofTime(row.last_proof_at),
     })) }, { headers: noStore });
 }
 
+// The trusted browser checks the typed, decrypted label. The Worker cannot
+// verify plaintext it never receives; the signed ciphertext digest pins the
+// exact label metadata and target at the expected epoch without leaking it.
 type Removal = { targetDeviceId: string; expectedEpoch: number; labelDigest: string; confirmation: string };
 function removalBody(value: Record<string, unknown> | null): Removal | null {
   if (!value || Object.keys(value).sort().join(",") !== "confirmation,expectedEpoch,labelDigest,targetDeviceId" ||
@@ -82,11 +84,28 @@ export async function removeEncryptionDevice(env: Env, session: ActiveSession,
   if (body.expectedEpoch !== authorized.registryEpoch) return denied(409, "registry_changed");
   if (!hasFreshAssertion(session, now) || session.id !== authorized.sessionId ||
       authorized.expiresAt <= now) return denied(403);
-  const target = await createDb(env.DB).get<{ label_ciphertext: ArrayBuffer | null }>(sql`
-    SELECT label_ciphertext FROM encryption_devices WHERE id = ${body.targetDeviceId}
-      AND account_id = ${authorized.accountId} AND state = 'active'`);
-  if (!target) return denied(409, "registry_changed");
-  if (body.labelDigest !== await labelDigest(target.label_ciphertext)) return denied(409, "registry_changed");
+  const proofDay = coarseProofTime(now);
+  const target = await createDb(env.DB).get<{
+    label_ciphertext: ArrayBuffer | null; state: string; revocation_reason: string | null;
+  }>(sql`
+    SELECT label_ciphertext, state, revocation_reason FROM encryption_devices WHERE id = ${body.targetDeviceId}
+      AND account_id = ${authorized.accountId}`);
+  if (!target || body.labelDigest !== await labelDigest(target.label_ciphertext)) {
+    return denied(409, "registry_changed");
+  }
+  if (target.state === "tombstoned" && target.revocation_reason === "device-removal") {
+    // After a lost response and expired proof, a new proof/confirmation at the
+    // refreshed epoch can safely retry the same already-completed removal.
+    const current = await createDb(env.DB).get<{ id: string }>(sql`
+      SELECT id FROM encryption_devices WHERE id = ${body.targetDeviceId}
+        AND account_id = ${authorized.accountId} AND state = 'tombstoned'
+        AND revocation_reason = 'device-removal'
+        AND label_ciphertext IS ${target.label_ciphertext === null ? null : new Uint8Array(target.label_ciphertext)}
+        AND ${privateReadGuard(authorized)} AND ${freshNormalSessionGuard(session, now)}`);
+    return current ? Response.json({ ok: true, alreadyRemoved: true }, { headers: noStore })
+      : denied(409, "registry_changed");
+  }
+  if (target.state !== "active") return denied(409, "registry_changed");
   const markerId = crypto.randomUUID();
   const label = target.label_ciphertext === null ? null : new Uint8Array(target.label_ciphertext);
   const marker = sql`EXISTS (SELECT 1 FROM security_events WHERE id = ${markerId}
@@ -137,9 +156,9 @@ export async function removeEncryptionDevice(env: Env, session: ActiveSession,
       sql`UPDATE crypto_jobs SET state = 'complete', updated_at = ${now}
         WHERE account_id = ${authorized.accountId} AND device_id = ${body.targetDeviceId}
           AND state = 'pending' AND ${marker}`,
-      sql`UPDATE encryption_devices SET last_proof_at = ${Math.floor(now / DAY_MS) * DAY_MS}
+      sql`UPDATE encryption_devices SET last_proof_at = ${proofDay}
         WHERE account_id = ${authorized.accountId} AND id = ${authorized.deviceId}
-          AND ${marker} AND (last_proof_at IS NULL OR last_proof_at < ${Math.floor(now / DAY_MS) * DAY_MS})`,
+          AND ${marker} AND (last_proof_at IS NULL OR last_proof_at < ${proofDay})`,
     ]);
     // The membership trigger advances the epoch in the same statement, so D1
     // reports both writes in meta.changes. A failed guard still reports zero.

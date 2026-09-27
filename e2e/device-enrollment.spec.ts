@@ -148,6 +148,8 @@ test("a synced Passkey needs QR approval before the second browser can open File
     await original.page.getByRole("button", { name: "Remove device" }).click();
     await expect(original.page.getByRole("heading", { name: "Remove Second device?" })).toBeVisible();
     await expect(original.page.getByRole("button", { name: "Confirm removal" })).toBeDisabled();
+    await original.page.getByLabel("Type Second device to confirm").fill("Wrong device");
+    await expect(original.page.getByRole("button", { name: "Confirm removal" })).toBeDisabled();
     await original.page.getByLabel("Type Second device to confirm").fill("Second device");
     await original.page.getByRole("button", { name: "Confirm removal" }).click();
     await expect(original.page.getByRole("status")).toContainText("Device removed", { timeout: 30_000 });

@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { createSymmetricWriter, openSymmetric } from "../../app/crypto/enc-v1";
+import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
 import { decodeBytes, encodeBytes } from "../../app/signup/protocol";
 import { recoveryCookie, seedNormalSession } from "./auth-fixtures";
 
@@ -13,7 +14,8 @@ const origin = "https://mdwn.test";
 const inventoryUrl = `${origin}/api/private/devices/inventory`;
 const removalUrl = `${origin}/api/private/devices/remove`;
 
-type Device = { id: string; assertion: CryptoKeyPair; session: Awaited<ReturnType<typeof seedNormalSession>> };
+type Device = { id: string; assertion: CryptoKeyPair; transport: CryptoKeyPair;
+  session: Awaited<ReturnType<typeof seedNormalSession>> };
 
 async function fixture(count = 2) {
   const id = crypto.randomUUID();
@@ -41,22 +43,28 @@ async function fixture(count = 2) {
   for (let index = 0; index < count; index++) {
     const id = crypto.randomUUID();
     const assertion = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+    const transport = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
     const session = await seedNormalSession(account);
     const writer = await createSymmetricWriter(rootKey);
     const label = await writer.seal(new TextEncoder().encode(`Device ${index + 1}`), {
       purpose: "device-label", vaultId: account.accountId,
       objectId: id, keyId: id, keyEpoch: 1, revision: 1,
     });
+    const rootEnvelope = await sealDeviceEnrollmentEnvelope(rootKey, transport.publicKey, {
+      purpose: "device-enrollment", vaultId: account.accountId,
+      objectId: id, keyId: id, keyEpoch: 1, revision: 1, recipientId: id,
+    });
     await env.DB.batch([
       env.DB.prepare("INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key, state, approval_provenance, label_ciphertext, registry_epoch, created_at) VALUES (?, ?, ?, ?, 'active', 'signup', ?, ?, ?)")
-        .bind(id, account.accountId, new Uint8Array(65), new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), label, index + 1, now),
+        .bind(id, account.accountId, new Uint8Array(await crypto.subtle.exportKey("raw", transport.publicKey)),
+          new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), label, index + 1, now),
       env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(id, session.id),
       env.DB.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'device-enrollment', ?, ?, ?, 1)")
-        .bind(account.accountId, id, id, Uint8Array.of(index + 2)),
+        .bind(account.accountId, id, id, rootEnvelope),
       env.DB.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'owned-device', ?, ?, ?, 1)")
         .bind(account.accountId, rootId, id, Uint8Array.of(index + 10)),
     ]);
-    devices.push({ id, assertion, session });
+    devices.push({ id, assertion, transport, session });
   }
   async function send(device: Device, url: string, body?: object, epoch = count, proof?: unknown) {
     const raw = body === undefined ? undefined : JSON.stringify(body);
@@ -128,6 +136,18 @@ describe("Encryption-device inventory and removal", () => {
     const savedLabel = (await (await f.send(actor, inventoryUrl, undefined, 3)).json() as {
       devices: Array<{ id: string; labelCiphertext: string }>;
     }).devices.find((item) => item.id === target.id)!.labelCiphertext;
+    const bootstrapUrl = `${origin}/api/private/bootstrap`;
+    const readBootstrap = async (device: Device, epoch: number) => SELF.fetch(bootstrapUrl, {
+      method: "POST", headers: { cookie: device.session.cookie, origin,
+        "X-Mdwn-Device-Proof": JSON.stringify(await signDeviceProof(device.assertion.privateKey, {
+          sessionBinding: await sessionBindingDigest(device.session.id), deviceId: device.id,
+          registryEpoch: epoch, method: "POST", url: bootstrapUrl,
+        })),
+      },
+    });
+    const cachedBootstrap = await readBootstrap(target, 3);
+    expect(cachedBootstrap.status).toBe(200);
+    const savedRootEnvelope = (await cachedBootstrap.json() as { enrollmentEnvelope: string }).enrollmentEnvelope;
     const staleProof = await signDeviceProof(peer.assertion.privateKey, {
       sessionBinding: await sessionBindingDigest(peer.session.id), deviceId: peer.id,
       registryEpoch: 3, method: "POST", url: inventoryUrl,
@@ -141,6 +161,10 @@ describe("Encryption-device inventory and removal", () => {
     expect(removed.status, await removed.clone().text()).toBe(200);
     expect(await removed.json()).toEqual({ ok: true, registryEpoch: 4 });
     expect((await f.send(actor, removalUrl, before, 3, proof)).status).toBe(200);
+    expect((await f.send(actor, removalUrl, before, 4)).status).toBe(409);
+    const renewed = await f.send(actor, removalUrl, { ...before, expectedEpoch: 4 }, 4);
+    expect(renewed.status).toBe(200);
+    expect(await renewed.json()).toEqual({ ok: true, alreadyRemoved: true });
     expect((await f.send(peer, inventoryUrl, undefined, 3, staleProof)).status).toBe(403);
     const refreshed = await f.send(peer, inventoryUrl, undefined, 4);
     expect(refreshed.status).toBe(200);
@@ -152,6 +176,8 @@ describe("Encryption-device inventory and removal", () => {
     expect(actorInventory.devices.find((item) => item.id === actor.id)?.lastUseAt)
       .toBe(Math.floor(Date.now() / 86_400_000) * 86_400_000);
     expect((await f.send(target, inventoryUrl, undefined, 4)).status).toBe(401);
+    expect((await readBootstrap(target, 4)).status).toBe(403);
+    expect((await readBootstrap(peer, 4)).status).toBe(200);
     expect((await SELF.fetch(inventoryUrl, { method: "POST", headers: { cookie: extra.cookie, origin } })).status).toBe(401);
     expect((await f.send(actor, inventoryUrl, undefined, 4)).status).toBe(200);
     expect(await env.DB.prepare("SELECT count(*) AS n FROM key_envelopes WHERE account_id = ? AND recipient_id = ? AND superseded_at IS NULL")
@@ -160,7 +186,12 @@ describe("Encryption-device inventory and removal", () => {
       .bind(f.account.accountId, peer.id).first()).toEqual({ n: 2 });
     expect(await env.DB.prepare("SELECT count(*) AS n FROM key_envelopes WHERE account_id = ? AND purpose = 'vault-recovery' AND superseded_at IS NULL")
       .bind(f.account.accountId).first()).toEqual({ n: 1 });
-    // A removed browser's already-cached ciphertext and key still decrypt locally.
+    // A removed browser can still open the Vault-root envelope it fetched before removal.
+    const cachedRoot = await openDeviceEnrollmentEnvelope(decodeBytes(savedRootEnvelope), target.transport, {
+      purpose: "device-enrollment", vaultId: f.account.accountId,
+      objectId: target.id, keyId: target.id, keyEpoch: 1, revision: 1, recipientId: target.id,
+    });
+    expect(cachedRoot).toEqual(f.rootKey);
     const cached = await openSymmetric(decodeBytes(savedLabel), f.rootKey, { context: {
       purpose: "device-label", vaultId: f.account.accountId,
       objectId: target.id, keyId: target.id, keyEpoch: 1, revision: 1,

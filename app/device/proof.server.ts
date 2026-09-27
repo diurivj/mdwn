@@ -3,6 +3,12 @@ import { atomicSqlBatch, createDb, deviceProofUses, registrationChallenges, weba
 import { getActiveSession, type ActiveSession } from "~/auth/session.server";
 import { sessionBindingDigest, verifyDeviceProof, type DeviceProof } from "./proof";
 
+const COARSE_PROOF_MS = 86_400_000;
+/** Record successful mutation proofs by UTC day; read proofs never write D1. */
+export function coarseProofTime(now: number): number {
+  return Math.floor(now / COARSE_PROOF_MS) * COARSE_PROOF_MS;
+}
+
 type ActiveDevice = { assertion_public_key: ArrayBuffer; registry_epoch: number };
 export type AuthorizedDevice = {
   accountId: string;
@@ -98,6 +104,7 @@ export async function commitPrivateMutation(
 ): Promise<boolean> {
   const now = Date.now();
   if (authorization.expiresAt <= now) return false;
+  const proofDay = coarseProofTime(now);
   const { accountId, sessionId, deviceId, registryEpoch, proofId, expiresAt } = authorization;
   const guard = sql`
     EXISTS (SELECT 1 FROM sessions s JOIN encryption_devices d ON d.id = s.device_id
@@ -116,9 +123,9 @@ export async function commitPrivateMutation(
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
       SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt} WHERE changes() = 1`,
     // Coarse successful mutation-proof use only. Read proofs must never write D1.
-    sql`UPDATE encryption_devices SET last_proof_at = ${Math.floor(now / 86_400_000) * 86_400_000}
+    sql`UPDATE encryption_devices SET last_proof_at = ${proofDay}
       WHERE id = ${deviceId} AND account_id = ${accountId} AND changes() = 1
-        AND (last_proof_at IS NULL OR last_proof_at < ${Math.floor(now / 86_400_000) * 86_400_000})`,
+        AND (last_proof_at IS NULL OR last_proof_at < ${proofDay})`,
   ]);
   return changed.meta.changes === 1 && consumed.meta.changes === 1;
 }
