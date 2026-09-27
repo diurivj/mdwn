@@ -1,35 +1,12 @@
 import { test, expect } from "./fixtures";
-import { completeRecoveryPresentation } from "./signup-recovery";
+import { openEditor, warnsOnUnload } from "./editor-workspace.fixture";
 
 test.setTimeout(240_000);
 
 test("edits and previews privately, flushes on shortcut/navigation, enforces bytes, and transfers the editing lease", async ({ browser, server, baseURL }, testInfo) => {
-  const worker = server.getWorker<{ DB: D1Database }>();
-  await worker.applyD1Migrations("DB");
-  const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1200, height: 850 } });
-  await context.addInitScript(() => {
-    if (typeof globalThis.PublicKeyCredential !== "function") {
-      Object.defineProperty(globalThis, "PublicKeyCredential", { configurable: true,
-        value: class PublicKeyCredential {} });
-    }
-  });
-  await context.credentials.install();
-  const page = await context.newPage();
+  const { context, page, fileId } = await openEditor(browser, server, baseURL!);
   try {
-    await page.goto(new URL("/sign-up", baseURL!).href, { waitUntil: "commit" });
-    const verify = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/signup/verify" &&
-      request.method() === "POST", { timeout: 120_000 });
-    await page.getByRole("button", { name: "Create account", exact: true }).click();
-    await completeRecoveryPresentation(page);
-    const signup = (await verify).postDataJSON() as { transcript: { rootDirectoryId: string } };
-    await expect(page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
-    await page.goto(new URL(`/d/${signup.transcript.rootDirectoryId}`, baseURL!).href);
-    await page.getByRole("button", { name: "New File" }).click();
-    const create = page.getByRole("dialog", { name: "Create a name" });
-    await create.getByRole("textbox", { name: "Name" }).fill("Workspace.md");
-    await create.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Workspace.md" })).toBeVisible();
-    const fileId = new URL(page.url()).pathname.split("/").at(-1)!;
     const editor = page.getByRole("textbox", { name: "Markdown source" });
     await expect(editor).toBeEditable();
     await expect(page.getByRole("region", { name: "Preview" })).toBeVisible();
@@ -42,12 +19,7 @@ test("edits and previews privately, flushes on shortcut/navigation, enforces byt
     const source = "## Live preview\n- [x] done\n<script>window.privateLeak = true</script>";
     await editor.fill(source);
     await expect(saveStatus).toHaveText("Unsaved");
-    const warnsOnUnload = () => page.evaluate(() => {
-      const event = new Event("beforeunload", { cancelable: true });
-      window.dispatchEvent(event);
-      return event.defaultPrevented;
-    });
-    expect(await warnsOnUnload()).toBe(true);
+    expect(await warnsOnUnload(page)).toBe(true);
     await page.waitForTimeout(250); // Below the specified 750 ms debounce.
     expect(patchCount).toBe(0);
     const save = page.waitForRequest((request) => new URL(request.url()).pathname === `/api/private/tree/files/${fileId}` &&
@@ -56,7 +28,7 @@ test("edits and previews privately, flushes on shortcut/navigation, enforces byt
     const submitted = await save;
     expect(submitted.postData()).not.toContain(source);
     await expect(saveStatus).toHaveText("Saved", { timeout: 20_000 });
-    expect(await warnsOnUnload()).toBe(false);
+    expect(await warnsOnUnload(page)).toBe(false);
     await expect(page.getByRole("heading", { name: "Live preview" })).toBeVisible();
     await expect(page.getByRole("checkbox")).toBeChecked();
     expect(await page.locator("script").filter({ hasText: "privateLeak" }).count()).toBe(0);
@@ -111,7 +83,7 @@ test("edits and previews privately, flushes on shortcut/navigation, enforces byt
       ? route.abort() : route.continue());
     await page.getByRole("textbox", { name: "Markdown source" }).fill("# unsent local draft");
     await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Couldn't save", { timeout: 15_000 });
-    expect(await warnsOnUnload()).toBe(true);
+    expect(await warnsOnUnload(page)).toBe(true);
     const download = page.waitForEvent("download");
     await page.getByRole("button", { name: "Download local draft" }).click();
     expect((await download).suggestedFilename()).toBe("draft.md");
@@ -122,7 +94,7 @@ test("edits and previews privately, flushes on shortcut/navigation, enforces byt
     await page.unroute("**/api/private/tree/files/*");
     await page.getByRole("button", { name: "Retry save" }).click();
     await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Saved", { timeout: 20_000 });
-    expect(await warnsOnUnload()).toBe(false);
+    expect(await warnsOnUnload(page)).toBe(false);
 
     const other = await context.newPage();
     try {

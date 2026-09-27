@@ -26,6 +26,60 @@ test("accepts a valid IME composition as one draft and rejects an over-limit res
   } finally { await context.close(); }
 });
 
+test("canceling composition after the debounce still saves the preceding valid draft", async ({ browser, server, baseURL }) => {
+  const { context, page, fileId } = await openEditor(browser, server, baseURL!);
+  try {
+    const editor = page.getByRole("textbox", { name: "Markdown source" });
+    const status = page.getByRole("status", { name: "Save status" });
+    let patches = 0;
+    page.on("request", (request) => { if (filePatch(request, fileId)) patches++; });
+    await editor.fill("valid draft before IME");
+    await editor.evaluate((area: HTMLTextAreaElement) => {
+      area.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "valid draft before IMEあ");
+      area.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText", data: "あ" }));
+    });
+    await page.waitForTimeout(1_050);
+    expect(patches).toBe(0);
+    await editor.evaluate((area: HTMLTextAreaElement) => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "valid draft before IME");
+      area.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText", data: "" }));
+      area.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "" }));
+    });
+    await expect(editor).toHaveValue("valid draft before IME");
+    await expect(status).toHaveText("Saved", { timeout: 20_000 });
+    expect(patches).toBe(1);
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("valid draft before IME");
+  } finally { await context.close(); }
+});
+
+test("rejecting an over-limit composition resumes autosave of the prior draft", async ({ browser, server, baseURL }) => {
+  const { context, page, fileId } = await openEditor(browser, server, baseURL!);
+  try {
+    const editor = page.getByRole("textbox", { name: "Markdown source" });
+    const status = page.getByRole("status", { name: "Save status" });
+    let patches = 0;
+    page.on("request", (request) => { if (filePatch(request, fileId)) patches++; });
+    await editor.fill("pending valid before rejection");
+    await editor.evaluate((area: HTMLTextAreaElement) => {
+      area.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "🙂" }));
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "a".repeat(262_145));
+      area.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText", data: "🙂" }));
+    });
+    await page.waitForTimeout(1_050);
+    expect(patches).toBe(0);
+    await editor.evaluate((area: HTMLTextAreaElement) => {
+      area.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "🙂" }));
+    });
+    await expect(editor).toHaveValue("pending valid before rejection");
+    await expect(status).toHaveText("Saved", { timeout: 20_000 });
+    expect(patches).toBe(1);
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("pending valid before rejection");
+  } finally { await context.close(); }
+});
+
 test("a pending older save cannot clear warnings or allow a lease handoff when the draft reverts", async ({ browser, server, baseURL }) => {
   const { context, page, fileId, rootId } = await openEditor(browser, server, baseURL!);
   try {

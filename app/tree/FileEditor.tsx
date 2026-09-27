@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useBlocker } from "react-router";
+import { useBlocker, useNavigation } from "react-router";
 
 import { loadDirectory, loadFile, type DirectoryListing, type LoadedFile, type RootAccess } from "./client";
 import { commitFileSave, FileChangedError, FILE_LIMIT_FEEDBACK, FILE_SOURCE_LIMIT,
@@ -19,16 +19,19 @@ function acceptableEdit(proposed: string, previous: string): boolean {
   return size <= FILE_SOURCE_LIMIT || (before > FILE_SOURCE_LIMIT && size < before);
 }
 
-export function FileEditor({ fileId, access, file, listing, parentKey, onCommitted, flushRef }: {
+export function FileEditor({ fileId, access, file, listing, parentKey, onCommitted, flushRef,
+  editingFrozen, authorityVerified }: {
   fileId: string; access: RootAccess; file: LoadedFile; listing: DirectoryListing;
   parentKey: Uint8Array; onCommitted: (file: LoadedFile, listing: DirectoryListing) => void;
   flushRef: React.RefObject<(() => Promise<boolean>) | null>;
+  editingFrozen: boolean; authorityVerified: boolean;
 }) {
   const [state, setState] = useState<EditorState>(() => ({ source: file.markdown,
     savedSource: file.markdown, file, listing, busy: null,
     status: withinFileLimit(file.markdown) ? "Saved" : "Couldn't save", conflict: false, rejected: false }));
   const current = useRef(state);
   const [composition, setComposition] = useState<string | null>(null);
+  const [compositionEpoch, setCompositionEpoch] = useState(0);
   const [view, setView] = useState<"edit" | "preview">("edit");
   const [notice, setNotice] = useState("");
   const [refreshingLease, setRefreshingLease] = useState(false);
@@ -42,6 +45,11 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   const protectedDraft = () => Boolean(pending.current || composing.current ||
     current.current.status !== "Saved" || current.current.source !== current.current.savedSource);
   const blocker = useBlocker(protectedDraft);
+  const navigation = useNavigation();
+  // An approved navigation leaves the old route mounted while its clientLoader runs.
+  // Neither a visual control nor a synthetic late input may accept a disposable draft.
+  const editingLocked = editingFrozen || !authorityVerified || navigation.state !== "idle" ||
+    blocker.state === "proceeding" || !lease.owner || refreshingLease || state.busy === "reload";
 
   function update(fn: (old: EditorState) => EditorState) {
     if (!alive.current) return;
@@ -91,6 +99,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   }
 
   function reload(): Promise<boolean> {
+    if (!authorityVerified) return Promise.resolve(false);
     if (pending.current) return pending.current.promise;
     return exclusive("reload", async () => {
       try {
@@ -145,7 +154,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
 
   function flush(): Promise<boolean> {
     if (pending.current) return pending.current.promise.then(() => flush());
-    if (!alive.current || composing.current) return Promise.resolve(false);
+    if (!authorityVerified || !alive.current || composing.current) return Promise.resolve(false);
     if (current.current.source === current.current.savedSource && current.current.status === "Saved") return Promise.resolve(true);
     if (!lease.isOwner()) return Promise.resolve(false);
     return exclusive("save", doFlush);
@@ -157,10 +166,12 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   }, [flushRef]);
 
   useEffect(() => {
-    if (state.status !== "Unsaved" || state.conflict || !lease.owner || composing.current || pending.current) return;
+    if (!authorityVerified || editingFrozen || state.status !== "Unsaved" || state.conflict ||
+        !lease.owner || composing.current || pending.current) return;
     const timer = window.setTimeout(() => { void flush(); }, 750);
     return () => window.clearTimeout(timer);
-  }, [state.source, state.status, state.conflict, lease.owner, state.busy]);
+  }, [state.source, state.status, state.conflict, lease.owner, state.busy, compositionEpoch,
+    authorityVerified, editingFrozen]);
 
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
@@ -201,15 +212,20 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
     wasOwner.current = lease.owner;
   }, [lease.owner]);
 
+  function restoreTextarea(textarea: HTMLTextAreaElement) {
+    const position = Math.min(textarea.selectionStart, current.current.source.length);
+    textarea.value = current.current.source;
+    textarea.setSelectionRange(position, position);
+  }
+
   function acceptEdit(proposed: string, textarea?: HTMLTextAreaElement) {
-    if (!lease.isOwner() || refreshingLease || pending.current?.kind === "reload" ||
-        proposed === current.current.source) return;
+    if (editingLocked || !lease.isOwner() || pending.current?.kind === "reload") {
+      if (textarea) restoreTextarea(textarea);
+      return;
+    }
+    if (proposed === current.current.source) return;
     if (!acceptableEdit(proposed, current.current.source)) {
-      if (textarea) {
-        const position = Math.min(textarea.selectionStart, current.current.source.length);
-        textarea.value = current.current.source;
-        textarea.setSelectionRange(position, position);
-      }
+      if (textarea) restoreTextarea(textarea);
       update((old) => ({ ...old, rejected: true }));
       return;
     }
@@ -235,6 +251,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
   }
 
   function overwrite(): Promise<boolean> {
+    if (!authorityVerified || editingFrozen) return Promise.resolve(false);
     if (pending.current) return pending.current.promise;
     if (!withinFileLimit(current.current.source) || !lease.isOwner() || composing.current) return Promise.resolve(false);
     return exclusive("overwrite", async () => {
@@ -291,10 +308,10 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
     {lease.transferRequested && <div className="mt-3 rounded border p-3" role="dialog" aria-label="Transfer editing">
       <p>Another tab wants to edit this File. Save your changes or explicitly discard them first.</p>
       <div className="mt-2 flex gap-3">
-        <button type="button" disabled={busy || composing.current} onClick={() => void flush().then((saved) => {
+        <button type="button" disabled={busy || editingFrozen || !authorityVerified || composing.current} onClick={() => void flush().then((saved) => {
           if (saved && !protectedDraft() && lease.isOwner()) void lease.finishTransfer();
         })}>Save and transfer</button>
-        <button type="button" disabled={busy || composing.current} onClick={() => {
+        <button type="button" disabled={busy || editingFrozen || !authorityVerified || composing.current} onClick={() => {
           if (pending.current || !lease.isOwner()) return;
           update((old) => ({ ...old, source: old.savedSource,
             status: withinFileLimit(old.savedSource) ? "Saved" : "Couldn't save", conflict: false }));
@@ -308,18 +325,18 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
       <button type="button" onClick={() => blocker.reset()}>Stay</button>
       <button type="button" disabled={busy} onClick={() => { if (!pending.current) blocker.proceed(); }}>Discard and leave</button>
     </div>}
-    {state.status === "Couldn't save" && <div className="mt-3 rounded border p-3" role="group" aria-label="Unsaved draft options">
+    {(state.status === "Couldn't save" || !authorityVerified) && <div className="mt-3 rounded border p-3" role="group" aria-label="Unsaved draft options">
       {oversized && <p>This File is over the limit. It is readable and exportable; reduce content to save.</p>}
       {state.conflict && <p>Review the conflicting File before choosing whether to overwrite it.</p>}
       <div className="mt-2 flex flex-wrap gap-3">
         <button type="button" onClick={() => void copyDraft()}>Copy local draft</button>
         <button type="button" onClick={downloadDraft}>Download local draft</button>
-        <button type="button" disabled={busy} onClick={() => void reload()}>Reload and discard local draft</button>
-        {state.conflict && !oversized && lease.owner && <button type="button" disabled={busy}
+        <button type="button" disabled={busy || editingFrozen || !authorityVerified} onClick={() => void reload()}>Reload and discard local draft</button>
+        {state.conflict && !oversized && lease.owner && <button type="button" disabled={busy || editingFrozen || !authorityVerified}
           onClick={() => void overwrite().then((ok) => { if (ok && current.current.source !== current.current.savedSource) void flush(); })}>
           Confirm overwrite</button>}
         {oversized && <button type="button" onClick={() => document.getElementById(`source-${fileId}`)?.focus()}>Reduce content</button>}
-        {!oversized && !state.conflict && lease.owner && <button type="button" disabled={busy}
+        {!oversized && !state.conflict && lease.owner && <button type="button" disabled={busy || editingFrozen || !authorityVerified}
           onClick={() => void flush()}>Retry save</button>}
       </div>
     </div>}
@@ -330,19 +347,23 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
     <div className="mt-4 grid min-h-[50vh] gap-4 lg:grid-cols-2">
       <section className={`${view === "preview" ? "hidden lg:block" : ""}`} aria-label="Editor">
         <h2 className="mb-2 font-medium">Markdown source</h2>
-        <textarea id={`source-${fileId}`} readOnly={!lease.owner || refreshingLease || state.busy === "reload"}
+        <textarea id={`source-${fileId}`} readOnly={editingLocked}
           value={composition ?? state.source} aria-label="Markdown source"
-          onCompositionStart={(event) => { if (lease.isOwner() && !refreshingLease && pending.current?.kind !== "reload") {
+          onCompositionStart={(event) => {
+            if (editingLocked || !lease.isOwner()) { event.preventDefault(); return; }
             composing.current = true; setComposition(event.currentTarget.value);
-          } }}
+          }}
           onCompositionEnd={(event) => {
             const proposed = event.currentTarget.value;
             composing.current = false;
             setComposition(null);
             acceptEdit(proposed, event.currentTarget);
+            // The prior debounce may have fired while composing, even when the final edit is
+            // unchanged or rejected. Re-arm it for the last accepted source, never IME bytes.
+            setCompositionEpoch((epoch) => epoch + 1);
           }}
           onPaste={(event) => {
-            if (!lease.isOwner() || refreshingLease || pending.current?.kind === "reload" || composing.current) {
+            if (editingLocked || !lease.isOwner() || composing.current) {
               event.preventDefault(); return;
             }
             const target = event.currentTarget;
@@ -354,6 +375,7 @@ export function FileEditor({ fileId, access, file, listing, parentKey, onCommitt
             }
           }}
           onChange={(event) => {
+            if (editingLocked) { restoreTextarea(event.currentTarget); return; }
             if (composing.current) setComposition(event.currentTarget.value);
             else acceptEdit(event.currentTarget.value, event.currentTarget);
           }}

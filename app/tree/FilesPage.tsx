@@ -29,10 +29,13 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const nameInput = useRef<HTMLInputElement>(null);
   const flushEditor = useRef<(() => Promise<boolean>) | null>(null);
   const busy = submitting || revalidator.state !== "idle" || navigation.state !== "idle";
+  // A failed same-route refresh has no new verified snapshot. Keep the last one for
+  // this identity (and its mounted, tab-local editor), but never use it as write authority.
+  const authorityVerified = status === "ready" && initial.status === "ready" && revalidator.state === "idle";
   const recoveryPending = isSignupRecoveryConfirmationPending();
 
   useEffect(() => {
-    setSnapshot(initial.snapshot);
+    setSnapshot((previous) => initial.snapshot ?? (previous?.crumbs.at(-1)?.id === nodeId ? previous : null));
     setStatus(initial.status);
     setDialog(null);
     if (initial.snapshot) setExpanded(Array.from(new Set([
@@ -42,7 +45,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }, [initial, nodeId, kind]);
 
   async function toggle(entry: TreeEntry) {
-    if (!snapshot || entry.kind !== "directory") return;
+    if (!snapshot || busy || !authorityVerified || entry.kind !== "directory") return;
     if (expanded.includes(entry.nodeId)) {
       const next = expanded.filter((id) => id !== entry.nodeId);
       setExpanded(next);
@@ -67,7 +70,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }
 
   function startCreate(createKind: TreeKind) {
-    if (!snapshot) return;
+    if (!snapshot || !authorityVerified) return;
     const parentId = kind === "directory" ? nodeId : snapshot.crumbs.at(-2)?.id;
     if (!parentId || !snapshot.listings[parentId]) return;
     setMessage("");
@@ -75,7 +78,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }
 
   function startRename() {
-    if (!snapshot || nodeId === snapshot.access.rootId) return;
+    if (!snapshot || !authorityVerified || nodeId === snapshot.access.rootId) return;
     const parentId = snapshot.crumbs.at(-2)?.id;
     const entry = parentId && snapshot.listings[parentId]?.entries.find((item) => item.nodeId === nodeId);
     if (!entry || !parentId) return;
@@ -84,7 +87,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }
 
   async function submit(current: Dialog, listing?: DirectoryListing) {
-    if (!snapshot || busy) return;
+    if (!snapshot || busy || !authorityVerified) return;
     setSubmitting(true);
     setMessage("");
     try {
@@ -115,7 +118,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           requestedName: current.requestedName, order: entry.order });
         await renameTreeChild(snapshot.access, current.parentId, entry.nodeId, payload, parent, key);
         setDialog(null);
-        revalidator.revalidate();
+        // Keep the structural freeze through the clientLoader's verified refresh.
+        await revalidator.revalidate();
       }
     } catch (error) {
       if (error instanceof NameConflictError) setDialog({ ...current, review: "local" });
@@ -132,7 +136,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }
 
   async function refreshAndRetry(current: Dialog) {
-    if (!snapshot || busy) return;
+    if (!snapshot || busy || !authorityVerified) return;
     setSubmitting(true);
     try {
       const listing = await loadDirectory(snapshot.access, current.parentId, snapshot.keys[current.parentId]!);
@@ -147,6 +151,13 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     }
   }
 
+  async function retryFiles() {
+    if (busy) return;
+    setSubmitting(true);
+    try { await revalidator.revalidate(); }
+    finally { setSubmitting(false); }
+  }
+
   function directoryItems(directoryId: string, depth = 0): React.ReactNode {
     if (!snapshot || depth > 100) return null;
     const listing = snapshot.listings[directoryId];
@@ -155,7 +166,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       <div className={`flex items-center gap-1 rounded px-1 py-0.5 ${entry.nodeId === nodeId ? "bg-stone-200" : ""}`}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}>
         {entry.kind === "directory" ? <button type="button" aria-label={`${expanded.includes(entry.nodeId) ? "Collapse" : "Expand"} ${entry.name}`}
-          onClick={() => void toggle(entry)} className="w-5 text-left">{expanded.includes(entry.nodeId) ? "▾" : "▸"}</button>
+          disabled={busy || !authorityVerified} onClick={() => void toggle(entry)} className="w-5 text-left">{expanded.includes(entry.nodeId) ? "▾" : "▸"}</button>
           : <span className="w-5" aria-hidden="true">·</span>}
         <Link to={`/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`}
           onClick={() => setDrawer(false)} className="min-w-0 truncate hover:underline">{entry.name}</Link>
@@ -164,9 +175,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     </div>);
   }
 
-  if (status === "not-found") return <main className="p-8"><h1 className="text-xl font-semibold">Not found</h1>
+  if (status === "not-found" && !snapshot) return <main className="p-8"><h1 className="text-xl font-semibold">Not found</h1>
     <p>This File or folder is unavailable.</p><Link to="/account/device-access" className="underline">Files access</Link></main>;
-  if (status !== "ready" || !snapshot) return <main className="p-8"><h1 className="text-xl font-semibold">Files unavailable</h1>
+  if (!snapshot || snapshot.crumbs.at(-1)?.id !== nodeId) return <main className="p-8"><h1 className="text-xl font-semibold">Files unavailable</h1>
     <p>Check this device’s access or try again.</p><Link to="/account/device-access" className="underline">Device access</Link></main>;
 
   const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
@@ -191,17 +202,22 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         </nav>
       </div>
       <div className="mt-6 flex flex-wrap items-center gap-2"><h1 className="mr-auto text-2xl font-semibold">{selected}</h1>
-        <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
-        <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button>
-        {nodeId !== snapshot.access.rootId && <button type="button" disabled={busy || recoveryPending} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
+        <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
+        <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button>
+        {nodeId !== snapshot.access.rootId && <button type="button" disabled={busy || !authorityVerified || recoveryPending} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
       </div>
       {recoveryPending && <p role="status" className="mt-3">Confirm your saved recovery phrase and codes before creating Files.</p>}
       {busy && <p role="status" className="mt-3">Updating Files…</p>}
+      {(status !== "ready" || initial.status !== "ready") && <div role="alert" className="mt-3 text-rose-700">
+        Files could not be verified. Your local view remains here; edits and writes are paused until a successful retry.
+        <button type="button" className="ml-3 underline" disabled={busy} onClick={() => void retryFiles()}>
+          {busy ? "Retrying Files…" : "Retry Files"}</button>
+      </div>}
       {message && <p role="alert" className="mt-3 text-rose-700">{message}</p>}
       {kind === "file" && snapshot.file && snapshot.crumbs.at(-2)?.id && snapshot.keys[snapshot.crumbs.at(-2)!.id]
         ? <FileEditor fileId={nodeId} access={snapshot.access} file={snapshot.file}
           listing={snapshot.listings[snapshot.file.parentId]!} parentKey={snapshot.keys[snapshot.file.parentId]!}
-          flushRef={flushEditor} onCommitted={(file, listing) => setSnapshot((old) => old && ({ ...old, file,
+          flushRef={flushEditor} editingFrozen={busy || !authorityVerified} authorityVerified={authorityVerified} onCommitted={(file, listing) => setSnapshot((old) => old && ({ ...old, file,
             listings: { ...old.listings, [listing.directoryId]: listing },
             crumbs: old.crumbs.map((crumb) => crumb.id === nodeId
               ? { ...crumb, name: listing.entries.find((entry) => entry.nodeId === nodeId)?.name ?? crumb.name }
