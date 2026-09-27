@@ -280,21 +280,33 @@ test("Owner-offline invitations keep an unprovisioned device nameless and allow 
       .getByRole("link", { name: "OwnerSeed.md (Shared as)", exact: true });
     await expect(directRoot).toBeVisible();
     const leaveResponse = recipient.page.waitForResponse((response) =>
-      new URL(response.url()).pathname === "/resources/sharing" && response.request().method() === "POST",
+      new URL(response.url()).pathname === `/api/private/sharing/grants/${directGrant.grantId}/leave` &&
+        response.request().method() === "DELETE",
     { timeout: 30_000 });
     await directRoot.locator("..").getByRole("button", { name: "Leave", exact: true }).click();
-    expect((await leaveResponse).status()).toBe(200);
+    const left = await leaveResponse;
+    expect(left.status()).toBe(200);
+    const leaveProof = JSON.parse(left.request().headers()["x-mdwn-device-proof"]!) as {
+      deviceId: string; registryEpoch: number;
+    };
+    expect(leaveProof).toMatchObject({ deviceId: recipient.deviceId, registryEpoch: 2 });
     // Leaving revokes this direct URL, so the message-bearing SharedNavigation is
     // replaced by the access-denied page during route revalidation.
     await expect(recipient.page.getByRole("heading", { name: "Not found", exact: true })).toBeVisible();
 
-    const rootsResponse = recipient.page.waitForResponse((response) => {
-      const url = new URL(response.url());
-      return url.pathname === "/resources/sharing" && url.searchParams.get("collection") === "roots" &&
-        response.request().method() === "GET";
-    }, { timeout: 30_000 });
+    const rootsResponse = recipient.page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/private/sharing/roots" &&
+        response.request().method() === "POST",
+    { timeout: 30_000 });
     await recipient.page.goto(`${origin}/d/${recipient.rootId}`);
-    expect((await rootsResponse).status()).toBe(200);
+    const roots = await rootsResponse;
+    expect(roots.status()).toBe(200);
+    const rootsProof = JSON.parse(roots.request().headers()["x-mdwn-device-proof"]!) as {
+      deviceId: string; registryEpoch: number;
+    };
+    expect(rootsProof).toMatchObject({ deviceId: recipient.deviceId, registryEpoch: 2 });
+    const rootsPage = await roots.json() as { roots: { grantId: string }[]; nextCursor: string | null };
+    expect(rootsPage.roots.some((root) => root.grantId === directGrant.grantId)).toBe(false);
     await expect(recipient.page.getByLabel("Shared content")
       .getByRole("link", { name: "OwnerSeed.md (Shared as)", exact: true })).toHaveCount(0);
     recipient.page.off("request", observeDirectRequest);
