@@ -125,6 +125,10 @@ _Avoid_: Public link, ownership
 A cryptographic key that protects the current representation of one file. It is distinct from a Directory capability, a Passkey, and a Public link.
 _Avoid_: Vault root key, recovery code
 
+**File receiving key pair**:
+A File-scoped asymmetric key pair for an access epoch: its public half is a write target for a fresh File content key, while its private half follows Directory access (or strictly owned recovery), never a direct File Grant.
+_Avoid_: Directory-wide write key, File content key
+
 **Private content**:
 Markdown source intended only for accounts authorised by its owner or a share; it remains unreadable to the service operator.
 _Avoid_: Secret data, encrypted-at-rest content

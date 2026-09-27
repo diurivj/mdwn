@@ -16,3 +16,7 @@
 - [ ] Content a Directory read/write Collaborator creates manually or through Import belongs immediately to the target Directory's Owner, with no approval workflow, no new Share or Grant, and no ownership transfer; the initiator keeps access through the existing Directory Grant.
 - [ ] Cancelled or declined Shares and revoked Grants are hard-deleted after any bounded security retention, and the MVP keeps no historical sharing-audit log.
 - [ ] Tests cover the full matrix including read-only Private Comment participation and direct-File structural denial, overlapping-Grant union and independent revocation, and reviewed `EXPLAIN QUERY PLAN` output for the effective-access query.
+
+## Comments
+
+- Approved, **not yet implemented**, protocol amendment: [ADR-0008](../../../docs/adr/0008-file-scoped-receiving-keys-and-signed-file-heads.md) and [spec §4.3](../../../docs/buildable-spec.md#43-key-envelopes-and-revocation). Direct File read/write acceptance must wait for a write-authorized parent-capability browser to atomically migrate a v1 File's complete-entry commitment to listing v2 and its signed File head under structural and File revision guards; SQL cannot do it, and a later direct editor must never need the Owner online or receive parent ID/path/capability, siblings, or a Directory-wide target. This is a dependency for direct-write sharing, not a checked acceptance item.
