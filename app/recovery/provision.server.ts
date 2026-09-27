@@ -1,6 +1,6 @@
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { inspectEnvelope } from "~/crypto/enc-v1";
-import { commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
+import { coarseProofTime, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 
 const noStore = { "Cache-Control": "no-store" };
@@ -82,6 +82,7 @@ export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevi
   } catch { return denied(); }
   const now = Date.now();
   if (authorized.expiresAt <= now) return denied();
+  const proofDay = coarseProofTime(now);
   const cursor = body.cursor;
   const objectId = body.objectId;
   const guard = sql`${privateReadGuard(authorized)} AND NOT EXISTS (
@@ -112,8 +113,12 @@ export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevi
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
       SELECT ${authorized.accountId}, ${authorized.proofId}, ${authorized.sessionId},
         ${authorized.expiresAt} WHERE changes() = 1`,
+    sql`UPDATE encryption_devices SET last_proof_at = ${proofDay}
+      WHERE id = ${authorized.deviceId} AND account_id = ${authorized.accountId}
+        AND changes() = 1
+        AND (last_proof_at IS NULL OR last_proof_at < ${proofDay})`,
   ]);
-  if (results.every((result) => result.meta.changes === 1)) {
+  if (results.slice(0, 3).every((result) => result.meta.changes === 1)) {
     return Response.json({ ok: true }, { headers: noStore });
   }
   // A completed retry is harmless and must never reset the cursor or rewrite an envelope.

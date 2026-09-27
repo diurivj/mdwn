@@ -214,6 +214,12 @@ export default function AccountSecurity({ loaderData }: Route.ComponentProps) {
           </section>
 
           <section className="mt-10 border-t border-stone-200 pt-8">
+            <h2 className="text-lg font-medium">Encryption devices</h2>
+            <p className="mt-2 text-sm text-stone-600">Manage the devices that can open your Files. Signing out a Session does not remove its device.</p>
+            <Link className="mt-3 inline-block underline" to="/account/devices">View Encryption devices</Link>
+          </section>
+
+          <section className="mt-10 border-t border-stone-200 pt-8">
             <h2 className="text-lg font-medium">Session management</h2>
             <p className="mt-2 text-sm text-stone-600">
               Refresh extends the 30-day idle deadline without extending the 90-day maximum.

@@ -138,6 +138,28 @@ test("a synced Passkey needs QR approval before the second browser can open File
     await expect(original.page.getByRole("alert")).toBeVisible();
     expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE state = 'active'")
       .first<{ n: number }>())?.n).toBe(2);
+    await original.page.goto(`${origin}/account/devices`, { waitUntil: "commit" });
+    await expect(original.page.getByRole("heading", { name: "Encryption devices" })).toBeVisible();
+    await expect(original.page.getByText("Second device", { exact: true })).toBeVisible();
+    await expect(original.page.getByText("Unlabelled device", { exact: true })).toBeVisible();
+    const document = await (await original.page.request.get(`${origin}/account/devices`)).text();
+    expect(document).not.toContain("Second device");
+    await expect(original.page.getByText("cannot erase plaintext", { exact: false })).toBeVisible();
+    await original.page.getByRole("button", { name: "Remove device" }).click();
+    await expect(original.page.getByRole("heading", { name: "Remove Second device?" })).toBeVisible();
+    await expect(original.page.getByRole("button", { name: "Confirm removal" })).toBeDisabled();
+    await original.page.getByLabel("Type Second device to confirm").fill("Wrong device");
+    await expect(original.page.getByRole("button", { name: "Confirm removal" })).toBeDisabled();
+    await original.page.getByLabel("Type Second device to confirm").fill("Second device");
+    await original.page.getByRole("button", { name: "Confirm removal" }).click();
+    await expect(original.page.getByRole("status")).toContainText("Device removed", { timeout: 30_000 });
+    await expect(original.page.getByText("Second device", { exact: true })).toBeVisible();
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM encryption_devices WHERE state = 'active'")
+      .first<{ n: number }>())?.n).toBe(1);
+    await candidate.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
+    await expect(candidate.page.getByRole("heading", { name: "Sign in to access your Files" })).toBeVisible();
+    await original.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
+    await expect(original.page.getByRole("heading", { name: "Private access ready" })).toBeVisible();
   } finally {
     await candidate?.context.close();
     await original.context.close();
