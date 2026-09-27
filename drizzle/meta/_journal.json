@@ -92,6 +92,41 @@
       "when": 1790524503482,
       "tag": "0012_chilly_jack_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1790535296852,
+      "tag": "0013_dark_menace",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790535579549,
+      "tag": "0014_abandoned_tusk",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1790536063555,
+      "tag": "0015_last_wild_pack",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1790536915034,
+      "tag": "0016_shareable_directory_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1790537077255,
+      "tag": "0017_sharing_material_ownership",
+      "breakpoints": true
     }
   ]
 }

@@ -125,7 +125,8 @@ type FileRow = HeadRow & { parent_node_id: string; has_parent_capability: number
   ciphertext: ArrayBuffer; key_epoch: number; key_envelope: ArrayBuffer; name_ciphertext: ArrayBuffer;
   order_ciphertext: ArrayBuffer; encoding: string; receiving_entry_id: string | null;
   receiving_entry_epoch: number | null; wrap_revision: number | null; device_ciphertext: ArrayBuffer | null;
-  device_digest: ArrayBuffer | null; device_registry_epoch: number | null };
+  device_digest: ArrayBuffer | null; device_registry_epoch: number | null;
+  direct_grant_id: string | null; direct_grant_generation: number | null };
 export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: string,
   directOnly = false): Promise<Response> {
   const ownerId = await fileOwner(env, fileId);
@@ -139,7 +140,8 @@ export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: strin
       f.current_revision, f.current_representation_id, r.ciphertext, r.key_epoch,
       e.key_envelope, e.name_ciphertext, e.order_ciphertext, e.encoding,
       e.receiving_key_id AS receiving_entry_id, e.receiving_epoch AS receiving_entry_epoch, e.wrap_revision,
-      own.ciphertext AS device_ciphertext, own.digest AS device_digest, own.registry_epoch AS device_registry_epoch
+      own.ciphertext AS device_ciphertext, own.digest AS device_digest, own.registry_epoch AS device_registry_epoch,
+      direct_grant.id AS direct_grant_id, direct_grant.generation AS direct_grant_generation
     FROM vault_nodes n JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
     JOIN file_heads h ON h.file_node_id = f.node_id AND h.owner_id = f.owner_id
     JOIN file_representations r ON r.id = f.current_representation_id AND r.file_node_id = f.node_id
@@ -149,12 +151,13 @@ export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: strin
     LEFT JOIN file_device_envelopes own ON own.file_node_id = f.node_id AND own.device_id = ${auth.deviceId}
       AND own.recipient_id = ${auth.accountId} AND own.revision = f.current_revision
       AND own.content_key_id = h.content_key_id AND own.content_epoch = h.content_epoch
+    LEFT JOIN grants direct_grant ON direct_grant.owner_id = n.owner_id
+      AND direct_grant.target_node_id = n.id AND direct_grant.target_kind = 'file'
+      AND direct_grant.recipient_id = ${auth.accountId}
     WHERE n.id = ${fileId} AND n.owner_id = ${ownerId} AND n.parent_node_id = ${parentId}
       AND e.encoding = 'receiving-file'
       AND ${fileAccessGuard(auth, ownerId, fileId, "file_read")}
-      AND ${directOnly ? sql`EXISTS (SELECT 1 FROM grants g WHERE g.owner_id = ${ownerId}
-        AND g.target_node_id = ${fileId} AND g.target_kind = 'file'
-        AND g.recipient_id = ${auth.accountId})` : sql`1=1`}`);
+      AND ${directOnly ? sql`direct_grant.id IS NOT NULL` : sql`1=1`}`);
   if (!row) return absent();
   try {
     const head = await verified(row);
@@ -174,7 +177,8 @@ export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: strin
     }
     if (!row.device_ciphertext || !row.device_digest || row.device_registry_epoch !== auth.registryEpoch ||
         !head.statement.recipients.some((r) => r.deviceId === auth.deviceId && r.accountId === auth.accountId &&
-          r.registryEpoch === row.device_registry_epoch)) {
+          r.registryEpoch === row.device_registry_epoch &&
+          r.grants.some((g) => g.id === row.direct_grant_id && g.generation === row.direct_grant_generation))) {
       return Response.json({ error: "provisioning_required" }, { status: 202, headers });
     }
     const key = await createDb(env.DB).get<{ transport_public_key: ArrayBuffer }>(sql`SELECT transport_public_key

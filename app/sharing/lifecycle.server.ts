@@ -7,7 +7,7 @@ import { assertExactFileRecipientDescriptors, assertFileHeadCommitTransition, ve
   verifyFileHead, type VerifiedFileHead } from "~/tree/file-head";
 import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
 import { digestBytes, hex, inspectOfferEnvelope, sameBytes, verifyOffer, type Offer } from "./offer";
-import { devices, devicesMatch, marker, proof, proofTime, spent, target, verifiedTarget, type Target } from "./sharing.server";
+import { begin, devices, devicesMatch, finish, marker, proof, proofTime, spent, target, verifiedTarget, type Target } from "./sharing.server";
 
 const headers = { "Cache-Control": "no-store" };
 const absent = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -150,15 +150,17 @@ export async function createShare(env: Env, auth: AuthorizedDevice, value: unkno
         AND h.owner_id = ${offer.ownerId} AND h.digest = ${fromHex(offer.headDigest)}
         AND h.content_key_id = ${offer.targetKeyId} AND h.content_epoch = ${offer.targetEpoch}
         AND h.revision = ${offer.contentRevision}) AND ${exactRecipientGuard(offer.ownerId, offer.targetId, existing)}`;
-    const now = Date.now(), active = marker(auth);
+    const now = Date.now(), invocationId = crypto.randomUUID(), active = marker(auth, invocationId);
     const statements = [
+      begin(auth, invocationId, sql`${authority} AND ${unblocked(offer.ownerId, offer.targetId)}
+        AND ${membership} AND ${currentTarget}
+        AND NOT EXISTS (SELECT 1 FROM grants WHERE owner_id = ${offer.ownerId}
+          AND recipient_id = ${offer.recipientId} AND target_node_id = ${offer.targetId})
+        AND NOT EXISTS (SELECT 1 FROM shares WHERE owner_id = ${offer.ownerId}
+          AND recipient_id = ${offer.recipientId} AND target_node_id = ${offer.targetId})`),
       sql`INSERT INTO shares (id, owner_id, recipient_id, target_node_id, target_kind, permission, created_at)
         SELECT ${offer.shareId}, ${offer.ownerId}, ${offer.recipientId}, ${offer.targetId}, ${offer.kind},
-          ${offer.permission}, ${now} WHERE ${proof(auth)} AND ${authority} AND ${unblocked(offer.ownerId, offer.targetId)}
-          AND ${membership} AND ${currentTarget}
-          AND NOT EXISTS (SELECT 1 FROM grants WHERE owner_id = ${offer.ownerId}
-            AND recipient_id = ${offer.recipientId} AND target_node_id = ${offer.targetId})`,
-      spent(auth),
+          ${offer.permission}, ${now} WHERE ${active}`,
       sql`INSERT INTO share_material (share_id, material_revision, anticipated_grant_id, target_key_id,
         target_epoch, head_digest, registry_epoch, candidate_head, candidate_digest, candidate_signature,
         candidate_signer_device_id) SELECT ${offer.shareId}, 1, ${offer.grantId}, ${offer.targetKeyId},
@@ -176,10 +178,13 @@ export async function createShare(env: Env, auth: AuthorizedDevice, value: unkno
       sql`INSERT INTO share_offer_labels (share_id, device_id, ciphertext, digest)
         SELECT ${offer.shareId}, json_extract(value, '$.deviceId'), unhex(json_extract(value, '$.label')),
           unhex(json_extract(value, '$.labelDigest')) FROM json_each(${payload}) WHERE ${active}`,
-      proofTime(auth),
+      spent(auth, invocationId),
+      proofTime(auth, invocationId),
+      finish(auth, invocationId),
     ];
     const result = await atomicSqlBatch(env.DB, statements);
-    return result[0]?.meta.changes === 1 ? json({ shareId: offer.shareId }, 201) : changed();
+    return result[0]?.meta.changes === 1 && result[1]?.meta.changes === 1 ?
+      json({ shareId: offer.shareId }, 201) : changed();
   } catch { return invalid(); }
 }
 
@@ -273,7 +278,7 @@ export async function acceptShare(env: Env, auth: AuthorizedDevice, shareId: str
     if (!t) return absent();
     const currentKey = t.target_key_id === row.target_key_id && t.target_epoch === row.target_epoch;
     const now = Date.now();
-    const live = marker(auth);
+    const invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
     const eligibleJSON = JSON.stringify(eligible.map((m) => ({ deviceId: m.device_id,
       keyHex: hex(bytes(m.transport_public_key)).toUpperCase() })));
     const stillEligible = sql`d.state = 'active' AND EXISTS (SELECT 1 FROM json_each(${eligibleJSON}) eligible
@@ -304,22 +309,28 @@ export async function acceptShare(env: Env, auth: AuthorizedDevice, shareId: str
     }
     // File material remains separately durable even when the presigned head is stale.
     const enabled = row.target_kind === "directory" ? possible : Boolean(head);
+    // Old committed signatures remain verifiable; a *new* Grant must still be
+    // accepted against the offer signer's active Owner registry membership.
+    const liveSigner = sql`EXISTS (SELECT 1 FROM encryption_devices signer
+      WHERE signer.id = ${row.signer_device_id} AND signer.account_id = ${row.owner_id}
+        AND signer.state = 'active' AND signer.assertion_public_key = ${bytes(row.assertion_public_key)})`;
     const targetGuard = row.target_kind === "directory" ? sql`EXISTS (SELECT 1 FROM directories
-      WHERE node_id = ${row.target_node_id} AND owner_id = ${row.owner_id}
-        AND node_id = ${row.target_key_id} AND capability_epoch = ${row.target_epoch})` :
+      WHERE node_id = ${row.target_node_id} AND owner_id = ${row.owner_id})` :
       sql`EXISTS (SELECT 1 FROM file_heads WHERE file_node_id = ${row.target_node_id}
         AND owner_id = ${row.owner_id})`;
     const statement = [
+      begin(auth, invocationId, sql`EXISTS (SELECT 1 FROM shares s
+        JOIN share_material m ON m.share_id = s.id AND m.material_revision = ${row.material_revision}
+        JOIN share_offers o ON o.share_id = s.id AND o.digest = ${bytes(row.offer_digest)}
+        WHERE s.id = ${shareId} AND s.recipient_id = ${auth.accountId}
+          AND s.owner_id = ${row.owner_id} AND s.target_node_id = ${row.target_node_id}
+          AND ${targetGuard} AND ${liveSigner} AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.owner_id = s.owner_id
+            AND g.recipient_id = s.recipient_id AND g.target_node_id = s.target_node_id))`),
       sql`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind,
         permission, generation, created_at, updated_at)
         SELECT ${row.anticipated_grant_id}, s.owner_id, s.recipient_id, s.target_node_id,
           s.target_kind, s.permission, 1, ${now}, ${now} FROM shares s
-        JOIN share_material m ON m.share_id = s.id AND m.material_revision = ${row.material_revision}
-        JOIN share_offers o ON o.share_id = s.id AND o.digest = ${bytes(row.offer_digest)}
-        WHERE s.id = ${shareId} AND s.recipient_id = ${auth.accountId} AND ${proof(auth)}
-          AND ${targetGuard} AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.owner_id = s.owner_id
-            AND g.recipient_id = s.recipient_id AND g.target_node_id = s.target_node_id)`,
-      spent(auth),
+        WHERE s.id = ${shareId} AND s.recipient_id = ${auth.accountId} AND ${live}`,
       sql`INSERT INTO grant_labels (grant_id, label_id, owner_copy, offer_bytes, offer_digest,
         offer_signature, signer_device_id) SELECT ${row.anticipated_grant_id}, label_id, owner_copy,
           bytes, digest, signature, signer_device_id FROM share_offers WHERE share_id = ${shareId} AND ${live}`,
@@ -342,9 +353,9 @@ export async function acceptShare(env: Env, auth: AuthorizedDevice, shareId: str
           AND directory.node_id = ${row.target_key_id} AND directory.capability_epoch = ${row.target_epoch}
           AND ${unblocked(row.owner_id, row.target_node_id)} AND ${enabled}`] : [
         sql`INSERT INTO grant_retained_material (grant_id, device_id, registry_epoch,
-          content_key_id, content_epoch, revision, ciphertext, digest)
+          content_key_id, content_epoch, revision, public_key_digest, ciphertext, digest)
           SELECT ${row.anticipated_grant_id}, d.id, registry.registry_epoch,
-            ${row.target_key_id}, ${row.target_epoch}, ${t.revision}, m.ciphertext, m.digest
+            ${row.target_key_id}, ${row.target_epoch}, ${t.revision}, m.public_key_digest, m.ciphertext, m.digest
           FROM share_device_material m JOIN encryption_devices d ON d.id = m.device_id
             AND d.account_id = ${row.recipient_id}
           JOIN account_encryption_identities registry ON registry.account_id = d.account_id
@@ -383,22 +394,36 @@ export async function acceptShare(env: Env, auth: AuthorizedDevice, shareId: str
         FROM encryption_devices d JOIN account_encryption_identities registry ON registry.account_id = d.account_id
         WHERE d.account_id = ${row.recipient_id} AND d.state = 'active' AND ${live}
         AND (NOT EXISTS (SELECT 1 FROM grant_label_deliveries label
-          WHERE label.grant_id = ${row.anticipated_grant_id} AND label.device_id = d.id)
-          OR NOT EXISTS (SELECT 1 FROM ${row.target_kind === "directory" ? sql`grant_device_envelopes` : sql`file_device_envelopes`} cap
-          WHERE ${row.target_kind === "directory" ? sql`cap.grant_id` : sql`cap.file_node_id`} = ${row.target_kind === "directory" ? row.anticipated_grant_id : row.target_node_id}
-            AND cap.device_id = d.id))`,
+          WHERE label.grant_id = ${row.anticipated_grant_id} AND label.device_id = d.id
+            AND label.registry_epoch = registry.registry_epoch)
+          OR ${row.target_kind === "directory" ? sql`NOT EXISTS (SELECT 1 FROM grant_device_envelopes cap
+            JOIN directories directory ON directory.node_id = ${row.target_node_id}
+              AND directory.owner_id = ${row.owner_id}
+            WHERE cap.grant_id = ${row.anticipated_grant_id} AND cap.device_id = d.id
+              AND cap.generation = 1 AND cap.registry_epoch = registry.registry_epoch
+              AND cap.target_key_id = directory.node_id AND cap.target_epoch = directory.capability_epoch)` :
+              sql`NOT EXISTS (SELECT 1 FROM file_device_envelopes cap
+                JOIN file_heads h ON h.file_node_id = cap.file_node_id AND h.owner_id = cap.owner_id
+                WHERE cap.file_node_id = ${row.target_node_id} AND cap.recipient_id = ${row.recipient_id}
+                  AND cap.device_id = d.id AND cap.revision = h.revision
+                  AND cap.content_key_id = h.content_key_id AND cap.content_epoch = h.content_epoch
+                  AND cap.registry_epoch = registry.registry_epoch)`})`,
       sql`DELETE FROM share_offer_labels WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM share_device_material WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM share_offers WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM share_material WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM shares WHERE id = ${shareId} AND recipient_id = ${auth.accountId} AND ${live}`,
-      proofTime(auth),
+      spent(auth, invocationId),
+      proofTime(auth, invocationId),
+      finish(auth, invocationId),
     ];
-    if (statement.length > 50) return invalid();
     const result = await atomicSqlBatch(env.DB, statement);
-    return result[0]?.meta.changes === 1 ? json({ grantId: row.anticipated_grant_id,
-      status: enabled && (row.target_kind === "directory" ? result[4]?.meta.changes === eligible.length :
-        result[6]?.meta.changes === eligible.length) ? "ready" : "provisioning" }) : changed();
+    const currentEligible = eligible.some((d) => d.device_id === auth.deviceId);
+    const committed = row.target_kind === "directory" ? result[4]?.meta.changes === eligible.length :
+      result[5]?.meta.changes === 1 && result[6]?.meta.changes === eligible.length;
+    const ready = currentEligible && enabled && committed && result[3]?.meta.changes === eligible.length;
+    return result[0]?.meta.changes === 1 && result[1]?.meta.changes === 1 ?
+      json({ grantId: row.anticipated_grant_id, status: ready ? "ready" : "provisioning" }) : changed();
   } catch { return invalid(); }
 }
 
@@ -409,17 +434,17 @@ export async function cancelShare(env: Env, auth: AuthorizedDevice, shareId: str
     const role = decline ? sql`recipient_id` : sql`owner_id`;
     const guard = sql`EXISTS (SELECT 1 FROM shares WHERE id = ${shareId}
       AND ${role} = ${auth.accountId})`;
-    const live = marker(auth);
+    const invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
     const result = await atomicSqlBatch(env.DB, [
-      sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
-        SELECT ${auth.accountId}, ${auth.proofId}, ${auth.sessionId}, ${auth.expiresAt}
-        WHERE ${proof(auth)} AND ${guard}`,
+      begin(auth, invocationId, guard),
       sql`DELETE FROM share_offer_labels WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM share_device_material WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM share_offers WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM share_material WHERE share_id = ${shareId} AND ${live}`,
       sql`DELETE FROM shares WHERE id = ${shareId} AND ${role} = ${auth.accountId} AND ${live}`,
-      proofTime(auth),
+      spent(auth, invocationId),
+      proofTime(auth, invocationId),
+      finish(auth, invocationId),
     ]);
     return result[0]?.meta.changes === 1 ? json({ status: decline ? "declined" : "cancelled" }) : absent();
   } catch { return invalid(); }
@@ -431,6 +456,7 @@ export async function cancelShare(env: Env, auth: AuthorizedDevice, shareId: str
 export async function updateGrant(env: Env, auth: AuthorizedDevice, grantId: string,
   leave: boolean, method: string, value: unknown): Promise<Response> {
   const changedPermission = method === "PATCH";
+  if (changedPermission && leave) return invalid();
   const input = record(value);
   if (changedPermission && (!input || Object.keys(input).length !== 1 ||
       (input.permission !== "read_only" && input.permission !== "read_write"))) return invalid();
@@ -441,21 +467,26 @@ export async function updateGrant(env: Env, auth: AuthorizedDevice, grantId: str
   if (!grant) return absent();
   if (changedPermission && grant.permission === input!.permission) return json({ status: "unchanged" });
   try {
-    const live = marker(auth), now = Date.now();
+    const invocationId = crypto.randomUUID(), live = marker(auth, invocationId), now = Date.now();
     const barrierEpoch = grant.generation + 1;
     const result = await atomicSqlBatch(env.DB, [
+      begin(auth, invocationId, sql`EXISTS (SELECT 1 FROM grants WHERE id = ${grantId}
+        AND recipient_id = ${grant.recipient_id} AND owner_id = ${grant.owner_id}
+        AND generation = ${grant.generation} AND ${leave ? sql`recipient_id` : sql`owner_id`} = ${auth.accountId})`),
       ...(changedPermission ? [sql`UPDATE grants SET permission = ${input!.permission},
         generation = generation + 1, updated_at = ${now}
         WHERE id = ${grantId} AND owner_id = ${auth.accountId} AND generation = ${grant.generation}
-        AND ${proof(auth)}`] : [sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
-        SELECT ${auth.accountId}, ${auth.proofId}, ${auth.sessionId}, ${auth.expiresAt}
-        WHERE ${proof(auth)} AND EXISTS (SELECT 1 FROM grants WHERE id = ${grantId}
-          AND recipient_id = ${grant.recipient_id} AND owner_id = ${grant.owner_id}
-          AND generation = ${grant.generation})`]),
-      ...(changedPermission ? [spent(auth)] : []),
+        AND ${live}`] : []),
       sql`INSERT INTO rotation_barriers (owner_id, target_node_id, epoch)
         SELECT ${grant.owner_id}, ${grant.target_node_id}, ${barrierEpoch} WHERE ${live}
         ON CONFLICT(owner_id, target_node_id) DO UPDATE SET epoch = max(epoch + 1, excluded.epoch)`,
+      sql`INSERT INTO sharing_rotation_jobs (owner_id, target_node_id, barrier_epoch, state,
+        cursor, created_at, updated_at)
+        SELECT b.owner_id, b.target_node_id, b.epoch, 'pending', NULL, ${now}, ${now}
+        FROM rotation_barriers b WHERE b.owner_id = ${grant.owner_id}
+          AND b.target_node_id = ${grant.target_node_id} AND ${live}
+        ON CONFLICT(owner_id, target_node_id) DO UPDATE SET barrier_epoch = excluded.barrier_epoch,
+          state = 'pending', cursor = NULL, updated_at = excluded.updated_at`,
       sql`DELETE FROM grant_device_envelopes WHERE grant_id = ${grantId} AND ${live}`,
       sql`DELETE FROM grant_retained_material WHERE grant_id = ${grantId} AND ${live}`,
       sql`DELETE FROM provisioning_needs WHERE grant_id = ${grantId} AND ${live}`,
@@ -469,22 +500,31 @@ export async function updateGrant(env: Env, auth: AuthorizedDevice, grantId: str
             AND g.target_node_id = ${grant.target_node_id} AND g.recipient_id = ${grant.recipient_id}
             AND g.target_kind = 'file')`,
       ] : []),
-      proofTime(auth),
+      spent(auth, invocationId),
+      proofTime(auth, invocationId),
+      finish(auth, invocationId),
     ]);
-    return result[0]?.meta.changes === 1 ? json({ status: "rotation_pending" }) : changed();
+    return result[0]?.meta.changes === 1 && (!changedPermission || result[1]?.meta.changes === 1) ?
+      json({ status: "rotation_pending" }) : changed();
   } catch { return invalid(); }
 }
 
-/** One query, bounded to 200 roots; no label/capability bytes for an unready root.
- * File representations remain on the separately guarded File-only resource.
+/** One stable, bounded page. A caller MUST follow nextCursor; no root becomes
+ * inaccessible at a global 200-row cutoff. No ciphertext for an unready root.
  */
-export async function roots(env: Env, auth: AuthorizedDevice): Promise<Response> {
+export async function roots(env: Env, auth: AuthorizedDevice, value?: unknown): Promise<Response> {
+  const input = value === undefined ? {} : record(value);
+  if (!input || Object.keys(input).some((key) => key !== "cursor") ||
+      (input.cursor !== undefined && !isV7(input.cursor))) return invalid();
+  const cursor = (input.cursor as string | undefined) ?? "";
   const rows = await createDb(env.DB).all<{ grant_id: string; owner_id: string; recipient_id: string;
     target_node_id: string; target_kind: "file" | "directory"; permission: "read_only" | "read_write";
     generation: number; label_id: string; label_ciphertext: ArrayBuffer | null; label_digest: ArrayBuffer | null;
+    label_registry_epoch: number | null; transport_public_key: ArrayBuffer;
     offer_bytes: ArrayBuffer; offer_digest: ArrayBuffer; offer_signature: ArrayBuffer;
     signer_public_key: ArrayBuffer; grant_ciphertext: ArrayBuffer | null; grant_digest: ArrayBuffer | null;
     target_key_id: string | null; target_epoch: number | null; directory_epoch: number | null;
+    grant_registry_epoch: number | null;
     file_envelope: ArrayBuffer | null; file_digest: ArrayBuffer | null; file_registry_epoch: number | null;
     head_bytes: ArrayBuffer | null; head_digest: ArrayBuffer | null; head_signature: ArrayBuffer | null;
     head_signer_id: string | null; head_signer_public_key: ArrayBuffer | null; file_revision: number | null;
@@ -492,10 +532,12 @@ export async function roots(env: Env, auth: AuthorizedDevice): Promise<Response>
     blocked: number }>(sql`SELECT g.id AS grant_id, g.owner_id, g.recipient_id, g.target_node_id,
       g.target_kind, g.permission, g.generation, label.label_id,
       delivery.ciphertext AS label_ciphertext, delivery.digest AS label_digest,
+      delivery.registry_epoch AS label_registry_epoch, active_device.transport_public_key,
       label.offer_bytes, label.offer_digest, label.offer_signature,
       offer_signer.assertion_public_key AS signer_public_key,
       cap.ciphertext AS grant_ciphertext, cap.digest AS grant_digest,
-      cap.target_key_id, cap.target_epoch, directory.capability_epoch AS directory_epoch,
+      cap.target_key_id, cap.target_epoch, cap.registry_epoch AS grant_registry_epoch,
+      directory.capability_epoch AS directory_epoch,
       filecap.ciphertext AS file_envelope, filecap.digest AS file_digest,
       filecap.registry_epoch AS file_registry_epoch,
       head.bytes AS head_bytes, head.digest AS head_digest, head.signature AS head_signature,
@@ -504,7 +546,10 @@ export async function roots(env: Env, auth: AuthorizedDevice): Promise<Response>
       head.content_epoch AS file_content_epoch, head.recipient_set_version AS head_recipient_set_version,
       CASE WHEN barrier.target_node_id IS NULL THEN 0 ELSE 1 END AS blocked
     FROM grants g JOIN grant_labels label ON label.grant_id = g.id
+    JOIN encryption_devices active_device ON active_device.id = ${auth.deviceId}
+      AND active_device.account_id = g.recipient_id AND active_device.state = 'active'
     JOIN encryption_devices offer_signer ON offer_signer.id = label.signer_device_id
+      AND offer_signer.account_id = g.owner_id
     LEFT JOIN grant_label_deliveries delivery ON delivery.grant_id = g.id AND delivery.device_id = ${auth.deviceId}
     LEFT JOIN grant_device_envelopes cap ON cap.grant_id = g.id AND cap.device_id = ${auth.deviceId}
       AND cap.generation = g.generation
@@ -514,11 +559,11 @@ export async function roots(env: Env, auth: AuthorizedDevice): Promise<Response>
     LEFT JOIN file_device_envelopes filecap ON filecap.file_node_id = head.file_node_id
       AND filecap.device_id = ${auth.deviceId} AND filecap.recipient_id = ${auth.accountId}
     LEFT JOIN rotation_barriers barrier ON barrier.target_node_id = g.target_node_id AND barrier.owner_id = g.owner_id
-    WHERE g.recipient_id = ${auth.accountId} AND ${privateReadGuard(auth)}
-    ORDER BY g.created_at LIMIT 201`);
-  if (rows.length > 200) return invalid();
+    WHERE g.recipient_id = ${auth.accountId} AND g.id > ${cursor} AND ${privateReadGuard(auth)}
+    ORDER BY g.id LIMIT 101`);
+  const page = rows.slice(0, 100);
   const result: object[] = [];
-  for (const r of rows) {
+  for (const r of page) {
     let ready = false, capability: { ciphertext: string; targetKeyId: string; targetEpoch: number;
       digest: string } | undefined;
     try {
@@ -528,10 +573,13 @@ export async function roots(env: Env, auth: AuthorizedDevice): Promise<Response>
       if (offer.grantId !== r.grant_id || offer.ownerId !== r.owner_id || offer.targetId !== r.target_node_id ||
           offer.kind !== r.target_kind || offer.labelId !== r.label_id || !expected ||
           !r.label_ciphertext || !r.label_digest || r.blocked ||
+          r.label_registry_epoch !== auth.registryEpoch ||
+          expected.publicKeyDigest !== hex(await digestBytes(bytes(r.transport_public_key))) ||
           expected.labelDigest !== hex(bytes(r.label_digest)) ||
           !sameBytes(await digestBytes(bytes(r.label_ciphertext)), bytes(r.label_digest))) throw new Error("pending");
       if (r.target_kind === "directory") {
         if (!r.grant_ciphertext || !r.grant_digest || !r.target_key_id ||
+            r.grant_registry_epoch !== auth.registryEpoch ||
             r.target_key_id !== r.target_node_id || r.directory_epoch !== r.target_epoch ||
             expected.contentDigest !== hex(bytes(r.grant_digest)) ||
             !sameBytes(await digestBytes(bytes(r.grant_ciphertext)), bytes(r.grant_digest))) throw new Error("pending");
@@ -550,6 +598,7 @@ export async function roots(env: Env, auth: AuthorizedDevice): Promise<Response>
             head.statement.recipientSetVersion !== r.head_recipient_set_version ||
             !head.statement.recipients.some((d) => d.deviceId === auth.deviceId &&
               d.accountId === auth.accountId && d.registryEpoch === auth.registryEpoch &&
+              d.grants.some((g) => g.id === r.grant_id && g.generation === r.generation) &&
               sameBytes(d.envelopeDigest, bytes(r.file_digest!))) ||
             !sameBytes(await digestBytes(bytes(r.file_envelope)), bytes(r.file_digest))) throw new Error("pending");
         ready = true;
@@ -570,5 +619,5 @@ export async function roots(env: Env, auth: AuthorizedDevice): Promise<Response>
         status: "provisioning", labelId: "", labelCiphertext: "" });
     }
   }
-  return json({ roots: result });
+  return json({ roots: result, nextCursor: rows.length > 100 ? page.at(-1)!.grant_id : null });
 }

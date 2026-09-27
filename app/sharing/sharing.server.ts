@@ -20,27 +20,36 @@ const json = (value: object, status = 200) => Response.json(value, { status, hea
 const bytes = (value: ArrayBuffer | Uint8Array) => new Uint8Array(value);
 const b64 = (value: ArrayBuffer | Uint8Array) => encodeTreeBytes(bytes(value));
 
-/** One proof consumption per lifecycle batch; a failed first INSERT spends nothing.
- * Subsequent statements are all gated on the unique fresh proof marker, not changes().
- */
+/** A fresh invocation witness, never an old durable proof-use row, gates every
+ * dependent statement. D1 batch is atomic; its final DELETE leaves no witness.
+ * Each invocation gets its own random ID even when the caller replays a proof. */
 export function proof(auth: AuthorizedDevice): SQL {
   const now = Date.now();
   return sql`${privateReadGuard(auth)} AND ${auth.expiresAt} > ${now} AND
     NOT EXISTS (SELECT 1 FROM device_proof_uses WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId})`;
 }
-export function marker(auth: AuthorizedDevice): SQL {
-  return sql`EXISTS (SELECT 1 FROM device_proof_uses WHERE account_id = ${auth.accountId}
-    AND proof_id = ${auth.proofId} AND session_id = ${auth.sessionId})`;
+export function begin(auth: AuthorizedDevice, invocationId: string, eligibility: SQL): SQL {
+  return sql`INSERT INTO sharing_write_witnesses (invocation_id, account_id, proof_id)
+    SELECT ${invocationId}, ${auth.accountId}, ${auth.proofId} WHERE ${proof(auth)} AND ${eligibility}`;
 }
-export function spent(auth: AuthorizedDevice): SQL {
+export function marker(auth: AuthorizedDevice, invocationId: string): SQL {
+  return sql`EXISTS (SELECT 1 FROM sharing_write_witnesses WHERE invocation_id = ${invocationId}
+    AND account_id = ${auth.accountId} AND proof_id = ${auth.proofId})`;
+}
+export function spent(auth: AuthorizedDevice, invocationId: string): SQL {
   return sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
-    SELECT ${auth.accountId}, ${auth.proofId}, ${auth.sessionId}, ${auth.expiresAt} WHERE changes() = 1`;
+    SELECT ${auth.accountId}, ${auth.proofId}, ${auth.sessionId}, ${auth.expiresAt}
+    WHERE ${marker(auth, invocationId)}`;
 }
-export function proofTime(auth: AuthorizedDevice): SQL {
+export function proofTime(auth: AuthorizedDevice, invocationId: string): SQL {
   const day = coarseProofTime(Date.now());
   return sql`UPDATE encryption_devices SET last_proof_at = ${day}
-    WHERE id = ${auth.deviceId} AND account_id = ${auth.accountId} AND ${marker(auth)}
+    WHERE id = ${auth.deviceId} AND account_id = ${auth.accountId} AND ${marker(auth, invocationId)}
       AND (last_proof_at IS NULL OR last_proof_at < ${day})`;
+}
+export function finish(auth: AuthorizedDevice, invocationId: string): SQL {
+  return sql`DELETE FROM sharing_write_witnesses WHERE invocation_id = ${invocationId}
+    AND account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`;
 }
 export function devicesMatch(accountId: string, devices: readonly { deviceId: string; registryEpoch: number;
   publicKeyHex: string }[]): SQL {
@@ -170,7 +179,12 @@ export async function scope(env: Env, auth: AuthorizedDevice, value: unknown): P
   const input = record(value);
   if (!input || !isV7(input.nodeId) || (input.kind !== "file" && input.kind !== "directory")) return invalid();
   const result = await createDb(env.DB).get<{ owner_id: string; parent_id: string | null;
-    grant_id: string | null; target_kind: string | null; path: string | null; own: number }>(sql`
+    grant_id: string | null; target_kind: string | null; path: string | null; own: number;
+    label_ciphertext: ArrayBuffer | null; label_digest: ArrayBuffer | null;
+    capability_ciphertext: ArrayBuffer | null; capability_digest: ArrayBuffer | null;
+    offer_bytes: ArrayBuffer | null; offer_digest: ArrayBuffer | null;
+    offer_signature: ArrayBuffer | null; signer_public_key: ArrayBuffer | null;
+    transport_public_key: ArrayBuffer | null; target_epoch: number | null }>(sql`
     WITH RECURSIVE lineage(id, kind, parent_node_id, owner_id, depth) AS (
       SELECT n.id, n.kind, n.parent_node_id, n.owner_id, 0 FROM vault_nodes n
         WHERE n.id = ${input.nodeId} AND n.kind = ${input.kind} AND n.import_id IS NULL
@@ -182,18 +196,34 @@ export async function scope(env: Env, auth: AuthorizedDevice, value: unknown): P
     )
     SELECT n.owner_id, n.parent_node_id AS parent_id, g.id AS grant_id, g.target_kind,
       CASE WHEN g.target_kind = 'file' THEN NULL ELSE (
-        SELECT json_group_array(id) FROM (SELECT id FROM lineage
-          WHERE depth <= l.depth ORDER BY depth DESC)) END AS path,
-      CASE WHEN n.owner_id = ${auth.accountId} THEN 1 ELSE 0 END AS own
+        SELECT json_group_array(sorted.id) FROM (SELECT id, depth FROM lineage ORDER BY depth DESC) sorted
+          WHERE sorted.depth <= l.depth) END AS path,
+      CASE WHEN n.owner_id = ${auth.accountId} THEN 1 ELSE 0 END AS own,
+      label_delivery.ciphertext AS label_ciphertext, label_delivery.digest AS label_digest,
+      cap.ciphertext AS capability_ciphertext, cap.digest AS capability_digest,
+      offer.offer_bytes, offer.offer_digest,
+      offer.offer_signature, signer.assertion_public_key AS signer_public_key,
+      actor_device.transport_public_key, cap.target_epoch
     FROM lineage n JOIN account_encryption_identities identity ON identity.account_id = n.owner_id
       AND identity.root_directory_id IN (SELECT id FROM lineage WHERE parent_node_id IS NULL)
     JOIN lineage l ON l.owner_id = n.owner_id AND l.depth >= 0
     LEFT JOIN grants g ON g.owner_id = n.owner_id AND g.recipient_id = ${auth.accountId}
       AND g.target_node_id = l.id AND g.target_kind = l.kind
+    LEFT JOIN grant_labels offer ON offer.grant_id = g.id
+    LEFT JOIN encryption_devices signer ON signer.id = offer.signer_device_id
+    LEFT JOIN encryption_devices actor_device ON actor_device.id = ${auth.deviceId}
+      AND actor_device.account_id = ${auth.accountId} AND actor_device.state = 'active'
+    LEFT JOIN grant_label_deliveries label_delivery ON label_delivery.grant_id = g.id
+      AND label_delivery.device_id = ${auth.deviceId} AND label_delivery.registry_epoch = ${auth.registryEpoch}
+    LEFT JOIN grant_device_envelopes cap ON cap.grant_id = g.id AND cap.device_id = ${auth.deviceId}
+      AND cap.registry_epoch = ${auth.registryEpoch} AND cap.generation = g.generation
+    LEFT JOIN directories directory ON directory.node_id = g.target_node_id AND directory.owner_id = n.owner_id
     WHERE n.depth = 0 AND ${privateReadGuard(auth)}
       AND (n.owner_id = ${auth.accountId} OR g.id IS NOT NULL)
-      AND (g.target_kind IS NULL OR g.target_kind = 'directory' OR l.depth = 0)
-    ORDER BY CASE WHEN g.target_kind = 'file' THEN 2 ELSE 1 END DESC, l.depth DESC LIMIT 1`);
+      AND (g.target_kind IS NULL OR (g.target_kind = 'directory' AND cap.target_key_id = g.target_node_id
+        AND cap.target_epoch = directory.capability_epoch AND label_delivery.ciphertext IS NOT NULL)
+        OR (g.target_kind = 'file' AND l.depth = 0))
+    ORDER BY CASE WHEN g.target_kind = 'directory' THEN 2 ELSE 1 END DESC, l.depth DESC LIMIT 1`);
   if (!result) return absent();
   if (result.own === 1) return Response.json({ scope: "owned" }, { headers });
   if (!result.grant_id || !isV7(result.grant_id)) return absent();
@@ -208,6 +238,22 @@ export async function scope(env: Env, auth: AuthorizedDevice, value: unknown): P
   if (result.target_kind === "file") return Response.json({ scope: "direct-file",
     grantId: result.grant_id, canEditMarkdown }, { headers });
   try {
+    if (!result.label_ciphertext || !result.label_digest || !result.capability_ciphertext ||
+        !result.capability_digest || !result.offer_bytes || !result.offer_digest ||
+        !result.offer_signature || !result.signer_public_key || !result.transport_public_key) return absent();
+    const offer = await verifyOffer(bytes(result.offer_bytes), bytes(result.offer_digest),
+      bytes(result.offer_signature), bytes(result.signer_public_key));
+    const device = offer.devices.find((item) => item.accountId === auth.accountId && item.deviceId === auth.deviceId);
+    if (!device || offer.grantId !== result.grant_id || offer.ownerId !== result.owner_id ||
+        device.publicKeyDigest !== hex(await digestBytes(bytes(result.transport_public_key))) ||
+        device.labelDigest !== hex(await digestBytes(bytes(result.label_ciphertext))) ||
+        device.contentDigest !== hex(await digestBytes(bytes(result.capability_ciphertext))) ||
+        !sameBytes(await digestBytes(bytes(result.label_ciphertext)), bytes(result.label_digest)) ||
+        !sameBytes(await digestBytes(bytes(result.capability_ciphertext)), bytes(result.capability_digest))) return absent();
+    inspectOfferEnvelope(bytes(result.capability_ciphertext), { purpose: "grant",
+      vaultId: result.owner_id, objectId: result.grant_id ? offer.targetId : "",
+      keyId: offer.targetKeyId, keyEpoch: result.target_epoch!, revision: 1,
+      recipientId: auth.deviceId });
     const path: unknown = JSON.parse(result.path ?? "null");
     if (!Array.isArray(path) || path.length > 101 || path.at(-1) !== input.nodeId ||
         path.some((id) => !isV7(id))) return absent();
@@ -216,20 +262,31 @@ export async function scope(env: Env, auth: AuthorizedDevice, value: unknown): P
   } catch { return absent(); }
 }
 
-export async function invitations(env: Env, auth: AuthorizedDevice): Promise<Response> {
-  const incoming = await createDb(env.DB).all<{ id: string; target_kind: string; permission: string; created_at: number }>(sql`
+export async function invitations(env: Env, auth: AuthorizedDevice, value?: unknown): Promise<Response> {
+  const input = value === undefined ? {} : record(value);
+  if (!input || Object.keys(input).some((key) => !["incomingCursor", "outgoingCursor", "grantsCursor"].includes(key)) ||
+      [input.incomingCursor, input.outgoingCursor, input.grantsCursor]
+        .some((cursor) => cursor !== undefined && !isV7(cursor))) return invalid();
+  const inCursor = (input.incomingCursor as string | undefined) ?? "";
+  const outCursor = (input.outgoingCursor as string | undefined) ?? "";
+  const grantCursor = (input.grantsCursor as string | undefined) ?? "";
+  const incoming =  await createDb(env.DB).all<{ id: string; target_kind: string; permission: string; created_at: number }>(sql`
     SELECT s.id, s.target_kind, s.permission, s.created_at FROM shares s JOIN share_offers o ON o.share_id = s.id
-    WHERE s.recipient_id = ${auth.accountId} AND ${privateReadGuard(auth)} ORDER BY s.created_at DESC LIMIT 201`);
+    WHERE s.recipient_id = ${auth.accountId} AND s.id > ${inCursor}
+      AND ${privateReadGuard(auth)} ORDER BY s.id LIMIT 101`);
   const outgoing = await createDb(env.DB).all<{ id: string; target_node_id: string; target_kind: string;
     permission: string; created_at: number }>(sql`SELECT s.id, s.target_node_id, s.target_kind, s.permission, s.created_at
     FROM shares s JOIN share_offers o ON o.share_id = s.id WHERE s.owner_id = ${auth.accountId}
-      AND ${privateReadGuard(auth)} ORDER BY s.created_at DESC LIMIT 201`);
+      AND s.id > ${outCursor} AND ${privateReadGuard(auth)} ORDER BY s.id LIMIT 101`);
   const grants = await createDb(env.DB).all<{ id: string; target_node_id: string; permission: string }>(sql`
     SELECT id, target_node_id, permission FROM grants WHERE owner_id = ${auth.accountId}
-      AND ${privateReadGuard(auth)} ORDER BY created_at DESC LIMIT 201`);
-  if (incoming.length > 200 || outgoing.length > 200 || grants.length > 200) return invalid();
+      AND id > ${grantCursor} AND ${privateReadGuard(auth)} ORDER BY id LIMIT 101`);
   const mapped = (r: { id: string; target_kind: string; permission: string; created_at: number }) =>
     ({ id: r.id, kind: r.target_kind, permission: r.permission, createdAt: r.created_at });
-  return json({ incoming: incoming.map(mapped), outgoing: outgoing.map((r) => ({ ...mapped(r), targetId: r.target_node_id })),
-    grants: grants.map((g) => ({ grantId: g.id, targetId: g.target_node_id, permission: g.permission })) });
+  return json({ incoming: incoming.slice(0, 100).map(mapped),
+    outgoing: outgoing.slice(0, 100).map((r) => ({ ...mapped(r), targetId: r.target_node_id })),
+    grants: grants.slice(0, 100).map((g) => ({ grantId: g.id, targetId: g.target_node_id, permission: g.permission })),
+    next: { incomingCursor: incoming.length > 100 ? incoming[99]!.id : null,
+      outgoingCursor: outgoing.length > 100 ? outgoing[99]!.id : null,
+      grantsCursor: grants.length > 100 ? grants[99]!.id : null } });
 }

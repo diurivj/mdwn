@@ -793,6 +793,8 @@ export const grantRetainedMaterial = sqliteTable("grant_retained_material", {
   contentKeyId: text("content_key_id").notNull(),
   contentEpoch: integer("content_epoch").notNull(),
   revision: integer("revision").notNull(),
+  /** Nullable only for pre-migration rows; those cannot bootstrap until reprovisioned. */
+  publicKeyDigest: blob("public_key_digest"),
   ciphertext: blob("ciphertext").notNull(),
   digest: blob("digest").notNull(),
 }, (table) => [primaryKey({ columns: [table.grantId, table.deviceId] }),
@@ -800,6 +802,7 @@ export const grantRetainedMaterial = sqliteTable("grant_retained_material", {
   check("grant_retained_material_bounded", sql`${table.registryEpoch} BETWEEN 1 AND 9007199254740991
     AND ${table.contentEpoch} BETWEEN 1 AND 9007199254740991 AND ${table.revision} BETWEEN 1 AND 9007199254740991
     AND length(${table.contentKeyId}) BETWEEN 1 AND 256
+    AND (${table.publicKeyDigest} IS NULL OR length(${table.publicKeyDigest}) = 32)
     AND length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.digest}) = 32`)]);
 
 /** Opaque outstanding Grant/device pair: NEVER a ciphertext, capability or name. */
@@ -831,6 +834,32 @@ export const rotationBarriers = sqliteTable("rotation_barriers", {
 }, (table) => [primaryKey({ columns: [table.ownerId, table.targetNodeId] }),
   foreignKey({ columns: [table.ownerId, table.targetNodeId], foreignColumns: [vaultNodes.ownerId, vaultNodes.id] }).onDelete("restrict"),
   check("rotation_barriers_epoch_positive", sql`${table.epoch} BETWEEN 1 AND 9007199254740991`)]);
+
+/** Durable, cursor-ready ticket-19 work item; no executor or fake rekey here.
+ * The barrier must remain until a future verified rotation completes. */
+export const sharingRotationJobs = sqliteTable("sharing_rotation_jobs", {
+  ownerId: text("owner_id").notNull(),
+  targetNodeId: text("target_node_id").notNull(),
+  barrierEpoch: integer("barrier_epoch").notNull(),
+  state: text("state").notNull(),
+  cursor: text("cursor"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.ownerId, table.targetNodeId] }),
+  foreignKey({ columns: [table.ownerId, table.targetNodeId],
+    foreignColumns: [rotationBarriers.ownerId, rotationBarriers.targetNodeId] }).onDelete("restrict"),
+  check("sharing_rotation_jobs_pending", sql`${table.state} = 'pending'
+    AND ${table.barrierEpoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.createdAt} >= 0 AND ${table.updatedAt} >= ${table.createdAt}`)]);
+
+/** One fresh, unguessable invocation ID per sharing transaction. Deleted in the same
+ * batch; a previously spent proof cannot stand in for this transaction's witness. */
+export const sharingWriteWitnesses = sqliteTable("sharing_write_witnesses", {
+  invocationId: text("invocation_id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  proofId: text("proof_id").notNull(),
+}, (table) => [check("sharing_write_witnesses_ids_bounded", sql`length(${table.invocationId}) = 36
+  AND length(${table.proofId}) BETWEEN 1 AND 256`)]);
 
 /** Unique transaction witness, consumed at the end of a successful v2 write batch. */
 export const fileWriteWitnesses = sqliteTable("file_write_witnesses", {

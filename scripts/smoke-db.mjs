@@ -74,6 +74,19 @@ const EXPECTED_COLUMNS = {
     ciphertext: "BLOB", digest: "BLOB" },
   provisioning_needs: { grant_id: "TEXT", owner_id: "TEXT", recipient_id: "TEXT", device_id: "TEXT",
     generation: "INTEGER", registry_epoch: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
+  share_offers: { share_id: "TEXT", label_id: "TEXT", owner_copy: "BLOB", bytes: "BLOB",
+    digest: "BLOB", signature: "BLOB", signer_device_id: "TEXT" },
+  share_offer_labels: { share_id: "TEXT", device_id: "TEXT", ciphertext: "BLOB", digest: "BLOB" },
+  grant_labels: { grant_id: "TEXT", label_id: "TEXT", owner_copy: "BLOB", offer_bytes: "BLOB",
+    offer_digest: "BLOB", offer_signature: "BLOB", signer_device_id: "TEXT" },
+  grant_label_deliveries: { grant_id: "TEXT", device_id: "TEXT", registry_epoch: "INTEGER",
+    ciphertext: "BLOB", digest: "BLOB" },
+  grant_retained_material: { grant_id: "TEXT", device_id: "TEXT", registry_epoch: "INTEGER",
+    content_key_id: "TEXT", content_epoch: "INTEGER", revision: "INTEGER",
+    public_key_digest: "BLOB", ciphertext: "BLOB", digest: "BLOB" },
+  sharing_write_witnesses: { invocation_id: "TEXT", account_id: "TEXT", proof_id: "TEXT" },
+  sharing_rotation_jobs: { owner_id: "TEXT", target_node_id: "TEXT", barrier_epoch: "INTEGER",
+    state: "TEXT", cursor: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
   rotation_barriers: { owner_id: "TEXT", target_node_id: "TEXT", epoch: "INTEGER" },
   file_write_witnesses: { file_node_id: "TEXT", proof_id: "TEXT" },
   file_representations: { id: "TEXT", file_node_id: "TEXT", owner_id: "TEXT", revision: "INTEGER", content_key_id: "TEXT", key_epoch: "INTEGER", ciphertext: "BLOB", ciphertext_size: "INTEGER", created_at: "INTEGER" },
@@ -109,6 +122,8 @@ const EXPECTED_INDEXES = [
   ["provisioning_needs", "provisioning_needs_device_idx", 0],
   ["provisioning_needs", "provisioning_needs_recipient_idx", 0],
   ["provisioning_needs", "provisioning_needs_owner_idx", 0],
+  ["grant_label_deliveries", "grant_label_deliveries_device_idx", 0],
+  ["grant_retained_material", "grant_retained_material_device_idx", 0],
   ["grants", "grants_id_owner_recipient_idx", 1],
   ["share_material", "share_material_revision_idx", 1],
   ["vault_nodes", "vault_nodes_owner_target_kind_idx", 1],
@@ -155,6 +170,19 @@ const EXPECTED_FOREIGN_KEYS = [
   "provisioning_needs:grant_id:grants:id:RESTRICT",
   "provisioning_needs:owner_id:grants:owner_id:RESTRICT",
   "provisioning_needs:recipient_id:grants:recipient_id:RESTRICT",
+  "share_offers:share_id:share_material:share_id:RESTRICT",
+  "share_offers:signer_device_id:encryption_devices:id:RESTRICT",
+  "share_offer_labels:share_id:share_offers:share_id:RESTRICT",
+  "share_offer_labels:device_id:encryption_devices:id:RESTRICT",
+  "grant_labels:grant_id:grants:id:RESTRICT",
+  "grant_labels:signer_device_id:encryption_devices:id:RESTRICT",
+  "grant_label_deliveries:grant_id:grants:id:RESTRICT",
+  "grant_label_deliveries:device_id:encryption_devices:id:RESTRICT",
+  "grant_retained_material:grant_id:grants:id:RESTRICT",
+  "grant_retained_material:device_id:encryption_devices:id:RESTRICT",
+  "sharing_write_witnesses:account_id:accounts:id:RESTRICT",
+  "sharing_rotation_jobs:owner_id:rotation_barriers:owner_id:RESTRICT",
+  "sharing_rotation_jobs:target_node_id:rotation_barriers:target_node_id:RESTRICT",
   "share_material:share_id:shares:id:RESTRICT",
   "share_material:candidate_signer_device_id:encryption_devices:id:RESTRICT",
   "share_device_material:share_id:share_material:share_id:RESTRICT",
@@ -237,7 +265,10 @@ function verifySchema(bindArgs, label) {
     if (!facts.has(fact)) failNow(`${label}: missing schema fact ${fact}`);
   }
   for (const fact of facts) {
-    if (["fk:share_material:", "fk:share_device_material:", "fk:provisioning_needs:"].some((prefix) =>
+    if (["fk:share_material:", "fk:share_device_material:", "fk:provisioning_needs:",
+      "fk:share_offers:", "fk:share_offer_labels:", "fk:grant_labels:",
+      "fk:grant_label_deliveries:", "fk:grant_retained_material:",
+      "fk:sharing_write_witnesses:", "fk:sharing_rotation_jobs:"].some((prefix) =>
       fact.startsWith(prefix)) && !fact.endsWith(":RESTRICT")) {
       failNow(`${label}: unexpected non-restrictive relationship ${fact}`);
     }
