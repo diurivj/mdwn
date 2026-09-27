@@ -1,4 +1,6 @@
 import { createSymmetricWriter, openSymmetric } from "~/crypto/enc-v1";
+import { createFileReceivingKey, createFileSave, openFileContentKeyFromDevice,
+  openFileContentKeyFromReceiving, openFileReceivingKey } from "~/crypto/file-receiving";
 import {
   createChildDirectoryCapability, createFileRepresentation, decodeFileRepresentation,
   openDeviceEnrollmentEnvelope, openVaultRecoveryEnvelope,
@@ -8,7 +10,10 @@ import { getDevice } from "~/device/store";
 import { canonicalizeSegment, sameComparisonKey } from "~/namespace-v1";
 import { newOpaqueId } from "~/opaque-id";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
-import { createListingHead, openListingHead, type ListingHead, type SealedEntry, type StoredListingHead } from "./listing";
+import { createListingHead, openListingHead, type ListingHead, type ListingVersion, type SealedEntry, type StoredListingHead } from "./listing";
+import { assertFileHeadCheckpointAdvance, signFileHead, verifyDirectFileRecipientEnvelope,
+  verifyFileHead, verifyFileParentEnvelope, verifyFileReceivingTarget, verifyFileRepresentation,
+  type VerifiedFileHead } from "./file-head";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
 
 const encoder = new TextEncoder();
@@ -24,13 +29,41 @@ export class TreeNotFoundError extends Error {
 export class TreeCommitUncertainError extends Error {
   constructor() { super("tree_commit_uncertain"); }
 }
+export class SharedProvisioningError extends Error {
+  constructor() { super("shared_content_provisioning_required"); }
+}
 
 export type TreeKind = "directory" | "file";
 export type TreeEntry = SealedEntry & { name: string; order: string };
-export type DirectoryListing = { directoryId: string; entriesRevision: number; entries: TreeEntry[] };
-export type RootAccess = { vaultId: string; rootId: string; rootKey: Uint8Array<ArrayBuffer> };
+export type DirectoryListing = { directoryId: string; entriesRevision: number; entries: TreeEntry[];
+  listingVersion?: ListingVersion }; // Omitted only by older in-tab v1 clients.
+export type RootAccess = { vaultId: string; actorAccountId?: string;
+  rootId: string; rootKey: Uint8Array<ArrayBuffer> };
 export type LoadedFile = { parentId: string; revision: number; representationId: string;
-  contentKeyId: string; keyEpoch: number; markdown: string; metadata: Uint8Array };
+  contentKeyId: string; keyEpoch: number; markdown: string; metadata: Uint8Array;
+  v2?: { head: VerifiedFileHead; receivingPublicKey: string; signedHead: FileHeadWire } };
+export type FileHeadWire = { bytes: string; digest: string; signature: string;
+  signerDeviceId: string; signerAccountId?: string; signerPublicKey: string };
+export async function authenticateFileHead(wire: FileHeadWire, ownerId: string, fileId: string,
+  revision: number): Promise<VerifiedFileHead> {
+  return verifyFileHead({ bytes: decodeTreeBytes(wire.bytes, 131_072), digest: decodeTreeBytes(wire.digest, 32),
+    signature: decodeTreeBytes(wire.signature, 64) }, { ownerId, vaultId: ownerId, fileId,
+    signerDeviceId: wire.signerDeviceId, publicKey: decodeTreeBytes(wire.signerPublicKey, 65), revision });
+}
+
+async function rememberFileHead(ownerId: string, fileId: string, wire: FileHeadWire,
+  head: VerifiedFileHead): Promise<void> {
+  if (typeof window === "undefined") return;
+  const key = `mdwn:file-head:${ownerId}:${fileId}`;
+  const saved = localStorage.getItem(key);
+  if (saved) {
+    const old = JSON.parse(saved) as { wire: FileHeadWire; revision: number };
+    if (!old.wire || !Number.isSafeInteger(old.revision)) throw new Error("invalid File checkpoint");
+    const previous = await authenticateFileHead(old.wire, ownerId, fileId, old.revision);
+    assertFileHeadCheckpointAdvance(previous, head);
+  }
+  localStorage.setItem(key, JSON.stringify({ wire, revision: head.statement.revision }));
+}
 
 function nameAgainstNamespace(name: string, existingNames: readonly string[]): string {
   const canonical = canonicalizeSegment(name);
@@ -53,7 +86,7 @@ async function encryptedEntry(parentKey: Uint8Array, vaultId: string, parentId: 
 
 /** Runs namespace-v1 before creating either a capability or a request. */
 export async function prepareTreeCreate(options: {
-  vaultId: string; parentId: string; parentKey: Uint8Array;
+  vaultId: string; actorAccountId?: string; parentId: string; parentKey: Uint8Array;
   entriesRevision: number; existingNames: readonly string[];
   requestedName: string; kind: TreeKind; markdown?: string;
 }) {
@@ -61,6 +94,32 @@ export async function prepareTreeCreate(options: {
   const nodeId = newOpaqueId();
   const order = newOpaqueId(); // Opaque in the Worker and encrypted before transport.
   const metadata = await encryptedEntry(options.parentKey, options.vaultId, options.parentId, nodeId, name, order);
+  if (options.kind === "file" && typeof window !== "undefined") {
+    const device = await getDevice(options.actorAccountId ?? options.vaultId);
+    if (!device) throw new Error("private File unavailable");
+    const receivingKeyId = newOpaqueId(), contentKeyId = newOpaqueId(), representationId = newOpaqueId();
+    const receiving = await createFileReceivingKey(options.parentKey, { vaultId: options.vaultId, fileId: nodeId,
+      receivingKeyId, receivingEpoch: 1, wrapRevision: options.entriesRevision + 1 });
+    const fresh = await createFileSave({ markdown: options.markdown ?? "", metadata: new Uint8Array() },
+      receiving.publicKey, { vaultId: options.vaultId, fileId: nodeId, receivingKeyId,
+        receivingEpoch: 1, publicKeyDigest: receiving.publicKeyDigest },
+      { vaultId: options.vaultId, fileId: nodeId, contentKeyId, contentEpoch: 1, revision: 1 }, []);
+    const digest = async (value: Uint8Array) => new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(value)));
+    const head = await signFileHead({ ownerId: options.vaultId, vaultId: options.vaultId, fileId: nodeId,
+      revision: 1, contentKey: { id: contentKeyId, epoch: 1 },
+      receivingKey: { id: receivingKeyId, epoch: 1, publicKeyDigest: receiving.publicKeyDigest },
+      representation: { id: representationId, digest: await digest(fresh.contentEnvelope) },
+      parentEnvelopeDigest: await digest(fresh.parentEnvelope), recipientSetVersion: 1, recipients: [],
+      publication: { status: "none" }, signerDeviceId: device.deviceId }, device.assertionKeyPair.privateKey);
+    return { nodeId, kind: "file" as const, expectedRevision: options.entriesRevision, ...metadata,
+      encoding: "receiving-file" as const, keyEnvelope: encodeTreeBytes(receiving.privateKeyEnvelope),
+      receivingKeyId, receivingEpoch: 1, wrapRevision: options.entriesRevision + 1,
+      receivingPublicKey: encodeTreeBytes(receiving.publicKey), parentEnvelope: encodeTreeBytes(fresh.parentEnvelope),
+      recipientEnvelopes: [], signedHead: { bytes: encodeTreeBytes(head.bytes),
+        digest: encodeTreeBytes(head.digest), signature: encodeTreeBytes(head.signature) },
+      representation: { id: representationId, contentKeyId, keyEpoch: 1, revision: 1,
+        ciphertext: encodeTreeBytes(fresh.contentEnvelope) } };
+  }
   if (options.kind === "directory") {
     const child = await createChildDirectoryCapability(options.parentKey, {
       vaultId: options.vaultId, parentDirectoryId: options.parentId, childDirectoryId: nodeId,
@@ -120,15 +179,18 @@ export async function openRoot(signal?: AbortSignal): Promise<RootAccess> {
   const rootKey = await openVaultRecoveryEnvelope(decodeTreeBytes(bootstrap.rootRecoveryEnvelope), vaultRoot,
     { purpose: "vault-recovery", vaultId: accountId, objectId: bootstrap.rootDirectoryId,
       keyId: bootstrap.rootDirectoryId, keyEpoch: 1, revision: 1 });
-  return { vaultId: accountId, rootId: bootstrap.rootDirectoryId, rootKey };
+  return { vaultId: accountId, actorAccountId: accountId, rootId: bootstrap.rootDirectoryId, rootKey };
 }
 
 export async function loadDirectory(access: RootAccess, directoryId: string, key: Uint8Array,
   signal?: AbortSignal): Promise<DirectoryListing> {
-  const listing = await jsonResource<{ directoryId: string; entriesRevision: number;
+  const listing = await jsonResource<{ directoryId: string; entriesRevision: number; listingVersion: ListingVersion;
+    capabilityKeyId: string; capabilityEpoch: number;
     entries: SealedEntry[]; listingHead: Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string } | null;
   }>(`/api/private/tree/directories/${directoryId}`, "POST", undefined, signal);
-  if (listing.directoryId !== directoryId || !Number.isSafeInteger(listing.entriesRevision) || listing.entriesRevision < 1) {
+  if (listing.directoryId !== directoryId || ![1, 2].includes(listing.listingVersion) ||
+      (listing.listingVersion === 2 && (listing.capabilityKeyId !== directoryId || listing.capabilityEpoch !== 1)) ||
+      !Number.isSafeInteger(listing.entriesRevision) || listing.entriesRevision < 1) {
     throw new Error("invalid directory listing");
   }
   if (listing.entriesRevision === 1) {
@@ -136,7 +198,7 @@ export async function loadDirectory(access: RootAccess, directoryId: string, key
   } else {
     if (!listing.listingHead) throw new Error("replayed-manifest");
     await openListingHead(key, { vaultId: access.vaultId, directoryId,
-      revision: listing.entriesRevision, entries: listing.entries,
+      revision: listing.entriesRevision, entries: listing.entries, version: listing.listingVersion,
       head: { ...listing.listingHead, signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) },
     });
   }
@@ -156,7 +218,7 @@ export async function loadDirectory(access: RootAccess, directoryId: string, key
     }
   }
   entries.sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : a.nodeId.localeCompare(b.nodeId));
-  return { directoryId, entriesRevision: listing.entriesRevision, entries };
+  return { directoryId, entriesRevision: listing.entriesRevision, listingVersion: listing.listingVersion, entries };
 }
 
 export async function openChildDirectory(access: RootAccess,
@@ -179,19 +241,100 @@ export async function loadFile(access: RootAccess, fileId: string, parentId: str
   expectedEntry: TreeEntry, signal?: AbortSignal): Promise<LoadedFile> {
   const file = await jsonResource<{ fileId: string; parentId: string; revision: number; representationId: string;
     contentKeyId: string; keyEpoch: number; ciphertext: string; keyEnvelope: string;
+    ownerId?: string; fileHead?: FileHeadWire; receivingPublicKey?: string;
+    receivingKeyId?: string; receivingEpoch?: number; wrapRevision?: number; parentEnvelope?: string;
   }>(`/api/private/tree/files/${fileId}`, "POST", undefined, signal);
-  if (file.parentId !== parentId ||
-      expectedEntry.nodeId !== fileId || expectedEntry.keyEnvelope !== file.keyEnvelope ||
+  if (file.parentId !== parentId || expectedEntry.nodeId !== fileId ||
+      expectedEntry.keyEnvelope !== file.keyEnvelope ||
       !Number.isSafeInteger(file.revision) || file.revision < 1 ||
       !Number.isSafeInteger(file.keyEpoch) || file.keyEpoch < 1) throw new Error("invalid File listing");
   const context = { vaultId: access.vaultId, objectId: fileId,
     keyId: file.contentKeyId, keyEpoch: file.keyEpoch, revision: file.revision };
+  if (expectedEntry.encoding === "receiving-file") {
+    if (!file.fileHead || !file.receivingPublicKey || !file.parentEnvelope ||
+        file.ownerId !== access.vaultId || expectedEntry.receivingKeyId !== file.receivingKeyId ||
+        expectedEntry.receivingEpoch !== file.receivingEpoch || expectedEntry.wrapRevision !== file.wrapRevision ||
+        !Number.isSafeInteger(file.receivingEpoch) || !Number.isSafeInteger(file.wrapRevision)) {
+      throw new Error("invalid File head");
+    }
+    const head = await authenticateFileHead(file.fileHead, access.vaultId, fileId, file.revision);
+    if (head.statement.contentKey.id !== file.contentKeyId || head.statement.contentKey.epoch !== file.keyEpoch ||
+        head.statement.representation.id !== file.representationId ||
+        head.statement.receivingKey.id !== file.receivingKeyId ||
+        head.statement.receivingKey.epoch !== file.receivingEpoch || head.statement.publication.status !== "none") {
+      throw new Error("invalid File head");
+    }
+    const publicKey = decodeTreeBytes(file.receivingPublicKey, 65);
+    await verifyFileReceivingTarget(head, publicKey);
+    await verifyFileRepresentation(head, file.representationId, decodeTreeBytes(file.ciphertext, 524_288));
+    await verifyFileParentEnvelope(head, decodeTreeBytes(file.parentEnvelope, 16_384));
+    const pair = await openFileReceivingKey(decodeTreeBytes(file.keyEnvelope, 16_384), parentKey,
+      { vaultId: access.vaultId, fileId, receivingKeyId: file.receivingKeyId!,
+        receivingEpoch: file.receivingEpoch!, wrapRevision: file.wrapRevision!, publicKey });
+    const key = await openFileContentKeyFromReceiving(decodeTreeBytes(file.parentEnvelope, 16_384), pair,
+      { vaultId: access.vaultId, fileId, revision: file.revision,
+        contentKeyId: file.contentKeyId, contentEpoch: file.keyEpoch,
+        receivingKeyId: file.receivingKeyId! });
+    const content = await openSymmetric(decodeTreeBytes(file.ciphertext, 524_288), key,
+      { context: { ...context, purpose: "file-content" } });
+    const plaintext = decodeFileRepresentation(content);
+    await rememberFileHead(access.vaultId, fileId, file.fileHead, head);
+    return { parentId, revision: file.revision, representationId: file.representationId,
+      contentKeyId: file.contentKeyId, keyEpoch: file.keyEpoch, ...plaintext,
+      v2: { head, receivingPublicKey: file.receivingPublicKey, signedHead: file.fileHead } };
+  }
+  if (expectedEntry.encoding && expectedEntry.encoding !== "legacy-file" || file.fileHead) {
+    throw new Error("invalid File encoding");
+  }
   const key = await openSymmetric(decodeTreeBytes(file.keyEnvelope), parentKey,
     { context: { ...context, purpose: "file-content-key" } });
   const content = await openSymmetric(decodeTreeBytes(file.ciphertext, 524_288), key,
     { context: { ...context, purpose: "file-content" } });
   return { parentId: file.parentId, revision: file.revision, representationId: file.representationId,
     contentKeyId: file.contentKeyId, keyEpoch: file.keyEpoch, ...decodeFileRepresentation(content) };
+}
+
+export type LoadedDirectFile = { ownerId: string; fileId: string; revision: number;
+  markdown: string; metadata: Uint8Array; head: VerifiedFileHead; signedHead: FileHeadWire;
+  receivingPublicKey: string };
+
+/** File-only cryptographic read: no parent ID, Directory key, sibling or path. */
+export async function loadDirectFile(actorAccountId: string, fileId: string,
+  signal?: AbortSignal): Promise<LoadedDirectFile> {
+  const device = await getDevice(actorAccountId);
+  if (!device) throw new Error("private File unavailable");
+  const response = await privateRequest(`/api/private/tree/files/${fileId}`, { method: "POST", signal });
+  if (response.status === 202) throw new SharedProvisioningError();
+  if (response.status === 404) throw new TreeNotFoundError();
+  if (!response.ok) throw new Error("private File unavailable");
+  const data = await response.json() as { ownerId: string; fileId: string; revision: number;
+    representationId: string; contentKeyId: string; keyEpoch: number; ciphertext: string;
+    receivingPublicKey: string; fileHead: FileHeadWire; recipientEnvelope: string;
+    parentId?: unknown; parentEnvelope?: unknown; keyEnvelope?: unknown };
+  if (data.fileId !== fileId || !data.ownerId || !data.fileHead || !data.recipientEnvelope ||
+      data.parentId !== undefined || data.parentEnvelope !== undefined || data.keyEnvelope !== undefined) {
+    throw new Error("invalid direct File response");
+  }
+  const head = await authenticateFileHead(data.fileHead, data.ownerId, fileId, data.revision);
+  if (head.statement.representation.id !== data.representationId ||
+      head.statement.contentKey.id !== data.contentKeyId || head.statement.contentKey.epoch !== data.keyEpoch ||
+      head.statement.publication.status !== "none") throw new Error("invalid File head");
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", device.transportKeyPair.publicKey));
+  await verifyFileReceivingTarget(head, decodeTreeBytes(data.receivingPublicKey, 65));
+  await verifyFileRepresentation(head, data.representationId, decodeTreeBytes(data.ciphertext, 524_288));
+  await verifyDirectFileRecipientEnvelope(head, actorAccountId, device.deviceId, publicKey,
+    decodeTreeBytes(data.recipientEnvelope, 16_384));
+  const identity = { vaultId: data.ownerId, fileId, contentKeyId: data.contentKeyId,
+    contentEpoch: data.keyEpoch, revision: data.revision };
+  const key = await openFileContentKeyFromDevice(decodeTreeBytes(data.recipientEnvelope, 16_384),
+    device.transportKeyPair, { ...identity, deviceId: device.deviceId });
+  const content = await openSymmetric(decodeTreeBytes(data.ciphertext, 524_288), key,
+    { context: { purpose: "file-content", vaultId: data.ownerId, objectId: fileId,
+      keyId: data.contentKeyId, keyEpoch: data.keyEpoch, revision: data.revision } });
+  const plaintext = decodeFileRepresentation(content);
+  await rememberFileHead(data.ownerId, fileId, data.fileHead, head);
+  return { ownerId: data.ownerId, fileId, revision: data.revision, ...plaintext,
+    head, signedHead: data.fileHead, receivingPublicKey: data.receivingPublicKey };
 }
 
 function listingCheckpointKey(vaultId: string, directoryId: string): string {
@@ -213,23 +356,28 @@ function rememberListing(vaultId: string, directoryId: string, revision: number,
 }
 
 async function signListingChange(access: RootAccess, listing: DirectoryListing, parentKey: Uint8Array,
-  updated: SealedEntry[]): Promise<ListingHead> {
+  updated: SealedEntry[], targetVersion: ListingVersion = listing.listingVersion ?? 1): Promise<ListingHead> {
   if (!listing.directoryId) throw new Error("invalid directory listing");
-  const device = await getDevice(access.vaultId);
+  const device = await getDevice(access.actorAccountId ?? access.vaultId);
   if (!device) throw new Error("private tree unavailable");
   return createListingHead(parentKey, device.assertionKeyPair.privateKey, {
     vaultId: access.vaultId, directoryId: listing.directoryId, deviceId: device.deviceId,
-    revision: listing.entriesRevision + 1, entries: updated,
+    revision: listing.entriesRevision + 1, entries: targetVersion === 2 ? updated.map((entry) => ({
+      ...entry, encoding: entry.encoding ?? (entry.kind === "directory" ? "directory" : "legacy-file"),
+    })) : updated, version: targetVersion,
   });
 }
 
 export async function createTreeChild(access: RootAccess, parentId: string,
   input: { nodeId: string; kind: TreeKind; expectedRevision: number;
-    nameCiphertext: string; orderCiphertext: string; keyEnvelope: string },
+    nameCiphertext: string; orderCiphertext: string; keyEnvelope: string;
+    encoding?: "directory" | "legacy-file" | "receiving-file"; receivingKeyId?: string;
+    receivingEpoch?: number; wrapRevision?: number },
   listing: DirectoryListing, parentKey: Uint8Array) {
   if (isSignupRecoveryConfirmationPending()) throw new RecoveryConfirmationPendingError();
   if (listing.directoryId !== parentId || input.expectedRevision !== listing.entriesRevision) throw new Error("invalid directory listing");
-  const head = await signListingChange(access, listing, parentKey, [...listing.entries, input]);
+  const targetVersion = input.encoding === "receiving-file" ? 2 : listing.listingVersion ?? 1;
+  const head = await signListingChange(access, listing, parentKey, [...listing.entries, input], targetVersion);
   const result = await jsonResource<{ nodeId: string; entriesRevision: number }>(
     `/api/private/tree/directories/${parentId}/children`, "PUT", { ...input, listingHead: head });
   try { rememberListing(access.vaultId, parentId, result.entriesRevision, head.digest); }

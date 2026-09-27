@@ -55,7 +55,7 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
   }
   // Preferences are browser-only, never encoded in a deep link. Restore only
   // descendants discoverable through a decrypted Directory in this Account.
-  const pending = new Set(savedExpanded(access.vaultId));
+  const pending = new Set(savedExpanded(access.actorAccountId ?? access.vaultId));
   for (let pass = 0; pass < 201 && pending.size; pass++) {
     let progressed = false;
     for (const id of pending) {

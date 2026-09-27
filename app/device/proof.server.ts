@@ -141,19 +141,25 @@ export async function commitDirectoryMutation(
   env: Env, authorization: AuthorizedDevice, parentId: string, expectedRevision: number,
   listingHead: { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array },
   eligible: SQL, statements: (committed: SQL) => readonly SQL[],
+  options: { ownerId?: string; previousVersion?: 1 | 2; nextVersion?: 1 | 2 } = {},
 ): Promise<boolean> {
   const now = Date.now();
   if (authorization.expiresAt <= now) return false;
   const { accountId, sessionId, deviceId, proofId, expiresAt } = authorization;
   const guard = privateMutationGuard(authorization, now);
+  const ownerId = options.ownerId ?? accountId;
+  const previousVersion = options.previousVersion ?? 1;
+  const nextVersion = options.nextVersion ?? previousVersion;
   // changes() is the preceding statement's *direct* row count. Chaining it
   // prevents a previously spent proof from authorizing dependent statements.
   const committed = sql`changes() = 1`;
   const [changed, consumed] = await atomicSqlBatch(env.DB, [
-    sql`UPDATE directories SET entries_revision = entries_revision + 1,
+    sql`UPDATE directories SET entries_revision = entries_revision + 1, listing_version = ${nextVersion},
+        capability_key_id = CASE WHEN ${previousVersion} = 1 AND ${nextVersion} = 2
+          THEN ${parentId} ELSE capability_key_id END,
         listing_ciphertext = ${listingHead.ciphertext}, listing_digest = ${listingHead.digest},
         listing_signature = ${listingHead.signature}, listing_device_id = ${deviceId}
-      WHERE node_id = ${parentId} AND owner_id = ${accountId}
+      WHERE node_id = ${parentId} AND owner_id = ${ownerId} AND listing_version = ${previousVersion}
         AND entries_revision = ${expectedRevision} AND ${eligible} AND ${guard}`,
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
       SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt} WHERE changes() = 1`,
