@@ -1,6 +1,6 @@
 import { hasEmptyBody, readAuthJsonText, requireSameOrigin } from "~/auth/request.server";
 import { createPrivateComment, createPrivateThread, deletePrivateComment, editPrivateComment,
-  provisionThreadDevices, readPrivateThread } from "~/comments/comments.server";
+  provisionThreadDevices, readPrivateThread, readThreadKey } from "~/comments/comments.server";
 import { getEnv } from "~/context/env";
 import { authorizePrivateRequest } from "~/device/proof.server";
 import { sharingBudget } from "~/sharing/budget.server";
@@ -20,6 +20,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   const method = request.method;
   const route = file && !file[2] && method === "POST" ? "read" :
     file?.[2] === "thread" && method === "PUT" ? "create-thread" :
+    file?.[2] === "thread" && method === "POST" ? "thread-key" :
     file?.[2] === "thread/devices" && method === "PATCH" ? "provision" :
     file?.[2] === "comments" && method === "PUT" ? "create" :
     item && method === "PATCH" ? "edit" : item && method === "DELETE" ? "delete" : null;
@@ -27,8 +28,8 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   try { requireSameOrigin(request); } catch { return denied(); }
   let body = "", value: unknown;
   try {
-    // A thread read may carry a JSON cursor; deletion and a first-page read have no body.
-    if (route === "delete" || (route === "read" && !request.headers.has("content-type"))) {
+    // A thread read may carry a JSON cursor; deletion, key reads and a first-page read have no body.
+    if (route === "delete" || route === "thread-key" || (route === "read" && !request.headers.has("content-type"))) {
       if (!await hasEmptyBody(request)) return denied();
     } else {
       const parsed = await readAuthJsonText(request, 1024 * 1024);
@@ -45,6 +46,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   if (!auth) return denied();
   const response = await (route === "read" ? readPrivateThread(env, auth, id, value) :
     route === "create-thread" ? createPrivateThread(env, auth, id, value) :
+    route === "thread-key" ? readThreadKey(env, auth, id) :
     route === "provision" ? provisionThreadDevices(env, auth, id, value) :
     route === "create" ? createPrivateComment(env, auth, id, value) :
     route === "edit" ? editPrivateComment(env, auth, id, value) : deletePrivateComment(env, auth, id));

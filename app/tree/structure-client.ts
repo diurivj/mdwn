@@ -1,3 +1,5 @@
+import { CommentsUnavailableError, loadThreadKeySource, prepareThreadRotation,
+  type ThreadKeySource } from "~/comments/client";
 import { createSymmetricWriter, inspectEnvelope, openSymmetric, sealToRecipient } from "~/crypto/enc-v1";
 import { createFileReceivingKey, openFileContentKeyFromReceiving, openFileReceivingKey } from "~/crypto/file-receiving";
 import { privateRequest } from "~/device/private-client";
@@ -103,9 +105,12 @@ async function sha256(value: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(value)));
 }
 
-/** Opens the current File key through the SOURCE capability and re-targets it to a fresh receiving pair. */
+/**
+ * Opens the current File key through the SOURCE capability and re-targets it to a fresh
+ * receiving pair; the File's Private thread (if any) moves to a new epoch for that pair.
+ */
 async function rotateReceivingPair(vaultId: string, signer: StructureSigner, entry: TreeEntry,
-  source: DirectoryState, destination: DirectoryState, file: FileRotationSource) {
+  source: DirectoryState, destination: DirectoryState, file: FileRotationSource, threadSource: ThreadKeySource) {
   if (entry.encoding !== "receiving-file" || !entry.receivingKeyId || !entry.receivingEpoch || !entry.wrapRevision) {
     throw new Error("invalid File entry");
   }
@@ -135,11 +140,13 @@ async function rotateReceivingPair(vaultId: string, signer: StructureSigner, ent
     const signed = await signFileHead({ ...statement,
       receivingKey: { id: receivingKeyId, epoch: receivingEpoch, publicKeyDigest: next.publicKeyDigest },
       parentEnvelopeDigest: await sha256(rotatedEnvelope), signerDeviceId: signer.deviceId }, signer.assertionKey);
+    const thread = await prepareThreadRotation(threadSource, { receivingKeyId: entry.receivingKeyId,
+      receivingEpoch: entry.receivingEpoch, pair }, { receivingKeyId, publicKey: next.keyPair.publicKey });
     return { keyEnvelope: encodeTreeBytes(next.privateKeyEnvelope), rotation: {
       expectedHeadDigest: file.fileHead.digest, receivingKeyId, receivingEpoch, wrapRevision,
       receivingPublicKey: encodeTreeBytes(next.publicKey), parentEnvelope: encodeTreeBytes(rotatedEnvelope),
       signedHead: { bytes: encodeTreeBytes(signed.bytes), digest: encodeTreeBytes(signed.digest),
-        signature: encodeTreeBytes(signed.signature) } } };
+        signature: encodeTreeBytes(signed.signature) }, thread } };
   } finally { contentKey.fill(0); }
 }
 
@@ -149,7 +156,8 @@ async function rotateReceivingPair(vaultId: string, signer: StructureSigner, ent
  * gets a fresh receiving pair), and both parent listings signed at their next revisions.
  */
 export async function prepareTreeMove(options: { vaultId: string; signer: StructureSigner;
-  source: DirectoryState; destination: DirectoryState; nodeId: string; file?: FileRotationSource }) {
+  source: DirectoryState; destination: DirectoryState; nodeId: string; file?: FileRotationSource;
+  thread?: ThreadKeySource }) {
   const { vaultId, signer, source, destination, nodeId } = options;
   const entry = source.listing.entries.find((item) => item.nodeId === nodeId);
   if (!entry) throw new TreeNotFoundError();
@@ -168,8 +176,9 @@ export async function prepareTreeMove(options: { vaultId: string; signer: Struct
         keyEnvelope: encodeTreeBytes(await writer.seal(capability, context)) };
     } finally { capability.fill(0); }
   } else if (entry.encoding === "receiving-file") {
-    if (!options.file) throw new Error("File rotation material required");
-    const rotated = await rotateReceivingPair(vaultId, signer, entry, source, destination, options.file);
+    if (!options.file || !options.thread) throw new Error("File rotation material required");
+    const rotated = await rotateReceivingPair(vaultId, signer, entry, source, destination, options.file,
+      options.thread);
     rotation = rotated.rotation;
     moved = { nodeId, kind: "file", encoding: "receiving-file", ...metadata, keyEnvelope: rotated.keyEnvelope,
       receivingKeyId: rotation.receivingKeyId, receivingEpoch: rotation.receivingEpoch,
@@ -262,8 +271,17 @@ export async function moveTreeChild(access: RootAccess, nodeId: string, source: 
   const signer = await browserSigner(access);
   const entry = source.listing.entries.find((item) => item.nodeId === nodeId);
   if (!entry) throw new TreeNotFoundError();
-  const file = entry.encoding === "receiving-file" ? await rotationSource(nodeId) : undefined;
-  const body = await prepareTreeMove({ vaultId: access.vaultId, signer, source, destination, nodeId, file });
+  const receiving = entry.encoding === "receiving-file";
+  const file = receiving ? await rotationSource(nodeId) : undefined;
+  const thread = receiving ? await loadThreadKeySource(nodeId).catch((error: unknown) => {
+    throw error instanceof CommentsUnavailableError && error.code === "not_found" ? new TreeNotFoundError() :
+      new Error("private tree unavailable");
+  }) : undefined;
+  const body = await prepareTreeMove({ vaultId: access.vaultId, signer, source, destination, nodeId, file, thread })
+    .catch((error: unknown) => {
+      throw error instanceof CommentsUnavailableError && error.code === "file_changed" ?
+        new TreeStructureError("file_changed") : error;
+    });
   const result = await structuralRequest<{ sourceRevision: number; destinationRevision: number }>(
     `/api/private/tree/nodes/${nodeId}/parent`, "PATCH", body);
   remember(access, source.listing.directoryId, result.sourceRevision, body.sourceListingHead);

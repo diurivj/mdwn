@@ -1,6 +1,7 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import type { ThreadKeySource } from "../../app/comments/client";
 import { openSymmetric } from "../../app/crypto/enc-v1";
 import { openFileContentKeyFromReceiving, openFileReceivingKey } from "../../app/crypto/file-receiving";
 import { decodeFileRepresentation } from "../../app/crypto/vault";
@@ -26,6 +27,11 @@ async function fileSource(who: Actor, fileId: string): Promise<FileRotationSourc
   const response = await call(who, `/api/private/tree/files/${fileId}`, "POST");
   expect(response.status).toBe(200);
   return response.json() as Promise<FileRotationSource>;
+}
+async function threadSource(who: Actor, fileId: string): Promise<ThreadKeySource> {
+  const response = await call(who, `/api/private/comments/files/${fileId}/thread`, "POST");
+  expect(response.status).toBe(200);
+  return response.json() as Promise<ThreadKeySource>;
 }
 async function readV2(who: Actor, ownerId: string, fileId: string, parentKey: Uint8Array): Promise<string> {
   const file = await (await call(who, `/api/private/tree/files/${fileId}`, "POST")).json() as {
@@ -161,7 +167,8 @@ describe("move", () => {
     source = await state(owner, owner.accountId, a.nodeId, a.key);
     destination = await root(owner);
     const moveFile = await prepareTreeMove({ vaultId: owner.accountId, signer: owner.signer, source, destination,
-      nodeId: modern, file: await fileSource(owner, modern) });
+      nodeId: modern, file: await fileSource(owner, modern),
+      thread: await threadSource(owner, modern) });
     response = await call(owner, `/api/private/tree/nodes/${modern}/parent`, "PATCH", moveFile);
     expect(response.status, await response.clone().text()).toBe(200);
     await budget(response);
@@ -310,7 +317,8 @@ describe("move", () => {
     await grant(owner, reader, shared.nodeId, "directory", "read_only");
     const move = await prepareTreeMove({ vaultId: owner.accountId, signer: owner.signer,
       source: await state(owner, owner.accountId, shared.nodeId, shared.key), destination: await root(owner),
-      nodeId: file, file: await fileSource(owner, file) });
+      nodeId: file, file: await fileSource(owner, file),
+      thread: await threadSource(owner, file) });
     const response = await call(owner, `/api/private/tree/nodes/${file}/parent`, "PATCH", move);
     expect(response.status, await response.clone().text()).toBe(200);
     // The reader lost server access and the shared Directory key opens nothing current.
@@ -322,7 +330,7 @@ describe("move", () => {
       .toEqual({ error: "namespace_changed" });
     const back = await prepareTreeMove({ vaultId: owner.accountId, signer: owner.signer, source: await root(owner),
       destination: await state(owner, owner.accountId, shared.nodeId, shared.key), nodeId: file,
-      file: await fileSource(owner, file) });
+      file: await fileSource(owner, file), thread: await threadSource(owner, file) });
     const otherHead = await call(owner, `/api/private/tree/nodes/${file}/parent`, "PATCH", { ...back,
       expectedHeadDigest: encodeTreeBytes(new Uint8Array(32)) });
     expect(otherHead.status).toBe(409);

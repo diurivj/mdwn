@@ -133,9 +133,12 @@ export async function readPrivateThread(env: Env, auth: AuthorizedDevice, fileId
     FROM comment_thread_device_envelopes WHERE thread_id = ${threadId} AND epoch = ${state.current_epoch}
       AND device_id = ${auth.deviceId} AND recipient_id = ${auth.accountId}
       AND registry_epoch = ${auth.registryEpoch} AND ${readable}`);
-  const provisioned = new Set((await createDb(env.DB).all<{ device_id: string }>(sql`SELECT device_id
-    FROM comment_thread_device_envelopes WHERE thread_id = ${threadId} AND epoch = ${state.current_epoch}
-      AND ${readable} LIMIT 257`)).map((row) => row.device_id));
+  // An envelope from before the recipient's latest device-registry change must be replaced.
+  const provisioned = new Set((await createDb(env.DB).all<{ device_id: string; registry_epoch: number }>(sql`
+    SELECT device_id, registry_epoch FROM comment_thread_device_envelopes
+    WHERE thread_id = ${threadId} AND epoch = ${state.current_epoch} AND ${readable} LIMIT 257`))
+    .filter((row) => current.some((device) => device.deviceId === row.device_id &&
+      device.registryEpoch === row.registry_epoch)).map((row) => row.device_id));
   const cursor = (input.cursor as string | undefined) ?? null;
   const page = await createDb(env.DB).all<{ id: string; author_id: string; epoch: number; revision: number;
     ciphertext: ArrayBuffer; created_at: number; updated_at: number }>(sql`
@@ -239,19 +242,126 @@ export async function provisionThreadDevices(env: Env, auth: AuthorizedDevice, f
     return json({ error: "recipients_changed" }, 409);
   }
   const ids = JSON.stringify(envelopes.map((item) => item.deviceId));
+  const kept = JSON.stringify(current.map((device) => device.deviceId));
   const invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
   try {
     const [witness] = await atomicSqlBatch(env.DB, [
       begin(auth, invocationId, sql`${readable} AND EXISTS (SELECT 1 FROM comment_threads WHERE id = ${threadId}
           AND current_epoch = ${epoch}) AND ${exactRecipientGuard(ownerId, fileId, current)}
-        AND NOT EXISTS (SELECT 1 FROM comment_thread_device_envelopes WHERE thread_id = ${threadId}
-          AND device_id IN (SELECT value FROM json_each(${ids})))`),
+        AND NOT EXISTS (SELECT 1 FROM comment_thread_device_envelopes e
+          JOIN account_encryption_identities r ON r.account_id = e.recipient_id
+          WHERE e.thread_id = ${threadId} AND e.epoch = ${epoch} AND e.registry_epoch = r.registry_epoch
+            AND e.device_id IN (SELECT value FROM json_each(${ids})))`),
+      // Replaces registry-stale envelopes and drops those of devices outside the exact current set.
+      sql`DELETE FROM comment_thread_device_envelopes WHERE thread_id = ${threadId} AND ${live}
+        AND (device_id IN (SELECT value FROM json_each(${ids}))
+          OR device_id NOT IN (SELECT value FROM json_each(${kept})))`,
       insertDeviceEnvelopes(threadId, epoch, await envelopePayload(envelopes, current), live),
       spent(auth, invocationId), proofTime(auth, invocationId), finish(auth, invocationId),
     ]);
     if (witness?.meta.changes === 1) return json({ provisioned: envelopes.length });
   } catch { return invalid(); }
   return threadChanged();
+}
+
+/**
+ * Key state only, for a parent-capability reader that is about to rotate the File's
+ * receiving pair (a move): the current thread epoch, its hierarchy wrapper and the
+ * current direct devices. No Comment or attribution ciphertext.
+ */
+export async function readThreadKey(env: Env, auth: AuthorizedDevice, fileId: string): Promise<Response> {
+  const node = await fileOwner(env, fileId);
+  if (!node) return absent();
+  const ownerId = node.owner_id;
+  const hierarchy = sql`${guard(auth, ownerId, fileId, "private_comment_read")}
+    AND ${directoryAccessGuard(auth, ownerId, node.parent_node_id, "directory_read")}`;
+  const state = await createDb(env.DB).get<{ receiving_key_id: string; receiving_epoch: number;
+    thread_id: string | null; current_epoch: number | null; key_id: string | null;
+    receiving_wrapper: ArrayBuffer | null; wrapper_key_id: string | null }>(sql`
+    SELECT h.receiving_key_id, h.receiving_epoch, t.id AS thread_id, t.current_epoch, e.key_id,
+      e.receiving_wrapper, e.receiving_key_id AS wrapper_key_id
+    FROM file_heads h
+    LEFT JOIN comment_threads t ON t.file_node_id = h.file_node_id AND t.owner_id = h.owner_id AND t.audience = 'private'
+    LEFT JOIN comment_thread_epochs e ON e.thread_id = t.id AND e.epoch = t.current_epoch
+    WHERE h.file_node_id = ${fileId} AND h.owner_id = ${ownerId} AND ${hierarchy}`);
+  if (!state) return absent();
+  let current: Recipient[];
+  try { current = await recipients(env, ownerId, fileId); } catch { return invalid(); }
+  return json({ ownerId, fileId, receivingKeyId: state.receiving_key_id, receivingEpoch: state.receiving_epoch,
+    thread: state.thread_id && state.current_epoch && state.key_id && state.receiving_wrapper ? {
+      threadId: state.thread_id, epoch: state.current_epoch, keyId: state.key_id,
+      receivingKeyId: state.wrapper_key_id, receivingWrapper: b64(state.receiving_wrapper) } : null,
+    directDevices: current });
+}
+
+export class ThreadRotationChangedError extends Error {}
+export type ThreadRotation = null | { ownerId: string; fileId: string; threadId: string; epoch: number;
+  keyId: string; receivingKeyId: string; receivingEpoch: number; receivingWrapper: Uint8Array;
+  previousWrapper: Uint8Array; envelopes: DeviceEnvelope[]; current: Recipient[] };
+
+/**
+ * A File receiving-key rotation starts a new Private thread epoch in the same batch:
+ * a fresh key sealed to the NEW receiving key, the previous key chained under it, and
+ * one envelope per current direct device. `null` is valid only while no thread exists.
+ * Throws ThreadRotationChangedError for a stale thread or recipient set.
+ */
+export async function parseThreadRotation(env: Env, ownerId: string, fileId: string, value: unknown,
+  receiving: { keyId: string; epoch: number }): Promise<ThreadRotation> {
+  const thread = await createDb(env.DB).get<{ id: string; current_epoch: number; key_id: string }>(sql`
+    SELECT t.id, t.current_epoch, e.key_id FROM comment_threads t
+    JOIN comment_thread_epochs e ON e.thread_id = t.id AND e.epoch = t.current_epoch
+    WHERE t.file_node_id = ${fileId} AND t.owner_id = ${ownerId} AND t.audience = 'private'`);
+  if (value === null) {
+    if (thread) throw new ThreadRotationChangedError();
+    return null;
+  }
+  const input = record(value);
+  if (!input || !exact(input, ["threadId", "epoch", "keyId", "receivingWrapper", "previousWrapper",
+    "deviceEnvelopes"]) || !isV7(input.threadId) || !isV7(input.keyId) || !Number.isSafeInteger(input.epoch)) {
+    throw new Error("invalid thread rotation");
+  }
+  if (!thread || thread.id !== input.threadId || thread.current_epoch + 1 !== input.epoch) {
+    throw new ThreadRotationChangedError();
+  }
+  const threadId = input.threadId, keyId = input.keyId, epoch = input.epoch as number;
+  if (keyId === thread.key_id) throw new Error("invalid thread rotation");
+  const receivingWrapper = expectEnvelope(input.receivingWrapper, MAX_THREAD_ENVELOPE, HPKE_SUITE,
+    threadKeyContext(ownerId, threadId, keyId, epoch, receiving.keyId));
+  const previousWrapper = expectEnvelope(input.previousWrapper, MAX_THREAD_ENVELOPE, SYMMETRIC_SUITE,
+    threadKeyContext(ownerId, threadId, thread.key_id, thread.current_epoch));
+  const envelopes = deviceEnvelopes(input.deviceEnvelopes, ownerId, threadId, keyId, epoch);
+  const current = await recipients(env, ownerId, fileId);
+  if (envelopes.length !== current.length ||
+      !current.every((device) => envelopes.some((item) => item.deviceId === device.deviceId))) {
+    throw new ThreadRotationChangedError();
+  }
+  return { ownerId, fileId, threadId, epoch, keyId, receivingKeyId: receiving.keyId,
+    receivingEpoch: receiving.epoch, receivingWrapper, previousWrapper, envelopes, current };
+}
+
+/** Same-batch precondition: the thread (or its absence) and direct recipients are as parsed. */
+export function threadRotationGuard(ownerId: string, fileId: string, rotation: ThreadRotation): SQL {
+  if (!rotation) return sql`NOT EXISTS (SELECT 1 FROM comment_threads WHERE owner_id = ${ownerId}
+    AND file_node_id = ${fileId} AND audience = 'private')`;
+  return sql`EXISTS (SELECT 1 FROM comment_threads WHERE id = ${rotation.threadId}
+      AND current_epoch = ${rotation.epoch - 1})
+    AND ${exactRecipientGuard(ownerId, fileId, rotation.current)}`;
+}
+
+/** Epoch row, then the forward-only thread epoch, then a wholesale device-envelope replacement. */
+export async function threadRotationStatements(rotation: ThreadRotation, now: number, live: SQL): Promise<SQL[]> {
+  if (!rotation) return [];
+  const { threadId, epoch } = rotation;
+  return [
+    sql`INSERT INTO comment_thread_epochs (thread_id, epoch, key_id, receiving_key_id, receiving_epoch,
+        receiving_wrapper, previous_wrapper, created_at)
+      SELECT ${threadId}, ${epoch}, ${rotation.keyId}, ${rotation.receivingKeyId}, ${rotation.receivingEpoch},
+        ${rotation.receivingWrapper}, ${rotation.previousWrapper}, ${now} WHERE ${live}`,
+    sql`UPDATE comment_threads SET current_epoch = ${epoch}
+      WHERE id = ${threadId} AND current_epoch = ${epoch - 1} AND ${live}`,
+    sql`DELETE FROM comment_thread_device_envelopes WHERE thread_id = ${threadId} AND ${live}`,
+    insertDeviceEnvelopes(threadId, epoch, await envelopePayload(rotation.envelopes, rotation.current), live),
+  ];
 }
 
 type CommentTarget = { thread_id: string; current_epoch: number; key_id: string;

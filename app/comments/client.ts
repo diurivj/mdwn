@@ -5,8 +5,8 @@ import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { decodeTreeBytes, encodeTreeBytes } from "~/tree/wire";
 import { generateThreadKey, openAttribution, openComment, openPreviousThreadKey, openThreadKeyFromDevice,
-  openThreadKeyFromReceiving, sealAttribution, sealComment, sealThreadKeyToDevice, sealThreadKeyToReceiving,
-  type ThreadKeyIdentity } from "./crypto";
+  openThreadKeyFromReceiving, sealAttribution, sealComment, sealPreviousThreadKey, sealThreadKeyToDevice,
+  sealThreadKeyToReceiving, type ThreadKeyIdentity } from "./crypto";
 
 /**
  * Who is reading: a parent-capability reader holds the File receiving key pair
@@ -62,9 +62,11 @@ async function deviceKeys(accountId: string) {
   return device;
 }
 
-async function importDeviceKey(publicKey: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", decodeTreeBytes(publicKey, 65), { name: "ECDH", namedCurve: "P-256" }, false, []);
+/** HPKE serializes the recipient key, so a public key is imported extractable (as browsers do anyway). */
+function importP256(raw: Uint8Array): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", new Uint8Array(raw), { name: "ECDH", namedCurve: "P-256" }, true, []);
 }
+const importDeviceKey = (publicKey: string) => importP256(decodeTreeBytes(publicKey, 65));
 
 /** Loads and decrypts one page of the Private thread, opening older epoch keys through the chain. */
 export async function loadPrivateThread(subject: ThreadSubject, signal?: AbortSignal): Promise<LoadedThread> {
@@ -136,8 +138,7 @@ export async function createPrivateThread(subject: ThreadSubject, directDevices:
   const threadId = newOpaqueId(), keyId = newOpaqueId(), threadKey = generateThreadKey();
   try {
     const identity = { ownerId: subject.ownerId, threadId, keyId, epoch: 1 };
-    const target = await crypto.subtle.importKey("raw", new Uint8Array(subject.receivingPublicKey),
-      { name: "ECDH", namedCurve: "P-256" }, false, []);
+    const target = await importP256(subject.receivingPublicKey);
     const receivingWrapper = await sealThreadKeyToReceiving(threadKey, target,
       { ...identity, receivingKeyId: subject.receivingKeyId });
     const deviceEnvelopes = await Promise.all(directDevices.map(async (device) => ({ deviceId: device.deviceId,
@@ -161,6 +162,49 @@ export async function provisionThreadDevices(subject: ThreadSubject,
   const result = await request<{ provisioned: number }>(`/api/private/comments/files/${subject.fileId}/thread/devices`,
     "PATCH", { threadId: thread.threadId, epoch: thread.epoch, deviceEnvelopes });
   return result.provisioned;
+}
+
+/** Thread key state a parent-capability reader loads before rotating a File's receiving pair. */
+export type ThreadKeySource = { ownerId: string; fileId: string; receivingKeyId: string; receivingEpoch: number;
+  thread: null | { threadId: string; epoch: number; keyId: string; receivingKeyId: string; receivingWrapper: string };
+  directDevices: { deviceId: string; publicKey: string }[] };
+
+export async function loadThreadKeySource(fileId: string): Promise<ThreadKeySource> {
+  const source = await request<ThreadKeySource>(`/api/private/comments/files/${fileId}/thread`, "POST");
+  if (source.fileId !== fileId) throw new CommentsUnavailableError("unavailable");
+  return source;
+}
+
+/**
+ * The next thread epoch for a receiving-pair rotation: the current key is opened with the
+ * OLD receiving pair, a fresh key is sealed to the NEW receiving key and to every current
+ * direct device, and the old key is chained under the new one so history stays readable.
+ */
+export async function prepareThreadRotation(source: ThreadKeySource, previous: { receivingKeyId: string;
+  receivingEpoch: number; pair: CryptoKeyPair }, next: { receivingKeyId: string; publicKey: CryptoKey }) {
+  if (source.receivingKeyId !== previous.receivingKeyId || source.receivingEpoch !== previous.receivingEpoch) {
+    throw new CommentsUnavailableError("file_changed");
+  }
+  const thread = source.thread;
+  if (!thread) return null;
+  if (thread.receivingKeyId !== previous.receivingKeyId) throw new CommentsUnavailableError("file_changed");
+  const old: ThreadKeyIdentity = { ownerId: source.ownerId, threadId: thread.threadId, keyId: thread.keyId,
+    epoch: thread.epoch };
+  const identity: ThreadKeyIdentity = { ...old, keyId: newOpaqueId(), epoch: thread.epoch + 1 };
+  const oldKey = await openThreadKeyFromReceiving(decodeTreeBytes(thread.receivingWrapper, 4096), previous.pair,
+    { ...old, receivingKeyId: previous.receivingKeyId });
+  const nextKey = generateThreadKey();
+  try {
+    const receivingWrapper = await sealThreadKeyToReceiving(nextKey, next.publicKey,
+      { ...identity, receivingKeyId: next.receivingKeyId });
+    const previousWrapper = await sealPreviousThreadKey(oldKey, nextKey, old);
+    const deviceEnvelopes = await Promise.all(source.directDevices.map(async (device) => ({ deviceId: device.deviceId,
+      ciphertext: encodeTreeBytes(await sealThreadKeyToDevice(nextKey, await importDeviceKey(device.publicKey),
+        { ...identity, deviceId: device.deviceId })) })));
+    return { threadId: thread.threadId, epoch: identity.epoch, keyId: identity.keyId,
+      receivingWrapper: encodeTreeBytes(receivingWrapper), previousWrapper: encodeTreeBytes(previousWrapper),
+      deviceEnvelopes };
+  } finally { oldKey.fill(0); nextKey.fill(0); }
 }
 
 /** The caller's own Public pseudonym, opened with its Vault root; it never leaves the browser in plaintext. */

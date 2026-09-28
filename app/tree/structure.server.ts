@@ -1,5 +1,7 @@
 import type { SQL } from "drizzle-orm";
 import { record } from "~/auth/request.server";
+import { parseThreadRotation, ThreadRotationChangedError, threadRotationGuard, threadRotationStatements,
+  type ThreadRotation } from "~/comments/comments.server";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { commitDirectoryMutation, type AuthorizedDevice } from "~/device/proof.server";
 import { fileAccessGuard, moveAccessGuard, structuralAccessGuard } from "~/sharing/access.server";
@@ -132,7 +134,7 @@ type MoveRow = {
 const MOVE_FIELDS = ["sourceId", "destinationId", "expectedSourceRevision", "expectedDestinationRevision",
   "nameCiphertext", "orderCiphertext", "keyEnvelope", "sourceListingHead", "destinationListingHead"] as const;
 const ROTATION_FIELDS = ["expectedHeadDigest", "receivingKeyId", "receivingEpoch", "wrapRevision",
-  "receivingPublicKey", "parentEnvelope", "signedHead"] as const;
+  "receivingPublicKey", "parentEnvelope", "signedHead", "thread"] as const;
 
 /**
  * One same-Owner move: both parent revisions are CAS'd, the edge is replaced and
@@ -140,8 +142,9 @@ const ROTATION_FIELDS = ["expectedHeadDigest", "receivingKeyId", "receivingEpoch
  * listings. The name/order are re-encrypted and the key material rewrapped for
  * the destination capability. A v2 File always rotates its receiving key pair
  * (new wrapper, public target, parent File-key envelope and same-revision signed
- * File head), so no departing Directory reader keeps a write target; a legacy
- * File's future keys are wrapped under the destination capability anyway.
+ * File head), so no departing Directory reader keeps a write target, and starts
+ * a new Private thread epoch sealed to the new receiving key; a legacy File's
+ * future keys are wrapped under the destination capability anyway.
  */
 export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string, value: unknown): Promise<Response> {
   const input = record(value);
@@ -186,6 +189,7 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
   let rotation: null | { expectedHeadDigest: Uint8Array; receivingKeyId: string; receivingEpoch: number;
     wrapRevision: number; publicKey: Uint8Array; parentEnvelope: Uint8Array;
     signed: ReturnType<typeof parseHead> } = null;
+  let thread: ThreadRotation = null;
   try {
     name = metadata(input.nameCiphertext, 1024, ownerId, nodeId, destinationId);
     order = metadata(input.orderCiphertext, 4096, ownerId, nodeId, destinationId);
@@ -228,7 +232,9 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
           after.statement.receivingKey.epoch !== rotation.receivingEpoch) return badRequest();
       await verifyFileReceivingTarget(after, rotation.publicKey);
       await verifyFileParentEnvelope(after, rotation.parentEnvelope);
-    } catch { return badRequest(); }
+      thread = await parseThreadRotation(env, ownerId, nodeId, input.thread,
+        { keyId: rotation.receivingKeyId, epoch: rotation.receivingEpoch });
+    } catch (error) { return error instanceof ThreadRotationChangedError ? fileChanged() : badRequest(); }
   }
   const nodeState = row.encoding === "directory" ? sql`1 = 1` : row.encoding === "legacy-file" ?
     sql`EXISTS (SELECT 1 FROM files f WHERE f.node_id = ${nodeId} AND f.owner_id = ${ownerId}
@@ -236,7 +242,7 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
     sql`EXISTS (SELECT 1 FROM file_heads h WHERE h.file_node_id = ${nodeId} AND h.owner_id = ${ownerId}
       AND h.digest = ${rotation!.expectedHeadDigest} AND h.receiving_key_id = ${row.receiving_key_id}
       AND h.receiving_epoch = ${row.receiving_epoch})
-      AND ${fileAccessGuard(auth, ownerId, nodeId, "file_edit")}`;
+      AND ${fileAccessGuard(auth, ownerId, nodeId, "file_edit")} AND ${threadRotationGuard(ownerId, nodeId, thread)}`;
   const now = Date.now(), invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
   try {
     const [, witness] = await atomicSqlBatch(env.DB, [
@@ -273,6 +279,7 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
           receiving_epoch = ${rotation.receivingEpoch}, parent_envelope = ${rotation.parentEnvelope}
         WHERE file_node_id = ${nodeId} AND owner_id = ${ownerId} AND digest = ${rotation.expectedHeadDigest}
           AND ${live}`] : []),
+      ...await threadRotationStatements(thread, now, live),
       spent(auth, invocationId),
       proofTime(auth, invocationId),
       finish(auth, invocationId),
@@ -325,6 +332,7 @@ export async function deleteNode(env: Env, auth: AuthorizedDevice, nodeId: strin
   const doomed = sql`SELECT node_id FROM tree_teardown_nodes WHERE invocation_id = ${invocationId}`;
   const shares = sql`SELECT id FROM shares WHERE owner_id = ${ownerId} AND target_node_id IN (${doomed})`;
   const grants = sql`SELECT id FROM grants WHERE owner_id = ${ownerId} AND target_node_id IN (${doomed})`;
+  const threads = sql`SELECT id FROM comment_threads WHERE owner_id = ${ownerId} AND file_node_id IN (${doomed})`;
   try {
     const [, witness, marked] = await atomicSqlBatch(env.DB, [
       deferForeignKeys,
@@ -355,6 +363,12 @@ export async function deleteNode(env: Env, auth: AuthorizedDevice, nodeId: strin
       // Deleted content needs no rotation: the job outlives nothing, then its barrier.
       sql`DELETE FROM sharing_rotation_jobs WHERE owner_id = ${ownerId} AND target_node_id IN (${doomed}) AND ${live}`,
       sql`DELETE FROM rotation_barriers WHERE owner_id = ${ownerId} AND target_node_id IN (${doomed}) AND ${live}`,
+      // Private Comment threads: Comments and attributions, device envelopes, key epochs, threads.
+      sql`DELETE FROM comments WHERE thread_id IN (${threads}) AND ${live}`,
+      sql`DELETE FROM thread_attributions WHERE thread_id IN (${threads}) AND ${live}`,
+      sql`DELETE FROM comment_thread_device_envelopes WHERE thread_id IN (${threads}) AND ${live}`,
+      sql`DELETE FROM comment_thread_epochs WHERE thread_id IN (${threads}) AND ${live}`,
+      sql`DELETE FROM comment_threads WHERE owner_id = ${ownerId} AND file_node_id IN (${doomed}) AND ${live}`,
       // File envelopes, heads and representations before the File rows.
       sql`DELETE FROM file_device_envelopes WHERE owner_id = ${ownerId} AND file_node_id IN (${doomed}) AND ${live}`,
       sql`DELETE FROM file_heads WHERE owner_id = ${ownerId} AND file_node_id IN (${doomed}) AND ${live}`,

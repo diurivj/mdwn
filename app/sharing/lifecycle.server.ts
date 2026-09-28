@@ -499,6 +499,14 @@ export async function updateGrant(env: Env, auth: AuthorizedDevice, grantId: str
           AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.owner_id = ${grant.owner_id}
             AND g.target_node_id = ${grant.target_node_id} AND g.recipient_id = ${grant.recipient_id}
             AND g.target_kind = 'file')`,
+        // The removed direct reader's Private thread envelopes go with its last direct File Grant.
+        sql`DELETE FROM comment_thread_device_envelopes WHERE recipient_id = ${grant.recipient_id}
+          AND thread_id IN (SELECT id FROM comment_threads WHERE owner_id = ${grant.owner_id}
+            AND file_node_id = ${grant.target_node_id})
+          AND ${grant.target_kind === "file"} AND ${live}
+          AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.owner_id = ${grant.owner_id}
+            AND g.target_node_id = ${grant.target_node_id} AND g.recipient_id = ${grant.recipient_id}
+            AND g.target_kind = 'file')`,
       ] : []),
       spent(auth, invocationId),
       proofTime(auth, invocationId),
