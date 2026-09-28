@@ -9,10 +9,16 @@ import { isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
 const headers = { "Cache-Control": "no-store" };
 const invalid = () => Response.json({ error: "invalid_file_save" }, { status: 400, headers });
 const missing = () => Response.json({ error: "not_found" }, { status: 404, headers });
+const migrationRequired = () => Response.json({ error: "migration_required" }, { status: 409, headers });
+const noDirectGrant = (ownerId: string, fileId: string) => sql`NOT EXISTS (SELECT 1 FROM grants
+  WHERE owner_id = ${ownerId} AND target_node_id = ${fileId} AND target_kind = 'file')`;
 
 /**
  * Legacy v1 requires parent-capability write authority; direct File editors use
  * only the v2 route. Old full-entry signatures and envelope bytes are unchanged.
+ * A v1 entry has no File head, so it cannot carry direct-Grant envelopes: while
+ * any direct File Grant exists, a legacy save would leave that Grant without an
+ * envelope for the fresh key and is refused; the browser migrates to v2 first.
  */
 export async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value: unknown): Promise<Response> {
   const input = record(value);
@@ -51,6 +57,9 @@ export async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string,
   if (row.current_revision !== expectedRevision) {
     return Response.json({ error: "file_changed" }, { status: 409, headers });
   }
+  if (!await createDb(env.DB).get(sql`SELECT 1 AS none WHERE ${noDirectGrant(ownerId, fileId)}`)) {
+    return migrationRequired();
+  }
   if (row.current_representation_id === repr.id || row.content_key_id === repr.contentKeyId) return invalid();
   let keyEnvelope: Uint8Array, ciphertext: Uint8Array;
   let head: Awaited<ReturnType<typeof signedListing>>;
@@ -77,7 +86,7 @@ export async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string,
           AND f.current_representation_id = ${row.current_representation_id})
           AND ${fileAccessGuard(auth, ownerId, fileId, "file_edit")}
           AND ${directoryAccessGuard(auth, ownerId, parentId, "child_create")}
-          AND ${unblocked(ownerId, fileId)}`,
+          AND ${unblocked(ownerId, fileId)} AND ${noDirectGrant(ownerId, fileId)}`,
       (previous) => [
         sql`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id,
           key_epoch, ciphertext, ciphertext_size, created_at)
@@ -99,6 +108,9 @@ export async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string,
       SELECT current_revision FROM files WHERE node_id = ${fileId} AND owner_id = ${ownerId}
         AND ${fileAccessGuard(auth, ownerId, fileId, "file_edit")}`);
     if (!current) return missing();
+    if (!await createDb(env.DB).get(sql`SELECT 1 AS none WHERE ${noDirectGrant(ownerId, fileId)}`)) {
+      return migrationRequired();
+    }
     return Response.json({ error: current.current_revision !== expectedRevision ? "file_changed" : "namespace_changed" },
       { status: 409, headers });
   } catch { return invalid(); }

@@ -9,6 +9,7 @@ import {
   type DirectoryListing, type TreeEntry, type TreeKind,
 } from "./client";
 import { FileEditor } from "./FileEditor";
+import { StructureActions } from "./StructureActions";
 import { expandedPreferenceKey, savedExpanded, type RootFilesPageData, type FilesSnapshot } from "./navigation-client";
 
 type Dialog = {
@@ -213,6 +214,15 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         {snapshot.scope === "owned" && nodeId !== snapshot.access.rootId && <SharePanel
           snapshot={snapshot} nodeId={nodeId} kind={kind} name={selected}
           onUpdated={(next) => setSnapshot(next)} />}
+      </div>
+      {/* Its own row, so the right-anchored Share panel never slides under the Files tree. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="Arrange">
+        <StructureActions snapshot={snapshot} nodeId={nodeId} kind={kind} name={selected}
+          disabled={busy || !authorityVerified || recoveryPending}
+          flush={async () => !flushEditor.current || await flushEditor.current()} onWorking={setSubmitting}
+          onDone={async (outcome) => { if ("navigateTo" in outcome) navigate(outcome.navigateTo);
+            else await revalidator.revalidate(); }}
+          onNotFound={() => setStatus("not-found")} />
       </div>
       {recoveryPending && <p role="status" className="mt-3">Confirm your saved recovery phrase and codes before creating Files.</p>}
       {busy && <p role="status" className="mt-3">Updating Files…</p>}

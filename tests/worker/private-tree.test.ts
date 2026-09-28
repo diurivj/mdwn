@@ -368,6 +368,36 @@ describe("private tree", () => {
       { context: replacement.contentContext })).markdown).toBe("# explicitly overwritten");
   });
 
+  it("refuses a legacy save that would leave an active direct File Grant without an envelope", async () => {
+    const f = await fixture(), recipient = await fixture();
+    const created = await fileRequest(f, "shared.md");
+    const fileId = created.body.nodeId;
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const now = Date.now();
+    await env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
+      generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'file', 'read_only', 1, ?, ?)`)
+      .bind(id(), f.accountId, recipient.accountId, fileId, now, now).run();
+    const listing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[] };
+    const keyId = id();
+    const fresh = await createFileRepresentation(f.rootKey, { markdown: "# must migrate", metadata: new Uint8Array() },
+      { vaultId: f.accountId, fileId, keyId, revision: 2 });
+    const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
+    const response = await request(f, `/api/private/tree/files/${fileId}`, "PATCH", { expectedRevision: 1,
+      expectedEntriesRevision: listing.entriesRevision, keyEnvelope,
+      listingHead: await createListingHead(f.rootKey, f.assertion.privateKey, { vaultId: f.accountId,
+        directoryId: f.rootId, deviceId: f.deviceId, revision: listing.entriesRevision + 1,
+        entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope } : entry) }),
+      representation: { id: id(), contentKeyId: keyId, keyEpoch: 1, revision: 2,
+        ciphertext: encodeBytes(fresh.contentEnvelope) } });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "migration_required" });
+    expect(await env.DB.prepare("SELECT current_revision FROM files WHERE node_id = ?").bind(fileId)
+      .first()).toEqual({ current_revision: 1 });
+    expect(await env.DB.prepare("SELECT entries_revision FROM directories WHERE node_id = ?").bind(f.rootId)
+      .first()).toEqual({ entries_revision: listing.entriesRevision });
+  });
+
   it("rejects an oversized encrypted File save without advancing either current pointer or signed listing", async () => {
     const f = await fixture();
     const created = await fileRequest(f, "bounded.md");

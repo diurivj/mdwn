@@ -1,0 +1,114 @@
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import { openEditor } from "./editor-workspace.fixture";
+
+test.setTimeout(180_000);
+
+async function createFolder(page: Page, name: string): Promise<string> {
+  await page.getByRole("button", { name: "New folder" }).click();
+  const dialog = page.getByRole("dialog", { name: "Create a name" });
+  await dialog.getByRole("textbox", { name: "Name" }).fill(name);
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByRole("heading", { name })).toBeVisible();
+  return new URL(page.url()).pathname.split("/").at(-1)!;
+}
+
+/** Firefox can report NS_BINDING_ABORTED for a top-level goto whose document did load
+ * (seen before in file-checkpoint.spec.ts); retry the same navigation once. */
+async function open(page: Page, url: string) {
+  try { await page.goto(url); }
+  catch (error) {
+    if (!String(error).includes("NS_BINDING_ABORTED")) throw error;
+    await page.goto(url);
+  }
+}
+
+function treeNames(page: Page) {
+  return page.getByRole("navigation", { name: "Files" }).getByRole("link").allTextContents();
+}
+
+test("moves, reorders and hard-deletes Files and folders through the built Worker", async ({ browser, server, baseURL }) => {
+  const { context, page, fileId, rootId } = await openEditor(browser, server, baseURL!, "Moving.md");
+  const db = (await server.getWorker<{ DB: D1Database }>().getEnv()).DB;
+  try {
+    const source = page.getByRole("textbox", { name: "Markdown source" });
+    await source.fill("# carried along");
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+
+    await open(page, new URL(`/d/${rootId}`, baseURL).href);
+    const archive = await createFolder(page, "Archive");
+    await open(page, new URL(`/d/${rootId}`, baseURL).href);
+    await createFolder(page, "Beta");
+
+    // Move the open File into Archive: content and File identity are unchanged.
+    await open(page, new URL(`/f/${fileId}`, baseURL).href);
+    await expect(source).toHaveValue("# carried along");
+    await page.getByRole("button", { name: "Move to…" }).click();
+    const move = page.getByRole("dialog", { name: "Move" });
+    await move.getByRole("combobox", { name: "Destination folder" }).selectOption({ label: "Files / Archive" });
+    await move.getByRole("button", { name: "Move", exact: true }).click();
+    await expect(page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Archive" }))
+      .toHaveAttribute("href", `/d/${archive}`);
+    await expect(page.getByRole("heading", { name: "Moving.md" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("# carried along");
+
+    // Reorder root siblings: Beta moves above Archive.
+    await open(page, new URL(`/d/${rootId}`, baseURL).href);
+    await expect.poll(() => treeNames(page)).toEqual(["Archive", "Beta"]);
+    const beta = page.getByRole("navigation", { name: "Files" }).getByRole("link", { name: "Beta" });
+    await beta.click();
+    await expect(page.getByRole("heading", { name: "Beta" })).toBeVisible();
+    await page.getByRole("button", { name: "Move up" }).click();
+    await expect.poll(() => treeNames(page)).toEqual(["Beta", "Archive"]);
+    await expect(page.getByRole("button", { name: "Move up" })).toBeDisabled();
+
+    // Deleting a File leaves its parent open and the File unavailable.
+    await open(page, new URL(`/f/${fileId}`, baseURL).href);
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    const confirm = page.getByRole("dialog", { name: "Delete" });
+    await expect(confirm).toContainText("There is no trash or restore");
+    await confirm.getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page).toHaveURL(new RegExp(`/d/${archive}$`));
+    await expect(page.getByRole("heading", { name: "Archive" })).toBeVisible();
+    await open(page, new URL(`/f/${fileId}`, baseURL).href);
+    await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
+
+    // A Directory over the 500-node bound is refused without any change.
+    await open(page, new URL(`/d/${rootId}`, baseURL).href);
+    const big = await createFolder(page, "Big");
+    const owner = await db.prepare("SELECT owner_id FROM vault_nodes WHERE id = ?").bind(big).first<{ owner_id: string }>();
+    await db.batch([
+      db.prepare(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 500)
+        INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at)
+        SELECT printf('%s-%04d', ?1, n), 'directory', ?2, ?1, 1, 1 FROM seq`).bind(big, owner!.owner_id),
+      db.prepare(`INSERT INTO directories (node_id, owner_id, entries_revision)
+        SELECT id, owner_id, 1 FROM vault_nodes WHERE parent_node_id = ?`).bind(big),
+      db.prepare(`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext,
+        order_ciphertext, key_envelope, encoding) SELECT id, owner_id, parent_node_id, X'01', X'01', X'01', 'directory'
+        FROM vault_nodes WHERE parent_node_id = ?`).bind(big),
+    ]);
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.getByRole("dialog", { name: "Delete" }).getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page.getByRole("dialog", { name: "Delete" }).getByRole("alert"))
+      .toContainText("more than 500 items");
+    expect((await db.prepare("SELECT count(*) AS n FROM vault_nodes WHERE id = ?1 OR parent_node_id = ?1")
+      .bind(big).first<{ n: number }>())!.n).toBe(501);
+
+    // A folder with content is deleted as a whole.
+    await open(page, new URL(`/d/${archive}`, baseURL).href);
+    await page.getByRole("button", { name: "New File" }).click();
+    const fileDialog = page.getByRole("dialog", { name: "Create a name" });
+    await fileDialog.getByRole("textbox", { name: "Name" }).fill("inside.md");
+    await fileDialog.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "inside.md" })).toBeVisible();
+    await open(page, new URL(`/d/${archive}`, baseURL).href);
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Delete" })).toContainText("everything inside it");
+    await page.getByRole("dialog", { name: "Delete" }).getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page).toHaveURL(new RegExp(`/d/${rootId}$`));
+    await expect.poll(() => treeNames(page)).toEqual(["Beta", "Big"]);
+    expect((await db.prepare("SELECT count(*) AS n FROM vault_nodes WHERE id = ?1 OR parent_node_id = ?1")
+      .bind(archive).first<{ n: number }>())!.n).toBe(0);
+  } finally { await context.close(); }
+});
