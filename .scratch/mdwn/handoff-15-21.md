@@ -28,7 +28,7 @@ Session 3 baseline (at `ca11599`): typecheck clean, 105 node + 244 Worker tests,
 | 16 | All boxes ticked; Comment follow-ups done in `5032a66`. |
 | 17 | ~70%: Comment/Import permission-matrix rows and box ticking remain. |
 | 18 | ~65%: thread capability envelopes exist (21); box ticking remains. |
-| 19 | ~15%: rotation executor not started; **capability-epoch decision pending with the user** (below). |
+| 19 | ~15%: rotation executor not started; capability-epoch decision made (thread the real epoch, below). |
 | 20 | ~20%: fulfillment not started beyond direct-File current-key retry; must include waiting direct thread devices. |
 | 21 | All boxes ticked with evidence; needs only the final review. |
 
@@ -60,9 +60,9 @@ Design and wire contract live in `docs/sharing-server.md` § Private Comment thr
   - **Directory target, permission change:** re-seal the capability to the recipient's devices at the new generation.
   - **Directory target, recipient removed:** top-down subtree rekey, one Directory per step. The step installs a new capability, re-encrypts its entries, updates its entry in the parent, and rotates receiving pairs and thread epochs of its Files. Legacy File keys are rewrapped. Grant envelopes are re-sealed for remaining grants in the subtree.
   - Finish: delete the job, then the barrier, only after verification.
-- **Open decision (brought to the user in session 3, awaiting answer):** thread a real capability epoch through all Directory contexts (listing heads, `directory-metadata`, `directory-capability`; `loadDirectory` currently requires `capabilityEpoch === 1`), or keep context epoch 1 and only replace the random key while bumping `directories.capability_epoch` for Grant envelopes. Recommended: thread the real epoch, as a behaviour-preserving refactor commit first. The child's epoch can come from its committed `directory-capability` envelope header in the parent's signed listing (as legacy File keys already do), the root's from the Grant envelope `targetEpoch` (owned root: 1), and the server checks `directories.capability_epoch`; no listing-format change is needed. Do not start 19 before the user answers.
+- **Decision (user, 2026-09-27): thread the real Directory capability epoch** through all Directory contexts (listing heads, `directory-metadata`, `directory-capability`). Land it first as a behaviour-preserving refactor with every epoch still 1. The child's epoch comes from its committed `directory-capability` envelope header in the parent's signed listing (as legacy File keys already do), a granted root's from the Grant envelope `targetEpoch` (owned root: 1); the server checks `directories.capability_epoch`. No listing-format change.
 - UI copy must say rotation cannot recall already-downloaded content.
 
 ## Then
 
-17/18 matrix rows and ticks → 19 (after the epoch decision) → 20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.
+17/18 matrix rows and ticks → 19 (epoch refactor first) → 20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.

@@ -314,9 +314,10 @@ test("approval tampering, stale freshness, and a removed approver never activate
 test("the QR scanner decodes a camera video stream", async ({ page, baseURL }) => {
   const value = "qr-scanner-check";
   const qr = await QRCode.toDataURL(value, { errorCorrectionLevel: "M", width: 512, margin: 4 });
-  await page.goto(`${new URL(baseURL!).origin}/enroll-device/approve`, { waitUntil: "commit" });
-  await page.evaluate((imageUrl) => {
-    const mediaDevices = navigator.mediaDevices;
+  // Patch the prototype before any page script: WebKit can hand the loaded document a
+  // fresh navigator.mediaDevices instance, silently dropping an instance-level stub.
+  await page.addInitScript((imageUrl) => {
+    const mediaDevices = MediaDevices.prototype;
     Object.defineProperty(mediaDevices, "enumerateDevices", {
       configurable: true, value: async () => [{ kind: "videoinput", deviceId: "qr-test", groupId: "", label: "QR test" }],
     });
@@ -343,6 +344,7 @@ test("the QR scanner decodes a camera video stream", async ({ page, baseURL }) =
       },
     });
   }, qr);
+  await page.goto(`${new URL(baseURL!).origin}/enroll-device/approve`, { waitUntil: "commit" });
   await page.getByRole("button", { name: "Scan QR code" }).click();
   await expect(page.getByRole("textbox", { name: "Pairing link" })).toHaveValue(value, { timeout: 30_000 });
 });
