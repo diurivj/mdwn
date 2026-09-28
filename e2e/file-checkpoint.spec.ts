@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { openEditor } from "./editor-workspace.fixture";
+import { markCheckpointDiagnosticPhase, openEditor } from "./editor-workspace.fixture";
 import { commitConcurrentFileRevision } from "./editor-conflict.fixture";
 import { signDeviceBytes } from "./editor-fixture-crypto";
 import { decodeBytes, encodeBytes } from "../app/signup/protocol";
@@ -106,9 +106,12 @@ test("a second signed File head at the same revision cannot fork the visible Fil
   const { context, page, fileId, accountId } = await openEditor(browser, server, baseURL!);
   const reader = await context.newPage();
   try {
+    markCheckpointDiagnosticPhase(reader, "initial-reader-navigation");
     await reader.goto(new URL(`/f/${fileId}`, baseURL!).href);
     await expect(reader.getByRole("textbox", { name: "Markdown source" })).toHaveValue("");
+    markCheckpointDiagnosticPhase(reader, "same-head-reload-start");
     await reader.reload(); // Re-reading the exact same signed head remains valid.
+    markCheckpointDiagnosticPhase(reader, "same-head-reload-resolved");
     await expect(reader.getByRole("textbox", { name: "Markdown source" })).toHaveValue("");
     await reader.route(fileRead(fileId), async (route) => {
       const response = await route.fetch(); // Authentic Worker material, then a signed service-response fork.
@@ -126,10 +129,14 @@ test("a second signed File head at the same revision cannot fork the visible Fil
       data.representationId = forkedRepresentationId;
       await route.fulfill({ response, json: data });
     });
+    markCheckpointDiagnosticPhase(reader, "fork-replay-reload-start");
     await reader.reload();
+    markCheckpointDiagnosticPhase(reader, "fork-replay-reload-resolved");
     await expect(reader.getByRole("heading", { name: "Files unavailable" })).toBeVisible();
     await reader.unroute(fileRead(fileId));
+    markCheckpointDiagnosticPhase(reader, "restored-head-reload-start");
     await reader.reload();
+    markCheckpointDiagnosticPhase(reader, "restored-head-reload-resolved");
     await expect(reader.getByRole("textbox", { name: "Markdown source" })).toHaveValue("");
   } finally { await context.close(); }
 });

@@ -74,7 +74,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     async ({ server }, use, testInfo) => {
       await use();
 
-      if (testInfo.status !== testInfo.expectedStatus) {
+      if (testInfo.status !== testInfo.expectedStatus && !process.env.MDWN_E2E_DIAG_MODE) {
         server.debug();
       }
       await server.reset();
