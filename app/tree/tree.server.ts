@@ -7,6 +7,8 @@ import { saveFile } from "./save.server";
 import { directoryAccessGuard, fileAccessGuard, structuralAccessGuard } from "~/sharing/access.server";
 import { createV2Child, fileWriteContext, migrateV1File, migrationRecipients, readV2File, saveV2File,
   unblocked } from "./file-v2.server";
+import { deleteNode, moveChild, reorderChild } from "./structure.server";
+import { sharingBudget } from "~/sharing/budget.server";
 
 const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -251,7 +253,7 @@ async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
 }
 
 /** Resource-only tree API; every private read is a proof-guarded, bodyless POST. */
-export async function treeAction(request: Request, env: Env): Promise<Response> {
+export async function treeAction(request: Request, platform: Env): Promise<Response> {
   const path = new URL(request.url).pathname;
   const directory = /^\/api\/private\/tree\/directories\/([0-9a-f-]+)$/.exec(path);
   const create = /^\/api\/private\/tree\/directories\/([0-9a-f-]+)\/children$/.exec(path);
@@ -260,11 +262,27 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   const migrateFile = /^\/api\/private\/tree\/files\/([0-9a-f-]+)\/migrate$/.exec(path);
   const migrationDevices = /^\/api\/private\/tree\/files\/([0-9a-f-]+)\/migration-recipients$/.exec(path);
   const rename = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/name$/.exec(path);
+  const reorder = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/order$/.exec(path);
+  const move = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/parent$/.exec(path);
+  const remove = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)$/.exec(path);
   const pathToNode = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/ancestors$/.exec(path);
-  if (!(directory || create || file || fileContext || migrateFile || migrationDevices || rename || pathToNode) ||
-      !((directory || file || fileContext || migrationDevices || pathToNode) && request.method === "POST" || create && request.method === "PUT" ||
-        (rename || file || migrateFile) && request.method === "PATCH")) return notFound();
-  const nodeId = (directory || create || file || fileContext || migrateFile || migrationDevices || rename || pathToNode)![1]!;
+  const match = directory || create || file || fileContext || migrateFile || migrationDevices || rename ||
+    reorder || move || remove || pathToNode;
+  if (!match || !((directory || file || fileContext || migrationDevices || pathToNode) && request.method === "POST" ||
+      create && request.method === "PUT" || remove && request.method === "DELETE" ||
+      (rename || reorder || move || file || migrateFile) && request.method === "PATCH")) return notFound();
+  const nodeId = match[1]!;
+  // Structural mutations are metered like sharing resources: <= 50 statements,
+  // <= 100 bindings each, with a local-only diagnostic header for SELF.fetch tests.
+  const structural = reorder || move || remove;
+  const measured = structural ? sharingBudget(platform.DB) : null;
+  const env = measured ? { ...platform, DB: measured.db } : platform;
+  const report = async (response: Promise<Response>) => {
+    const value = await response;
+    if (measured && platform.APP_ENV === "local") value.headers.set("X-Mdwn-Sharing-Budget",
+      `${measured.budget.queries};${measured.budget.maxBindings}`);
+    return value;
+  };
   if (!isV7(nodeId)) return notFound();
   let raw = "", value: unknown;
   try {
@@ -303,5 +321,8 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   }
   if (pathToNode) return ancestors(env, auth, nodeId);
   if (create) return createChild(env, auth, nodeId, value);
+  if (reorder) return report(reorderChild(env, auth, nodeId, value));
+  if (move) return report(moveChild(env, auth, nodeId, value));
+  if (remove) return report(deleteNode(env, auth, nodeId, value));
   return renameChild(env, auth, nodeId, value);
 }

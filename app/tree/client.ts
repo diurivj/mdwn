@@ -75,7 +75,7 @@ async function rememberFileHead(ownerId: string, fileId: string, wire: FileHeadW
   });
 }
 
-function nameAgainstNamespace(name: string, existingNames: readonly string[]): string {
+export function nameAgainstNamespace(name: string, existingNames: readonly string[]): string {
   const canonical = canonicalizeSegment(name);
   if (existingNames.some((sibling) => sameComparisonKey(sibling, canonical))) throw new NameConflictError();
   return canonical.display;
@@ -86,7 +86,7 @@ function metadataContext(vaultId: string, parentId: string, childId: string) {
     keyId: parentId, keyEpoch: 1, revision: 1 };
 }
 
-async function encryptedEntry(parentKey: Uint8Array, vaultId: string, parentId: string,
+export async function encryptedEntry(parentKey: Uint8Array, vaultId: string, parentId: string,
   nodeId: string, name: string, order: string) {
   const writer = await createSymmetricWriter(parentKey);
   const context = metadataContext(vaultId, parentId, nodeId);
@@ -356,7 +356,7 @@ function listingCheckpointKey(vaultId: string, directoryId: string): string {
 }
 
 /** Browser-local high-water mark detects rolled-back/same-revision heads across navigations. */
-function rememberListing(vaultId: string, directoryId: string, revision: number, digest: string): void {
+export function rememberListing(vaultId: string, directoryId: string, revision: number, digest: string): void {
   if (typeof window === "undefined") return;
   const key = listingCheckpointKey(vaultId, directoryId);
   const previous = localStorage.getItem(key);

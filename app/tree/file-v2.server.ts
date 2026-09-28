@@ -52,13 +52,13 @@ export async function recipients(env: Env, ownerId: string, fileId: string): Pro
   return result;
 }
 
-type HeadRow = { file_node_id: string; owner_id: string; bytes: ArrayBuffer; digest: ArrayBuffer;
+export type HeadRow = { file_node_id: string; owner_id: string; bytes: ArrayBuffer; digest: ArrayBuffer;
   signature: ArrayBuffer; signer_device_id: string; assertion_public_key: ArrayBuffer;
   signer_account_id: string;
   receiving_public_key: ArrayBuffer; receiving_key_id: string; receiving_epoch: number;
   recipient_set_version: number; revision: number; representation_id: string; content_key_id: string;
   content_epoch: number; parent_envelope: ArrayBuffer };
-async function verified(row: HeadRow): Promise<VerifiedFileHead> {
+export async function verified(row: HeadRow): Promise<VerifiedFileHead> {
   const head = await verifyFileHead({ bytes: bytes(row.bytes), digest: bytes(row.digest), signature: bytes(row.signature) }, {
     ownerId: row.owner_id, vaultId: row.owner_id, fileId: row.file_node_id,
     signerDeviceId: row.signer_device_id, publicKey: bytes(row.assertion_public_key),
@@ -81,7 +81,7 @@ async function fileOwner(env: Env, fileId: string): Promise<string | null> {
   return (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM vault_nodes
     WHERE id = ${fileId} AND kind = 'file'`))?.owner_id ?? null;
 }
-async function headRow(env: Env, auth: AuthorizedDevice, ownerId: string, fileId: string): Promise<HeadRow | undefined> {
+export async function headRow(env: Env, auth: AuthorizedDevice, ownerId: string, fileId: string): Promise<HeadRow | undefined> {
   return createDb(env.DB).get<HeadRow>(sql`SELECT h.*, signer.assertion_public_key, signer.account_id AS signer_account_id
     FROM file_heads h JOIN encryption_devices signer ON signer.id = h.signer_device_id
     WHERE h.file_node_id = ${fileId} AND h.owner_id = ${ownerId}
@@ -192,7 +192,7 @@ export async function readV2File(env: Env, auth: AuthorizedDevice, fileId: strin
   } catch { return invalid(); }
 }
 
-function parseHead(value: unknown): SignedFileHead {
+export function parseHead(value: unknown): SignedFileHead {
   const input = record(value);
   if (!input || !exact(input, ["bytes", "digest", "signature"])) throw new Error("invalid File head");
   return { bytes: decodeTreeBytes(input.bytes, 131_072), digest: decodeTreeBytes(input.digest, 32),

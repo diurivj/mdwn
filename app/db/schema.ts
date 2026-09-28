@@ -867,5 +867,16 @@ export const fileWriteWitnesses = sqliteTable("file_write_witnesses", {
   proofId: text("proof_id").notNull(),
 }, (table) => [check("file_write_witnesses_proof_id_bounded", sql`length(${table.proofId}) BETWEEN 1 AND 256`)]);
 
+/** Transient hard-deletion marker, inserted and removed inside ONE teardown batch.
+ * Deleting a node (and a Directory namespace) requires its marker; no FK, so the
+ * marker never blocks the node deletion it authorizes. Never a soft-delete state. */
+export const treeTeardownNodes = sqliteTable("tree_teardown_nodes", {
+  nodeId: text("node_id").primaryKey(),
+  invocationId: text("invocation_id").notNull(),
+  ownerId: text("owner_id").notNull(),
+}, (table) => [index("tree_teardown_nodes_invocation_idx").on(table.invocationId),
+  check("tree_teardown_nodes_bounded", sql`length(${table.invocationId}) = 36
+    AND length(${table.nodeId}) BETWEEN 1 AND 256 AND length(${table.ownerId}) BETWEEN 1 AND 256`)]);
+
 export type Share = typeof shares.$inferSelect;
 export type Grant = typeof grants.$inferSelect;
