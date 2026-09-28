@@ -11,6 +11,7 @@ import { decodeTreeBytes, encodeTreeBytes } from "~/tree/wire";
 import { sealShareLabel, openShareLabel } from "./label";
 import { digestBytes, hex, signOffer, verifyOffer, type Offer } from "./offer";
 import { deriveShareHandleLookupToken } from "./share-handle";
+import type { ShareInvitePreparationStage } from "./share-types";
 
 export type GrantRoot = { grantId: string; ownerId: string; targetId: string;
   kind: "file" | "directory"; permission: "read_only" | "read_write";
@@ -23,9 +24,7 @@ export type ResolvedRecipient = { accountId: string; registryEpoch: number;
 export type ShareItem = { id: string; kind: "file" | "directory"; permission: "read_only" | "read_write"; createdAt: number };
 
 type StagedShareInviteAction = (signal: AbortSignal) => Promise<string>;
-export type ShareInvitePreparationStage = "recipient-key-import" | "label-sealing" | "file-key-reading" |
-  "content-key-validation" | "content-sealing" | "material-digests" | "file-head-signing" |
-  "offer-signing" | "share-submit";
+export type { ShareInvitePreparationStage };
 export class ShareInvitePreparationFailure extends Error {
   constructor(readonly stage: ShareInvitePreparationStage) {
     super("Share invitation preparation failed");

@@ -4,7 +4,7 @@ import type { TestHarness } from "wrangler";
 
 import { expect } from "./fixtures";
 import { openEditor } from "./editor-workspace.fixture";
-import type { ShareInvitePreparationStage } from "../app/sharing/client";
+import type { ShareInvitePreparationStage } from "../app/sharing/share-types";
 
 type TestAccount = Awaited<ReturnType<typeof openEditor>>;
 type Passkey = Awaited<ReturnType<BrowserContext["credentials"]["get"]>>[number];
@@ -207,7 +207,7 @@ export async function inviteFromCurrentPage(page: Page, shareId: string,
     const response = await requireInviteResponse(Promise.resolve(requestResult), trace, panel,
       "PUT", "/api/private/sharing/shares", outcome.kind === "stage" ? outcome.stage ?? undefined : undefined);
     if (expectedPreparationFailure) {
-      expect.fail(`Expected client preparation failure at ${expectedPreparationFailure}, but Share submission returned`);
+      throw new Error(`Expected client preparation failure at ${expectedPreparationFailure}, but Share submission returned`);
     }
     requireInviteStatus(response, "PUT", "/api/private/sharing/shares", 201, trace);
     const responseBody = await response.json() as { shareId?: unknown };
