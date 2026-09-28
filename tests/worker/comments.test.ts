@@ -386,6 +386,26 @@ describe("Private Comment threads", () => {
     expect((await call(owner, comments(mine), "DELETE")).status).toBe(200);
   });
 
+  it("pages a long thread oldest first in pages of 200", async () => {
+    const owner = await actor();
+    const fileId = await v2File(owner, owner.accountId, await root(owner), "long.md");
+    const thread = await createThread(owner, owner.accountId, fileId,
+      await receiving(owner, owner.accountId, fileId, owner.rootKey));
+    const ids = Array.from({ length: 201 }, () => uuid7()).sort();
+    await env.DB.batch(ids.map((id, index) => env.DB.prepare(`INSERT INTO comments (id, thread_id, author_id, epoch,
+      revision, ciphertext, created_at, updated_at) VALUES (?, ?, ?, 1, 1, X'01', ?, ?)`)
+      .bind(id, thread.threadId, owner.accountId, 1_000 + index, 1_000 + index)));
+    const first = (await read(owner, fileId)).body;
+    expect(first.comments.map((item) => item.commentId)).toEqual(ids.slice(0, 200));
+    expect(first.nextCursor).toBe(ids[199]);
+    const next = await call(owner, files(fileId), "POST", { cursor: first.nextCursor! });
+    await budget(next);
+    const second = await next.json() as WireRead;
+    expect(second.comments.map((item) => item.commentId)).toEqual([ids[200]]);
+    expect(second.nextCursor).toBeNull();
+    expect((await call(owner, files(fileId), "POST", { cursor: "not-an-id" })).status).toBe(400);
+  });
+
   it("keeps a legacy File without a thread until it is migrated", async () => {
     const owner = await actor();
     const fileId = await legacyFile(owner, owner.accountId, await root(owner), "old.md");

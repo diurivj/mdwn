@@ -1,4 +1,4 @@
-# Handoff: finish tickets 15–21 (session 2 → session 3)
+# Handoff: finish tickets 15–21 (session 3 → session 4)
 
 Repo `/Users/diurivj/coding/mdwn`, written 2026-09-27. Read `AGENTS.md`, `CONTEXT.md`, `docs/sharing-server.md`, `docs/adr/0008-*`, `docs/enc-v1.md` and tickets `.scratch/mdwn/issues/15-*` … `21-*` first.
 
@@ -10,27 +10,27 @@ Repo `/Users/diurivj/coding/mdwn`, written 2026-09-27. Read `AGENTS.md`, `CONTEX
 
 ## State of the branch
 
-`0558f43` (last real commit from session 1) + this session's commits:
-
 | Commit | What |
 |---|---|
 | `2177776` | 16 server: migration 0018, move/reorder/delete routes, `structure-client.ts`, Worker tests |
 | `24a1e42` | 16 UI (`StructureActions.tsx`, own row under the title), e2e spec; 15 legacy-save guard |
-| next commit | **WIP ticket 21** (see below) + ticket 15/16 evidence + this handoff |
+| `ca11599` | 21 WIP: schema + server + crypto + client |
+| `5032a66` | 21 lifecycle under revoke/move/delete, thread key-state route, registry-stale provisioning, `tests/worker/comments.test.ts` |
+| after `5032a66` | 21 `CommentsPanel` UI, pagination, `e2e/private-comments.spec.ts`, ticket 21 ticked, docs |
 
-Verified at the WIP commit: `npm run typecheck` passes; `npm test` 105 node + 244 Worker pass. Full `playwright test` ran once after the 16 server/UI change: 299 passed, 4 failed. Three of those were one real regression (the Share panel slid under the Files tree, so `sharing-browser.spec.ts:54` timed out), fixed in `24a1e42` and re-verified in Chromium only. The fourth was the known WebKit QR flake (`device-enrollment.spec.ts:314`, ticket 12). **Rerun the whole browser suite early next session.**
+Session 3 baseline (at `ca11599`): typecheck clean, 105 node + 244 Worker tests, full Playwright 302 passed / 1 failed (known WebKit QR flake `device-enrollment.spec.ts:314`).
 
 ## Ticket status
 
 | Ticket | State |
 |---|---|
 | 15 | All boxes ticked; needs only the final review. |
-| 16 | All boxes ticked with evidence in the ticket. Two follow-ups belong to 21 (below). |
+| 16 | All boxes ticked; Comment follow-ups done in `5032a66`. |
 | 17 | ~70%: Comment/Import permission-matrix rows and box ticking remain. |
-| 18 | ~60%: Private Comment thread capability envelopes (now designed, see 21) and box ticking. |
-| 19 | ~15%: rotation executor not started (design below). |
-| 20 | ~20%: fulfillment not started beyond direct-File current-key retry. |
-| 21 | ~35%: schema + server + crypto + client written, **untested, no UI** (WIP commit). |
+| 18 | ~65%: thread capability envelopes exist (21); box ticking remains. |
+| 19 | ~15%: rotation executor not started; **capability-epoch decision pending with the user** (below). |
+| 20 | ~20%: fulfillment not started beyond direct-File current-key retry; must include waiting direct thread devices. |
+| 21 | All boxes ticked with evidence; needs only the final review. |
 
 ## Key facts learned this session (not obvious from the code)
 
@@ -43,21 +43,13 @@ Verified at the WIP commit: `npm run typecheck` passes; `npm test` 105 node + 24
 - Firefox can throw `NS_BINDING_ABORTED` on a `page.goto` whose document did load; `e2e/tree-structure.spec.ts` retries once (`open()` helper).
 - Header layout: extra header buttons pushed the right-anchored Share panel (`SharingUI.tsx`, `absolute right-0 w-80`) under the Files tree. Keep new header controls out of the title row.
 
-## Ticket 21: design as implemented (WIP)
+## Ticket 21 (done, pending review)
 
-- Migration **0019**: `comment_threads` (one `audience='private'` per File, `current_epoch`), `comment_thread_epochs` (per-epoch `key_id`, HPKE `receiving_wrapper` to the File receiving key, `previous_wrapper` = previous epoch key sealed under this one), `comment_thread_device_envelopes` (current-epoch HPKE envelopes for direct-File-Grant devices only), `comments` (ciphertext, `author_id`, `epoch`, `revision`), `thread_attributions` (author's pseudonym per thread under an epoch key). Triggers enforce current-epoch writes, forward-only epochs, revision+1 edits, and direct-Grant/active-device/current-registry for device envelopes.
-- Key hierarchy: the Owner and Directory readers reach the thread key through the receiving private key (which follows the Directory capability). Direct readers use per-device envelopes. Any current reader can provision missing direct devices, and until then a direct reader sees "secure access is being prepared". Legacy v1 Files have no thread until migrated; the owned browser migrates on first edit.
-- Crypto (`app/comments/crypto.ts`): purposes `private-comment-thread` (HPKE to receiving key with `recipientId=receivingKeyId`, or to device `recipientId=deviceId`; symmetric for the previous-epoch chain), `comment-content` (plaintext `["mdwn/private-comment/v1", authorId, text]`, context objectId=commentId, revision=comment revision), `attribution` (plaintext `["mdwn/attribution/v1", accountId, pseudonym]`, objectId=accountId). Text: CRLF→LF, no other controls, ≤2,000 code points, ciphertext ≤9,216 bytes.
-- Server `app/comments/comments.server.ts` + route `app/routes/api/private-comments.ts` (metered budget): `POST /api/private/comments/files/:fileId` read (optional `{cursor}`), `PUT …/thread` create, `PATCH …/thread/devices` provision, `PUT …/comments` post, `PATCH /api/private/comments/comments/:id` edit own, `DELETE …/comments/:id` delete (author with read access, or Owner). Every ciphertext SELECT/CAS rechecks `fileAccessGuard`. Writes (not deletes) are blocked by rotation barriers.
-- Client `app/comments/client.ts`: `loadPrivateThread`, `createPrivateThread`, `provisionThreadDevices`, `postPrivateComment`, `editPrivateComment`, `deletePrivateComment`, `loadOwnPseudonym`.
+Design and wire contract live in `docs/sharing-server.md` § Private Comment threads and the ticket 21 comments. Things the next tickets must reuse:
 
-### Remaining for 21 (do these first)
-
-1. Worker tests (new `tests/worker/comments.test.ts`, reuse `tests/worker/tree-fixtures.ts`): thread create race, read-only participation, direct-reader device envelope and provisioning, author-only edit/delete, Owner delete-any but never edit, epoch/attribution rules, and a revoked device getting 404 with no ciphertext. Also budget headers.
-2. Revocation cleanup: `updateGrant` (`app/sharing/lifecycle.server.ts`) must delete `comment_thread_device_envelopes` for a removed direct-File recipient.
-3. Ticket-16 follow-ups: `deleteNode` must drain `comments`, `thread_attributions`, `comment_thread_device_envelopes`, `comment_thread_epochs`, `comment_threads` (in that order) before `files`. A v2 File move must re-wrap the thread key to the new receiving key. Recommended: rotate the thread epoch on move (new key, `previous_wrapper`, device envelopes for current direct devices); server requires it when a thread exists.
-4. UI: `CommentsPanel` in `FileEditor` (wide: right pane toggles Preview/Comments; narrow: third view "Comments"; "Private" thread label; composer at the bottom with an x/2000 counter; edit/delete own; Owner delete-any). Subject for hierarchy readers comes from `file.v2.receiving`; for direct readers use `LoadedDirectFile` plus device keys. Keep "Read-only — you can comment".
-5. e2e spec on all three engines; tick ticket 21 boxes with evidence.
+- Ticket 19: any receiving-pair rotation must also rotate the thread epoch in the same batch with `parseThreadRotation`/`threadRotationGuard`/`threadRotationStatements` (`app/comments/comments.server.ts`); the browser side is `loadThreadKeySource` + `prepareThreadRotation` (`app/comments/client.ts`), as `prepareTreeMove` does.
+- Ticket 20: waiting direct thread devices are provisioned only when a reader opens the Comments pane (`provisionThreadDevices`); the Owner's fulfillment loop should call the same route.
+- Public keys fed to HPKE must be imported extractable (workerd refuses non-extractable; browsers ignore the flag). `app/tree/editor-client.ts` `recipientKeys` still imports `false` and only works because browsers treat public keys as extractable.
 
 ## Ticket 19 design (agreed direction, not started)
 
@@ -68,9 +60,9 @@ Verified at the WIP commit: `npm run typecheck` passes; `npm test` 105 node + 24
   - **Directory target, permission change:** re-seal the capability to the recipient's devices at the new generation.
   - **Directory target, recipient removed:** top-down subtree rekey, one Directory per step. The step installs a new capability, re-encrypts its entries, updates its entry in the parent, and rotates receiving pairs and thread epochs of its Files. Legacy File keys are rewrapped. Grant envelopes are re-sealed for remaining grants in the subtree.
   - Finish: delete the job, then the barrier, only after verification.
-- **Open decision:** thread a real capability epoch through all Directory contexts (listing heads, `directory-metadata`, `directory-capability`; many call sites, and `loadDirectory` currently requires `capabilityEpoch === 1`), or keep context epoch 1 and only replace the random key while bumping `directories.capability_epoch` for Grant envelopes. Decide before coding; the first is more faithful to the spec.
+- **Open decision (brought to the user in session 3, awaiting answer):** thread a real capability epoch through all Directory contexts (listing heads, `directory-metadata`, `directory-capability`; `loadDirectory` currently requires `capabilityEpoch === 1`), or keep context epoch 1 and only replace the random key while bumping `directories.capability_epoch` for Grant envelopes. Recommended: thread the real epoch, as a behaviour-preserving refactor commit first. The child's epoch can come from its committed `directory-capability` envelope header in the parent's signed listing (as legacy File keys already do), the root's from the Grant envelope `targetEpoch` (owned root: 1), and the server checks `directories.capability_epoch`; no listing-format change is needed. Do not start 19 before the user answers.
 - UI copy must say rotation cannot recall already-downloaded content.
 
 ## Then
 
-17/18 matrix rows and ticks → 20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.
+17/18 matrix rows and ticks → 19 (after the epoch decision) → 20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.

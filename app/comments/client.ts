@@ -69,8 +69,10 @@ function importP256(raw: Uint8Array): Promise<CryptoKey> {
 const importDeviceKey = (publicKey: string) => importP256(decodeTreeBytes(publicKey, 65));
 
 /** Loads and decrypts one page of the Private thread, opening older epoch keys through the chain. */
-export async function loadPrivateThread(subject: ThreadSubject, signal?: AbortSignal): Promise<LoadedThread> {
-  const response = await privateRequest(`/api/private/comments/files/${subject.fileId}`, { method: "POST", signal });
+export async function loadPrivateThread(subject: ThreadSubject,
+  options: { cursor?: string; signal?: AbortSignal } = {}): Promise<LoadedThread> {
+  const response = await privateRequest(`/api/private/comments/files/${subject.fileId}`, { method: "POST",
+    signal: options.signal, ...(options.cursor ? { body: JSON.stringify({ cursor: options.cursor }) } : {}) });
   if (response.status === 404) throw new CommentsUnavailableError("not_found");
   if (!response.ok) throw new CommentsUnavailableError("unavailable");
   const wire = await response.json() as WireThread;

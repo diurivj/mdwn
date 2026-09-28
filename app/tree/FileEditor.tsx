@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBlocker, useNavigation } from "react-router";
+
+import type { ThreadSubject } from "~/comments/client";
+import { CommentsPanel } from "~/comments/CommentsPanel";
 
 import { loadDirectFile, loadDirectory, loadFile, type DirectoryListing, type LoadedDirectFile,
   type LoadedFile, type RootAccess } from "./client";
@@ -7,6 +10,7 @@ import { commitDirectFileSave, commitFileSave, FileChangedError, FILE_LIMIT_FEED
   sourceBytes, withinFileLimit } from "./editor-client";
 import { useFileLease } from "./edit-lease";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { decodeTreeBytes } from "./wire";
 
 type SaveStatus = "Unsaved" | "Saving" | "Saved" | "Couldn't save";
 type Operation = "save" | "overwrite" | "reload";
@@ -61,7 +65,10 @@ export function FileEditor(props: Props) {
   const current = useRef(state);
   const [composition, setComposition] = useState<string | null>(null);
   const [compositionEpoch, setCompositionEpoch] = useState(0);
-  const [view, setView] = useState<"edit" | "preview">("edit");
+  // Narrow layouts show one view; wide layouts keep the editor and switch the right pane.
+  const [narrowView, setNarrowView] = useState<"edit" | "pane">("edit");
+  const [pane, setPane] = useState<"preview" | "comments">("preview");
+  const [commentsOpened, setCommentsOpened] = useState(false);
   const [notice, setNotice] = useState("");
   const [refreshingLease, setRefreshingLease] = useState(false);
   const [leavingFailed, setLeavingFailed] = useState(false);
@@ -82,6 +89,28 @@ export function FileEditor(props: Props) {
   // Neither a visual control nor a synthetic late input may accept a disposable draft.
   const editingLocked = editingFrozen || !authorityVerified || !writable || navigation.state !== "idle" ||
     blocker.state === "proceeding" || !lease.owner || refreshingLease || state.busy === "reload";
+
+  // The Private thread subject follows the verified receiving key; a legacy File has none yet.
+  const threadFile = state.file;
+  const receivingKey = "ownerId" in threadFile ? threadFile.head.statement.receivingKey :
+    threadFile.v2?.head.statement.receivingKey;
+  const subject = useMemo<ThreadSubject | null>(() => {
+    if (!receivingKey) return null;
+    if ("ownerId" in threadFile) {
+      return { ownerId: threadFile.ownerId, fileId, actorAccountId: props.actorAccountId!,
+        receivingKeyId: receivingKey.id, receivingEpoch: receivingKey.epoch,
+        receivingPublicKey: decodeTreeBytes(threadFile.receivingPublicKey, 65) };
+    }
+    if (!threadFile.v2 || props.direct) return null;
+    return { ownerId: props.access.vaultId, fileId, actorAccountId: props.access.actorAccountId ?? props.access.vaultId,
+      receivingKeyId: receivingKey.id, receivingEpoch: receivingKey.epoch,
+      receivingPublicKey: decodeTreeBytes(threadFile.v2.receivingPublicKey, 65), receiving: threadFile.v2.receiving };
+  }, [fileId, receivingKey?.id, receivingKey?.epoch]);
+  function show(next: "edit" | "preview" | "comments") {
+    setNarrowView(next === "edit" ? "edit" : "pane");
+    if (next !== "edit") setPane(next);
+    if (next === "comments") setCommentsOpened(true);
+  }
 
   function update(fn: (old: EditorState) => EditorState) {
     if (!alive.current) return;
@@ -375,11 +404,18 @@ export function FileEditor(props: Props) {
       </div>
     </div>}
     <div className="mt-6 flex gap-3 lg:hidden" role="group" aria-label="File view">
-      <button type="button" aria-pressed={view === "edit"} onClick={() => setView("edit")}>Edit</button>
-      <button type="button" aria-pressed={view === "preview"} onClick={() => setView("preview")}>Preview</button>
+      <button type="button" aria-pressed={narrowView === "edit"} onClick={() => show("edit")}>Edit</button>
+      <button type="button" aria-pressed={narrowView === "pane" && pane === "preview"}
+        onClick={() => show("preview")}>Preview</button>
+      <button type="button" aria-pressed={narrowView === "pane" && pane === "comments"}
+        onClick={() => show("comments")}>Comments</button>
+    </div>
+    <div className="mt-6 hidden justify-end gap-3 lg:flex" role="group" aria-label="Side pane">
+      <button type="button" aria-pressed={pane === "preview"} onClick={() => show("preview")}>Preview</button>
+      <button type="button" aria-pressed={pane === "comments"} onClick={() => show("comments")}>Comments</button>
     </div>
     <div className="mt-4 grid min-h-[50vh] gap-4 lg:grid-cols-2">
-      <section className={`${view === "preview" ? "hidden lg:block" : ""}`} aria-label="Editor">
+      <section className={`${narrowView === "pane" ? "hidden lg:block" : ""}`} aria-label="Editor">
         <h2 className="mb-2 font-medium">Markdown source</h2>
         <textarea id={`source-${fileId}`} readOnly={editingLocked}
           value={composition ?? state.source} aria-label="Markdown source"
@@ -415,12 +451,22 @@ export function FileEditor(props: Props) {
           }}
           className="h-[50vh] w-full resize-none rounded border border-stone-300 bg-white p-3 font-mono text-sm" />
       </section>
-      <section className={`${view === "edit" ? "hidden lg:block" : ""}`} aria-label="Preview">
+      <section className={`${narrowView === "edit" || pane !== "preview" ? "hidden" : ""} ${
+        pane === "preview" ? "lg:block" : ""}`} aria-label="Preview">
         <h2 className="mb-2 font-medium">Preview</h2>
         <div className="min-h-[50vh] rounded border border-stone-300 bg-white p-3">
           <MarkdownPreview source={state.source} />
         </div>
       </section>
+      {/* Mounted on first open and then kept, so a draft survives switching panes. */}
+      {commentsOpened && <section className={`${narrowView === "edit" || pane !== "comments" ? "hidden" : ""} ${
+        pane === "comments" ? "lg:block" : ""}`} aria-label="Comments">
+        <h2 className="mb-2 font-medium">Comments</h2>
+        <div className="rounded border border-stone-300 bg-white p-3">
+          <CommentsPanel key={`${subject?.receivingKeyId}:${subject?.receivingEpoch}`} subject={subject}
+            authorityVerified={authorityVerified} />
+        </div>
+      </section>}
     </div>
   </>;
 }
