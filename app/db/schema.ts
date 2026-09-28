@@ -878,5 +878,100 @@ export const treeTeardownNodes = sqliteTable("tree_teardown_nodes", {
   check("tree_teardown_nodes_bounded", sql`length(${table.invocationId}) = 36
     AND length(${table.nodeId}) BETWEEN 1 AND 256 AND length(${table.ownerId}) BETWEEN 1 AND 256`)]);
 
+/** Exactly one Private thread per File; Public threads arrive with Publications (ticket 23). */
+export const commentThreads = sqliteTable("comment_threads", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  fileNodeId: text("file_node_id").notNull(),
+  audience: text("audience").notNull(),
+  /** Current thread-key epoch; older epochs stay readable through the epoch chain. */
+  currentEpoch: integer("current_epoch").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("comment_threads_private_file_idx").on(table.fileNodeId).where(sql`${table.audience} = 'private'`),
+  uniqueIndex("comment_threads_owner_id_idx").on(table.ownerId, table.id),
+  foreignKey({ columns: [table.ownerId, table.fileNodeId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+  check("comment_threads_bounded", sql`${table.audience} = 'private'
+    AND ${table.currentEpoch} BETWEEN 1 AND 9007199254740991 AND ${table.createdAt} >= 0`),
+]);
+
+/** One thread key per epoch: HPKE-wrapped to the File receiving key (Directory readers and
+ * the Owner reach it through the hierarchy) and, from epoch 2, the previous epoch's key
+ * sealed under this one so current readers keep the thread's history. Never plaintext. */
+export const commentThreadEpochs = sqliteTable("comment_thread_epochs", {
+  threadId: text("thread_id").notNull().references(() => commentThreads.id, { onDelete: "restrict" }),
+  epoch: integer("epoch").notNull(),
+  keyId: text("key_id").notNull(),
+  receivingKeyId: text("receiving_key_id").notNull(),
+  receivingEpoch: integer("receiving_epoch").notNull(),
+  receivingWrapper: blob("receiving_wrapper").notNull(),
+  previousWrapper: blob("previous_wrapper"),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.threadId, table.epoch] }),
+  check("comment_thread_epochs_bounded", sql`${table.epoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.receivingEpoch} BETWEEN 1 AND 9007199254740991
+    AND length(${table.keyId}) BETWEEN 1 AND 256 AND length(${table.receivingKeyId}) BETWEEN 1 AND 256
+    AND length(${table.receivingWrapper}) BETWEEN 1 AND 4096
+    AND ((${table.epoch} = 1 AND ${table.previousWrapper} IS NULL)
+      OR (${table.epoch} > 1 AND length(${table.previousWrapper}) BETWEEN 1 AND 4096))`),
+]);
+
+/** Current-epoch thread key for one direct-File-Grant device; no Grant-derived material in recovery. */
+export const commentThreadDeviceEnvelopes = sqliteTable("comment_thread_device_envelopes", {
+  threadId: text("thread_id").notNull(),
+  epoch: integer("epoch").notNull(),
+  recipientId: text("recipient_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  registryEpoch: integer("registry_epoch").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.threadId, table.deviceId] }),
+  index("comment_thread_device_envelopes_device_idx").on(table.deviceId),
+  foreignKey({ columns: [table.threadId, table.epoch],
+    foreignColumns: [commentThreadEpochs.threadId, commentThreadEpochs.epoch] }).onDelete("restrict"),
+  check("comment_thread_device_envelopes_bounded", sql`${table.epoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.registryEpoch} BETWEEN 1 AND 9007199254740991
+    AND length(${table.ciphertext}) BETWEEN 1 AND 4096 AND length(${table.digest}) = 32`),
+]);
+
+/** Flat, ordered plain-text Comments: ciphertext only, no moderation-searchable text. */
+export const comments = sqliteTable("comments", {
+  id: text("id").primaryKey(),
+  threadId: text("thread_id").notNull(),
+  authorId: text("author_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  epoch: integer("epoch").notNull(),
+  revision: integer("revision").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("comments_thread_order_idx").on(table.threadId, table.createdAt, table.id),
+  foreignKey({ columns: [table.threadId, table.epoch],
+    foreignColumns: [commentThreadEpochs.threadId, commentThreadEpochs.epoch] }).onDelete("restrict"),
+  check("comments_bounded", sql`${table.epoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.revision} BETWEEN 1 AND 9007199254740991
+    AND length(${table.ciphertext}) BETWEEN 1 AND 9216
+    AND ${table.createdAt} >= 0 AND ${table.updatedAt} >= ${table.createdAt}`),
+]);
+
+/** Each author's encrypted Public-pseudonym declaration for one thread, under a thread-key epoch. */
+export const threadAttributions = sqliteTable("thread_attributions", {
+  threadId: text("thread_id").notNull(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  epoch: integer("epoch").notNull(),
+  revision: integer("revision").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.threadId, table.accountId] }),
+  foreignKey({ columns: [table.threadId, table.epoch],
+    foreignColumns: [commentThreadEpochs.threadId, commentThreadEpochs.epoch] }).onDelete("restrict"),
+  check("thread_attributions_bounded", sql`${table.epoch} BETWEEN 1 AND 9007199254740991
+    AND ${table.revision} BETWEEN 1 AND 9007199254740991
+    AND length(${table.ciphertext}) BETWEEN 1 AND 2048 AND ${table.updatedAt} >= 0`),
+]);
+
 export type Share = typeof shares.$inferSelect;
 export type Grant = typeof grants.$inferSelect;

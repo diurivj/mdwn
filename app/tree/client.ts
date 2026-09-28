@@ -42,7 +42,9 @@ export type RootAccess = { scope?: "owned" | "directory-grant"; vaultId: string;
   grantId?: string; rootLabel?: string };
 export type LoadedFile = { parentId: string; revision: number; representationId: string;
   contentKeyId: string; keyEpoch: number; markdown: string; metadata: Uint8Array;
-  v2?: { head: VerifiedFileHead; receivingPublicKey: string; signedHead: FileHeadWire } };
+  v2?: { head: VerifiedFileHead; receivingPublicKey: string; signedHead: FileHeadWire;
+    /** Verified against the signed target; opens this File's Private Comment thread key. */
+    receiving: CryptoKeyPair } };
 export type FileHeadWire = { bytes: string; digest: string; signature: string;
   signerDeviceId: string; signerAccountId?: string; signerPublicKey: string };
 export async function authenticateFileHead(wire: FileHeadWire, ownerId: string, fileId: string,
@@ -295,7 +297,7 @@ export async function loadFile(access: RootAccess, fileId: string, parentId: str
     await rememberFileHead(access.vaultId, fileId, file.fileHead, head, signal);
     return { parentId, revision: file.revision, representationId: file.representationId,
       contentKeyId: file.contentKeyId, keyEpoch: file.keyEpoch, ...plaintext,
-      v2: { head, receivingPublicKey: file.receivingPublicKey, signedHead: file.fileHead } };
+      v2: { head, receivingPublicKey: file.receivingPublicKey, signedHead: file.fileHead, receiving: pair } };
   }
   if (expectedEntry.encoding && expectedEntry.encoding !== "legacy-file" || file.fileHead) {
     throw new Error("invalid File encoding");

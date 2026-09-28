@@ -27,12 +27,12 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   const rows = await createDb(env.DB).get<{
     root_directory_id: string; root_envelope: ArrayBuffer; enrollment_envelope: ArrayBuffer;
     capsule: ArrayBuffer; recovery_salt: ArrayBuffer; verification_public_key: ArrayBuffer;
-    profile: ArrayBuffer;
+    profile: ArrayBuffer; profile_epoch: number; profile_revision: number;
   }>(sql`
     SELECT i.root_directory_id, root.ciphertext AS root_envelope,
       enrollment.ciphertext AS enrollment_envelope,
       c.ciphertext AS capsule, c.recovery_salt, c.verification_public_key,
-      p.ciphertext AS profile
+      p.ciphertext AS profile, p.epoch AS profile_epoch, p.revision AS profile_revision
     FROM account_encryption_identities i
     JOIN key_envelopes root ON root.account_id = i.account_id
       AND root.purpose = 'vault-recovery' AND root.object_id = i.root_directory_id
@@ -56,5 +56,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     recoverySalt: encodeBytes(new Uint8Array(rows.recovery_salt)),
     recoveryVerificationPublicKey: encodeBytes(new Uint8Array(rows.verification_public_key)),
     encryptedProfile: encodeBytes(new Uint8Array(rows.profile)),
+    // Trusted current profile coordinates; the envelope header is never authority.
+    profileEpoch: rows.profile_epoch, profileRevision: rows.profile_revision,
   }, { headers: { "Cache-Control": "no-store" } });
 }
