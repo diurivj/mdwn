@@ -6,6 +6,7 @@ import { createChildDirectoryCapability, generateDirectoryCapabilityKey } from "
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { sealShareLabel, openShareLabel } from "../../app/sharing/label";
 import { hex, signOffer, verifyOffer, parseOffer, digestBytes, type Offer } from "../../app/sharing/offer";
+import { prepareGrantSeals, type RotationStep } from "../../app/sharing/rotation-client";
 import type { FileProvisioningBootstrap } from "../../app/sharing/provisioning-wire";
 import { signFileHead, verifyFileHead, assertFileHeadCommitTransition,
   assertExactFileRecipientDescriptors, verifyDirectFileRecipientEnvelope, type FileHeadStatement } from "../../app/tree/file-head";
@@ -815,5 +816,57 @@ describe("private sharing lifecycle through the built Worker", () => {
     expect(historical.listingHead!.signerDeviceId).toBe(recipient.deviceId);
     const blocked = await owner.request(`/api/private/tree/directories/${directory.childId}/children`, "PUT", {});
     expect(blocked.status).not.toBe(201);
+  });
+});
+
+describe("Directory permission-change rotation", () => {
+  it("re-seals the capability at the new generation under a re-signed offer that roots accept", async () => {
+    const owner = await account(), recipient = await account();
+    const directory = await createDirectory(owner, owner, owner.rootId, owner.rootKey, "Team");
+    const invitation = await inviteDirectory(owner, recipient, directory.childId, directory.key, "Team");
+    expect((await recipient.request(`/api/private/sharing/shares/${invitation.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    const rootsOf = async () => (await (await recipient.request("/api/private/sharing/roots", "POST")).json() as {
+      roots: { grantId: string; status: string; permission: string; generation: number;
+        capability?: { ciphertext: string; targetKeyId: string; targetEpoch: number } }[] }).roots[0]!;
+    expect(await rootsOf()).toMatchObject({ status: "ready", permission: "read_write", generation: 1 });
+
+    expect((await owner.request(`/api/private/sharing/grants/${invitation.grantId}`, "PATCH",
+      { permission: "read_only" })).status).toBe(200);
+    // Authority changed at once; the old capability envelope is gone until the Owner re-seals it.
+    expect(await rootsOf()).toMatchObject({ status: "provisioning", permission: "read_only", generation: 2 });
+    const next = await owner.request(`/api/private/rotations/${directory.childId}/next`, "POST");
+    expect(next.status, await next.clone().text()).toBe(200);
+    checkBudget(next.headers.get("X-Mdwn-Sharing-Budget"));
+    const step = await next.json() as Extract<RotationStep, { step: "grants" }>;
+    expect(step).toMatchObject({ step: "grants", mode: "reprovision", epoch: 1 });
+    expect(step.grants.map((item) => [item.grantId, item.generation, item.devices.length]))
+      .toEqual([[invitation.grantId, 2, 1]]);
+    const grants = await prepareGrantSeals({ ownerId: owner.accountId, directoryId: directory.childId,
+      key: directory.key, epoch: 1, signer: { deviceId: owner.deviceId, assertionKey: owner.signing.privateKey },
+      grants: step.grants });
+    const tampered = { ...grants[0]!, envelopes: grants[0]!.envelopes.map((item) => ({ ...item,
+      ciphertext: invitation.ciphertext.length ? enc(invitation.ciphertext) : item.ciphertext })) };
+    expect((await owner.request(`/api/private/rotations/${directory.childId}/grants`, "PATCH",
+      { barrierEpoch: step.barrierEpoch, epoch: 1, grants: [tampered] })).status).toBe(400);
+    const done = await owner.request(`/api/private/rotations/${directory.childId}/grants`, "PATCH",
+      { barrierEpoch: step.barrierEpoch, epoch: 1, grants });
+    expect(done.status, await done.clone().text()).toBe(200);
+    checkBudget(done.headers.get("X-Mdwn-Sharing-Budget"));
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM sharing_rotation_jobs WHERE target_node_id = ?")
+      .bind(directory.childId).first()).toEqual({ n: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM rotation_barriers WHERE target_node_id = ?")
+      .bind(directory.childId).first()).toEqual({ n: 0 });
+
+    const ready = await rootsOf();
+    expect(ready).toMatchObject({ status: "ready", permission: "read_only", generation: 2 });
+    const opened = await openForRecipient(decodeTreeBytes(ready.capability!.ciphertext, 16_384), recipient.transport,
+      { context: { purpose: "grant", vaultId: owner.accountId, objectId: directory.childId,
+        keyId: directory.childId, keyEpoch: 1, revision: 1, recipientId: recipient.deviceId } });
+    expect(opened).toEqual(directory.key);
+    const stored = await env.DB.prepare("SELECT offer_bytes FROM grant_labels WHERE grant_id = ?")
+      .bind(invitation.grantId).first<{ offer_bytes: ArrayBuffer }>();
+    expect(parseOffer(new Uint8Array(stored!.offer_bytes))).toMatchObject({ materialRevision: 2,
+      permission: "read_only", targetEpoch: 1 });
   });
 });

@@ -21,6 +21,7 @@ export default [
   route("api/private/tree/*", "routes/api/private-tree.ts"),
   route("api/private/sharing/*", "routes/api/private-sharing.ts"),
   route("api/private/comments/*", "routes/api/private-comments.ts"),
+  route("api/private/rotations/*", "routes/api/private-rotations.ts"),
   route("resources/sharing", "routes/resources/sharing.ts"),
   route("api/auth/*", "routes/auth.ts"),
   route("api/signup/*", "routes/signup.ts"),
