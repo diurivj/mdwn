@@ -2,6 +2,26 @@
 
 Repo `/Users/diurivj/coding/mdwn`, written 2026-09-27. Read `AGENTS.md`, `CONTEXT.md`, `docs/sharing-server.md`, `docs/adr/0008-*`, `docs/enc-v1.md` and tickets `.scratch/mdwn/issues/15-*` … `21-*` first.
 
+## Session 4 resume (2026-09-29)
+
+Claude Code's orchestrator session (`c9005de1-…` under `~/.claude/projects/-Users-diurivj-coding-mdwn/`) hit its account session limit at ~10:04, and so did its ticket-20 implementer sub-agent (`agent-a69589c513ce21e1a`). Nothing was pushed. The user asked for the work to continue outside Claude Code; orchestration may spawn implementers again.
+
+**Verified hand-over state**
+
+- `feat/15-21-private-workspace` is clean at `b21ea57` (tracker-only: ticket 07's criteria re-homed — rotation and 24 h physical deletion to 31, the Public Comment 429 with draft survival and the honeypot to 23).
+- Ticket 20 was spawned as `work/20-grant-fulfillment` in `.claude/worktrees/agent-a69589c513ce21e1a`; that worktree is **clean at `b21ea57`** — the implementer finished its design pass and wrote no code.
+- That design pass found (from its transcript): provisioning needs are only created when a Grant is accepted, so a device joining later by routine enrollment or Vault recovery never gets one recorded; and because Vault recovery removes every old device, each Grant the Account received needs a fresh need. Two questions it was told to settle in a note and never reported: whether enrollment advancing the registry epoch makes existing devices' Shared-as label deliveries stale, and that Grants have no expiry column although the ticket says "revoked or expired" (do not invent expiry).
+- Baseline at `b21ea57`: typecheck clean; `npm test` 105 unit + 262 Worker pass; build passes; full Playwright **311 passed / 1 failed**.
+
+**The Chromium failure, diagnosed and fixed this session**
+
+`tree-structure.spec.ts` failed **4/4** when rerun alone on Chromium, so it was never a flake. From instrumented runs (`/private/tmp/mdwn-chromium-hang-probe*.log`):
+
+- The test hangs in `open()` on `page.waitForLoadState("networkidle")` after the hard-deleted File's page renders "Not found". The page is idle and responsive (`readyState: "complete"`, `loadEventEnd` ~31 ms, no other request in flight), yet Chromium never reports that document network-idle.
+- One request is stuck: `POST /api/private/sharing/scope` for the deleted node, `timing` `responseStart: 3 ms, responseEnd: -1` at 60 s. The harness delivered the response headers (404) and the app reads only `response.status`, so it renders "Not found" correctly and never notices the body is missing.
+- The Worker is healthy: `/healthz` answers 401 during the hang, and replaying that exact request from Node (same URL, cookies, body, via `page.context().request`) returns `404 bodyBytes=21 {"error":"not_found"}` in milliseconds. The stall is in the harness's HTTP delivery, not in the app or the Worker. Reloading the page does not clear it; the next scope POST stalls the same way.
+- Fix (test-only, consistent with the earlier decision on the WebKit keep-alive race): `e2e/support/settle.ts` waits for network-idle with a 10 s cap instead of unbounded, used by `tree-structure.spec.ts` (`open()`), `file-checkpoint.spec.ts` (`settledReload()`) and `editor-revalidation.spec.ts`. All three call sites exist for the same reason — leave only once lazy route modules have loaded, then retry the navigation — and all three were exposed to the same stall.
+
 ## Rules from the user (do not relitigate)
 
 - **Stay local.** Work on local branch `feat/15-21-private-workspace`. No push, no PR, until 15–21 are finished and reviewed; then one Standards/Spec/RR8 review and one PR. Ask before any push.
@@ -80,6 +100,11 @@ Design and wire contract live in `docs/sharing-server.md` § Private Comment thr
 ## For ticket 20 (next)
 
 - **Decision (user, 2026-09-29): only the Owner's browser fulfills needs.** A recipient's devices never fulfill, and the ticket 18 direct-File holder completion stays as it is. Session 4 (orchestrator) runs ticket 20 as Sonnet implementer `work/20-grant-fulfillment`, branched from `feat/15-21-private-workspace`.
+- **Design facts found later the same day (read-only research, quotes in the session log):**
+  - `provisioning_needs` is written in exactly one place, `acceptShare` (`app/sharing/lifecycle.server.ts:390-410`), and **nothing reads it** — there is no `SELECT ... FROM provisioning_needs` in `app/` and no route exposes needs. Fulfillment has to build the read path.
+  - **Advancing the registry epoch invalidates every existing device's sharing material, not just the new device's.** Deliveries are stamped with the account epoch (`lifecycle.server.ts:337-341`), and reads demand exact equality with the current account epoch (`app/sharing/sharing.server.ts:218-220`, `lifecycle.server.ts:589,595`, `provisioning.server.ts:273-274`, `comments/comments.server.ts:135`, `tree/file-v2.server.ts:178`; `auth.registryEpoch` comes from `account_encryption_identities` in `app/device/proof.server.ts:24-26`). Enrollment and recovery advance it (`app/enrollment/enrollment.server.ts:292-295` + trigger `drizzle/0004_device_registry_epochs.sql:17-36`). Nothing re-stamps `grant_label_deliveries.registry_epoch` today — `grantSealStatements` rewrites `grant_device_envelopes` and the `grant_labels` offer only (`app/sharing/rotation.server.ts:191-217`). Direct-File retained material is the exception: it is epoch-agnostic (`provisioning.server.ts:88-96`).
+  - **Grants have no expiry, status or revoked column** (`app/db/schema.ts:599-620`); a Grant stops by row deletion (`lifecycle.server.ts:501`, `tree/structure.server.ts:338`). The ticket's "revoked or expired" has no schema support — do not invent expiry.
+  - Closest building blocks: `app/sharing/rotation.server.ts` (`grantMaterial`, `parseGrantSeals`, `grantSealStatements`, `resealDirectoryGrants`, `nextRotationStep`), `app/sharing/rotation-client.ts` (`prepareGrantSeals`, `runPendingRotations`, `runRotationStep`), the Owner runner `app/device/owned-provision-client.ts`, the direct-File path in `app/sharing/provisioning.server.ts`, and the route `app/routes/api/private-rotations.ts`.
 - **Ticket 07 open criteria (user, 2026-09-29):** Network-bucket rotation and 24 h physical deletion go to 31. The Public Comment 429 with draft survival, and the honeypot, go to 23 (criteria added there).
 - Re-sealing a Directory capability for a device needs a **re-signed offer** listing that device (see `prepareGrantSeals`/`parseGrantSeals`/`grantSealStatements` in `app/sharing/rotation-{client,server}.ts`); a device without a current `grant_label_deliveries` row also needs its Shared-as label re-sealed. The Owner can open the label from `grant_labels.owner_copy` with the Vault root.
 - Direct File devices need a same-revision recipient-set update (`prepareFileTargetRotation` does this for the live set) plus Private thread envelopes (`provisionThreadDevices`).
