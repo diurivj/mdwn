@@ -4,15 +4,15 @@
 
 **Blocked by:** 11 (Vault recovery and replacement-device enrollment), 12 (Routine Encryption-device enrollment), 18 (Grant capability envelopes and shared-content provisioning).
 
-**Status:** ready-for-agent
+**Status:** ready-for-review
 
-- [ ] When an active Grant lacks an envelope for a new or replacement device, the service records only an opaque provisioning need — no object name, plaintext, or capability.
-- [ ] An already authorized source browser — normally the File or Directory Owner's browser — provisions the current Grant/Comment capability when it next processes that need.
-- [ ] Until the need is fulfilled, the recipient sees **Shared content is being securely provisioned** with no names, plaintext, or URL-fragment fallback.
-- [ ] A revoked or expired Grant cancels its need, and a need can never provision an old capability or resurrect access that has been withdrawn.
-- [ ] Fulfillment is idempotent and bounded, and interrupted provisioning resumes from an enrolled device.
-- [ ] The flow works after Vault recovery (ticket 11) and after routine enrollment (ticket 12) without weakening either cutover's rules.
-- [ ] Tests prove only active Grant holders can provision, a recovered device receives nothing through its Vault-root envelope, revocation before fulfillment leaves the recipient without access, and no provisioning happens after revocation.
+- [x] When an active Grant lacks an envelope for a new or replacement device, the service records only an opaque provisioning need — no object name, plaintext, or capability.
+- [x] An already authorized source browser — normally the File or Directory Owner's browser — provisions the current Grant/Comment capability when it next processes that need.
+- [x] Until the need is fulfilled, the recipient sees **Shared content is being securely provisioned** with no names, plaintext, or URL-fragment fallback.
+- [x] A revoked or expired Grant cancels its need, and a need can never provision an old capability or resurrect access that has been withdrawn.
+- [x] Fulfillment is idempotent and bounded, and interrupted provisioning resumes from an enrolled device.
+- [x] The flow works after Vault recovery (ticket 11) and after routine enrollment (ticket 12) without weakening either cutover's rules.
+- [x] Tests prove only active Grant holders can provision, a recovered device receives nothing through its Vault-root envelope, revocation before fulfillment leaves the recipient without access, and no provisioning happens after revocation.
 
 ## Comments
 
@@ -20,3 +20,12 @@
 - 2026-09-29: User decision: **only the Owner's browser fulfills needs.** It processes provisioning needs after pending rotation jobs, from the same runner on owned Files pages, and handles Directory capabilities under re-signed offers, Shared-as label deliveries, direct-File recipient sets and Private thread device envelopes. A recipient's own devices do not fulfill; that would need a new recipient-signed proof format. The existing ticket 18 direct-File holder completion (`PATCH /direct-files/:fileId/complete`) stays as it is and is not extended.
 - 2026-09-29: Design facts verified before implementation. `provisioning_needs` is inserted in one place, `acceptShare` (`app/sharing/lifecycle.server.ts:390-410`), and **never selected anywhere in `app/`** — it is only deleted (`lifecycle.server.ts:497`, `tree/structure.server.ts:335`, `provisioning.server.ts:252-259`, `rotation.server.ts:212-215`), so the fulfillment read path has to be built. Per-device material is stamped with the account registry epoch and every read demands exact equality with the current one (`app/sharing/sharing.server.ts:218-220`, `lifecycle.server.ts:589,595`, `provisioning.server.ts:273-274`, `comments/comments.server.ts:135`, `tree/file-v2.server.ts:178`), so **an enrollment or a Vault recovery invalidates every existing device's deliveries, not only the joining or replacement device's**. Nothing re-stamps `grant_label_deliveries.registry_epoch` today; `grantSealStatements` rewrites `grant_device_envelopes` and the label offer only. Direct-File retained material is the exception — it is validated by key id/epoch/revision and digests, not by registry epoch.
 - 2026-09-29: User decisions on the two questions above. (1) Fulfillment re-seals at the **current** registry epoch for every active device of every affected Grant, so a need may legitimately exist for devices that the epoch advance invalidated rather than only for the device that triggered it. (2) Grants have no expiry, status or revoked column (`app/db/schema.ts:599-620`) and stop only by row deletion, so the criterion's "expired" is inapplicable: do not add expiry.
+- 2026-09-29: Implemented on `work/20-grant-fulfillment` (base `5e4024b`) and reviewed (Standards, Spec, RR8 reported separately). Evidence per criterion:
+  - Opaque need: `reconcileNeedStatements` (`app/sharing/needs.server.ts`) appended to the enrollment, recovery and device-removal batches plus the Owner list route; the worker test asserts `PRAGMA table_info(provisioning_needs)` is exactly the eight opaque columns.
+  - Owner browser fulfils: Owner-only `/api/private/provisioning` (list / `next` / `file` / `grants`) driven by `runPendingProvisioning` from `RotationStatus` after `runPendingRotations`; Directory and File worker tests prove the label, capability/File envelope and re-signed offer are written, and `provisionThreadDevices` covers waiting direct thread devices.
+  - Provisioning copy: `roots` reports `provisioning` and `scope` returns only an opaque `directory-grant` (ids and path) while material is stale; the sharing-browser spec asserts the copy on the Directory and Direct-File surfaces and that the SSR shell carries no private value.
+  - Revocation: `updateGrant`/teardown already delete needs; every step re-joins live Grants by generation and `unblocked`; tests prove revocation between `next` and `step` leaves no residue, no need, no root and refuses the step.
+  - Idempotent and bounded: reconcile caps at 256 rows (tested), a step covers at most 32 Grants / 256 devices, an oversized or device-less Grant is skipped rather than starving its target (tested with a 301-device Grant), an exact replay is refused and changes nothing, and an existing current-epoch label delivery is reused byte-identically rather than re-sealed.
+  - Recovery and enrollment: real-route tests for both ceremonies; needs are stamped at the recovery's final epoch (3 after two advances) and the cutover guards are unchanged.
+  - Proofs: recipient and non-Owner devices are refused on both provisioning routes; the recovery test shows the replacement device's Vault-root envelope cannot open the Grant capability and that neither capability nor label ciphertext appears in any `key_envelopes` row.
+- 2026-09-29: Known bound, deliberately not addressed: a single Grant with more than 256 active devices is not fulfilled in one step (recorded in `grantFulfillMaterial`); its target stays listed with its needs rather than silently reporting success. Chunking a Grant across steps would change the offer's device-set contract from ticket 19 and was not taken on here.
