@@ -18,13 +18,7 @@ export async function openEditor(browser: Browser, server: TestHarness, baseURL:
   await context.credentials.install();
   const page = await context.newPage();
   await page.goto(new URL("/sign-up", baseURL).href, { waitUntil: "commit" });
-  const verify = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/signup/verify" &&
-    request.method() === "POST", { timeout: 120_000 });
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  const recovery = await completeRecoveryPresentation(page);
-  const signup = (await verify).postDataJSON() as { transcript: {
-    rootDirectoryId: string; accountId: string; deviceId: string;
-  } };
+  const { recovery, signup } = await signUp(page);
   await expectReady(page);
   const rootId = signup.transcript.rootDirectoryId;
   await page.goto(new URL(`/d/${rootId}`, baseURL).href);
@@ -36,6 +30,49 @@ export async function openEditor(browser: Browser, server: TestHarness, baseURL:
   return { context, page, fileId: new URL(page.url()).pathname.split("/").at(-1)!, rootId,
     accountId: signup.transcript.accountId, deviceId: signup.transcript.deviceId,
     phrase: recovery.phrase.map((word) => word.replace(/^\d+\.\s*/, "").trim()).join(" ") };
+}
+
+type SignupTranscript = { transcript: { rootDirectoryId: string; accountId: string; deviceId: string } };
+
+/**
+ * Signs up once, retrying a single time only after a network-level failure of a
+ * signup request. The local harness is served by workerd, which closes an idle
+ * HTTP/1.1 connection after 5 s without announcing it; WebKit, unlike Chromium and
+ * Firefox, does not replay a POST that lands on the closing socket. Signup's proof
+ * of work leaves a variable idle gap before `/api/signup/options`, so it can hit
+ * that ~2 ms window. Any HTTP-level refusal still fails the test.
+ */
+async function signUp(page: Page): Promise<{ recovery: Awaited<ReturnType<typeof completeRecoveryPresentation>>;
+  signup: SignupTranscript }> {
+  const signupRequest = (request: { url(): string }) => new URL(request.url()).pathname.startsWith("/api/signup/");
+  for (let attempt = 1; ; attempt++) {
+    let networkFailure: string | null = null;
+    const failed = (request: { url(): string; failure(): { errorText: string } | null }) => {
+      if (signupRequest(request)) networkFailure ??= `${new URL(request.url()).pathname}: ${request.failure()?.errorText}`;
+    };
+    page.on("requestfailed", failed);
+    try {
+      const verified = page.waitForResponse((response) => response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/signup/verify", { timeout: 120_000 });
+      verified.catch(() => undefined); // A losing race must not surface as an unhandled rejection.
+      await page.getByRole("button", { name: "Create account", exact: true }).click();
+      const recovery = await completeRecoveryPresentation(page);
+      // Only confirming the codes commits; a previous attempt's alert is gone by now.
+      const refused = page.getByText("We could not create your account.", { exact: false })
+        .waitFor({ timeout: 120_000 });
+      refused.catch(() => undefined);
+      const outcome = await Promise.race([verified, refused.then(() => null)]);
+      if (outcome) {
+        if (!outcome.ok()) throw new Error(`signup verification returned ${outcome.status()}`);
+        return { recovery, signup: outcome.request().postDataJSON() as SignupTranscript };
+      }
+      if (!networkFailure || attempt > 1) {
+        throw new Error(`signup failed${networkFailure ? ` after a retry (${networkFailure})` : " without a network failure"}`);
+      }
+    } finally {
+      page.off("requestfailed", failed);
+    }
+  }
 }
 
 async function expectReady(page: Page) {
