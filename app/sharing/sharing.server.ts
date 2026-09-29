@@ -95,6 +95,7 @@ export async function target(env: Env, auth: AuthorizedDevice, targetId: string,
       NULL AS content_key_id, NULL AS content_epoch, NULL AS recipient_set_version
       FROM vault_nodes n JOIN directories d ON d.node_id = n.id AND d.owner_id = n.owner_id
       WHERE n.id = ${targetId} AND n.kind = 'directory' AND n.import_id IS NULL
+        AND n.parent_node_id IS NOT NULL -- The hidden root is never shared.
         AND ${directoryAccessGuard(auth, auth.accountId, targetId, "share_manage")}`) ?? null;
   }
   return await createDb(env.DB).get<Target>(sql`SELECT n.owner_id, n.id, n.kind,

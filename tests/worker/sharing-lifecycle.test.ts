@@ -425,7 +425,8 @@ describe("private sharing lifecycle through the built Worker", () => {
     const recipient = await account(), expected: string[] = [];
     for (let i = 0; i < 201; i++) {
       const owner = await account();
-      const offer = await inviteDirectory(owner, recipient, owner.rootId, owner.rootKey, `Root ${i}`);
+      const folder = await createDirectory(owner, owner, owner.rootId, owner.rootKey, `Folder ${i}`);
+      const offer = await inviteDirectory(owner, recipient, folder.childId, folder.key, `Root ${i}`);
       const accepted = await recipient.request(`/api/private/sharing/shares/${offer.shareId}/accept`,
         "POST", { materialRevision: 1 });
       expect(accepted.status, `root ${i}: ${await accepted.clone().text()}`).toBe(200);

@@ -480,13 +480,18 @@ export async function updateGrant(env: Env, auth: AuthorizedDevice, grantId: str
       sql`INSERT INTO rotation_barriers (owner_id, target_node_id, epoch)
         SELECT ${grant.owner_id}, ${grant.target_node_id}, ${barrierEpoch} WHERE ${live}
         ON CONFLICT(owner_id, target_node_id) DO UPDATE SET epoch = max(epoch + 1, excluded.epoch)`,
-      sql`INSERT INTO sharing_rotation_jobs (owner_id, target_node_id, barrier_epoch, state,
+      // A permission change only re-seals current keys; a removed party forces a rekey,
+      // and a pending rekey is never weakened by a later permission change.
+      sql`INSERT INTO sharing_rotation_jobs (owner_id, target_node_id, barrier_epoch, state, mode,
         cursor, created_at, updated_at)
-        SELECT b.owner_id, b.target_node_id, b.epoch, 'pending', NULL, ${now}, ${now}
+        SELECT b.owner_id, b.target_node_id, b.epoch, 'pending',
+          ${changedPermission ? "reprovision" : "rekey"}, NULL, ${now}, ${now}
         FROM rotation_barriers b WHERE b.owner_id = ${grant.owner_id}
           AND b.target_node_id = ${grant.target_node_id} AND ${live}
         ON CONFLICT(owner_id, target_node_id) DO UPDATE SET barrier_epoch = excluded.barrier_epoch,
-          state = 'pending', cursor = NULL, updated_at = excluded.updated_at`,
+          state = 'pending', cursor = NULL, updated_at = excluded.updated_at,
+          mode = CASE WHEN sharing_rotation_jobs.mode = 'rekey' OR excluded.mode = 'rekey'
+            THEN 'rekey' ELSE 'reprovision' END`,
       sql`DELETE FROM grant_device_envelopes WHERE grant_id = ${grantId} AND ${live}`,
       sql`DELETE FROM grant_retained_material WHERE grant_id = ${grantId} AND ${live}`,
       sql`DELETE FROM provisioning_needs WHERE grant_id = ${grantId} AND ${live}`,

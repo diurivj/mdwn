@@ -835,13 +835,16 @@ export const rotationBarriers = sqliteTable("rotation_barriers", {
   foreignKey({ columns: [table.ownerId, table.targetNodeId], foreignColumns: [vaultNodes.ownerId, vaultNodes.id] }).onDelete("restrict"),
   check("rotation_barriers_epoch_positive", sql`${table.epoch} BETWEEN 1 AND 9007199254740991`)]);
 
-/** Durable, cursor-ready ticket-19 work item; no executor or fake rekey here.
- * The barrier must remain until a future verified rotation completes. */
+/** Durable ticket-19 work item, executed by the Owner's browser one bounded step at a time.
+ * `rekey` (revoke/leave) replaces keys a removed party may hold; `reprovision` (permission
+ * change) only re-seals current keys at the new Grant generation. The barrier remains until
+ * the last step commits. `cursor` is the last completed node in the step order. */
 export const sharingRotationJobs = sqliteTable("sharing_rotation_jobs", {
   ownerId: text("owner_id").notNull(),
   targetNodeId: text("target_node_id").notNull(),
   barrierEpoch: integer("barrier_epoch").notNull(),
   state: text("state").notNull(),
+  mode: text("mode").notNull().default("rekey"),
   cursor: text("cursor"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
@@ -850,7 +853,8 @@ export const sharingRotationJobs = sqliteTable("sharing_rotation_jobs", {
     foreignColumns: [rotationBarriers.ownerId, rotationBarriers.targetNodeId] }).onDelete("restrict"),
   check("sharing_rotation_jobs_pending", sql`${table.state} = 'pending'
     AND ${table.barrierEpoch} BETWEEN 1 AND 9007199254740991
-    AND ${table.createdAt} >= 0 AND ${table.updatedAt} >= ${table.createdAt}`)]);
+    AND ${table.createdAt} >= 0 AND ${table.updatedAt} >= ${table.createdAt}`),
+  check("sharing_rotation_jobs_mode", sql`${table.mode} IN ('rekey', 'reprovision')`)]);
 
 /** One fresh, unguessable invocation ID per sharing transaction. Deleted in the same
  * batch; a previously spent proof cannot stand in for this transaction's witness. */

@@ -141,6 +141,13 @@
       "when": 1790563252388,
       "tag": "0019_private_comment_threads",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1790653018153,
+      "tag": "0020_rotation_job_mode",
+      "breakpoints": true
     }
   ]
 }
