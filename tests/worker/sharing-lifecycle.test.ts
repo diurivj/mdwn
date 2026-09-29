@@ -5,7 +5,9 @@ import { createFileReceivingKey, createFileSave, openFileContentKeyFromDevice } 
 import { createChildDirectoryCapability, generateDirectoryCapabilityKey } from "../../app/crypto/vault";
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { sealShareLabel, openShareLabel } from "../../app/sharing/label";
-import { hex, signOffer, verifyOffer, parseOffer, digestBytes, type Offer } from "../../app/sharing/offer";
+import { digestBytes, hex, signOffer, verifyOffer, parseOffer, type Offer } from "../../app/sharing/offer";
+import { atomicSqlBatch, sql } from "../../app/db/client.server";
+import { reconcileNeedStatements } from "../../app/sharing/needs.server";
 import { prepareGrantSeals, type RotationStep } from "../../app/sharing/rotation-client";
 import type { FileProvisioningBootstrap } from "../../app/sharing/provisioning-wire";
 import { signFileHead, verifyFileHead, assertFileHeadCommitTransition,
@@ -970,6 +972,12 @@ describe("ticket 20 grant provisioning fulfillment", () => {
       .toEqual([recipient.deviceId, second].sort());
     expect(needs.results).toEqual(needs.results.map(() => ({ grant_id: invite.grantId, owner_id: owner.accountId,
       recipient_id: recipient.accountId, device_id: expect.any(String), generation: 1, registry_epoch: 2 })));
+    // A need carries no name, plaintext, digest or capability: only opaque IDs and counters.
+    expect((await env.DB.prepare("PRAGMA table_info(provisioning_needs)").all()).results
+      .map((row) => (row as { name: string }).name).sort()).toEqual(["created_at", "device_id", "generation",
+        "grant_id", "owner_id", "recipient_id", "registry_epoch", "updated_at"]);
+    // Only the Owner fulfills: a recipient gets no scope for the Owner's target and no step.
+    expect((await recipient.request(`/api/private/provisioning/${directory.childId}/next`, "POST")).status).toBe(404);
     const next = await owner.request(`/api/private/provisioning/${directory.childId}/next`, "POST");
     expect(next.status, await next.clone().text()).toBe(200);
     const step = await next.json() as Extract<FulfillStep, { step: "grants" }>;
@@ -1037,6 +1045,18 @@ describe("ticket 20 grant provisioning fulfillment", () => {
       signerDeviceId: owner.deviceId }, owner.signing.privateKey);
     const envelopeBytes = new Map(envelopes.map((entry) => [entry.deviceId, decodeTreeBytes(entry.ciphertext, 16_384)] as const));
     const grants = await prepareFulfillGrants(owner, step, async (device) => envelopeBytes.get(device.deviceId)!);
+    // A rotation barrier for this File interlocks: the recipient-set update is refused, no write.
+    await env.DB.prepare("INSERT INTO rotation_barriers (owner_id, target_node_id, epoch) VALUES (?, ?, 2)")
+      .bind(owner.accountId, file.fileId).run();
+    const headBefore = await env.DB.prepare("SELECT digest, recipient_set_version FROM file_heads WHERE file_node_id = ?")
+      .bind(file.fileId).first();
+    const blocked = await owner.request(`/api/private/provisioning/${file.fileId}/file`, "PATCH", {
+      expectedHeadDigest: current.fileHead.digest, signedHead: wireHead(nextHead), recipientEnvelopes: envelopes, grants });
+    expect([404, 409]).toContain(blocked.status);
+    expect(await env.DB.prepare("SELECT digest, recipient_set_version FROM file_heads WHERE file_node_id = ?")
+      .bind(file.fileId).first()).toEqual(headBefore);
+    await env.DB.prepare("DELETE FROM rotation_barriers WHERE owner_id = ? AND target_node_id = ?")
+      .bind(owner.accountId, file.fileId).run();
     const done = await owner.request(`/api/private/provisioning/${file.fileId}/file`, "PATCH", {
       expectedHeadDigest: current.fileHead.digest, signedHead: wireHead(nextHead),
       recipientEnvelopes: envelopes, grants });
@@ -1099,6 +1119,9 @@ describe("ticket 20 grant provisioning fulfillment", () => {
     expect(await grantResidue(invite.grantId)).toEqual(noResidue);
     const list = await owner.request("/api/private/provisioning", "POST");
     expect((await list.json() as { targets: { targetId: string }[] }).targets).toEqual([]);
+    // The revoked recipient keeps no ready root: withdrawn access is never resurrected.
+    const roots = await recipient.request("/api/private/sharing/roots", "POST");
+    expect((await roots.json() as { roots: unknown[] }).roots).toEqual([]);
   });
 
   it("caps one reconcile at 256 opaque rows and stamps the final registry epoch", async () => {
@@ -1136,5 +1159,40 @@ describe("ticket 20 grant provisioning fulfillment", () => {
     await owner.request("/api/private/provisioning", "POST");
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM provisioning_needs WHERE grant_id = ?")
       .bind(grantId).first()).toEqual({ n: 256 });
+  });
+});
+
+describe("ticket 20 need reconciliation ordering", () => {
+  it("stamps every need with the final registry epoch after recovery's double advance", async () => {
+    const owner = await account(), recipient = await account();
+    const now = Date.now(), grantId = id();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
+        generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 'read_only', 1, ?, ?)`)
+        .bind(grantId, owner.accountId, recipient.accountId, owner.rootId, now, now),
+      env.DB.prepare(`INSERT INTO grant_labels (grant_id, label_id, owner_copy, offer_bytes, offer_digest,
+        offer_signature, signer_device_id) VALUES (?, ?, X'01', X'01', zeroblob(32), zeroblob(64), ?)`)
+        .bind(grantId, id(), owner.deviceId),
+    ]);
+    const replacement = id();
+    const transport = new Uint8Array(await crypto.subtle.exportKey("raw",
+      (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"])).publicKey));
+    const assertion = new Uint8Array(await crypto.subtle.exportKey("raw",
+      (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"])).publicKey));
+    // Recovery's order in one atomic batch: activate the replacement (advance), tombstone
+    // the old device (advance again), then reconcile LAST against the final epoch.
+    await atomicSqlBatch(env.DB, [
+      sql`INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key, state,
+        approval_provenance, registry_epoch, created_at)
+        VALUES (${replacement}, ${recipient.accountId}, ${transport}, ${assertion}, 'active', 'recovery', 2, ${now})`,
+      sql`UPDATE encryption_devices SET state = 'tombstoned', revocation_reason = 'recovery'
+        WHERE account_id = ${recipient.accountId} AND id != ${replacement} AND state = 'active'`,
+      reconcileNeedStatements({ recipientId: recipient.accountId }, now, sql`1 = 1`),
+    ]);
+    expect(await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id = ?")
+      .bind(recipient.accountId).first()).toEqual({ registry_epoch: 3 });
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n, MIN(registry_epoch) AS lo, MAX(registry_epoch) AS hi
+      FROM provisioning_needs WHERE grant_id = ?`).bind(grantId).first())
+      .toEqual({ n: 1, lo: 3, hi: 3 });
   });
 });
