@@ -1,4 +1,4 @@
-import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
+import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { ThreadKeySource } from "../../app/comments/client";
@@ -504,5 +504,18 @@ describe("Private threads under structural changes", () => {
       "comment_thread_epochs"]) expect(await count(table, "thread_id = ?", thread.threadId)).toBe(0);
     expect(await threadOf(fileId)).toBeNull();
     expect(await treeIntegrity(owner.accountId)).toEqual({ broken: 0, markers: 0 });
+  });
+});
+
+describe("authenticated-body ceiling", () => {
+  it("accepts a legitimate 1.2 MiB private-comments body instead of rejecting it as 404", async () => {
+    // 256 device envelopes of up to 4096 bytes are ~1.4 MB of base64: above a 1 MiB per-route
+    // literal but within the documented 1.5 MiB ceiling. The body is read before authorization,
+    // so a 403 (device proof required) proves the ceiling, while a 404 means the body was rejected.
+    const response = await SELF.fetch(`https://mdwn.test/api/private/comments/files/${uuid7()}/thread`, {
+      method: "PUT", headers: { origin: "https://mdwn.test", "content-type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(1_200_000) }),
+    });
+    expect(response.status).toBe(403);
   });
 });

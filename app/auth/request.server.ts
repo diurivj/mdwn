@@ -35,13 +35,19 @@ export async function hasEmptyBody(request: Request): Promise<boolean> {
   finally { await reader.cancel(); }
 }
 
+/**
+ * The documented 1.5 MiB authenticated-body ceiling (docs/sharing-server.md), shared by every
+ * private JSON route and the maximum `readAuthJsonText` accepts.
+ */
+export const MAX_AUTHENTICATED_BODY_BYTES = 1536 * 1024;
+
 /** WebAuthn JSON is bounded protocol input, never an arbitrary upload. */
 export async function readAuthJsonText(request: Request, maxBytes = 64 * 1024): Promise<{ raw: string; value: unknown }> {
   if (!request.headers.get("content-type")?.startsWith("application/json")) {
     throw new AuthRequestError(400, "bad_request");
   }
   const declaredLength = Number(request.headers.get("content-length"));
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1536 * 1024 ||
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_AUTHENTICATED_BODY_BYTES ||
       (Number.isFinite(declaredLength) && declaredLength > maxBytes)) {
     throw new AuthRequestError(400, "bad_request");
   }

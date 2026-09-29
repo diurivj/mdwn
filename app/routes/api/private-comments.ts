@@ -1,4 +1,4 @@
-import { hasEmptyBody, readAuthJsonText, requireSameOrigin } from "~/auth/request.server";
+import { hasEmptyBody, MAX_AUTHENTICATED_BODY_BYTES, readAuthJsonText, requireSameOrigin } from "~/auth/request.server";
 import { createPrivateComment, createPrivateThread, deletePrivateComment, editPrivateComment,
   provisionThreadDevices, readPrivateThread, readThreadKey } from "~/comments/comments.server";
 import { getEnv } from "~/context/env";
@@ -32,7 +32,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (route === "delete" || route === "thread-key" || (route === "read" && !request.headers.has("content-type"))) {
       if (!await hasEmptyBody(request)) return denied();
     } else {
-      const parsed = await readAuthJsonText(request, 1024 * 1024);
+      const parsed = await readAuthJsonText(request, MAX_AUTHENTICATED_BODY_BYTES);
       body = parsed.raw; value = parsed.value;
     }
   } catch { return absent(); }

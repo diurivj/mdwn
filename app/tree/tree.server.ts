@@ -1,4 +1,4 @@
-import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
+import { hasEmptyBody, MAX_AUTHENTICATED_BODY_BYTES, readAuthJsonText, record } from "~/auth/request.server";
 import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitDirectoryMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
@@ -297,7 +297,7 @@ export async function treeAction(request: Request, platform: Env): Promise<Respo
     if ((directory || file || fileContext || migrationDevices || pathToNode) && request.method === "POST") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
-      const parsed = await readAuthJsonText(request, 1536 * 1024);
+      const parsed = await readAuthJsonText(request, MAX_AUTHENTICATED_BODY_BYTES);
       raw = parsed.raw; value = parsed.value;
     }
   } catch { return badRequest(); }

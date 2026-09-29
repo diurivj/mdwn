@@ -1,4 +1,4 @@
-import { hasEmptyBody, readAuthJsonText, requireSameOrigin } from "~/auth/request.server";
+import { hasEmptyBody, MAX_AUTHENTICATED_BODY_BYTES, readAuthJsonText, requireSameOrigin } from "~/auth/request.server";
 import { getEnv } from "~/context/env";
 import { authorizePrivateRequest } from "~/device/proof.server";
 import { sharingBudget } from "~/sharing/budget.server";
@@ -11,10 +11,9 @@ const noStore = { "Cache-Control": "no-store" };
 const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers: noStore });
 const absent = () => Response.json({ error: "not_found" }, { status: 404, headers: noStore });
 /**
- * The shared authenticated-body ceiling. A Directory rekey step carries its re-sealed entries and
- * two signed listings, so a Directory whose listing nears the 512 KiB cap cannot rotate in one step.
+ * A Directory rekey step carries its re-sealed entries and two signed listings, so a Directory
+ * whose listing nears the 512 KiB cap cannot rotate in one step.
  */
-const MAX_STEP_BYTES = 1536 * 1024;
 
 /** Resource-only Owner rotation API (ticket 19); private data never enters a loader or SSR payload. */
 export async function action({ request, context }: Route.ActionArgs): Promise<Response> {
@@ -32,7 +31,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (route === "list" || route === "next") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
-      const parsed = await readAuthJsonText(request, MAX_STEP_BYTES);
+      const parsed = await readAuthJsonText(request, MAX_AUTHENTICATED_BODY_BYTES);
       body = parsed.raw; value = parsed.value;
     }
   } catch { return absent(); }

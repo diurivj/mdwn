@@ -1,4 +1,4 @@
-import { hasEmptyBody, readAuthJsonText, requireSameOrigin } from "~/auth/request.server";
+import { hasEmptyBody, MAX_AUTHENTICATED_BODY_BYTES, readAuthJsonText, requireSameOrigin } from "~/auth/request.server";
 import { getEnv } from "~/context/env";
 import { authorizePrivateRequest } from "~/device/proof.server";
 import { sharingBudget } from "~/sharing/budget.server";
@@ -11,7 +11,6 @@ const noStore = { "Cache-Control": "no-store" };
 const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers: noStore });
 const absent = () => Response.json({ error: "not_found" }, { status: 404, headers: noStore });
 /** A step carries one owner copy per Grant that needs a label plus up to 256 envelopes. */
-const MAX_STEP_BYTES = 1536 * 1024;
 
 /** Resource-only Owner fulfillment API (ticket 20); no private data enters a loader or SSR payload. */
 export async function action({ request, context }: Route.ActionArgs): Promise<Response> {
@@ -29,7 +28,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (route === "list" || route === "next") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
-      const parsed = await readAuthJsonText(request, MAX_STEP_BYTES);
+      const parsed = await readAuthJsonText(request, MAX_AUTHENTICATED_BODY_BYTES);
       body = parsed.raw; value = parsed.value;
     }
   } catch { return absent(); }

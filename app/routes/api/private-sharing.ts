@@ -1,4 +1,4 @@
-import { requireSameOrigin, hasEmptyBody, readAuthJsonText } from "~/auth/request.server";
+import { requireSameOrigin, hasEmptyBody, MAX_AUTHENTICATED_BODY_BYTES, readAuthJsonText } from "~/auth/request.server";
 import { getEnv } from "~/context/env";
 import { authorizePrivateRequest } from "~/device/proof.server";
 import { acceptShare, createShare, cancelShare, updateGrant, roots } from "~/sharing/lifecycle.server";
@@ -30,7 +30,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if ((reading && !(listing && request.headers.has("content-type"))) || request.method === "DELETE") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
-      const parsed = await readAuthJsonText(request, 1536 * 1024);
+      const parsed = await readAuthJsonText(request, MAX_AUTHENTICATED_BODY_BYTES);
       body = parsed.raw; value = parsed.value;
     }
   } catch { return absent(); }
