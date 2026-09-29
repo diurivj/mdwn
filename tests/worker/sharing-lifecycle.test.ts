@@ -317,11 +317,10 @@ describe("private sharing lifecycle through the built Worker", () => {
         invitation.grantId).run();
     expect((await recipient.request(path, "POST")).status).toBe(200);
     const otherOwner = await account();
-    await env.DB.prepare("UPDATE grant_labels SET signer_device_id = ? WHERE grant_id = ?")
-      .bind(otherOwner.deviceId, invitation.grantId).run();
-    expect((await recipient.request(path, "POST")).status).toBe(202);
-    await env.DB.prepare("UPDATE grant_labels SET signer_device_id = ? WHERE grant_id = ?")
-      .bind(owner.deviceId, invitation.grantId).run();
+    // Storage itself refuses an offer signer that is not an active device of the Grant's Owner.
+    await expect(env.DB.prepare("UPDATE grant_labels SET signer_device_id = ? WHERE grant_id = ?")
+      .bind(otherOwner.deviceId, invitation.grantId).run()).rejects.toThrow();
+    expect((await recipient.request(path, "POST")).status).toBe(200);
     const corruptedSignature = new Uint8Array(invitation.signed.signature);
     corruptedSignature[0] ^= 1;
     await env.DB.prepare("UPDATE grant_labels SET offer_signature = ? WHERE grant_id = ?")
