@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 import { loadDirectory, NameConflictError, NamespaceChangedError, openChildDirectory, TreeCommitUncertainError,
   TreeNotFoundError, type TreeKind } from "./client";
@@ -76,6 +76,8 @@ export function StructureActions({ snapshot, nodeId, kind, name, disabled, flush
 }) {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [message, setMessage] = useState("");
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const parentId = snapshot.crumbs.at(-2)?.id;
   const siblings = parentId ? snapshot.listings[parentId]?.entries ?? [] : [];
   const position = siblings.findIndex((entry) => entry.nodeId === nodeId);
@@ -89,16 +91,20 @@ export function StructureActions({ snapshot, nodeId, kind, name, disabled, flush
     try {
       // A structural change must not race the selected File's pending save.
       if (!await flush()) {
-        setMessage("Your File could not be saved. Keep or explicitly discard its draft before changing this folder.");
+        if (alive.current) setMessage("Your File could not be saved. Keep or explicitly discard its draft before changing this folder.");
         return;
       }
       const outcome = await work();
+      // The write is done, but a newer navigation wins: if this tree unmounted while the request
+      // was in flight, never redirect or revalidate from the dead component.
+      if (!alive.current) return;
       setDialog(null);
       await onDone(outcome);
     } catch (error) {
+      if (!alive.current) return;
       if (error instanceof TreeNotFoundError) { setDialog(null); onNotFound(); return; }
       setMessage(refusal(error, operation));
-    } finally { onWorking(false); }
+    } finally { if (alive.current) onWorking(false); }
   }
 
   async function parentState() {

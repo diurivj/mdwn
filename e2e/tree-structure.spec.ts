@@ -116,3 +116,38 @@ test("moves, reorders and hard-deletes Files and folders through the built Worke
       .bind(archive).first<{ n: number }>())!.n).toBe(0);
   } finally { await context.close(); }
 });
+
+test("a finished structure write never overrides a newer navigation", async ({ browser, server, baseURL }) => {
+  const { context, page, fileId, rootId } = await openEditor(browser, server, baseURL!, "Hijack.md");
+  const path = `**/api/private/tree/nodes/${fileId}`;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let started!: () => void;
+  const write = new Promise<void>((resolve) => { started = resolve; });
+  try {
+    await open(page, new URL(`/d/${rootId}`, baseURL).href);
+    const elsewhere = await createFolder(page, "Elsewhere");
+    await open(page, new URL(`/f/${fileId}`, baseURL).href);
+    // Hold the hard-delete response so the tree link is chosen while the write is in flight.
+    await page.route(path, async (route) => {
+      if (route.request().method() !== "DELETE") return route.continue();
+      const response = await route.fetch();
+      started();
+      await gate;
+      try { await route.fulfill({ response }); } catch { /* the page has moved on */ }
+    });
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.getByRole("dialog", { name: "Delete" }).getByRole("button", { name: "Delete permanently" }).click();
+    await write;
+    // The write is still pending; the user picks a different destination than the delete's own parent.
+    const files = page.getByRole("navigation", { name: "Files" }).getByRole("link", { name: "Elsewhere" });
+    await files.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Elsewhere" })).toBeVisible();
+    release();
+    await page.waitForTimeout(250);
+    // The finished delete must not navigate back to the File's parent over the user's choice.
+    await expect(page).toHaveURL(new URL(`/d/${elsewhere}`, baseURL).href);
+    await expect(page.getByRole("heading", { name: "Elsewhere" })).toBeVisible();
+  } finally { release(); await page.unroute(path); await context.close(); }
+});
