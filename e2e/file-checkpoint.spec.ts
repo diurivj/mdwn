@@ -102,13 +102,23 @@ test("overlapping authenticated File reads across tabs cannot roll back the chec
   }
 });
 
+/**
+ * Reload only once the page's lazy route modules have loaded: a reload aborts an in-flight
+ * module import, and React Router answers that by reloading on its own, which cancels ours
+ * (Firefox reports NS_BINDING_ABORTED).
+ */
+async function settledReload(page: import("@playwright/test").Page) {
+  await page.waitForLoadState("networkidle");
+  await page.reload();
+}
+
 test("a second signed File head at the same revision cannot fork the visible File", async ({ browser, server, baseURL }) => {
   const { context, page, fileId, accountId } = await openEditor(browser, server, baseURL!);
   const reader = await context.newPage();
   try {
     await reader.goto(new URL(`/f/${fileId}`, baseURL!).href);
     await expect(reader.getByRole("textbox", { name: "Markdown source" })).toHaveValue("");
-    await reader.reload(); // Re-reading the exact same signed head remains valid.
+    await settledReload(reader); // Re-reading the exact same signed head remains valid.
     await expect(reader.getByRole("textbox", { name: "Markdown source" })).toHaveValue("");
     await reader.route(fileRead(fileId), async (route) => {
       const response = await route.fetch(); // Authentic Worker material, then a signed service-response fork.
@@ -126,10 +136,10 @@ test("a second signed File head at the same revision cannot fork the visible Fil
       data.representationId = forkedRepresentationId;
       await route.fulfill({ response, json: data });
     });
-    await reader.reload();
+    await settledReload(reader);
     await expect(reader.getByRole("heading", { name: "Files unavailable" })).toBeVisible();
     await reader.unroute(fileRead(fileId));
-    await reader.reload();
+    await settledReload(reader);
     await expect(reader.getByRole("textbox", { name: "Markdown source" })).toHaveValue("");
   } finally { await context.close(); }
 });
