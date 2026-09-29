@@ -2,6 +2,25 @@
 
 Repo `/Users/diurivj/coding/mdwn`, written 2026-09-27. Read `AGENTS.md`, `CONTEXT.md`, `docs/sharing-server.md`, `docs/adr/0008-*`, `docs/enc-v1.md` and tickets `.scratch/mdwn/issues/15-*` … `21-*` first.
 
+## Session 5 (2026-09-29): ticket 20 complete, 15–21 reviewed
+
+Orchestration continued outside Claude Code (see the session-4 resume above). Ticket 20 is implemented, reviewed and on `feat/15-21-private-workspace`; the whole 15–21 branch has had its Standards/Spec review and the RR8 gate.
+
+**Ticket 20.** Built on `work/20-grant-fulfillment` (base `5e4024b`) and fast-forwarded: `049f699` feat, `902d259`/`6d9fbac` tests, `f90f687` doc, `3f6b29b` skipping oversized Grants, `1a8167d` recovery isolation proof, `5646bb1` criteria ticked — plus `ff193a0`, a real browser spec (`e2e/grant-provisioning.spec.ts`) that proves the Owner's browser sealer, not a mirror: stored ciphertext hex equals the submitted body, digests equal SHA-256 of those bytes, the re-signed offer is at `materialRevision + 1` with `signer_device_id` set, and the recipient reads the plaintext while the Grant material stays absent from every `key_envelopes` row. `reconcileNeedStatements` is appended to the enrollment, recovery and device-removal batches and to the Owner list route; the Owner-only `/api/private/provisioning` route (list / `next` / `file` / `grants`) fulfils one bounded, CAS'd step at a time; `scope()` returns an opaque `directory-grant` for stale material so the recipient sees the provisioning copy instead of a 404.
+
+**Reviews.** Ticket 20: Standards (route placement, testing and enc-v1 rules hold; duplication smells), Spec (flagged the missing Vault-root proof, the missing non-Owner refusal and the replay test's misleading comment), RR8 (three low findings, no rule or API breach). All fixed except the documented bound that a single Grant with more than 256 active devices is not fulfilled in one step. 15–21 branch: Standards found no hard violations — its findings are duplication debt (the offer-verify block eight times, the response/byte helpers seven, re-declared crypto primitives, a nine-copy exact-fields guard, and the "satisfied" predicate duplicated between `needs.server.ts` and `acceptShare` where it can drift) — left as follow-up. Spec found two real gaps (below) plus a criterion-wording note for ticket 19. RR8 verdict Findings: `StructureActions` had no live guard, and `private-comments` used a 1 MiB body limit against the documented 1.5 MiB ceiling.
+
+**Post-review fixes** (each with a negative-control test): `ed0fcce` bounds reconcile to Grants a step can fulfil (an oversized Grant sorted first could occupy the whole 256-row cap and starve every later Grant), `7c67bd0` exports `MAX_AUTHENTICATED_BODY_BYTES` beside `readAuthJsonText` and removes the per-route literals, `54a118b` guards `StructureActions.run` on a live ref so an unmounted tree cannot navigate over the user's newer location, with an e2e assertion in `tree-structure.spec.ts`.
+
+**Verification.** At `ff193a0` the full suite was 318 passed / 0 failed. At `54a118b` it was 320 passed / 1 failed — `sharing-browser.spec.ts:54` on Chromium hit the known harness stall (pending loader, page frozen); it passes 3/3 in isolation and 3/3 in the previous full run, so it is a load-induced flake, not a regression. `npm run typecheck` and `npm test` (105 unit + 274 Worker) green. The earlier fix (`e2e/support/settle.ts`, `316d05f`) and the two remaining known flakes are documented above.
+
+**Open decisions for the user (do not resolve these silently).**
+
+1. Rotation capacity leaves a permanent write-block: `grantMaterial` throws `"rotation capacity exceeded"` past 32 Grants on a Directory or 256 devices across them (`app/sharing/rotation.server.ts:101-102`), every caller turns that into `invalid()`, so the job never advances and the `rotation_barriers` row blocks writes beneath that folder indefinitely. A folder shared with 33 recipients is plausible. Options: chunk the rotation's grant seals across steps (correct, moderate work, touches ticket 19's step protocol); refuse the 33rd recipient on a Directory at sharing time (cheap, visible product limit); or leave and open a follow-up. Recommendation: the cap now, chunking as its own ticket.
+2. Handle claiming: nothing in `app/` writes `accounts.share_handle_lookup_token`, so ticket 17's invite-by-handle criterion cannot be met end to end, and the ticket itself notes no ticket owns claiming. Recommendation: untick that clause with a note and open a ticket for handle claiming plus the `sh1:` addressing work.
+
+**Untracked, deliberately left alone:** `.claude/` (Claude Code worktrees, one of them `work/20-grant-fulfillment`) and `.scratch/mdwn/orchestrator-prompt.md`.
+
 ## Session 4 resume (2026-09-29)
 
 Claude Code's orchestrator session (`c9005de1-…` under `~/.claude/projects/-Users-diurivj-coding-mdwn/`) hit its account session limit at ~10:04, and so did its ticket-20 implementer sub-agent (`agent-a69589c513ce21e1a`). Nothing was pushed. The user asked for the work to continue outside Claude Code; orchestration may spawn implementers again.
