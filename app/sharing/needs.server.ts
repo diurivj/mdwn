@@ -60,6 +60,11 @@ const satisfied = sql`(CASE WHEN g.target_kind = 'directory' THEN (
  * current-epoch label/capability material is missing. Inserted only when `gate` holds, so a
  * rejected enrollment/removal batch records nothing. One call is capped at 256 rows; the
  * Owner's list route re-runs it, so a large Account converges over several visits.
+ *
+ * Only Grants a bounded step can actually fulfil are considered: the same `1..MAX_FULFILL_DEVICES`
+ * active-device bound as `grantFulfillMaterial`. The residual is a Grant with more active devices
+ * than one step covers; it records no needs and so can never occupy the 256-row cap, while it
+ * becomes eligible again if its device count later drops back within the bound.
  */
 export function reconcileNeedStatements(scope: { ownerId: string } | { recipientId: string },
   now: number, gate: SQL): SQL {
@@ -70,6 +75,8 @@ export function reconcileNeedStatements(scope: { ownerId: string } | { recipient
     FROM grants g JOIN encryption_devices d ON d.account_id = g.recipient_id AND d.state = 'active'
     JOIN account_encryption_identities r ON r.account_id = g.recipient_id
     WHERE ${filter} AND ${gate} AND NOT ${satisfied}
+      AND (SELECT COUNT(*) FROM encryption_devices nd WHERE nd.account_id = g.recipient_id
+        AND nd.state = 'active') BETWEEN 1 AND ${MAX_FULFILL_DEVICES}
     ORDER BY g.id, d.id LIMIT ${MAX_NEED_ROWS}
     ON CONFLICT(grant_id, device_id) DO UPDATE SET generation = excluded.generation,
       registry_epoch = excluded.registry_epoch, updated_at = excluded.updated_at`;

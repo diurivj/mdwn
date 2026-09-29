@@ -1079,10 +1079,11 @@ describe("ticket 20 grant provisioning fulfillment", () => {
     expect((await roots.json() as { roots: unknown[] }).roots).toEqual([]);
   });
 
-  it("caps one reconcile at 256 opaque rows and stamps the final registry epoch", async () => {
+  it("caps one reconcile at 256 eligible rows and stamps the final registry epoch", async () => {
     const owner = await account(), recipient = await account();
-    // One Grant, 300 active devices: the registry epoch advances once per device insertion.
-    for (let start = 0; start < 300; start += 100) {
+    // 200 active devices: within the 1..256 fulfilment bound, so both Grants are eligible and
+    // together exceed the 256-row cap. The registry epoch advances once per device insertion.
+    for (let start = 0; start < 200; start += 100) {
       const statements = [];
       for (let index = start; index < start + 100; index++) {
         const transport = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
@@ -1095,25 +1096,26 @@ describe("ticket 20 grant provisioning fulfillment", () => {
       }
       await env.DB.batch(statements);
     }
-    const now = Date.now(), grantId = id();
-    await env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
-      generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 'read_only', 1, ?, ?)`)
-      .bind(grantId, owner.accountId, recipient.accountId, owner.rootId, now, now).run();
-    await env.DB.prepare(`INSERT INTO grant_labels (grant_id, label_id, owner_copy, offer_bytes, offer_digest,
-      offer_signature, signer_device_id) VALUES (?, ?, X'01', X'01', zeroblob(32), zeroblob(64), ?)`)
-      .bind(grantId, id(), owner.deviceId).run();
     const epoch = (await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id = ?")
       .bind(recipient.accountId).first<{ registry_epoch: number }>())!.registry_epoch;
-    expect(epoch).toBe(301);
+    expect(epoch).toBe(201);
+    const directory = await createDirectory(owner, owner, owner.rootId, owner.rootKey, "Cap");
+    const now = Date.now();
+    await env.DB.batch([owner.rootId, directory.childId].map((target) => env.DB.prepare(
+      `INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
+        generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 'read_only', 1, ?, ?)`)
+      .bind(id(), owner.accountId, recipient.accountId, target, now, now)));
     const list = await owner.request("/api/private/provisioning", "POST");
-    expect((await list.json() as { targets: unknown[] }).targets)
-      .toEqual([{ targetId: owner.rootId, kind: "directory", needs: 256, devices: 256 }]);
+    const targets = (await list.json() as { targets: { targetId: string; needs: number }[] }).targets;
+    expect(targets.map((target) => target.targetId).sort()).toEqual([owner.rootId, directory.childId].sort());
+    // 400 satisfiable (grant, device) rows, but the single statement inserts at most 256.
+    expect(targets.reduce((total, target) => total + target.needs, 0)).toBe(256);
     expect(await env.DB.prepare(`SELECT COUNT(*) AS n, MIN(registry_epoch) AS lo, MAX(registry_epoch) AS hi
-      FROM provisioning_needs WHERE grant_id = ?`).bind(grantId).first()).toEqual({ n: 256, lo: 301, hi: 301 });
+      FROM provisioning_needs WHERE owner_id = ?`).bind(owner.accountId).first()).toEqual({ n: 256, lo: 201, hi: 201 });
     // A second pass upserts the same 256 rows rather than duplicating or bypassing the cap.
     await owner.request("/api/private/provisioning", "POST");
-    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM provisioning_needs WHERE grant_id = ?")
-      .bind(grantId).first()).toEqual({ n: 256 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM provisioning_needs WHERE owner_id = ?")
+      .bind(owner.accountId).first()).toEqual({ n: 256 });
   });
 });
 
@@ -1194,7 +1196,7 @@ describe("ticket 20 partial-label reuse and oversized-Grant isolation", () => {
     expect(await countRows("provisioning_needs", "grant_id = ?", invite.grantId)).toBe(0);
   });
 
-  it("skips one oversized Grant and still fulfils the normal Grant on the same target", async () => {
+  it("does not let an oversized Grant that sorts first starve a normal Grant's needs", async () => {
     const owner = await account(), normal = await account(), oversized = await account();
     const directory = await createDirectory(owner, owner, owner.rootId, owner.rootKey, "Mixed");
     const invite = await inviteDirectory(owner, normal, directory.childId, directory.key, "Mixed");
@@ -1202,12 +1204,10 @@ describe("ticket 20 partial-label reuse and oversized-Grant isolation", () => {
       { materialRevision: 1 })).status).toBe(200);
     await addDevice(normal, 2);
     normal.setRegistryEpoch(2);
-    // The normal Grant's needs are recorded first.
-    await owner.request("/api/private/provisioning", "POST");
-    // An oversized Grant (300 active devices) that sorts first must not starve the normal one.
-    for (let start = 0; start < 300; start += 100) {
+    // An oversized Grant (301 active devices) that sorts first is inserted before any reconcile.
+    for (let start = 0; start < 301; start += 100) {
       const statements = [];
-      for (let index = start; index < start + 100; index++) {
+      for (let index = start; index < start + 100 && index < 301; index++) {
         const transport = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
         const assertion = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
         statements.push(env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key,
@@ -1227,7 +1227,11 @@ describe("ticket 20 partial-label reuse and oversized-Grant isolation", () => {
         offer_signature, signer_device_id) VALUES (?, ?, X'01', X'01', zeroblob(32), zeroblob(64), ?)`)
         .bind(oversizedGrant, id(), owner.deviceId),
     ]);
+    // One reconcile: the oversized Grant is outside the 1..256 fulfilment bound, so it records no
+    // needs and cannot consume the 256-row cap; the normal Grant still gets its rows.
     await owner.request("/api/private/provisioning", "POST");
+    expect(await countRows("provisioning_needs", "grant_id = ?", invite.grantId)).toBeGreaterThan(0);
+    expect(await countRows("provisioning_needs", "grant_id = ?", oversizedGrant)).toBe(0);
     const next = await owner.request(`/api/private/provisioning/${directory.childId}/next`, "POST");
     expect(next.status, await next.clone().text()).toBe(200);
     const step = await next.json() as Extract<FulfillStep, { step: "grants" }>;
@@ -1238,9 +1242,9 @@ describe("ticket 20 partial-label reuse and oversized-Grant isolation", () => {
     expect((await owner.request(`/api/private/provisioning/${directory.childId}/grants`, "PATCH",
       { epoch: 1, grants })).status).toBe(200);
     expect(await countRows("provisioning_needs", "grant_id = ?", invite.grantId)).toBe(0);
-    expect(await countRows("provisioning_needs", "grant_id = ?", oversizedGrant)).toBeGreaterThan(0);
+    expect(await countRows("provisioning_needs", "grant_id = ?", oversizedGrant)).toBe(0);
     expect(await countRows("grant_device_envelopes", "grant_id = ?", oversizedGrant)).toBe(0);
-    // Only unfulfillable work remains, so the route reports no step and a run terminates.
+    // No fulfilable work remains, so a run terminates instead of retrying the oversized Grant.
     expect((await owner.request(`/api/private/provisioning/${directory.childId}/next`, "POST")).status).toBe(404);
   });
 });
