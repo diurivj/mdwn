@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { digestEnvelope } from "../../app/crypto/enc-v1";
+import { digestEnvelope, openForRecipient, openSymmetric, sealToRecipient } from "../../app/crypto/enc-v1";
 import {
   createRecoveryMaterial, createVaultKeyHierarchy, openDeviceEnrollmentEnvelope,
   openOwnedDeviceEnvelope, openRecoveryCapsule, openVaultRecoveryEnvelope,
@@ -10,7 +10,11 @@ import {
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type RecoveryIntent } from "../../app/recovery/protocol";
 import { decodeBytes, encodeBytes } from "../../app/signup/protocol";
+import { hex } from "../../app/sharing/offer";
+import { decodeTreeBytes } from "../../app/tree/wire";
 import { seedNormalSession, type SeededSession } from "./auth-fixtures";
+import { importDeviceKey, prepareFulfillGrants, type FulfillStep } from "./provisioning-fixtures";
+import { actor, call, directory, shareDirectory, state, type Actor } from "./tree-fixtures";
 
 declare global {
   namespace Cloudflare { interface Env {
@@ -378,5 +382,94 @@ describe("ticket 20 needs recorded by Vault recovery", () => {
     expect(epoch).toBe(3);
     expect((await env.DB.prepare("SELECT device_id, registry_epoch FROM provisioning_needs WHERE grant_id = ?")
       .bind(grantId).all()).results).toEqual([{ device_id: prepared.deviceId, registry_epoch: epoch }]);
+  });
+});
+
+describe("ticket 20 recovered device material isolation", () => {
+  it("gives the replacement device shared access only through its Grant envelopes, never the Vault root", async () => {
+    const f = await fixture();
+    const owner = await actor();
+    const vaultRoot = crypto.getRandomValues(new Uint8Array(32));
+    const root = await state(owner, owner.accountId, owner.rootId, owner.rootKey);
+    const folder = await directory(owner, owner.accountId, root, "Recovered");
+    // The old device accepts a real Directory Grant before recovery.
+    const recipient = { accountId: f.accountId, deviceId: f.oldDeviceId, session: f.old,
+      assertion: f.oldAssertion } as unknown as Actor;
+    const share = await shareDirectory(owner, recipient, folder.nodeId, folder.key, "read_write", vaultRoot);
+    // Real Vault recovery replaces every device; the replacement has no current material.
+    const start = await startRecovery(f);
+    const prepared = await prepare(f, start);
+    const { secret } = await challenge(f, start, prepared);
+    const committed = await commit(f, start, prepared, secret);
+    expect(committed.status, await committed.clone().text()).toBe(200);
+    const epoch = (await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id = ?")
+      .bind(f.accountId).first<{ registry_epoch: number }>())!.registry_epoch;
+    expect(epoch).toBe(3);
+    const newSessionId = (await env.DB.prepare("SELECT id FROM sessions WHERE account_id = ? AND device_id = ? AND revoked_at IS NULL")
+      .bind(f.accountId, prepared.deviceId).first<{ id: string }>())!.id;
+    const cookie = committed.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const recoveredRequest = async (path: string, method: "POST" | "PATCH", value?: object) => {
+      const body = value === undefined ? undefined : JSON.stringify(value);
+      const url = `https://mdwn.test${path}`;
+      const proof = await signDeviceProof(prepared.assertion.privateKey, {
+        sessionBinding: await sessionBindingDigest(newSessionId), deviceId: prepared.deviceId,
+        registryEpoch: epoch, method, url, body });
+      return SELF.fetch(url, { method, headers: { cookie, origin: "https://mdwn.test",
+        "X-Mdwn-Device-Proof": JSON.stringify(proof),
+        ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      ...(body === undefined ? {} : { body }) });
+    };
+    // Before fulfillment the replacement device has nothing and reports provisioning.
+    const cold = await recoveredRequest("/api/private/sharing/roots", "POST");
+    expect(cold.status, await cold.clone().text()).toBe(200);
+    expect((await cold.json() as { roots: { status: string }[] }).roots[0]!.status).toBe("provisioning");
+    // The Owner runs one real fulfillment step for the replacement device.
+    expect((await call(owner, "/api/private/provisioning", "POST")).status).toBe(200);
+    const next = await call(owner, `/api/private/provisioning/${folder.nodeId}/next`, "POST");
+    expect(next.status, await next.clone().text()).toBe(200);
+    const step = await next.json() as Extract<FulfillStep, { step: "grants" }>;
+    expect(step.grants[0]!.devices.map((device) => device.deviceId)).toEqual([prepared.deviceId]);
+    const grants = await prepareFulfillGrants({ accountId: owner.accountId, deviceId: owner.deviceId,
+      assertionKey: owner.assertion.privateKey, vaultRoot }, step,
+      (device) => importDeviceKey(device.publicKey).then((key) => sealToRecipient(folder.key, key,
+        { purpose: "grant", vaultId: owner.accountId, objectId: folder.nodeId, keyId: folder.nodeId,
+          keyEpoch: 1, revision: 1, recipientId: device.deviceId })));
+    const done = await call(owner, `/api/private/provisioning/${folder.nodeId}/grants`, "PATCH",
+      { epoch: step.epoch, grants });
+    expect(done.status, await done.clone().text()).toBe(200);
+    // Its access now comes only from the Grant envelopes.
+    const roots = await recoveredRequest("/api/private/sharing/roots", "POST");
+    const entry = (await roots.json() as { roots: { targetId: string; status: string;
+      capability?: { ciphertext: string } }[] }).roots[0]!;
+    expect(entry).toMatchObject({ targetId: folder.nodeId, status: "ready" });
+    const capability = await env.DB.prepare(`SELECT ciphertext FROM grant_device_envelopes
+      WHERE grant_id = ? AND device_id = ?`).bind(share.grantId, prepared.deviceId)
+      .first<{ ciphertext: ArrayBuffer }>();
+    const label = await env.DB.prepare(`SELECT ciphertext FROM grant_label_deliveries
+      WHERE grant_id = ? AND device_id = ?`).bind(share.grantId, prepared.deviceId)
+      .first<{ ciphertext: ArrayBuffer }>();
+    expect(capability).not.toBeNull();
+    expect(label).not.toBeNull();
+    const context = { purpose: "grant" as const, vaultId: owner.accountId, objectId: folder.nodeId,
+      keyId: folder.nodeId, keyEpoch: 1, revision: 1, recipientId: prepared.deviceId };
+    expect(await openForRecipient(decodeTreeBytes(entry.capability!.ciphertext, 16_384), prepared.transport,
+      { context })).toEqual(folder.key);
+    // The Vault-root key cannot open the Grant capability, and the Grant ciphertexts are absent
+    // from every Vault-root key envelope row for the recovering Account.
+    await expect(openSymmetric(new Uint8Array(capability!.ciphertext), prepared.opened.vaultRootKey,
+      { context })).rejects.toThrow();
+    const enrollment = await env.DB.prepare(`SELECT ciphertext FROM key_envelopes
+      WHERE account_id = ? AND recipient_id = ? AND purpose = 'device-enrollment'`)
+      .bind(f.accountId, prepared.deviceId).first<{ ciphertext: ArrayBuffer }>();
+    const vaultRootOpened = await openDeviceEnrollmentEnvelope(new Uint8Array(enrollment!.ciphertext),
+      prepared.transport, { purpose: "device-enrollment", vaultId: f.accountId, objectId: prepared.deviceId,
+        keyId: prepared.deviceId, keyEpoch: 1, revision: 1, recipientId: prepared.deviceId });
+    expect(vaultRootOpened).toEqual(prepared.opened.vaultRootKey);
+    expect(vaultRootOpened).not.toEqual(folder.key);
+    const envelopes = (await env.DB.prepare("SELECT ciphertext FROM key_envelopes WHERE account_id = ?")
+      .bind(f.accountId).all()).results as { ciphertext: ArrayBuffer }[];
+    const stored = envelopes.map((row) => hex(new Uint8Array(row.ciphertext)));
+    expect(stored).not.toContain(hex(new Uint8Array(capability!.ciphertext)));
+    expect(stored).not.toContain(hex(new Uint8Array(label!.ciphertext)));
   });
 });
