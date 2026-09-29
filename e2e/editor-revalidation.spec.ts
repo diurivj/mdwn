@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { settled } from "./support/settle";
 import { filePatch, openEditor, warnsOnUnload } from "./editor-workspace.fixture";
 
 test.setTimeout(240_000);
@@ -122,10 +123,8 @@ test("a failed same-File rename revalidation preserves the editor but freezes ed
     await expect(status).toHaveText("Saved", { timeout: 20_000 });
     await page.reload();
     await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("after verified retry");
-    // Leave only once the reloaded page's lazy route modules have loaded: WebKit aborts an
-    // in-flight module import on navigation, and React Router answers that by reloading
-    // the old page, which would cancel this goto.
-    await page.waitForLoadState("networkidle");
+    // Leave only once the reloaded page's lazy route modules have loaded.
+    await settled(page);
     // A well-formed but missing File identity cannot inherit this tab's old snapshot.
     await page.goto(new URL("/f/00000000-0000-7000-8000-000000000000", baseURL!).href);
     await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();

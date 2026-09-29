@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { settled } from "./support/settle";
 import { openEditor } from "./editor-workspace.fixture";
 import { commitConcurrentFileRevision } from "./editor-conflict.fixture";
 import { signDeviceBytes } from "./editor-fixture-crypto";
@@ -103,12 +104,10 @@ test("overlapping authenticated File reads across tabs cannot roll back the chec
 });
 
 /**
- * Reload only once the page's lazy route modules have loaded: a reload aborts an in-flight
- * module import, and React Router answers that by reloading on its own, which cancels ours
- * (Firefox reports NS_BINDING_ABORTED).
+ * Reload only once the page's lazy route modules have loaded.
  */
 async function settledReload(page: import("@playwright/test").Page) {
-  await page.waitForLoadState("networkidle");
+  await settled(page);
   await page.reload();
 }
 
@@ -179,7 +178,7 @@ test("canceling a File load during signature verification leaves its trusted che
     await replayPage.goto(new URL(`/f/${fileId}`, baseURL!).href);
     await expect(replayPage.getByRole("textbox", { name: "Markdown source" })).toHaveValue("");
     await replayPage.unroute(fileRead(fileId));
-    await replayPage.reload();
+    await settledReload(replayPage);
     await expect(replayPage.getByRole("textbox", { name: "Markdown source" })).toHaveValue("two");
   } finally {
     await releaseCheckpointVerification(canceled).catch(() => {});

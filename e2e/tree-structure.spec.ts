@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
+import { settled } from "./support/settle";
 import { openEditor } from "./editor-workspace.fixture";
 
 test.setTimeout(180_000);
@@ -14,13 +15,11 @@ async function createFolder(page: Page, name: string): Promise<string> {
 }
 
 /**
- * Leave only once the page's lazy route modules have loaded: a navigation aborts an in-flight
- * module import, and React Router answers that by reloading the old page, which cancels ours
- * (Firefox: NS_BINDING_ABORTED; WebKit: "interrupted by another navigation"). One retry
- * covers an import that starts after the settle.
+ * Leave only once the page's lazy route modules have loaded, then one retry covers an import
+ * that starts after the settle.
  */
 async function open(page: Page, url: string) {
-  await page.waitForLoadState("networkidle");
+  await settled(page);
   try { await page.goto(url); }
   catch (error) {
     if (!/NS_BINDING_ABORTED|interrupted by another navigation/.test(String(error))) throw error;
