@@ -138,6 +138,10 @@ export async function grantFulfillMaterial(env: Env, ownerId: string, targetId: 
   return { grants: keptGrants, devices: keptDevices };
 }
 
+/** `ownerCopy` is the Owner's own Shared-as label copy under their Vault root, never a
+ * recipient ciphertext, and is returned only for a Grant whose recipient has no current-epoch
+ * delivery; it is required to re-seal that label. Everything else is opaque IDs, the signed
+ * offer and public keys. */
 export function grantFulfillWire(material: GrantFulfillMaterial) {
   return material.grants.map((grant) => {
     const own = material.devices.filter((device) => device.grant_id === grant.id);
