@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
+import { RotationStatus } from "~/sharing/RotationStatus";
 import { SharedNavigation, SharePanel } from "~/sharing/SharingUI";
 
 import {
@@ -225,6 +226,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             else await revalidator.revalidate(); }}
           onNotFound={() => setStatus("not-found")} />
       </div>
+      {snapshot.scope === "owned" && <RotationStatus access={snapshot.access} trigger={snapshot}
+        onComplete={() => { void revalidator.revalidate(); }} />}
       {recoveryPending && <p role="status" className="mt-3">Confirm your saved recovery phrase and codes before creating Files.</p>}
       {busy && <p role="status" className="mt-3">Updating Files…</p>}
       {(status !== "ready" || initial.status !== "ready") && <div role="alert" className="mt-3 text-rose-700">

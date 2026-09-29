@@ -201,6 +201,22 @@ async function rotationRequest<T>(path: string, method: "POST" | "PATCH", body?:
   return response.json() as Promise<T>;
 }
 
+/** Runs every pending job for this Owner to completion, one step at a time, reporting progress. */
+export async function runPendingRotations(access: RootAccess, signer: StructureSigner,
+  onProgress: (progress: { jobs: number; done: number; total: number }) => void): Promise<number> {
+  const { jobs } = await rotationRequest<{ jobs: { targetId: string }[] }>("/api/private/rotations", "POST");
+  for (const [index, job] of jobs.entries()) {
+    onProgress({ jobs: jobs.length - index, done: 0, total: 0 });
+    // A job is bounded by its frozen subtree; the guard only stops a runaway loop.
+    for (let step = 0; step < 100_000; step++) {
+      const progress = await runRotationStep(access, signer, job.targetId);
+      if (!progress) break;
+      onProgress({ jobs: jobs.length - index, ...progress });
+    }
+  }
+  return jobs.length;
+}
+
 /** The Owner's verified key chain from the hidden root to one node's parent (and the node, if a Directory). */
 async function openPath(access: RootAccess, nodeId: string): Promise<{ states: Map<string, DirectoryState>;
   entry: TreeEntry | null }> {

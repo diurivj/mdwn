@@ -13,12 +13,17 @@ async function createFolder(page: Page, name: string): Promise<string> {
   return new URL(page.url()).pathname.split("/").at(-1)!;
 }
 
-/** Firefox can report NS_BINDING_ABORTED for a top-level goto whose document did load
- * (seen before in file-checkpoint.spec.ts); retry the same navigation once. */
+/**
+ * Leave only once the page's lazy route modules have loaded: a navigation aborts an in-flight
+ * module import, and React Router answers that by reloading the old page, which cancels ours
+ * (Firefox: NS_BINDING_ABORTED; WebKit: "interrupted by another navigation"). One retry
+ * covers an import that starts after the settle.
+ */
 async function open(page: Page, url: string) {
+  await page.waitForLoadState("networkidle");
   try { await page.goto(url); }
   catch (error) {
-    if (!String(error).includes("NS_BINDING_ABORTED")) throw error;
+    if (!/NS_BINDING_ABORTED|interrupted by another navigation/.test(String(error))) throw error;
     await page.goto(url);
   }
 }

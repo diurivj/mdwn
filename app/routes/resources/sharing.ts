@@ -107,7 +107,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         return { state: "success", intent, itemId, message: "Share left." } as const;
       case "revoke":
         await revokeGrant(itemId, request.signal);
-        return { state: "success", intent, itemId, message: "Share revoked." } as const;
+        return { state: "success", intent, itemId, message: "Share revoked. Access ended now and this browser is replacing the keys; copies already downloaded can't be recalled." } as const;
       case "change-permission":
       case "permission": {
         const permission = formString(form, "permission");
