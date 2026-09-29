@@ -169,7 +169,9 @@ export async function treeIntegrity(ownerId: string): Promise<{ broken: number; 
  * envelopes for every current recipient device, through the same routes the browser uses.
  */
 export async function shareDirectory(owner: Actor, recipient: Actor, directoryId: string, key: Uint8Array,
-  permission: "read_only" | "read_write" = "read_only"): Promise<{ grantId: string; shareId: string }> {
+  permission: "read_only" | "read_write" = "read_only",
+  vaultRoot: Uint8Array = generateDirectoryCapabilityKey()): Promise<{
+    grantId: string; shareId: string; vaultRoot: Uint8Array }> {
   const prep = await call(owner, "/api/private/sharing/target", "POST",
     { targetId: directoryId, kind: "directory", recipientId: recipient.accountId });
   if (prep.status !== 200) throw new Error(`share target ${prep.status}`);
@@ -185,7 +187,7 @@ export async function shareDirectory(owner: Actor, recipient: Actor, directoryId
       decodeTreeBytes(device.publicKey, 65), { name: "ECDH", namedCurve: "P-256" }, true, []) })));
   const shareId = uuid7(), grantId = uuid7(), labelId = uuid7();
   const labels = await sealShareLabel("Shared", owner.accountId, directoryId, labelId,
-    targets.map((device) => ({ deviceId: device.deviceId, publicKey: device.key })), generateDirectoryCapabilityKey());
+    targets.map((device) => ({ deviceId: device.deviceId, publicKey: device.key })), vaultRoot);
   const material = await Promise.all(targets.map(async (device) => ({ ...device,
     ciphertext: await sealToRecipient(key, device.key, { purpose: "grant", vaultId: owner.accountId,
       objectId: directoryId, keyId: coordinates.targetKeyId, keyEpoch: coordinates.targetEpoch, revision: 1,
@@ -211,5 +213,5 @@ export async function shareDirectory(owner: Actor, recipient: Actor, directoryId
   if (sent.status !== 201) throw new Error(`share ${sent.status} ${await sent.text()}`);
   const accepted = await call(recipient, `/api/private/sharing/shares/${shareId}/accept`, "POST", { materialRevision: 1 });
   if (accepted.status !== 200) throw new Error(`accept ${accepted.status} ${await accepted.text()}`);
-  return { grantId, shareId };
+  return { grantId, shareId, vaultRoot };
 }

@@ -107,35 +107,42 @@ type DeviceRow = { grant_id: string; device_id: string; registry_epoch: number;
 export type GrantFulfillMaterial = { grants: GrantRow[]; devices: DeviceRow[] };
 
 /** The current Grants on one target with outstanding needs, and each recipient's active
- * devices with their current-epoch label digest (null when it must be re-sealed). */
+ * devices with their current-epoch label digest (null when it must be re-sealed).
+ * >256 active devices on one Grant is not fulfilled in one step: that Grant is skipped so it
+ * never starves the other Grants on the target, and its needs stay for a later pass. */
 export async function grantFulfillMaterial(env: Env, ownerId: string, targetId: string,
   targetKind: "file" | "directory"): Promise<GrantFulfillMaterial> {
   const db = createDb(env.DB);
-  const grants = await db.all<GrantRow>(sql`SELECT g.id, g.recipient_id, g.generation, g.permission,
-      l.label_id, l.owner_copy, l.offer_bytes, l.offer_digest, l.offer_signature
-    FROM grants g JOIN grant_labels l ON l.grant_id = g.id
-    WHERE g.owner_id = ${ownerId} AND g.target_node_id = ${targetId} AND g.target_kind = ${targetKind}
-      AND EXISTS (SELECT 1 FROM provisioning_needs n WHERE n.grant_id = g.id)
-    ORDER BY g.id LIMIT ${MAX_FULFILL_GRANTS + 1}`);
-  grants.length = Math.min(grants.length, MAX_FULFILL_GRANTS);
+  // Grants (with their active-device count) whose needs still exist and that one bounded step
+  // can cover, skipping oversized or device-less Grants instead of stopping the scan.
+  const grants = await db.all<GrantRow>(sql`
+    WITH candidates AS (
+      SELECT g.id, g.recipient_id, g.generation, g.permission, l.label_id, l.owner_copy,
+        l.offer_bytes, l.offer_digest, l.offer_signature,
+        (SELECT COUNT(*) FROM encryption_devices d
+          JOIN account_encryption_identities r ON r.account_id = d.account_id
+          WHERE d.account_id = g.recipient_id AND d.state = 'active') AS device_count
+      FROM grants g JOIN grant_labels l ON l.grant_id = g.id
+      WHERE g.owner_id = ${ownerId} AND g.target_node_id = ${targetId} AND g.target_kind = ${targetKind}
+        AND EXISTS (SELECT 1 FROM provisioning_needs n WHERE n.grant_id = g.id)
+    ), eligible AS (
+      SELECT * FROM candidates WHERE device_count BETWEEN 1 AND ${MAX_FULFILL_DEVICES}
+    ), sized AS (
+      SELECT *, SUM(device_count) OVER (ORDER BY id) AS running FROM eligible
+    )
+    SELECT id, recipient_id, generation, permission, label_id, owner_copy, offer_bytes, offer_digest,
+      offer_signature FROM sized WHERE running <= ${MAX_FULFILL_DEVICES} ORDER BY id LIMIT ${MAX_FULFILL_GRANTS}`);
   if (!grants.length) return { grants: [], devices: [] };
+  const ids = JSON.stringify(grants.map((grant) => grant.id));
   const devices = await db.all<DeviceRow>(sql`SELECT g.id AS grant_id, d.id AS device_id, r.registry_epoch,
       d.transport_public_key, del.digest AS label_digest
     FROM grants g JOIN encryption_devices d ON d.account_id = g.recipient_id AND d.state = 'active'
     JOIN account_encryption_identities r ON r.account_id = g.recipient_id
     LEFT JOIN grant_label_deliveries del ON del.grant_id = g.id AND del.device_id = d.id
       AND del.registry_epoch = r.registry_epoch
-    WHERE g.owner_id = ${ownerId} AND g.target_node_id = ${targetId} AND g.target_kind = ${targetKind}
-    ORDER BY g.id, d.id LIMIT ${MAX_FULFILL_DEVICES + 1}`);
-  // Keep Grants in order until the device budget is spent; the leftovers stay needs.
-  const keptGrants: GrantRow[] = [], keptDevices: DeviceRow[] = [];
-  for (const grant of grants) {
-    const own = devices.filter((device) => device.grant_id === grant.id);
-    if (!own.length || keptDevices.length + own.length > MAX_FULFILL_DEVICES) break;
-    keptGrants.push(grant);
-    keptDevices.push(...own);
-  }
-  return { grants: keptGrants, devices: keptDevices };
+    WHERE g.id IN (SELECT value FROM json_each(${ids}))
+    ORDER BY g.id, d.id`);
+  return { grants, devices };
 }
 
 /** `ownerCopy` is the Owner's own Shared-as label copy under their Vault root, never a
