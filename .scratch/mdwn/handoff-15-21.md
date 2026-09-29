@@ -51,6 +51,14 @@ Design and wire contract live in `docs/sharing-server.md` § Private Comment thr
 - Ticket 20: waiting direct thread devices are provisioned only when a reader opens the Comments pane (`provisionThreadDevices`); the Owner's fulfillment loop should call the same route.
 - Public keys fed to HPKE must be imported extractable (workerd refuses non-extractable; browsers ignore the flag). `app/tree/editor-client.ts` `recipientKeys` still imports `false` and only works because browsers treat public keys as extractable.
 
+## Known WebKit flake: POST on a connection workerd is closing (diagnosed, not fixed)
+
+- Symptom: `openEditor` signup times out waiting for `/api/signup/verify`; the one captured trace shows `POST /api/signup/options` failing with "The network connection was lost". It hits about one WebKit test every one to two full runs.
+- Cause: the test harness is served by workerd directly (`lsof` on the harness port), which closes idle HTTP/1.1 keep-alive connections after 5.0s without a `Keep-Alive` header. A request sent on that socket in the last ~2ms fails. Chromium and Firefox transparently retry it; WebKit does not. Signup is exposed because the proof of work leaves a variable 0.3–50s idle gap before `/options`, but any POST whose idle gap lands at ~5.0s can fail the same way.
+- Tight loop (kept in the session scratchpad as `zz-keepalive-race.spec.ts`): in a page, `fetch` POST, wait 4996–5002ms, POST again. WebKit failed 29/80 with `Load failed`; Chromium 0/80; Firefox 0/80. `workerd.capnp` has no HTTP idle-timeout setting.
+- Fix not chosen yet (user decision): retry a network-level failure in the signup fixture only, or a guarded single retry in the app's POST helpers, which must respect one-use proof/challenge semantics.
+- Never run two Playwright invocations at once here: they share `test-results/` and one wipes the other's traces (ENOENT failures).
+
 ## Ticket 19 design (agreed direction, not started)
 
 - `sharing_rotation_jobs` needs a `mode` (`rekey` for revoke/leave, `reprovision` for a permission change; upsert keeps the stronger). Add it by migration and set it in `updateGrant`.
