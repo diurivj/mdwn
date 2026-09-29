@@ -6,6 +6,7 @@ import { sealDeviceEnrollmentEnvelope } from "~/crypto/vault";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { newOpaqueId } from "~/opaque-id";
+import { reconcileNeedStatements } from "~/sharing/needs.server";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 
 import { approvalMessage, candidateTranscriptMessage, possessionMessage, sha256,
@@ -320,9 +321,15 @@ export async function commitDeviceEnrollment(env: Env, session: ActiveSession,
         WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ${newSessionId}
           AND account_id = ${row.account_id} AND device_id = ${row.candidate_device_id}
           AND revoked_at IS NULL)`,
+      // Advancing the registry epoch invalidates every existing device's material, not only
+      // the joining device's, so one capped reconcile records an opaque need per affected pair.
+      reconcileNeedStatements({ recipientId: row.account_id }, now,
+        sql`EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${row.candidate_device_id}
+          AND account_id = ${row.account_id} AND state = 'active' AND approval_provenance = ${row.id})`),
     ]);
+    // The reconcile is derived and intentionally unguarded beyond the activation gate above.
     if (results[0]?.meta.changes !== 1 || (results[1]?.meta.changes ?? 0) < 1 ||
-        !results.slice(2).every((result) => result.meta.changes === 1)) return failed();
+        !results.slice(2, -1).every((result) => result.meta.changes === 1)) return failed();
     return Response.json({ ok: true, accountId: row.account_id,
       deviceId: row.candidate_device_id, registryEpoch: row.registry_epoch + 1 },
     { headers: { ...noStore, "Set-Cookie": cookie } });

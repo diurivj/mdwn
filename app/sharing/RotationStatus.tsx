@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { getDevice } from "~/device/store";
 import type { RootAccess } from "~/tree/client";
+import { runPendingProvisioning } from "./needs-client";
 import { runPendingRotations } from "./rotation-client";
 
 type State = { status: "idle" } | { status: "running"; done: number; total: number } | { status: "failed" };
@@ -10,8 +11,11 @@ type State = { status: "idle" } | { status: "running"; done: number; total: numb
 let inFlight: Promise<number> | null = null;
 
 /**
- * The Owner's browser replaces keys after a revoke, leave or permission change (ticket 19).
- * Server access already ended; writes beneath the affected folder or File resume when it finishes.
+ * The Owner's browser replaces keys after a revoke, leave or permission change (ticket 19) and
+ * then fulfils outstanding provisioning needs (ticket 20): rotation's barrier drains first, then
+ * the current-epoch material is re-sealed for every active device an enrollment or recovery left
+ * behind. Server access already ended; writes beneath the affected folder or File resume when it
+ * finishes.
  */
 export function RotationStatus({ access, trigger, onComplete }: { access: RootAccess; trigger: unknown;
   onComplete: () => void }) {
@@ -27,9 +31,16 @@ export function RotationStatus({ access, trigger, onComplete }: { access: RootAc
         const device = await getDevice(access.actorAccountId ?? access.vaultId);
         if (!device) return;
         const signer = { deviceId: device.deviceId, assertionKey: device.assertionKeyPair.privateKey };
-        inFlight ??= runPendingRotations(access, signer, (progress) => {
-          if (!cancelled && alive.current) setState({ status: "running", done: progress.done, total: progress.total });
-        }).finally(() => { inFlight = null; });
+        const report = (done: number, total: number) => {
+          if (!cancelled && alive.current) setState({ status: "running", done, total });
+        };
+        inFlight ??= (async () => {
+          const jobs = await runPendingRotations(access, signer,
+            (progress) => report(progress.done, progress.total));
+          const needs = await runPendingProvisioning(access, signer,
+            (progress) => report(progress.done, progress.targets));
+          return jobs + needs;
+        })().finally(() => { inFlight = null; });
         const ran = await inFlight;
         if (cancelled || !alive.current) return;
         setState({ status: "idle" });

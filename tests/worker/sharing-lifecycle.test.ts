@@ -869,3 +869,272 @@ describe("Directory permission-change rotation", () => {
       permission: "read_only", targetEpoch: 1 });
   });
 });
+
+type FulfillDevice = { deviceId: string; registryEpoch: number; publicKey: string; labelDigest: string | null };
+type FulfillGrant = { grantId: string; recipientId: string; generation: number;
+  permission: "read_only" | "read_write"; offer: { bytes: string; digest: string; signature: string };
+  labelId: string; ownerCopy?: string; devices: FulfillDevice[] };
+type FulfillStep =
+  | { step: "grants"; targetId: string; directoryId: string; epoch: number; grants: FulfillGrant[] }
+  | { step: "file"; targetId: string; fileId: string; recipients: { accountId: string; deviceId: string;
+      registryEpoch: number; publicKey: string; grants: { id: string; generation: number }[] }[];
+      grants: FulfillGrant[] };
+
+async function importDeviceKey(publicKey: string) {
+  return crypto.subtle.importKey("raw", decodeTreeBytes(publicKey, 65),
+    { name: "ECDH", namedCurve: "P-256" }, true, []);
+}
+
+/** Mirrors the browser's needs-client preparation with the fixture keys: a re-signed offer plus a
+ * fresh Shared-as label for every device an epoch advance invalidated. */
+async function prepareFulfillGrants(owner: Account, step: FulfillStep,
+  content: (device: FulfillDevice, grant: FulfillGrant) => Promise<Uint8Array>) {
+  const targetId = step.step === "grants" ? step.directoryId : step.fileId;
+  return Promise.all(step.grants.map(async (grant) => {
+    const stored = parseOffer(decodeTreeBytes(grant.offer.bytes, 131_072));
+    const envelopes = await Promise.all(grant.devices.map(async (device) => ({ device,
+      ciphertext: await content(device, grant) })));
+    let plaintext: Uint8Array | null = null;
+    if (grant.ownerCopy) plaintext = await openSymmetric(decodeTreeBytes(grant.ownerCopy, 4096), owner.vaultRoot,
+      { context: { purpose: "share-root-label", vaultId: owner.accountId, objectId: targetId,
+        keyId: grant.labelId, keyEpoch: 1, revision: 1 } });
+    const labels = await Promise.all(grant.devices.map(async (device) => {
+      if (device.labelDigest) return { deviceId: device.deviceId, ciphertext: null as Uint8Array | null,
+        digest: device.labelDigest };
+      const ciphertext = await sealToRecipient(plaintext!, await importDeviceKey(device.publicKey),
+        { purpose: "share-root-label", vaultId: owner.accountId, objectId: targetId, keyId: grant.labelId,
+          keyEpoch: 1, revision: 1, recipientId: device.deviceId });
+      return { deviceId: device.deviceId, ciphertext, digest: await digest(ciphertext) };
+    }));
+    const devices = await Promise.all(envelopes.map(async ({ device, ciphertext }) => ({
+      accountId: grant.recipientId, deviceId: device.deviceId, registryEpoch: device.registryEpoch,
+      publicKeyDigest: await digest(decodeTreeBytes(device.publicKey, 65)),
+      contentDigest: await digest(ciphertext),
+      labelDigest: labels.find((item) => item.deviceId === device.deviceId)!.digest })));
+    const offer = await signOffer({ ...stored, permission: grant.permission,
+      materialRevision: stored.materialRevision + 1,
+      targetKeyId: step.step === "grants" ? targetId : stored.targetKeyId,
+      targetEpoch: step.step === "grants" ? step.epoch : stored.targetEpoch,
+      registryEpoch: grant.devices[0]!.registryEpoch, devices, signerDeviceId: owner.deviceId },
+      owner.signing.privateKey);
+    return { grantId: grant.grantId,
+      offer: { bytes: enc(offer.bytes), digest: enc(offer.digest), signature: enc(offer.signature) },
+      devices: envelopes.map(({ device, ciphertext }, index) => ({ deviceId: device.deviceId,
+        ...(step.step === "grants" ? { ciphertext: enc(ciphertext) } : {}),
+        labelCiphertext: labels[index]!.ciphertext ? enc(labels[index]!.ciphertext!) : null })) };
+  }));
+}
+
+async function addDevice(account: Account, epoch: number): Promise<string> {
+  const deviceId = id();
+  const transport = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const assertion = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  await env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key,
+    state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, ?, ?, 'active', 'routine', ?, ?)`)
+    .bind(deviceId, account.accountId, new Uint8Array(await crypto.subtle.exportKey("raw", transport.publicKey)),
+      new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), epoch, Date.now()).run();
+  return deviceId;
+}
+
+const directoryCapability = (owner: Account, directoryId: string) => (device: FulfillDevice) =>
+  importDeviceKey(device.publicKey).then((key) => sealToRecipient(directoryKeyOf.get(directoryId)!, key,
+    { purpose: "grant", vaultId: owner.accountId, objectId: directoryId, keyId: directoryId,
+      keyEpoch: 1, revision: 1, recipientId: device.deviceId }));
+const directoryKeyOf = new Map<string, Uint8Array>();
+
+describe("ticket 20 grant provisioning fulfillment", () => {
+  it("re-seals a Directory Grant for both devices an epoch advance invalidated and refuses an exact replay", async () => {
+    const owner = await account(), recipient = await account();
+    const directory = await createDirectory(owner, owner, owner.rootId, owner.rootKey, "Fulfil");
+    directoryKeyOf.set(directory.childId, directory.key);
+    const invite = await inviteDirectory(owner, recipient, directory.childId, directory.key, "Fulfil");
+    expect((await recipient.request(`/api/private/sharing/shares/${invite.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    const second = await addDevice(recipient, 2);
+    recipient.setRegistryEpoch(2);
+    // The recipient sees provisioning, and its scope still resolves to an opaque directory grant.
+    expect(((await (await recipient.request("/api/private/sharing/roots", "POST")).json()) as {
+      roots: { status: string }[] }).roots[0]!.status).toBe("provisioning");
+    const scope = await recipient.request("/api/private/sharing/scope", "POST",
+      { nodeId: directory.childId, kind: "directory" });
+    expect(scope.status, await scope.clone().text()).toBe(200);
+    expect((await scope.json() as { scope: string }).scope).toBe("directory-grant");
+    // The Owner records one opaque need per active device.
+    const list = await owner.request("/api/private/provisioning", "POST");
+    expect(list.status, await list.clone().text()).toBe(200);
+    expect((await list.json() as { targets: unknown[] }).targets).toEqual([
+      expect.objectContaining({ targetId: directory.childId, kind: "directory", needs: 2, devices: 2 })]);
+    const needs = await env.DB.prepare(`SELECT grant_id, owner_id, recipient_id, device_id, generation,
+      registry_epoch FROM provisioning_needs WHERE grant_id = ? ORDER BY device_id`).bind(invite.grantId).all();
+    expect(needs.results.map((row) => (row as { device_id: string }).device_id).sort())
+      .toEqual([recipient.deviceId, second].sort());
+    expect(needs.results).toEqual(needs.results.map(() => ({ grant_id: invite.grantId, owner_id: owner.accountId,
+      recipient_id: recipient.accountId, device_id: expect.any(String), generation: 1, registry_epoch: 2 })));
+    const next = await owner.request(`/api/private/provisioning/${directory.childId}/next`, "POST");
+    expect(next.status, await next.clone().text()).toBe(200);
+    const step = await next.json() as Extract<FulfillStep, { step: "grants" }>;
+    expect(step).toMatchObject({ step: "grants", targetId: directory.childId, directoryId: directory.childId, epoch: 1 });
+    expect(step.grants[0]!.ownerCopy).toBeTruthy();
+    expect(step.grants[0]!.devices.map((device) => device.labelDigest)).toEqual([null, null]);
+    const grants = await prepareFulfillGrants(owner, step, directoryCapability(owner, directory.childId));
+    const done = await owner.request(`/api/private/provisioning/${directory.childId}/grants`, "PATCH",
+      { epoch: 1, grants });
+    expect(done.status, await done.clone().text()).toBe(200);
+    checkBudget(done.headers.get("X-Mdwn-Sharing-Budget"));
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM provisioning_needs WHERE grant_id = ?")
+      .bind(invite.grantId).first()).toEqual({ n: 0 });
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n FROM grant_label_deliveries
+      WHERE grant_id = ? AND registry_epoch = 2`).bind(invite.grantId).first()).toEqual({ n: 2 });
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n FROM grant_device_envelopes
+      WHERE grant_id = ? AND registry_epoch = 2 AND generation = 1`).bind(invite.grantId).first()).toEqual({ n: 2 });
+    const stored = await env.DB.prepare("SELECT offer_bytes FROM grant_labels WHERE grant_id = ?")
+      .bind(invite.grantId).first<{ offer_bytes: ArrayBuffer }>();
+    expect(parseOffer(new Uint8Array(stored!.offer_bytes)).devices).toHaveLength(2);
+    expect(((await (await recipient.request("/api/private/sharing/roots", "POST")).json()) as {
+      roots: { status: string }[] }).roots[0]!.status).toBe("ready");
+    // An exact replay reuses the stored envelope bytes and changes nothing.
+    const before = await env.DB.prepare(`SELECT device_id, ciphertext FROM grant_device_envelopes
+      WHERE grant_id = ? ORDER BY device_id`).bind(invite.grantId).all();
+    const replay = await owner.request(`/api/private/provisioning/${directory.childId}/grants`, "PATCH",
+      { epoch: 1, grants });
+    expect(replay.status).toBe(400);
+    const after = await env.DB.prepare(`SELECT device_id, ciphertext FROM grant_device_envelopes
+      WHERE grant_id = ? ORDER BY device_id`).bind(invite.grantId).all();
+    expect(after.results).toEqual(before.results);
+  });
+
+  it("re-seals a direct File Grant and its label for a newly enrolled device", async () => {
+    const owner = await account(), recipient = await account(), file = await createV2File(owner);
+    const invite = await inviteFile(owner, recipient, file);
+    expect((await recipient.request(`/api/private/sharing/shares/${invite.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    const second = await addDevice(recipient, 2);
+    recipient.setRegistryEpoch(2);
+    const list = await owner.request("/api/private/provisioning", "POST");
+    expect((await list.json() as { targets: { targetId: string }[] }).targets)
+      .toEqual([expect.objectContaining({ targetId: file.fileId, kind: "file", needs: 2 })]);
+    const step = await (await owner.request(`/api/private/provisioning/${file.fileId}/next`, "POST"))
+      .json() as Extract<FulfillStep, { step: "file" }>;
+    expect(step.recipients.map((item) => item.deviceId).sort()).toEqual([recipient.deviceId, second].sort());
+    const current = await (await owner.request(`/api/private/tree/files/${file.fileId}`, "POST")).json() as {
+      fileHead: { bytes: string; digest: string; signature: string }; revision: number; contentKeyId: string;
+      keyEpoch: number };
+    const before = await verifyFileHead({ bytes: decodeTreeBytes(current.fileHead.bytes, 131_072),
+      digest: decodeTreeBytes(current.fileHead.digest, 32), signature: decodeTreeBytes(current.fileHead.signature, 64) },
+    { ownerId: owner.accountId, vaultId: owner.accountId, fileId: file.fileId, revision: current.revision,
+      signerDeviceId: owner.deviceId, publicKey: new Uint8Array(await crypto.subtle.exportKey(
+        "raw", owner.signing.publicKey)) });
+    const envelopes = await Promise.all(step.recipients.map(async (item) => ({ deviceId: item.deviceId,
+      ciphertext: enc(await sealToRecipient(file.saved.fileContentKey, await importDeviceKey(item.publicKey),
+        { purpose: "grant", vaultId: owner.accountId, objectId: file.fileId, keyId: current.contentKeyId,
+          keyEpoch: current.keyEpoch, revision: current.revision, recipientId: item.deviceId })) })));
+    const nextHead = await signFileHead({ ...before.statement,
+      recipientSetVersion: before.statement.recipientSetVersion + 1,
+      recipients: await Promise.all(step.recipients.map(async (item) => ({ accountId: item.accountId,
+        deviceId: item.deviceId, registryEpoch: item.registryEpoch, grants: item.grants,
+        publicKeyDigest: await hash(decodeTreeBytes(item.publicKey, 65)),
+        envelopeDigest: await hash(decodeTreeBytes(envelopes.find((entry) => entry.deviceId === item.deviceId)!.ciphertext, 16_384)) }))),
+      signerDeviceId: owner.deviceId }, owner.signing.privateKey);
+    const envelopeBytes = new Map(envelopes.map((entry) => [entry.deviceId, decodeTreeBytes(entry.ciphertext, 16_384)] as const));
+    const grants = await prepareFulfillGrants(owner, step, async (device) => envelopeBytes.get(device.deviceId)!);
+    const done = await owner.request(`/api/private/provisioning/${file.fileId}/file`, "PATCH", {
+      expectedHeadDigest: current.fileHead.digest, signedHead: wireHead(nextHead),
+      recipientEnvelopes: envelopes, grants });
+    expect(done.status, await done.clone().text()).toBe(200);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM provisioning_needs WHERE grant_id = ?")
+      .bind(invite.grantId).first()).toEqual({ n: 0 });
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n FROM file_device_envelopes
+      WHERE file_node_id = ? AND registry_epoch = 2`).bind(file.fileId).first()).toEqual({ n: 2 });
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n FROM grant_label_deliveries
+      WHERE grant_id = ? AND registry_epoch = 2`).bind(invite.grantId).first()).toEqual({ n: 2 });
+    expect(((await (await recipient.request("/api/private/sharing/roots", "POST")).json()) as {
+      roots: { status: string }[] }).roots[0]!.status).toBe("ready");
+  });
+
+  it("refuses fulfillment while a rotation barrier is up and writes nothing", async () => {
+    const owner = await account(), recipient = await account();
+    const directory = await createDirectory(owner, owner, owner.rootId, owner.rootKey, "Barrier");
+    directoryKeyOf.set(directory.childId, directory.key);
+    const invite = await inviteDirectory(owner, recipient, directory.childId, directory.key, "Barrier");
+    expect((await recipient.request(`/api/private/sharing/shares/${invite.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    await addDevice(recipient, 2);
+    recipient.setRegistryEpoch(2);
+    await owner.request("/api/private/provisioning", "POST");
+    const step = await (await owner.request(`/api/private/provisioning/${directory.childId}/next`, "POST"))
+      .json() as Extract<FulfillStep, { step: "grants" }>;
+    const grants = await prepareFulfillGrants(owner, step, directoryCapability(owner, directory.childId));
+    const before = await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM grant_device_envelopes WHERE grant_id = ?1) AS envelopes,
+      (SELECT COUNT(*) FROM provisioning_needs WHERE grant_id = ?1) AS needs`).bind(invite.grantId).first();
+    await env.DB.prepare("INSERT INTO rotation_barriers (owner_id, target_node_id, epoch) VALUES (?, ?, 2)")
+      .bind(owner.accountId, directory.childId).run();
+    expect((await owner.request(`/api/private/provisioning/${directory.childId}/next`, "POST")).status).toBe(404);
+    const refused = await owner.request(`/api/private/provisioning/${directory.childId}/grants`, "PATCH",
+      { epoch: 1, grants });
+    expect([404, 409]).toContain(refused.status);
+    expect(await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM grant_device_envelopes WHERE grant_id = ?1) AS envelopes,
+      (SELECT COUNT(*) FROM provisioning_needs WHERE grant_id = ?1) AS needs`).bind(invite.grantId).first())
+      .toEqual(before);
+    await env.DB.prepare("DELETE FROM rotation_barriers WHERE owner_id = ? AND target_node_id = ?")
+      .bind(owner.accountId, directory.childId).run();
+  });
+
+  it("leaves a revoked Grant with no need, no material and no way to provision", async () => {
+    const owner = await account(), recipient = await account();
+    const directory = await createDirectory(owner, owner, owner.rootId, owner.rootKey, "Revoke");
+    directoryKeyOf.set(directory.childId, directory.key);
+    const invite = await inviteDirectory(owner, recipient, directory.childId, directory.key, "Revoke");
+    expect((await recipient.request(`/api/private/sharing/shares/${invite.shareId}/accept`, "POST",
+      { materialRevision: 1 })).status).toBe(200);
+    await addDevice(recipient, 2);
+    recipient.setRegistryEpoch(2);
+    await owner.request("/api/private/provisioning", "POST");
+    const step = await (await owner.request(`/api/private/provisioning/${directory.childId}/next`, "POST"))
+      .json() as Extract<FulfillStep, { step: "grants" }>;
+    const grants = await prepareFulfillGrants(owner, step, directoryCapability(owner, directory.childId));
+    expect((await owner.request(`/api/private/sharing/grants/${invite.grantId}`, "DELETE")).status).toBe(200);
+    const refused = await owner.request(`/api/private/provisioning/${directory.childId}/grants`, "PATCH",
+      { epoch: 1, grants });
+    expect([400, 404, 409]).toContain(refused.status);
+    expect(await grantResidue(invite.grantId)).toEqual(noResidue);
+    const list = await owner.request("/api/private/provisioning", "POST");
+    expect((await list.json() as { targets: { targetId: string }[] }).targets).toEqual([]);
+  });
+
+  it("caps one reconcile at 256 opaque rows and stamps the final registry epoch", async () => {
+    const owner = await account(), recipient = await account();
+    // One Grant, 300 active devices: the registry epoch advances once per device insertion.
+    for (let start = 0; start < 300; start += 100) {
+      const statements = [];
+      for (let index = start; index < start + 100; index++) {
+        const transport = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+        const assertion = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+        statements.push(env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key,
+          assertion_public_key, state, approval_provenance, registry_epoch, created_at)
+          VALUES (?, ?, ?, ?, 'active', 'routine', ?, ?)`).bind(id(), recipient.accountId,
+          new Uint8Array(await crypto.subtle.exportKey("raw", transport.publicKey)),
+          new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), index + 2, Date.now()));
+      }
+      await env.DB.batch(statements);
+    }
+    const now = Date.now(), grantId = id();
+    await env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
+      generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 'read_only', 1, ?, ?)`)
+      .bind(grantId, owner.accountId, recipient.accountId, owner.rootId, now, now).run();
+    await env.DB.prepare(`INSERT INTO grant_labels (grant_id, label_id, owner_copy, offer_bytes, offer_digest,
+      offer_signature, signer_device_id) VALUES (?, ?, X'01', X'01', zeroblob(32), zeroblob(64), ?)`)
+      .bind(grantId, id(), owner.deviceId).run();
+    const epoch = (await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id = ?")
+      .bind(recipient.accountId).first<{ registry_epoch: number }>())!.registry_epoch;
+    expect(epoch).toBe(301);
+    const list = await owner.request("/api/private/provisioning", "POST");
+    expect((await list.json() as { targets: unknown[] }).targets)
+      .toEqual([{ targetId: owner.rootId, kind: "directory", needs: 256, devices: 256 }]);
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n, MIN(registry_epoch) AS lo, MAX(registry_epoch) AS hi
+      FROM provisioning_needs WHERE grant_id = ?`).bind(grantId).first()).toEqual({ n: 256, lo: 301, hi: 301 });
+    // A second pass upserts the same 256 rows rather than duplicating or bypassing the cap.
+    await owner.request("/api/private/provisioning", "POST");
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM provisioning_needs WHERE grant_id = ?")
+      .bind(grantId).first()).toEqual({ n: 256 });
+  });
+});

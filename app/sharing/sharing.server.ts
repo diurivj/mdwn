@@ -225,7 +225,39 @@ export async function scope(env: Env, auth: AuthorizedDevice, value: unknown): P
         AND cap.target_epoch = directory.capability_epoch AND label_delivery.ciphertext IS NOT NULL)
         OR (g.target_kind = 'file' AND l.depth = 0))
     ORDER BY CASE WHEN g.target_kind = 'directory' THEN 2 ELSE 1 END DESC, l.depth DESC LIMIT 1`);
-  if (!result) return absent();
+  if (!result) {
+    // A Grant whose material an epoch advance invalidated must still resolve to a minimal
+    // opaque scope, so navigation reaches `roots` and shows the provisioning state rather
+    // than a misleading "not found". Only opaque IDs and the path are returned; readiness
+    // is decided by `roots`. No name, ciphertext or capability is disclosed.
+    const fallback = await createDb(env.DB).get<{ owner_id: string; grant_id: string;
+      target_kind: string; path: string | null }>(sql`
+      WITH RECURSIVE lineage(id, kind, parent_node_id, owner_id, depth) AS (
+        SELECT n.id, n.kind, n.parent_node_id, n.owner_id, 0 FROM vault_nodes n
+          WHERE n.id = ${input.nodeId} AND n.kind = ${input.kind} AND n.import_id IS NULL
+        UNION ALL
+        SELECT p.id, p.kind, p.parent_node_id, p.owner_id, child.depth + 1
+          FROM vault_nodes p JOIN lineage child ON p.id = child.parent_node_id
+          WHERE child.depth < 100 AND p.kind = 'directory' AND p.import_id IS NULL
+            AND p.owner_id = child.owner_id
+      )
+      SELECT n.owner_id, g.id AS grant_id, g.target_kind,
+        (SELECT json_group_array(sorted.id) FROM (SELECT id, depth FROM lineage ORDER BY depth DESC) sorted
+          WHERE sorted.depth <= l.depth) AS path
+      FROM lineage n JOIN account_encryption_identities identity ON identity.account_id = n.owner_id
+        AND identity.root_directory_id IN (SELECT id FROM lineage WHERE parent_node_id IS NULL)
+      JOIN lineage l ON l.owner_id = n.owner_id AND l.depth >= 0
+      JOIN grants g ON g.owner_id = n.owner_id AND g.recipient_id = ${auth.accountId}
+        AND g.target_node_id = l.id AND g.target_kind = l.kind
+      WHERE n.depth = 0 AND ${privateReadGuard(auth)} AND g.id IS NOT NULL
+      ORDER BY CASE WHEN g.target_kind = 'directory' THEN 2 ELSE 1 END DESC, l.depth DESC LIMIT 1`);
+    if (!fallback || fallback.target_kind !== "directory") return absent();
+    const directory = await getEffectiveDirectoryAccess(env.DB, auth, fallback.owner_id, input.nodeId);
+    const path: unknown = JSON.parse(fallback.path ?? "null");
+    if (!directory || !Array.isArray(path) || path.length > 101 || path.at(-1) !== input.nodeId ||
+        path.some((id) => !isV7(id))) return absent();
+    return Response.json({ scope: "directory-grant", grantId: fallback.grant_id, path }, { headers });
+  }
   if (result.own === 1) return Response.json({ scope: "owned" }, { headers });
   if (!result.grant_id || !isV7(result.grant_id)) return absent();
   const effective = input.kind === "file" ?

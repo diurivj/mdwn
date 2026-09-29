@@ -255,3 +255,64 @@ describe("routine device enrollment", () => {
       .bind(stale.transcript.deviceId).first()).toBeNull();
   });
 });
+
+describe("ticket 20 needs recorded by routine enrollment", () => {
+  it("records an opaque need per affected device at the final registry epoch", async () => {
+    const f = await fixture();
+    // A Grant held by this Account from another Owner, so the epoch advance affects it.
+    const ownerId = uuidv7(), ownerRootId = uuidv7(), ownerDeviceId = uuidv7(), now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .bind(ownerId, uuidv7(), now, now),
+      env.DB.prepare("INSERT INTO account_encryption_identities (account_id, root_directory_id, registry_epoch) VALUES (?, ?, 1)")
+        .bind(ownerId, ownerRootId),
+      env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key,
+        state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, X'02', X'02', 'active', 'signup', 1, ?)`)
+        .bind(ownerDeviceId, ownerId, now),
+    ]);
+    const grantId = uuidv7();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
+        generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 'read_only', 1, ?, ?)`)
+        .bind(grantId, ownerId, f.accountId, ownerRootId, now, now),
+      env.DB.prepare(`INSERT INTO grant_labels (grant_id, label_id, owner_copy, offer_bytes, offer_digest,
+        offer_signature, signer_device_id) VALUES (?, ?, X'01', X'01', zeroblob(32), zeroblob(64), ?)`)
+        .bind(grantId, uuidv7(), ownerDeviceId),
+    ]);
+    const started = await start(f);
+    const envelope = await sealDeviceEnrollmentEnvelope(f.hierarchy.vaultRootKey, f.transport.publicKey, {
+      purpose: "device-enrollment", vaultId: f.accountId, objectId: f.transcript.deviceId,
+      keyId: f.transcript.deviceId, keyEpoch: 1, revision: 1, recipientId: f.transcript.deviceId,
+    });
+    const approval: EnrollmentApproval = { ...f.transcript,
+      enrollmentId: started.enrollmentId, transcriptDigest: started.transcriptDigest,
+      envelopeDigest: encodeBytes(await digestEnvelope(envelope)),
+      approvingDeviceId: f.approverId, expiresAt: started.expiresAt };
+    const approvalSignature = encodeBytes(new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, f.approverAssertion.privateKey, approvalMessage(approval))));
+    expect((await privatePost("/api/device-enrollment/approve", f.approver.cookie,
+      { enrollmentId: started.enrollmentId, approval, approvalSignature,
+        enrollmentEnvelope: encodeBytes(envelope) }, f)).status).toBe(200);
+    const challenge = await (await post("/api/device-enrollment/status", f.candidate.cookie,
+      { enrollmentId: started.enrollmentId })).json() as { challenge: string; enrollmentEnvelope: string };
+    const secret = await openDeviceEnrollmentEnvelope(decodeBytes(challenge.challenge), f.transport, {
+      purpose: "device-enrollment", vaultId: f.accountId, objectId: "routine-transport-challenge",
+      keyId: "routine-transport-challenge", keyEpoch: 1, revision: 1, recipientId: f.transcript.deviceId });
+    const signature = encodeBytes(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" },
+      f.assertion.privateKey, possessionMessage(decodeBytes(started.transcriptDigest, 32), secret))));
+    const committed = await post("/api/device-enrollment/commit", f.candidate.cookie, {
+      enrollmentId: started.enrollmentId, transcript: f.transcript, transcriptDigest: started.transcriptDigest,
+      approval, approvalSignature, enrollmentEnvelope: challenge.enrollmentEnvelope,
+      challengeSecret: encodeBytes(secret), challengeSignature: signature });
+    expect(committed.status, await committed.clone().text()).toBe(200);
+    // Both of the recipient's active devices now carry a need stamped with the FINAL epoch.
+    expect(await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id = ?")
+      .bind(f.accountId).first()).toEqual({ registry_epoch: 2 });
+    const needs = (await env.DB.prepare(`SELECT device_id, registry_epoch, generation FROM provisioning_needs
+      WHERE grant_id = ?`).bind(grantId).all()).results as { device_id: string; registry_epoch: number;
+        generation: number }[];
+    expect(needs.map((row) => row.device_id).sort()).toEqual([f.approverId, f.transcript.deviceId].sort());
+    expect(needs).toHaveLength(2);
+    expect(needs.every((row) => row.registry_epoch === 2 && row.generation === 1)).toBe(true);
+  });
+});

@@ -218,7 +218,7 @@ export async function runPendingRotations(access: RootAccess, signer: StructureS
 }
 
 /** The Owner's verified key chain from the hidden root to one node's parent (and the node, if a Directory). */
-async function openPath(access: RootAccess, nodeId: string): Promise<{ states: Map<string, DirectoryState>;
+export async function openPath(access: RootAccess, nodeId: string): Promise<{ states: Map<string, DirectoryState>;
   entry: TreeEntry | null }> {
   const path = await loadAncestors(nodeId);
   if (path[0] !== access.rootId) throw new TreeNotFoundError();
@@ -238,7 +238,7 @@ async function openPath(access: RootAccess, nodeId: string): Promise<{ states: M
   return { states, entry };
 }
 
-async function fileSource(fileId: string): Promise<RotationFile> {
+export async function fileSource(fileId: string): Promise<RotationFile> {
   const response = await privateRequest(`/api/private/tree/files/${fileId}`, { method: "POST" });
   if (response.status === 404) throw new TreeNotFoundError();
   if (!response.ok) throw new Error("rotation unavailable");

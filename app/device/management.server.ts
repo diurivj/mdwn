@@ -5,6 +5,7 @@ import { coarseProofTime, privateReadGuard, type AuthorizedDevice } from "./proo
 import { sessionBindingDigest, verifyDeviceProof } from "./proof";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 import { MAX_EVENT_RETENTION_MS } from "~/security/abuse-control.server";
+import { reconcileNeedStatements } from "~/sharing/needs.server";
 
 const noStore = { "Cache-Control": "no-store" };
 const denied = (status = 403, error = "device_proof_required") =>
@@ -159,6 +160,11 @@ export async function removeEncryptionDevice(env: Env, session: ActiveSession,
       sql`UPDATE encryption_devices SET last_proof_at = ${proofDay}
         WHERE account_id = ${authorized.accountId} AND id = ${authorized.deviceId}
           AND ${marker} AND (last_proof_at IS NULL OR last_proof_at < ${proofDay})`,
+      // Tombstoning a device advances the epoch and stales every surviving device's material.
+      reconcileNeedStatements({ recipientId: authorized.accountId }, now,
+        sql`EXISTS (SELECT 1 FROM encryption_devices WHERE id = ${body.targetDeviceId}
+          AND account_id = ${authorized.accountId} AND state = 'tombstoned'
+          AND revocation_reason = 'device-removal')`),
     ]);
     // The membership trigger advances the epoch in the same statement, so D1
     // reports both writes in meta.changes. A failed guard still reports zero.

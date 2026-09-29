@@ -4,6 +4,7 @@ import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
 import { sealDeviceEnrollmentEnvelope } from "~/crypto/vault";
 import { enforceRateLimit, MAX_EVENT_RETENTION_MS, rateLimitResponse } from "~/security/abuse-control.server";
+import { reconcileNeedStatements } from "~/sharing/needs.server";
 import { decodeBytes, encodeBytes } from "~/signup/protocol";
 
 import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type NextRecoveryMetadata, type RecoveryIntent } from "./protocol";
@@ -275,6 +276,9 @@ export async function commitRecoveryEnrollment(env: Env, session: ActiveSession,
           'pending', NULL, ${now}, ${now}
         WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ${newSessionId} AND account_id = ${session.accountId}
           AND revoked_at IS NULL AND device_id = ${body.intent.deviceId})`,
+      // Recovery tombstones the old devices and advances the epoch more than once; this runs
+      // after the LAST device mutation so every recorded need carries the final epoch.
+      reconcileNeedStatements({ recipientId: session.accountId }, now, activatedDevice),
     ]);
     if (results[0]?.meta.changes !== 1 || (results[1]?.meta.changes ?? 0) < 1 ||
         results[4]?.meta.changes !== 1 || results[5]?.meta.changes !== 1 ||
