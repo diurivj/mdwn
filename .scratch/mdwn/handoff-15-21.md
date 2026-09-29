@@ -79,6 +79,8 @@ Design and wire contract live in `docs/sharing-server.md` § Private Comment thr
 
 ## For ticket 20 (next)
 
+- **Decision (user, 2026-09-29): only the Owner's browser fulfills needs.** A recipient's devices never fulfill, and the ticket 18 direct-File holder completion stays as it is. Session 4 (orchestrator) runs ticket 20 as Sonnet implementer `work/20-grant-fulfillment`, branched from `feat/15-21-private-workspace`.
+- **Ticket 07 open criteria (user, 2026-09-29):** Network-bucket rotation and 24 h physical deletion go to 31. The Public Comment 429 with draft survival, and the honeypot, go to 23 (criteria added there).
 - Re-sealing a Directory capability for a device needs a **re-signed offer** listing that device (see `prepareGrantSeals`/`parseGrantSeals`/`grantSealStatements` in `app/sharing/rotation-{client,server}.ts`); a device without a current `grant_label_deliveries` row also needs its Shared-as label re-sealed. The Owner can open the label from `grant_labels.owner_copy` with the Vault root.
 - Direct File devices need a same-revision recipient-set update (`prepareFileTargetRotation` does this for the live set) plus Private thread envelopes (`provisionThreadDevices`).
 - `RotationStatus` already runs in the Owner's browser on owned Files pages; a fulfillment loop can share its runner pattern.

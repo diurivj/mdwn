@@ -13,3 +13,4 @@
 - [ ] Covering indexes exist and are exercised for current representation, current epoch, pending Share and Publication request, active-or-deleting Publication, current Recovery capsule and Device registry, unexpired session/challenge/enrollment/Import, consumed mutation proof, outstanding provisioning need, and counter-window lookups.
 - [ ] Representative tree and access queries are validated with reviewed `EXPLAIN QUERY PLAN` output; recursive traversal and deletion are explicitly bounded.
 - [ ] Migration rollback posture is rehearsed on non-production data using D1 Time Travel plus a pre-change export.
+- [ ] (Moved from 07.) Network buckets: rotating the HMAC key is exercised (a rotated key yields fresh buckets and the raw IP is never retained), and counter rows are physically deleted within 24 hours, not just logically expired. A test or documented operational verification proves this.

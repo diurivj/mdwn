@@ -17,3 +17,4 @@
 ## Comments
 
 - 2026-09-21: Dependency note from ticket 03: resumed fulfillment must reuse the stored envelope bytes on an exact retry. If it re-seals instead, it uses a fresh writer or HPKE context; it never restores nonce state. See `docs/enc-v1.md`.
+- 2026-09-29: User decision: **only the Owner's browser fulfills needs.** It processes provisioning needs after pending rotation jobs, from the same runner on owned Files pages, and handles Directory capabilities under re-signed offers, Shared-as label deliveries, direct-File recipient sets and Private thread device envelopes. A recipient's own devices do not fulfill; that would need a new recipient-signed proof format. The existing ticket 18 direct-File holder completion (`PATCH /direct-files/:fileId/complete`) stays as it is and is not extended.

@@ -17,6 +17,8 @@
 - [ ] Every read and create checks active thread and Publication state, current audience authorization, and epoch; edit/delete additionally checks author identity with Owner hard-delete as the only author exception; Public Comment participation counters are consumed atomically with accepted create, edit, and report operations.
 - [ ] Private Comments are never copied or exposed when publishing; a Public reader sees only eligible public epochs under the rendered document, with no Private/Public selector.
 - [ ] Tests prove audience transitions never disclose Collaborators-only history publicly, an unauthorized signed-in Account receives no data, and the Private thread is absent from every Public response.
+- [ ] (Moved from 07.) A Public Comment create, edit or report that is rate-limited or over quota gets the generic `429` with `Retry-After` (`rateLimitResponse`). The response never confirms whether an Account exists, and the Comment draft held by the browser survives the denial.
+- [ ] (Moved from 07.) The Public Comment form has one static, genuinely hidden, non-autofillable honeypot field (`HoneypotField`). A non-empty value creates no Comment and gets only a generic failure. The value is never logged or persisted, and at most a `honeypot-filled` Security event is recorded.
 
 ## Comments
 
