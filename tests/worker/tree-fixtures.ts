@@ -60,21 +60,23 @@ const decoder = new TextDecoder();
 export async function state(who: Actor, vaultId: string, directoryId: string, key: Uint8Array): Promise<DirectoryState> {
   const response = await call(who, `/api/private/tree/directories/${directoryId}`, "POST");
   if (!response.ok) throw new Error(`listing ${response.status}`);
-  const listing = await response.json() as { entriesRevision: number; listingVersion: ListingVersion; entries: SealedEntry[] };
+  const listing = await response.json() as { entriesRevision: number; listingVersion: ListingVersion;
+    capabilityEpoch: number; entries: SealedEntry[] };
   const entries = await Promise.all(listing.entries.map(async (entry): Promise<TreeEntry> => {
     const context = { purpose: "directory-metadata" as const, vaultId, objectId: entry.nodeId,
-      keyId: directoryId, keyEpoch: 1, revision: 1 };
+      keyId: directoryId, keyEpoch: listing.capabilityEpoch, revision: 1 };
     return { ...entry, name: decoder.decode(await openSymmetric(decodeTreeBytes(entry.nameCiphertext), key, { context })),
       order: decoder.decode(await openSymmetric(decodeTreeBytes(entry.orderCiphertext), key, { context })) };
   }));
   entries.sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : a.nodeId.localeCompare(b.nodeId));
   return { listing: { directoryId, entriesRevision: listing.entriesRevision, listingVersion: listing.listingVersion,
-    entries } satisfies DirectoryListing, key };
+    capabilityEpoch: listing.capabilityEpoch, entries } satisfies DirectoryListing, key };
 }
 
 export function signListing(signer: StructureSigner, vaultId: string, parent: DirectoryState,
   entries: readonly SealedEntry[], version: ListingVersion = parent.listing.listingVersion ?? 1) {
   return createListingHead(parent.key, signer.assertionKey, { vaultId, directoryId: parent.listing.directoryId,
+    epoch: parent.listing.capabilityEpoch,
     deviceId: signer.deviceId, revision: parent.listing.entriesRevision + 1, version,
     entries: entries.map((entry) => ({ nodeId: entry.nodeId, kind: entry.kind, nameCiphertext: entry.nameCiphertext,
       orderCiphertext: entry.orderCiphertext, keyEnvelope: entry.keyEnvelope,
@@ -87,6 +89,7 @@ export function signListing(signer: StructureSigner, vaultId: string, parent: Di
 export async function directory(who: Actor, vaultId: string, parent: DirectoryState, name: string): Promise<{
   nodeId: string; key: Uint8Array<ArrayBuffer> }> {
   const payload = await prepareTreeCreate({ vaultId, parentId: parent.listing.directoryId, parentKey: parent.key,
+    parentEpoch: parent.listing.capabilityEpoch,
     entriesRevision: parent.listing.entriesRevision, existingNames: parent.listing.entries.map((e) => e.name),
     requestedName: name, kind: "directory" });
   const listingHead = await signListing(who.signer, vaultId, parent, [...parent.listing.entries,
@@ -103,6 +106,7 @@ export async function directory(who: Actor, vaultId: string, parent: DirectorySt
 export async function legacyFile(who: Actor, vaultId: string, parent: DirectoryState, name: string,
   markdown = "# legacy"): Promise<string> {
   const payload = await prepareTreeCreate({ vaultId, parentId: parent.listing.directoryId, parentKey: parent.key,
+    parentEpoch: parent.listing.capabilityEpoch,
     entriesRevision: parent.listing.entriesRevision, existingNames: parent.listing.entries.map((e) => e.name),
     requestedName: name, kind: "file", markdown });
   const listingHead = await signListing(who.signer, vaultId, parent, [...parent.listing.entries,
@@ -121,7 +125,7 @@ export async function v2File(who: Actor, vaultId: string, parent: DirectoryState
   const listing = parent.listing, nodeId = uuid7(), receivingKeyId = uuid7(), contentKeyId = uuid7();
   const representationId = uuid7(), wrapRevision = listing.entriesRevision + 1;
   const metadata = await encryptedEntry(parent.key, vaultId, listing.directoryId, nodeId, name,
-    orderBetween(listing.entries.at(-1)?.order ?? ""));
+    orderBetween(listing.entries.at(-1)?.order ?? ""), listing.capabilityEpoch);
   const receiving = await createFileReceivingKey(parent.key, { vaultId, fileId: nodeId, receivingKeyId,
     receivingEpoch: 1, wrapRevision });
   const fresh = await createFileSave({ markdown, metadata: new Uint8Array() }, receiving.publicKey,

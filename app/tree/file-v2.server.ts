@@ -397,17 +397,18 @@ export async function createV2Child(env: Env, auth: AuthorizedDevice, parentId: 
   const contentOwner = (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id
     FROM vault_nodes WHERE id = ${parentId} AND kind = 'directory'`))?.owner_id;
   if (!contentOwner) return absent();
-  const parent = await createDb(env.DB).get<{ owner_id: string; listing_version: ListingVersion }>(sql`
-    SELECT d.owner_id, d.listing_version FROM directories d
+  const parent = await createDb(env.DB).get<{ owner_id: string; listing_version: ListingVersion;
+    capability_epoch: number }>(sql`
+    SELECT d.owner_id, d.listing_version, d.capability_epoch FROM directories d
     WHERE d.node_id = ${parentId} AND d.owner_id = ${contentOwner}
       AND ${directoryAccessGuard(auth, contentOwner, parentId, "child_create")}`);
   if (!parent) return absent();
   try {
     const ownerId = parent.owner_id, fileId = v.nodeId, contentKeyId = representation.contentKeyId;
     const name = treeEnvelope(v.nameCiphertext, 4096, { purpose: "directory-metadata",
-      vaultId: ownerId, objectId: fileId, keyId: parentId, keyEpoch: 1, revision: 1 });
+      vaultId: ownerId, objectId: fileId, keyId: parentId, keyEpoch: parent.capability_epoch, revision: 1 });
     const order = treeEnvelope(v.orderCiphertext, 4096, { purpose: "directory-metadata",
-      vaultId: ownerId, objectId: fileId, keyId: parentId, keyEpoch: 1, revision: 1 });
+      vaultId: ownerId, objectId: fileId, keyId: parentId, keyEpoch: parent.capability_epoch, revision: 1 });
     const wrapper = treeEnvelope(v.keyEnvelope, 16_384, { purpose: "file-receiving-key",
       vaultId: ownerId, objectId: fileId, keyId: v.receivingKeyId, keyEpoch: 1,
       revision: v.wrapRevision as number });
@@ -426,8 +427,8 @@ export async function createV2Child(env: Env, auth: AuthorizedDevice, parentId: 
     await verifyFileReceivingTarget(head, receivingPublicKey);
     await verifyFileParentEnvelope(head, parentEnvelope);
     await verifyFileRepresentation(head, representation.id as string, representationCiphertext);
-    const listing = await signedListing(v.listingHead, auth, parentId, v.expectedRevision as number,
-      ownerId, 2);
+    const listing = await signedListing(v.listingHead, auth, { directoryId: parentId,
+      expectedRevision: v.expectedRevision as number, ownerId, version: 2, epoch: parent.capability_epoch });
     const now = Date.now();
     const committed = await commitDirectoryMutation(env, auth, parentId, v.expectedRevision as number,
       listing, sql`EXISTS (SELECT 1 FROM directories WHERE node_id = ${parentId}
@@ -478,10 +479,11 @@ export async function migrateV1File(env: Env, auth: AuthorizedDevice, fileId: st
     FROM vault_nodes WHERE id = ${fileId} AND owner_id = ${ownerId}`))?.parent_node_id;
   if (!parentId) return absent();
   const row = await createDb(env.DB).get<{ owner_id: string; parent_node_id: string; current_revision: number;
-    entries_revision: number; listing_version: ListingVersion; current_representation_id: string; content_key_id: string;
+    entries_revision: number; listing_version: ListingVersion; capability_epoch: number;
+    current_representation_id: string; content_key_id: string;
     key_epoch: number; ciphertext: ArrayBuffer; key_envelope: ArrayBuffer; name_ciphertext: ArrayBuffer;
     order_ciphertext: ArrayBuffer }>(sql`SELECT n.owner_id, n.parent_node_id, f.current_revision,
-      d.entries_revision, d.listing_version, f.current_representation_id, r.content_key_id, r.key_epoch,
+      d.entries_revision, d.listing_version, d.capability_epoch, f.current_representation_id, r.content_key_id, r.key_epoch,
       r.ciphertext, e.key_envelope, e.name_ciphertext, e.order_ciphertext
     FROM vault_nodes n JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
     JOIN file_representations r ON r.id = f.current_representation_id AND r.file_node_id = n.id
@@ -536,8 +538,8 @@ export async function migrateV1File(env: Env, auth: AuthorizedDevice, fileId: st
       await verifyDirectFileRecipientEnvelope(next, r.accountId, r.deviceId,
         decodeTreeBytes(r.publicKey, 65), envelope.ciphertext);
     }
-    const listing = await signedListing(v.listingHead, auth, row.parent_node_id,
-      row.entries_revision, row.owner_id, 2);
+    const listing = await signedListing(v.listingHead, auth, { directoryId: row.parent_node_id,
+      expectedRevision: row.entries_revision, ownerId: row.owner_id, version: 2, epoch: row.capability_epoch });
     if (auth.expiresAt <= Date.now()) return changed();
     const witness = sql`EXISTS (SELECT 1 FROM file_write_witnesses WHERE file_node_id = ${fileId}
       AND proof_id = ${auth.proofId})`;

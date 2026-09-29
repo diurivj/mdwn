@@ -114,7 +114,7 @@ export async function migrateOwnedFile(options: { access: RootAccess; fileId: st
     receivingKeyId, receivingEpoch: 1, wrapRevision: listing.entriesRevision + 1 };
   const listingHead = await createListingHead(parentKey, device.assertionKeyPair.privateKey, {
     vaultId: access.vaultId, directoryId: file.parentId, deviceId: device.deviceId,
-    revision: listing.entriesRevision + 1, version: 2,
+    epoch: listing.capabilityEpoch, revision: listing.entriesRevision + 1, version: 2,
     entries: listing.entries.map((item) => item.nodeId === fileId ? nextEntry : {
       ...item, encoding: item.encoding ?? (item.kind === "directory" ? "directory" : "legacy-file"),
     }),
@@ -260,7 +260,7 @@ export async function commitLegacyFileSave(options: {
   const keyEnvelope = encodeTreeBytes(fresh.fileContentKeyEnvelope);
   const head = await createListingHead(parentKey, device.assertionKeyPair.privateKey, {
     vaultId: access.vaultId, directoryId: file.parentId, deviceId: device.deviceId,
-    revision: listing.entriesRevision + 1, version: listing.listingVersion ?? 1,
+    epoch: listing.capabilityEpoch, revision: listing.entriesRevision + 1, version: listing.listingVersion ?? 1,
     entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope } : entry),
   });
   const response = await privateRequest(`/api/private/tree/files/${fileId}`, { method: "PATCH", body: JSON.stringify({

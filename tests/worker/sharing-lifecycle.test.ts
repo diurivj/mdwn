@@ -79,7 +79,7 @@ async function createDirectory(actor: Account, owner: Account, parentId: string,
     orderCiphertext: enc(await writer.seal(new TextEncoder().encode(id()), context)),
     keyEnvelope: enc(child.envelope), ...(listing?.listingVersion === 2 ? { encoding: "directory" as const } : {}) };
   const revision = listing?.entriesRevision ?? 1;
-  const head = await createListingHead(parentKey, actor.signing.privateKey, {
+  const head = await createListingHead(parentKey, actor.signing.privateKey, { epoch: 1,
     vaultId: owner.accountId, directoryId: parentId, deviceId: actor.deviceId,
     revision: revision + 1, entries: [...(listing?.entries ?? []), entry], version: listing?.listingVersion ?? 1 });
   const response = await actor.request(`/api/private/tree/directories/${parentId}/children`, "PUT", {
@@ -93,7 +93,7 @@ async function list(actor: Account, owner: Account, directoryId: string, key: Ui
   const data = await response.json() as { entriesRevision: number; entries: SealedEntry[]; listingVersion: 1 | 2;
     listingHead: { ciphertext: string; digest: string; signature: string; signerDeviceId: string;
       signerPublicKey: string } | null };
-  if (data.listingHead) await openListingHead(key, { vaultId: owner.accountId, directoryId,
+  if (data.listingHead) await openListingHead(key, { epoch: 1, vaultId: owner.accountId, directoryId,
     revision: data.entriesRevision, entries: data.entries, version: data.listingVersion,
     head: { ...data.listingHead, signerPublicKey: decodeTreeBytes(data.listingHead.signerPublicKey, 65) } });
   return data;
@@ -167,7 +167,7 @@ async function createV2File(owner: Account) {
     nameCiphertext: enc(await writer.seal(new TextEncoder().encode("Private.md"), ctx)),
     orderCiphertext: enc(await writer.seal(new TextEncoder().encode("first"), ctx)),
     keyEnvelope: enc(receiver.privateKeyEnvelope), receivingKeyId, receivingEpoch: 1, wrapRevision: 2 };
-  const listingHead = await createListingHead(owner.rootKey, owner.signing.privateKey, {
+  const listingHead = await createListingHead(owner.rootKey, owner.signing.privateKey, { epoch: 1,
     vaultId: owner.accountId, directoryId: owner.rootId, deviceId: owner.deviceId,
     revision: 2, entries: [entry], version: 2 });
   const created = await owner.request(`/api/private/tree/directories/${owner.rootId}/children`, "PUT", {

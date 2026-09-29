@@ -12,6 +12,11 @@ export type SealedEntry = {
   receivingKeyId?: string; receivingEpoch?: number; wrapRevision?: number;
 };
 export type ListingVersion = 1 | 2;
+
+/** A Directory capability epoch: 1 at creation, advanced by each rotation (ticket 19). */
+export function validEpoch(epoch: unknown): epoch is number {
+  return Number.isSafeInteger(epoch) && (epoch as number) >= 1;
+}
 export type ListingHead = { ciphertext: string; digest: string; signature: string };
 export type StoredListingHead = ListingHead & { signerDeviceId: string; signerPublicKey: Uint8Array };
 
@@ -56,11 +61,12 @@ function signatureMessage(vaultId: string, directoryId: string, deviceId: string
     vaultId, directoryId, deviceId, revision, digest])));
 }
 
+/** `epoch` is the Directory's own capability epoch: the listing is sealed under that key. */
 export async function createListingHead(parentKey: Uint8Array, assertionKey: CryptoKey, options: {
   vaultId: string; directoryId: string; deviceId: string; revision: number; entries: readonly SealedEntry[];
-  version?: ListingVersion;
+  version?: ListingVersion; epoch: number;
 }): Promise<ListingHead> {
-  if (!Number.isSafeInteger(options.revision) || options.revision < 2 ||
+  if (!Number.isSafeInteger(options.revision) || options.revision < 2 || !validEpoch(options.epoch) ||
       !assertionKey || assertionKey.type !== "private" || assertionKey.extractable ||
       assertionKey.algorithm.name !== "ECDSA") throw new EnvelopeError("malformed");
   const version = options.version ?? 1;
@@ -68,7 +74,7 @@ export async function createListingHead(parentKey: Uint8Array, assertionKey: Cry
   const writer = await createSymmetricWriter(parentKey);
   const ciphertext = await writer.seal(encoder.encode(await members(options.entries, version)), {
     purpose: "directory-metadata", vaultId: options.vaultId,
-    objectId: options.directoryId, keyId: options.directoryId, keyEpoch: 1, revision: options.revision,
+    objectId: options.directoryId, keyId: options.directoryId, keyEpoch: options.epoch, revision: options.revision,
   });
   if (ciphertext.length > MAX_LISTING_BYTES) throw new EnvelopeError("malformed");
   const digest = encodeTreeBytes(await digestEnvelope(ciphertext));
@@ -97,10 +103,11 @@ export async function verifyListingSignature(head: ListingHead, values: {
 /** The trusted digest is established by a verified device signature, never the envelope header. */
 export async function openListingHead(parentKey: Uint8Array, options: {
   vaultId: string; directoryId: string; revision: number;
-  entries: readonly SealedEntry[]; head: StoredListingHead; version?: ListingVersion;
+  entries: readonly SealedEntry[]; head: StoredListingHead; version?: ListingVersion; epoch: number;
 }): Promise<void> {
   try {
-    const { head, vaultId, directoryId, revision, entries } = options;
+    const { head, vaultId, directoryId, revision, entries, epoch } = options;
+    if (!validEpoch(epoch)) throw new EnvelopeError("malformed");
     const digest = decodeTreeBytes(head.digest, 32);
     if (digest.length !== 32 || !await verifyListingSignature(head, {
       vaultId, directoryId, deviceId: head.signerDeviceId, revision, publicKey: head.signerPublicKey,
@@ -108,7 +115,7 @@ export async function openListingHead(parentKey: Uint8Array, options: {
     })) throw new EnvelopeError("replayed-manifest");
     const plaintext = await openSymmetric(decodeTreeBytes(head.ciphertext, MAX_LISTING_BYTES), parentKey, {
       context: { purpose: "directory-metadata", vaultId, objectId: directoryId, keyId: directoryId,
-        keyEpoch: 1, revision }, manifestDigest: digest,
+        keyEpoch: epoch, revision }, manifestDigest: digest,
     });
     if (decoder.decode(plaintext) !== await members(entries, options.version ?? 1)) throw new EnvelopeError("replayed-manifest");
   } catch { throw new EnvelopeError("replayed-manifest"); }

@@ -72,7 +72,7 @@ async function signedRequest(f: Fixture, path: string, method: "PUT" | "PATCH", 
     orderCiphertext: input.orderCiphertext, keyEnvelope: input.keyEnvelope!,
   }] : listing.entries.map((entry) => entry.nodeId === rename![1]
     ? { ...entry, nameCiphertext: input.nameCiphertext, orderCiphertext: input.orderCiphertext } : entry);
-  return { ...value, listingHead: await createListingHead(f.keys.get(parentId)!, f.assertion.privateKey, {
+  return { ...value, listingHead: await createListingHead(f.keys.get(parentId)!, f.assertion.privateKey, { epoch: 1,
     vaultId: f.accountId, directoryId: parentId, deviceId: f.deviceId,
     revision: input.expectedRevision + 1, entries,
   }) };
@@ -137,11 +137,11 @@ describe("private tree", () => {
     try {
       await expect(createTreeChild({ vaultId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
         id(), { nodeId: id(), kind: "file", expectedRevision: 1, nameCiphertext: "", orderCiphertext: "",
-          keyEnvelope: "" }, { directoryId: id(), entriesRevision: 1, entries: [] },
+          keyEnvelope: "" }, { directoryId: id(), entriesRevision: 1, capabilityEpoch: 1, entries: [] },
         generateDirectoryCapabilityKey())).rejects.toBeInstanceOf(RecoveryConfirmationPendingError);
       await expect(renameTreeChild({ vaultId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
         id(), id(), { expectedRevision: 1, nameCiphertext: "", orderCiphertext: "" },
-        { directoryId: id(), entriesRevision: 1, entries: [] }, generateDirectoryCapabilityKey()))
+        { directoryId: id(), entriesRevision: 1, capabilityEpoch: 1, entries: [] }, generateDirectoryCapabilityKey()))
         .rejects.toBeInstanceOf(RecoveryConfirmationPendingError);
     } finally { vi.unstubAllGlobals(); }
   });
@@ -177,7 +177,7 @@ describe("private tree", () => {
       entriesRevision: number; entries: SealedEntry[];
       listingHead: Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string };
     };
-    const options = { vaultId: f.accountId, directoryId: f.rootId, revision: result.entriesRevision,
+    const options = { vaultId: f.accountId, directoryId: f.rootId, epoch: 1, revision: result.entriesRevision,
       entries: result.entries, head: { ...result.listingHead,
         signerPublicKey: decodeBytes(result.listingHead.signerPublicKey) } };
     await expect(openListingHead(f.rootKey, options)).resolves.toBeUndefined();
@@ -193,36 +193,36 @@ describe("private tree", () => {
   it("runs Unicode 17 namespace collision fixtures before the real create path", async () => {
     const f = await fixture();
     const path = `/api/private/tree/directories/${f.rootId}/children`;
-    const first = await prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+    const first = await prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
       entriesRevision: 1, existingNames: [], requestedName: "Amélie", kind: "directory" });
     expect(JSON.stringify(first)).not.toContain("Amélie");
     expect(JSON.stringify(first)).not.toContain("616dc3a96c6965");
     expect((await request(f, path, "PUT", first)).status).toBe(201);
     await expectAgreedEdges(f);
     for (const duplicate of ["Ame\u0301lie", "AMÉLIE"]) {
-      await expect(prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+      await expect(prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
         entriesRevision: 2, existingNames: ["Amélie"], requestedName: duplicate, kind: "file" }))
         .rejects.toBeInstanceOf(NameConflictError);
     }
-    const second = await prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+    const second = await prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
       entriesRevision: 2, existingNames: ["Amélie"], requestedName: "Straße", kind: "directory" });
     expect((await request(f, path, "PUT", second)).status).toBe(201);
     await expectAgreedEdges(f);
-    await expect(prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+    await expect(prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
       entriesRevision: 3, existingNames: ["Amélie", "Straße"], requestedName: "STRASSE", kind: "directory" }))
       .rejects.toBeInstanceOf(NameConflictError);
-    const third = await prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+    const third = await prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
       entriesRevision: 3, existingNames: ["Amélie", "Straße"], requestedName: "Ａ", kind: "directory" });
     expect((await request(f, path, "PUT", third)).status).toBe(201);
     await expectAgreedEdges(f);
-    const fourth = await prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+    const fourth = await prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
       entriesRevision: 4, existingNames: ["Amélie", "Straße", "Ａ"], requestedName: "A", kind: "file" });
     expect((await request(f, path, "PUT", fourth)).status).toBe(201);
     await expectAgreedEdges(f);
     let revision = 5;
     const names = ["Amélie", "Straße", "Ａ", "A"];
     for (const name of ["Σ", "I", "İ"]) {
-      const payload = await prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+      const payload = await prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
         entriesRevision: revision, existingNames: names, requestedName: name, kind: "directory" });
       expect((await request(f, path, "PUT", payload)).status).toBe(201);
       await expectAgreedEdges(f);
@@ -230,7 +230,7 @@ describe("private tree", () => {
       revision++;
     }
     for (const duplicate of ["ς", "σ", "i"]) {
-      await expect(prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+      await expect(prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
         entriesRevision: revision, existingNames: names, requestedName: duplicate, kind: "directory" }))
         .rejects.toBeInstanceOf(NameConflictError);
     }
@@ -250,7 +250,7 @@ describe("private tree", () => {
     const path = `/api/private/tree/directories/${f.rootId}/children`;
     for (const requestedName of ["two words", "e\u0301", "🙂", "emoji\uFE0F", "क\u200Dष", "\u0378",
       "é".repeat(127) + "a", "e\u0301".repeat(127) + "b"]) {
-      const payload = await prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+      const payload = await prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
         entriesRevision: revision, existingNames: names, requestedName, kind: "directory" });
       expect(JSON.stringify(payload)).not.toContain(requestedName);
       expect((await request(f, path, "PUT", payload)).status).toBe(201);
@@ -260,7 +260,7 @@ describe("private tree", () => {
     }
     for (const requestedName of ["", ".", "..", "a\u0000b", "a/b", "a\\b", "trailing ", "trailing.",
       "CON", "con.txt", "a\u202Eb", "\uD800", "\uDC00", "a".repeat(256), "é".repeat(128)]) {
-      await expect(prepareTreeCreate({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+      await expect(prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
         entriesRevision: revision, existingNames: names, requestedName, kind: "file" }))
         .rejects.toBeInstanceOf(NamespaceError);
     }
@@ -305,7 +305,7 @@ describe("private tree", () => {
       { markdown: "# saved secret", metadata: new Uint8Array() },
       { vaultId: f.accountId, fileId, keyId: freshKeyId, revision: 2 });
     const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
-    const head = await createListingHead(f.rootKey, f.assertion.privateKey, {
+    const head = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1,
       vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
       revision: listing.entriesRevision + 1,
       entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope } : entry),
@@ -327,7 +327,7 @@ describe("private tree", () => {
     const afterListing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
       entriesRevision: number; entries: SealedEntry[]; listingHead: StoredListingHead & { signerPublicKey: string };
     };
-    await expect(openListingHead(f.rootKey, { vaultId: f.accountId, directoryId: f.rootId,
+    await expect(openListingHead(f.rootKey, { epoch: 1, vaultId: f.accountId, directoryId: f.rootId,
       revision: afterListing.entriesRevision, entries: afterListing.entries,
       head: { ...afterListing.listingHead, signerPublicKey: decodeBytes(afterListing.listingHead.signerPublicKey) },
     })).resolves.toBeUndefined();
@@ -351,7 +351,7 @@ describe("private tree", () => {
       { markdown: "# explicitly overwritten", metadata: new Uint8Array() },
       { vaultId: f.accountId, fileId, keyId: overwriteKeyId, revision: 3 });
     const replacementEnvelope = encodeBytes(replacement.fileContentKeyEnvelope);
-    const replacementHead = await createListingHead(f.rootKey, f.assertion.privateKey, {
+    const replacementHead = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1,
       vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
       revision: afterListing.entriesRevision + 1,
       entries: afterListing.entries.map((entry) => entry.nodeId === fileId
@@ -385,7 +385,7 @@ describe("private tree", () => {
     const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
     const response = await request(f, `/api/private/tree/files/${fileId}`, "PATCH", { expectedRevision: 1,
       expectedEntriesRevision: listing.entriesRevision, keyEnvelope,
-      listingHead: await createListingHead(f.rootKey, f.assertion.privateKey, { vaultId: f.accountId,
+      listingHead: await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1, vaultId: f.accountId,
         directoryId: f.rootId, deviceId: f.deviceId, revision: listing.entriesRevision + 1,
         entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope } : entry) }),
       representation: { id: id(), contentKeyId: keyId, keyEpoch: 1, revision: 2,
@@ -410,7 +410,7 @@ describe("private tree", () => {
       vaultId: f.accountId, fileId: created.body.nodeId, keyId: contentKeyId, revision: 2,
     });
     const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
-    const listingHead = await createListingHead(f.rootKey, f.assertion.privateKey, {
+    const listingHead = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1,
       vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
       revision: 3, entries: listing.entries.map((entry) => ({ ...entry, keyEnvelope })),
     });
@@ -452,7 +452,7 @@ describe("private tree", () => {
       { markdown: "# should not commit", metadata: new Uint8Array() },
       { vaultId: f.accountId, fileId: first.body.nodeId, keyId: freshKeyId, revision: 2 });
     const keyEnvelope = encodeBytes(fresh.fileContentKeyEnvelope);
-    const head = await createListingHead(f.rootKey, f.assertion.privateKey, {
+    const head = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1,
       vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId,
       revision: 4, entries: listing.entries.map((entry) => entry.nodeId === first.body.nodeId
         ? { ...entry, keyEnvelope } : entry),
@@ -507,7 +507,7 @@ describe("private tree", () => {
       { markdown: "🙂".repeat(65_536), metadata: new Uint8Array() },
       { vaultId: f.accountId, fileId, keyId: id(), revision: 2 });
     const keyEnvelope = encodeBytes(reduced.fileContentKeyEnvelope);
-    const head = await createListingHead(f.rootKey, f.assertion.privateKey, {
+    const head = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1,
       vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId, revision: 3,
       entries: listing.entries.map((entry) => ({ ...entry, keyEnvelope })),
     });
@@ -528,7 +528,7 @@ describe("private tree", () => {
     expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created)).status).toBe(201);
     const context = { purpose: "directory-metadata" as const, vaultId: f.accountId,
       objectId: created.nodeId, keyId: f.rootId, keyEpoch: 1, revision: 1 };
-    const rename = await prepareTreeRename({ vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
+    const rename = await prepareTreeRename({ parentEpoch: 1, vaultId: f.accountId, parentId: f.rootId, parentKey: f.rootKey,
       nodeId: created.nodeId, entriesRevision: 2, existingNames: [], requestedName: "after", order: "first" });
     const path = `/api/private/tree/nodes/${created.nodeId}/name`;
     expect((await request(f, path, "PATCH", rename)).status).toBe(200);
@@ -553,7 +553,7 @@ describe("private tree", () => {
       purpose: "directory-capability", vaultId: f.accountId, objectId: folder.nodeId,
       keyId: folder.nodeId, keyEpoch: 1, revision: 1,
     } });
-    const nested = await prepareTreeCreate({ vaultId: f.accountId, parentId: folder.nodeId, parentKey: childKey,
+    const nested = await prepareTreeCreate({ parentEpoch: 1, vaultId: f.accountId, parentId: folder.nodeId, parentKey: childKey,
       entriesRevision: 1, existingNames: [], requestedName: "nested.md", kind: "file" });
     expect((await request(f, `/api/private/tree/directories/${folder.nodeId}/children`, "PUT", nested)).status).toBe(201);
     await expectAgreedEdges(f);

@@ -106,7 +106,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       if (current.operation === "create") {
         const payload = await prepareTreeCreate({ vaultId: snapshot.access.vaultId,
           actorAccountId: snapshot.access.actorAccountId,
-          parentId: current.parentId, parentKey: key, entriesRevision: parent.entriesRevision,
+          parentId: current.parentId, parentKey: key, parentEpoch: parent.capabilityEpoch,
+          entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.map((entry) => entry.name), requestedName: current.requestedName,
           kind: current.kind });
         const created = await createTreeChild(snapshot.access, current.parentId, payload, parent, key);
@@ -116,7 +117,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         const entry = parent.entries.find((item) => item.nodeId === current.nodeId);
         if (!entry) throw new TreeNotFoundError();
         const payload = await prepareTreeRename({ vaultId: snapshot.access.vaultId,
-          parentId: current.parentId, parentKey: key, nodeId: entry.nodeId,
+          parentId: current.parentId, parentKey: key, parentEpoch: parent.capabilityEpoch, nodeId: entry.nodeId,
           entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.filter((item) => item.nodeId !== entry.nodeId).map((item) => item.name),
           requestedName: current.requestedName, order: entry.order });

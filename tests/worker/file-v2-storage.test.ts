@@ -54,7 +54,7 @@ async function setup() {
     { vaultId: ownerId, fileId });
   const entry: SealedEntry = { nodeId: fileId, kind: "file", nameCiphertext, orderCiphertext,
     keyEnvelope: encode(content.fileContentKeyEnvelope) };
-  const listingHead = await createListingHead(rootKey, assertion.privateKey, { vaultId: ownerId,
+  const listingHead = await createListingHead(rootKey, assertion.privateKey, { epoch: 1, vaultId: ownerId,
     directoryId: rootId, deviceId, revision: 2, entries: [entry] });
   const created = await request(`/api/private/tree/directories/${rootId}/children`, "PUT", {
     ...entry, expectedRevision: 1, representation: { id: representationId, contentKeyId: fileId,
@@ -67,7 +67,7 @@ async function prepareMigration(f: Awaited<ReturnType<typeof setup>>) {
   const listing = await (await f.request(`/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
     entriesRevision: number; entries: SealedEntry[]; listingHead: { ciphertext: string; digest: string; signature: string;
       signerDeviceId: string; signerPublicKey: string } };
-  await openListingHead(f.rootKey, { vaultId: f.ownerId, directoryId: f.rootId,
+  await openListingHead(f.rootKey, { epoch: 1, vaultId: f.ownerId, directoryId: f.rootId,
     revision: listing.entriesRevision, entries: listing.entries,
     head: { ...listing.listingHead, signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) } });
   const prior = await (await f.request(`/api/private/tree/files/${f.fileId}`, "POST")).json() as {
@@ -93,7 +93,7 @@ async function prepareMigration(f: Awaited<ReturnType<typeof setup>>) {
     ...entry, encoding: "receiving-file", keyEnvelope: encode(receiver.privateKeyEnvelope),
     receivingKeyId, receivingEpoch: 1, wrapRevision: listing.entriesRevision + 1 } :
     { ...entry, encoding: entry.kind === "file" ? "legacy-file" : "directory" });
-  const head = await createListingHead(f.rootKey, f.assertion.privateKey, { vaultId: f.ownerId,
+  const head = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1, vaultId: f.ownerId,
     directoryId: f.rootId, deviceId: f.deviceId, revision: listing.entriesRevision + 1, version: 2, entries });
   return { value: { expectedEntriesRevision: listing.entriesRevision, expectedRevision: 1, expectedEntry: {
     nameCiphertext: f.entry.nameCiphertext, orderCiphertext: f.entry.orderCiphertext,
@@ -269,7 +269,7 @@ describe("v2 File storage over proof-guarded resources", () => {
       nameCiphertext: encode(await writer.seal(new TextEncoder().encode("other.md"), metadata)),
       orderCiphertext: encode(await writer.seal(new TextEncoder().encode("second"), metadata)),
       keyEnvelope: encode(second.fileContentKeyEnvelope) };
-    const head = await createListingHead(f.rootKey, f.assertion.privateKey, { vaultId: f.ownerId,
+    const head = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1, vaultId: f.ownerId,
       directoryId: f.rootId, deviceId: f.deviceId, revision: 3, entries: [f.entry, entry] });
     const created = await f.request(`/api/private/tree/directories/${f.rootId}/children`, "PUT", {
       ...entry, expectedRevision: 2, representation: { id: secondRepresentationId,
@@ -282,10 +282,10 @@ describe("v2 File storage over proof-guarded resources", () => {
         ciphertext: string; digest: string; signature: string; signerDeviceId: string; signerPublicKey: string } };
     expect(listing.entries.map((item) => [item.nodeId, item.encoding]).sort()).toEqual([
       [f.fileId, "receiving-file"], [secondId, "legacy-file"]].sort());
-    await openListingHead(f.rootKey, { vaultId: f.ownerId, directoryId: f.rootId, version: 2,
+    await openListingHead(f.rootKey, { epoch: 1, vaultId: f.ownerId, directoryId: f.rootId, version: 2,
       revision: 4, entries: listing.entries, head: { ...listing.listingHead,
         signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) } });
-    await expect(openListingHead(f.rootKey, { vaultId: f.ownerId, directoryId: f.rootId, version: 1,
+    await expect(openListingHead(f.rootKey, { epoch: 1, vaultId: f.ownerId, directoryId: f.rootId, version: 1,
       revision: 4, entries: listing.entries, head: { ...listing.listingHead,
         signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) } })).rejects.toThrow();
     expect((await f.request(`/api/private/tree/files/${secondId}`, "POST")).status).toBe(200);
@@ -293,7 +293,7 @@ describe("v2 File storage over proof-guarded resources", () => {
       .bind(secondId).run();
     const forged = await (await f.request(`/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
       entries: SealedEntry[] };
-    await expect(openListingHead(f.rootKey, { vaultId: f.ownerId, directoryId: f.rootId, version: 2,
+    await expect(openListingHead(f.rootKey, { epoch: 1, vaultId: f.ownerId, directoryId: f.rootId, version: 2,
       revision: 4, entries: forged.entries, head: { ...listing.listingHead,
         signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) } })).rejects.toThrow();
   });
@@ -306,7 +306,7 @@ describe("v2 File storage over proof-guarded resources", () => {
       listingVersion: number; entriesRevision: number; entries: SealedEntry[]; listingHead: {
         ciphertext: string; digest: string; signature: string; signerDeviceId: string; signerPublicKey: string } };
     expect([listed.listingVersion, listed.entriesRevision, listed.entries[0]?.encoding]).toEqual([2, 3, "receiving-file"]);
-    await openListingHead(f.rootKey, { vaultId: f.ownerId, directoryId: f.rootId,
+    await openListingHead(f.rootKey, { epoch: 1, vaultId: f.ownerId, directoryId: f.rootId,
       version: 2, revision: 3, entries: listed.entries,
       head: { ...listed.listingHead, signerPublicKey: decodeTreeBytes(listed.listingHead.signerPublicKey, 65) } });
     const read = await (await f.request(`/api/private/tree/files/${f.fileId}`, "POST")).json() as {
@@ -423,7 +423,7 @@ describe("v2 File storage over proof-guarded resources", () => {
       keyEnvelope: encode((await createChildDirectoryCapability(f.rootKey,
         { vaultId: f.ownerId, parentDirectoryId: f.rootId, childDirectoryId: sibling })).envelope),
       expectedRevision: 2 };
-    const v1Head = await createListingHead(f.rootKey, f.assertion.privateKey, { vaultId: f.ownerId,
+    const v1Head = await createListingHead(f.rootKey, f.assertion.privateKey, { epoch: 1, vaultId: f.ownerId,
       directoryId: f.rootId, deviceId: f.deviceId, revision: 3,
       entries: [f.entry, child] });
     expect((await f.request(`/api/private/tree/directories/${f.rootId}/children`, "PUT",
@@ -674,7 +674,7 @@ describe("v2 File storage over proof-guarded resources", () => {
     const nextName = encode(await (await createSymmetricWriter(f.rootKey)).seal(new TextEncoder().encode("after.md"), {
       purpose: "directory-metadata", vaultId: f.ownerId, objectId: f.fileId,
       keyId: f.rootId, keyEpoch: 1, revision: 1 }));
-    const renameHead = await createListingHead(f.rootKey, assertion.privateKey, {
+    const renameHead = await createListingHead(f.rootKey, assertion.privateKey, { epoch: 1,
       vaultId: f.ownerId, directoryId: f.rootId, deviceId: recipientDeviceId, version: 2,
       revision: listing.entriesRevision + 1,
       entries: listing.entries.map((entry) => entry.nodeId === f.fileId ? { ...entry, nameCiphertext: nextName } : entry),
@@ -688,7 +688,7 @@ describe("v2 File storage over proof-guarded resources", () => {
       entriesRevision: number; entries: SealedEntry[]; listingHead: { ciphertext: string;
         digest: string; signature: string; signerDeviceId: string; signerPublicKey: string } };
     expect(historical.listingHead.signerDeviceId).toBe(recipientDeviceId);
-    await expect(openListingHead(f.rootKey, { vaultId: f.ownerId, directoryId: f.rootId,
+    await expect(openListingHead(f.rootKey, { epoch: 1, vaultId: f.ownerId, directoryId: f.rootId,
       version: 2, revision: historical.entriesRevision, entries: historical.entries,
       head: { ...historical.listingHead,
         signerPublicKey: decodeTreeBytes(historical.listingHead.signerPublicKey, 65) } })).resolves.toBeUndefined();

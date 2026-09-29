@@ -7,7 +7,8 @@ import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 import {
-  authenticateFileHead, encryptedEntry, nameAgainstNamespace, rememberListing, TreeCommitUncertainError,
+  authenticateFileHead, childCapabilityEpoch, encryptedEntry, nameAgainstNamespace, rememberListing,
+  TreeCommitUncertainError,
   TreeNotFoundError, NamespaceChangedError,
   type DirectoryListing, type FileHeadWire, type RootAccess, type TreeEntry,
 } from "./client";
@@ -63,7 +64,7 @@ function sealedEntries(entries: readonly SealedEntry[], version: ListingVersion)
 function signListing(vaultId: string, signer: StructureSigner, state: DirectoryState,
   entries: readonly SealedEntry[], version: ListingVersion = state.listing.listingVersion ?? 1): Promise<ListingHead> {
   return createListingHead(state.key, signer.assertionKey, { vaultId, directoryId: state.listing.directoryId,
-    deviceId: signer.deviceId, revision: state.listing.entriesRevision + 1,
+    epoch: state.listing.capabilityEpoch, deviceId: signer.deviceId, revision: state.listing.entriesRevision + 1,
     entries: sealedEntries(entries, version), version });
 }
 
@@ -86,7 +87,7 @@ export async function prepareTreeReorder(options: { vaultId: string; signer: Str
   const entry = siblings[index]!;
   const order = orderBetween(lower ?? "", upper);
   const { orderCiphertext } = await encryptedEntry(options.parent.key, options.vaultId,
-    options.parent.listing.directoryId, entry.nodeId, entry.name, order);
+    options.parent.listing.directoryId, entry.nodeId, entry.name, order, options.parent.listing.capabilityEpoch);
   const listingHead = await signListing(options.vaultId, options.signer, options.parent,
     options.parent.listing.entries.map((item) => item.nodeId === entry.nodeId ? { ...item, orderCiphertext } : item));
   return { expectedRevision: options.parent.listing.entriesRevision, orderCiphertext, listingHead };
@@ -164,11 +165,12 @@ export async function prepareTreeMove(options: { vaultId: string; signer: Struct
   const name = nameAgainstNamespace(entry.name, destination.listing.entries.map((item) => item.name));
   const last = sorted(destination.listing).at(-1)?.order;
   const metadata = await encryptedEntry(destination.key, vaultId, destination.listing.directoryId, nodeId,
-    name, orderBetween(last ?? ""));
+    name, orderBetween(last ?? ""), destination.listing.capabilityEpoch);
   let moved: SealedEntry, rotation: Awaited<ReturnType<typeof rotateReceivingPair>>["rotation"] | undefined;
   if (entry.kind === "directory") {
+    // The moved Directory keeps its own capability and epoch; only the wrapping parent changes.
     const context = { purpose: "directory-capability" as const, vaultId, objectId: nodeId, keyId: nodeId,
-      keyEpoch: 1, revision: 1 };
+      keyEpoch: childCapabilityEpoch(entry), revision: 1 };
     const capability = await openSymmetric(decodeTreeBytes(entry.keyEnvelope), source.key, { context });
     try {
       const writer = await createSymmetricWriter(destination.key);

@@ -133,7 +133,8 @@ function exact(value: Record<string, unknown>, fields: readonly string[]): boole
   return Object.keys(value).length === fields.length && fields.every((key) => Object.hasOwn(value, key));
 }
 
-function createPayload(value: unknown, accountId: string, parentId: string): Create {
+/** Entry metadata is sealed at the parent's epoch; a new child Directory starts at epoch 1. */
+function createPayload(value: unknown, accountId: string, parentId: string, parentEpoch: number): Create {
   const input = record(value);
   if (!input || !isV7(input.nodeId) || (input.kind !== "directory" && input.kind !== "file") ||
       !Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 1 ||
@@ -141,11 +142,12 @@ function createPayload(value: unknown, accountId: string, parentId: string): Cre
         "orderCiphertext", "keyEnvelope", "representation", "listingHead"] : ["nodeId", "kind", "expectedRevision",
         "nameCiphertext", "orderCiphertext", "keyEnvelope", "listingHead"])) throw new Error("invalid tree request");
   const nodeId = input.nodeId;
-  const context = { vaultId: accountId, objectId: nodeId, keyId: parentId, keyEpoch: 1, revision: 1 };
+  const context = { vaultId: accountId, objectId: nodeId, keyId: parentId, keyEpoch: parentEpoch, revision: 1 };
   const nameCiphertext = treeEnvelope(input.nameCiphertext, 1024, { ...context, purpose: "directory-metadata" });
   const orderCiphertext = treeEnvelope(input.orderCiphertext, 4096, { ...context, purpose: "directory-metadata" });
   if (input.kind === "directory") {
-    const keyEnvelope = treeEnvelope(input.keyEnvelope, 1024, { ...context, keyId: nodeId, purpose: "directory-capability" });
+    const keyEnvelope = treeEnvelope(input.keyEnvelope, 1024,
+      { ...context, keyId: nodeId, keyEpoch: 1, purpose: "directory-capability" });
     return { nodeId, expectedRevision: input.expectedRevision as number, kind: "directory",
       nameCiphertext, orderCiphertext, keyEnvelope };
   }
@@ -169,19 +171,20 @@ async function createChild(env: Env, auth: AuthorizedDevice, parentId: string, v
   const contentOwner = (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM vault_nodes
     WHERE id = ${parentId} AND kind = 'directory'`))?.owner_id;
   if (!contentOwner) return notFound();
-  let input: Create;
-  try { input = createPayload(value, contentOwner, parentId); }
-  catch { return badRequest(); }
-  const exists = await createDb(env.DB).get<{ id: string; listing_version: 1 | 2 }>(sql`
-    SELECT n.id, d.listing_version FROM vault_nodes n JOIN directories d ON d.node_id = n.id
+  const exists = await createDb(env.DB).get<{ id: string; listing_version: 1 | 2; capability_epoch: number }>(sql`
+    SELECT n.id, d.listing_version, d.capability_epoch FROM vault_nodes n JOIN directories d ON d.node_id = n.id
     WHERE n.id = ${parentId} AND n.owner_id = ${contentOwner}
       AND n.kind = 'directory' AND ${directoryAccessGuard(auth, contentOwner, parentId, "child_create")}`);
   if (!exists) return notFound();
+  let input: Create;
+  try { input = createPayload(value, contentOwner, parentId, exists.capability_epoch); }
+  catch { return badRequest(); }
   const accountId = contentOwner;
   const now = Date.now();
   try {
-    const head = await signedListing(record(value)?.listingHead, auth, parentId, input.expectedRevision,
-      contentOwner, exists.listing_version);
+    const head = await signedListing(record(value)?.listingHead, auth, { directoryId: parentId,
+      expectedRevision: input.expectedRevision, ownerId: contentOwner, version: exists.listing_version,
+      epoch: exists.capability_epoch });
     const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision, head,
       sql`EXISTS (SELECT 1 FROM vault_nodes WHERE id = ${parentId}
         AND owner_id = ${accountId} AND kind = 'directory')
@@ -221,8 +224,10 @@ async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
   const ownerId = (await createDb(env.DB).get<{ owner_id: string }>(sql`SELECT owner_id FROM vault_nodes
     WHERE id = ${nodeId}`))?.owner_id;
   if (!ownerId) return notFound();
-  const row = await createDb(env.DB).get<{ parent_node_id: string; listing_version: 1 | 2 }>(sql`
-    SELECT n.parent_node_id, d.listing_version FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
+  const row = await createDb(env.DB).get<{ parent_node_id: string; listing_version: 1 | 2;
+    capability_epoch: number }>(sql`
+    SELECT n.parent_node_id, d.listing_version, d.capability_epoch
+    FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
     JOIN directories d ON d.node_id = n.parent_node_id
     WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId}
       AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
@@ -232,13 +237,16 @@ async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
   let name: Uint8Array, order: Uint8Array;
   try {
     const context = { purpose: "directory-metadata" as const, vaultId: ownerId,
-      objectId: nodeId, keyId: parentId, keyEpoch: 1, revision: 1 };
+      objectId: nodeId, keyId: parentId, keyEpoch: row.capability_epoch, revision: 1 };
     name = treeEnvelope(input.nameCiphertext, 1024, context);
     order = treeEnvelope(input.orderCiphertext, 4096, context);
   } catch { return badRequest(); }
   let head: Awaited<ReturnType<typeof signedListing>>;
-  try { head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision as number,
-    ownerId, row.listing_version); }
+  try {
+    head = await signedListing(input.listingHead, auth, { directoryId: parentId,
+      expectedRevision: input.expectedRevision as number, ownerId, version: row.listing_version,
+      epoch: row.capability_epoch });
+  }
   catch { return badRequest(); }
   const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision as number, head,
     sql`EXISTS (SELECT 1 FROM directory_entries WHERE child_node_id = ${nodeId}

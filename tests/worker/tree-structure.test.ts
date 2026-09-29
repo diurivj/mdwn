@@ -8,6 +8,7 @@ import { decodeFileRepresentation } from "../../app/crypto/vault";
 import { NameConflictError } from "../../app/tree/client";
 import { orderBetween, prepareTreeDelete, prepareTreeMove, prepareTreeReorder,
   type FileRotationSource } from "../../app/tree/structure-client";
+import { openListingHead, type SealedEntry, type StoredListingHead } from "../../app/tree/listing";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import { actor, call, directory, legacyFile, state, treeIntegrity, uuid7, v2File,
   type Actor } from "./tree-fixtures";
@@ -519,5 +520,38 @@ describe("hard deletion", () => {
     expect((await call(owner, `/api/private/tree/nodes/${(await root(owner)).listing.entries[0]!.nodeId}`,
       "DELETE", forged)).status).toBe(400);
     expect(await treeIntegrity(owner.accountId)).toEqual({ broken: 0, markers: 0 });
+  });
+});
+
+describe("Directory capability epochs", () => {
+  it("writes and verifies a Directory at its stored epoch and refuses another epoch's contexts", async () => {
+    const owner = await actor();
+    const folder = await directory(owner, owner.accountId, await root(owner), "Epoch");
+    const loose = await v2File(owner, owner.accountId, await root(owner), "loose.md");
+    // Stands in for a completed rotation: the stored epoch alone decides every Directory context.
+    await env.DB.prepare("UPDATE directories SET capability_epoch = 2 WHERE node_id = ?").bind(folder.nodeId).run();
+    const current = await state(owner, owner.accountId, folder.nodeId, folder.key);
+    expect(current.listing.capabilityEpoch).toBe(2);
+    const stale = { ...current, listing: { ...current.listing, capabilityEpoch: 1 } };
+    await expect(legacyFile(owner, owner.accountId, stale, "stale.md")).rejects.toThrow("legacy File 400");
+    await expect(v2File(owner, owner.accountId, stale, "stale.md")).rejects.toThrow("v2 File 400");
+    await legacyFile(owner, owner.accountId, current, "a.md");
+    await v2File(owner, owner.accountId, await state(owner, owner.accountId, folder.nodeId, folder.key), "b.md");
+    const move = await prepareTreeMove({ vaultId: owner.accountId, signer: owner.signer, source: await root(owner),
+      destination: await state(owner, owner.accountId, folder.nodeId, folder.key), nodeId: loose,
+      file: await fileSource(owner, loose), thread: await threadSource(owner, loose) });
+    const moved = await call(owner, `/api/private/tree/nodes/${loose}/parent`, "PATCH", move);
+    expect(moved.status, await moved.clone().text()).toBe(200);
+    const after = await state(owner, owner.accountId, folder.nodeId, folder.key);
+    expect(after.listing.entries.map((entry) => entry.name)).toEqual(["a.md", "b.md", "loose.md"]);
+    // The signed listing head itself is sealed at epoch 2.
+    const wire = await (await call(owner, `/api/private/tree/directories/${folder.nodeId}`, "POST")).json() as {
+      entriesRevision: number; listingVersion: 1 | 2; entries: SealedEntry[];
+      listingHead: Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string } };
+    const head = { ...wire.listingHead, signerPublicKey: decodeTreeBytes(wire.listingHead.signerPublicKey, 65) };
+    const options = { vaultId: owner.accountId, directoryId: folder.nodeId, revision: wire.entriesRevision,
+      entries: wire.entries, version: wire.listingVersion, head };
+    await expect(openListingHead(folder.key, { ...options, epoch: 2 })).resolves.toBeUndefined();
+    await expect(openListingHead(folder.key, { ...options, epoch: 1 })).rejects.toThrow();
   });
 });

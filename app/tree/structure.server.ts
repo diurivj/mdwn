@@ -46,9 +46,11 @@ async function blocked(env: Env, ownerId: string, nodeId: string): Promise<boole
   return !await createDb(env.DB).get(sql`SELECT 1 AS open WHERE ${unblocked(ownerId, nodeId)}`);
 }
 
-function metadata(value: unknown, max: number, ownerId: string, nodeId: string, parentId: string): Uint8Array {
+/** Entry name/order under the parent's capability at the parent's current epoch. */
+function metadata(value: unknown, max: number, ownerId: string, nodeId: string, parentId: string,
+  parentEpoch: number): Uint8Array {
   return treeEnvelope(value, max, { purpose: "directory-metadata", vaultId: ownerId,
-    objectId: nodeId, keyId: parentId, keyEpoch: 1, revision: 1 });
+    objectId: nodeId, keyId: parentId, keyEpoch: parentEpoch, revision: 1 });
 }
 
 /** Same signed-head CAS as commitDirectoryMutation, but gated by an invocation witness. */
@@ -70,8 +72,9 @@ export async function reorderChild(env: Env, auth: AuthorizedDevice, nodeId: str
   const expectedRevision = input.expectedRevision;
   const ownerId = await nodeOwner(env, nodeId);
   if (!ownerId) return notFound();
-  const row = await createDb(env.DB).get<{ parent_node_id: string; listing_version: ListingVersion }>(sql`
-    SELECT n.parent_node_id, d.listing_version FROM vault_nodes n
+  const row = await createDb(env.DB).get<{ parent_node_id: string; listing_version: ListingVersion;
+    capability_epoch: number }>(sql`
+    SELECT n.parent_node_id, d.listing_version, d.capability_epoch FROM vault_nodes n
     JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
     JOIN directories d ON d.node_id = n.parent_node_id AND d.owner_id = n.owner_id
     WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId}
@@ -80,8 +83,9 @@ export async function reorderChild(env: Env, auth: AuthorizedDevice, nodeId: str
   const parentId = row.parent_node_id;
   let order: Uint8Array, head: Head;
   try {
-    order = metadata(input.orderCiphertext, 4096, ownerId, nodeId, parentId);
-    head = await signedListing(input.listingHead, auth, parentId, expectedRevision, ownerId, row.listing_version);
+    order = metadata(input.orderCiphertext, 4096, ownerId, nodeId, parentId, row.capability_epoch);
+    head = await signedListing(input.listingHead, auth, { directoryId: parentId, expectedRevision, ownerId,
+      version: row.listing_version, epoch: row.capability_epoch });
   } catch { return badRequest(); }
   if (await blocked(env, ownerId, nodeId)) return rotationPending();
   try {
@@ -126,8 +130,9 @@ type MoveRow = {
   kind: "directory" | "file"; parent_node_id: string;
   encoding: "directory" | "legacy-file" | "receiving-file";
   receiving_key_id: string | null; receiving_epoch: number | null; wrap_revision: number | null;
-  source_revision: number; source_version: ListingVersion;
-  destination_revision: number; destination_version: ListingVersion;
+  source_revision: number; source_version: ListingVersion; source_epoch: number;
+  destination_revision: number; destination_version: ListingVersion; destination_epoch: number;
+  own_epoch: number | null;
   current_revision: number | null; representation_id: string | null;
   content_key_id: string | null; key_epoch: number | null;
 };
@@ -160,12 +165,15 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
   const row = await createDb(env.DB).get<MoveRow>(sql`
     SELECT n.kind, n.parent_node_id, e.encoding, e.receiving_key_id, e.receiving_epoch, e.wrap_revision,
       src.entries_revision AS source_revision, src.listing_version AS source_version,
+      src.capability_epoch AS source_epoch,
       dst.entries_revision AS destination_revision, dst.listing_version AS destination_version,
+      dst.capability_epoch AS destination_epoch, own.capability_epoch AS own_epoch,
       f.current_revision, f.current_representation_id AS representation_id, r.content_key_id, r.key_epoch
     FROM vault_nodes n
     JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
     JOIN directories src ON src.node_id = n.parent_node_id AND src.owner_id = n.owner_id
     JOIN directories dst ON dst.node_id = ${destinationId} AND dst.owner_id = n.owner_id
+    LEFT JOIN directories own ON own.node_id = n.id AND own.owner_id = n.owner_id
     LEFT JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
     LEFT JOIN file_representations r ON r.id = f.current_representation_id AND r.file_node_id = f.node_id
       AND r.owner_id = f.owner_id AND r.revision = f.current_revision
@@ -191,11 +199,12 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
     signed: ReturnType<typeof parseHead> } = null;
   let thread: ThreadRotation = null;
   try {
-    name = metadata(input.nameCiphertext, 1024, ownerId, nodeId, destinationId);
-    order = metadata(input.orderCiphertext, 4096, ownerId, nodeId, destinationId);
+    name = metadata(input.nameCiphertext, 1024, ownerId, nodeId, destinationId, row.destination_epoch);
+    order = metadata(input.orderCiphertext, 4096, ownerId, nodeId, destinationId, row.destination_epoch);
     if (row.encoding === "directory") {
+      // The moved Directory keeps its own capability and epoch; only its wrapper changes parent.
       keyEnvelope = treeEnvelope(input.keyEnvelope, 1024, { purpose: "directory-capability", vaultId: ownerId,
-        objectId: nodeId, keyId: nodeId, keyEpoch: 1, revision: 1 });
+        objectId: nodeId, keyId: nodeId, keyEpoch: row.own_epoch!, revision: 1 });
     } else if (row.encoding === "legacy-file") {
       keyEnvelope = treeEnvelope(input.keyEnvelope, 16_384, { purpose: "file-content-key", vaultId: ownerId,
         objectId: nodeId, keyId: row.content_key_id!, keyEpoch: row.key_epoch!, revision: row.current_revision! });
@@ -212,9 +221,10 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
         objectId: nodeId, keyId: rotation.receivingKeyId, keyEpoch: rotation.receivingEpoch,
         revision: rotation.wrapRevision });
     }
-    sourceHead = await signedListing(input.sourceListingHead, auth, sourceId, expectedSource, ownerId, row.source_version);
-    destinationHead = await signedListing(input.destinationListingHead, auth, destinationId, expectedDestination,
-      ownerId, nextDestinationVersion);
+    sourceHead = await signedListing(input.sourceListingHead, auth, { directoryId: sourceId,
+      expectedRevision: expectedSource, ownerId, version: row.source_version, epoch: row.source_epoch });
+    destinationHead = await signedListing(input.destinationListingHead, auth, { directoryId: destinationId,
+      expectedRevision: expectedDestination, ownerId, version: nextDestinationVersion, epoch: row.destination_epoch });
   } catch { return badRequest(); }
   if (rotation) {
     const current = await headRow(env, auth, ownerId, nodeId);
@@ -313,8 +323,9 @@ export async function deleteNode(env: Env, auth: AuthorizedDevice, nodeId: strin
   if (!ownerId) return notFound();
   const count = sql`(${subtree(ownerId, nodeId)} SELECT count(*) FROM subtree)`;
   const row = await createDb(env.DB).get<{ parent_node_id: string; entries_revision: number;
-    listing_version: ListingVersion; nodes: number }>(sql`
-    SELECT n.parent_node_id, d.entries_revision, d.listing_version, ${count} AS nodes FROM vault_nodes n
+    listing_version: ListingVersion; capability_epoch: number; nodes: number }>(sql`
+    SELECT n.parent_node_id, d.entries_revision, d.listing_version, d.capability_epoch, ${count} AS nodes
+    FROM vault_nodes n
     JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
     JOIN directories d ON d.node_id = n.parent_node_id AND d.owner_id = n.owner_id
     WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId}
@@ -324,7 +335,10 @@ export async function deleteNode(env: Env, auth: AuthorizedDevice, nodeId: strin
   if (row.entries_revision !== expectedRevision) return changed();
   const parentId = row.parent_node_id;
   let head: Head;
-  try { head = await signedListing(input.listingHead, auth, parentId, expectedRevision, ownerId, row.listing_version); }
+  try {
+    head = await signedListing(input.listingHead, auth, { directoryId: parentId, expectedRevision, ownerId,
+      version: row.listing_version, epoch: row.capability_epoch });
+  }
   catch { return badRequest(); }
   // The deleted subtree's own barriers are drained below; its parent chain must be unsealed.
   if (await blocked(env, ownerId, parentId)) return rotationPending();

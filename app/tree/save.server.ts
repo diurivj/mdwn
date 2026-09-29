@@ -41,9 +41,10 @@ export async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string,
   if (!coordinates) return missing();
   const ownerId = coordinates.owner_id, parentId = coordinates.parent_node_id;
   const row = await createDb(env.DB).get<{ parent_node_id: string; current_revision: number;
-    current_representation_id: string; content_key_id: string; listing_version: 1 | 2 }>(sql`
+    current_representation_id: string; content_key_id: string; listing_version: 1 | 2;
+    capability_epoch: number }>(sql`
       SELECT n.parent_node_id, f.current_revision, f.current_representation_id, r.content_key_id,
-        d.listing_version
+        d.listing_version, d.capability_epoch
       FROM vault_nodes n JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
       JOIN file_representations r ON r.id = f.current_representation_id AND r.file_node_id = f.node_id
         AND r.owner_id = f.owner_id AND r.revision = f.current_revision
@@ -68,8 +69,8 @@ export async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string,
       keyEpoch: 1, revision: expectedRevision + 1 };
     keyEnvelope = treeEnvelope(input.keyEnvelope, 16_384, { ...context, purpose: "file-content-key" });
     ciphertext = treeEnvelope(repr.ciphertext, MAX_REPRESENTATION_BYTES, { ...context, purpose: "file-content" });
-    head = await signedListing(input.listingHead, auth, parentId, expectedEntriesRevision,
-      ownerId, row.listing_version);
+    head = await signedListing(input.listingHead, auth, { directoryId: parentId,
+      expectedRevision: expectedEntriesRevision, ownerId, version: row.listing_version, epoch: row.capability_epoch });
   } catch { return invalid(); }
   const now = Date.now();
   try {
