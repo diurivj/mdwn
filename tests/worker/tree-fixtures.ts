@@ -1,9 +1,11 @@
 import { env, SELF } from "cloudflare:test";
 
-import { openSymmetric } from "../../app/crypto/enc-v1";
+import { openSymmetric, sealToRecipient } from "../../app/crypto/enc-v1";
 import { createFileReceivingKey, createFileSave } from "../../app/crypto/file-receiving";
 import { generateDirectoryCapabilityKey } from "../../app/crypto/vault";
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
+import { sealShareLabel } from "../../app/sharing/label";
+import { digestBytes, hex, signOffer, type Offer } from "../../app/sharing/offer";
 import { encryptedEntry, prepareTreeCreate, type DirectoryListing, type TreeEntry } from "../../app/tree/client";
 import { signFileHead } from "../../app/tree/file-head";
 import { createListingHead, type ListingVersion, type SealedEntry } from "../../app/tree/listing";
@@ -160,4 +162,54 @@ export async function treeIntegrity(ownerId: string): Promise<{ broken: number; 
     WHERE n.owner_id = ? AND n.parent_node_id IS NOT NULL AND e.child_node_id IS NULL`).bind(ownerId).first<{ n: number }>();
   const markers = await env.DB.prepare("SELECT count(*) AS n FROM tree_teardown_nodes").first<{ n: number }>();
   return { broken: broken!.n, markers: markers!.n };
+}
+
+/**
+ * A real accepted Directory Share: Owner-signed offer, sealed Shared-as labels and capability
+ * envelopes for every current recipient device, through the same routes the browser uses.
+ */
+export async function shareDirectory(owner: Actor, recipient: Actor, directoryId: string, key: Uint8Array,
+  permission: "read_only" | "read_write" = "read_only"): Promise<{ grantId: string; shareId: string }> {
+  const prep = await call(owner, "/api/private/sharing/target", "POST",
+    { targetId: directoryId, kind: "directory", recipientId: recipient.accountId });
+  if (prep.status !== 200) throw new Error(`share target ${prep.status}`);
+  const coordinates = await prep.json() as { targetKeyId: string; targetEpoch: number; revision: number;
+    headDigest: string };
+  const shareIdentity = (await env.DB.prepare("SELECT share_id FROM accounts WHERE id = ?")
+    .bind(recipient.accountId).first<{ share_id: string }>())!.share_id;
+  const resolved = await call(owner, "/api/private/sharing/resolve", "POST", { kind: "share-id", value: shareIdentity });
+  const addressed = await resolved.json() as { registryEpoch: number;
+    devices: { deviceId: string; publicKey: string; registryEpoch: number }[] };
+  const targets = await Promise.all(addressed.devices.map(async (device) => ({ ...device,
+    bytes: decodeTreeBytes(device.publicKey, 65), key: await crypto.subtle.importKey("raw",
+      decodeTreeBytes(device.publicKey, 65), { name: "ECDH", namedCurve: "P-256" }, true, []) })));
+  const shareId = uuid7(), grantId = uuid7(), labelId = uuid7();
+  const labels = await sealShareLabel("Shared", owner.accountId, directoryId, labelId,
+    targets.map((device) => ({ deviceId: device.deviceId, publicKey: device.key })), generateDirectoryCapabilityKey());
+  const material = await Promise.all(targets.map(async (device) => ({ ...device,
+    ciphertext: await sealToRecipient(key, device.key, { purpose: "grant", vaultId: owner.accountId,
+      objectId: directoryId, keyId: coordinates.targetKeyId, keyEpoch: coordinates.targetEpoch, revision: 1,
+      recipientId: device.deviceId }),
+    label: labels.deliveries.find((item) => item.deviceId === device.deviceId)!.envelope })));
+  const fingerprint = async (value: Uint8Array) => hex(await digestBytes(value));
+  const offer: Offer = { shareId, grantId, ownerId: owner.accountId, recipientId: recipient.accountId,
+    targetId: directoryId, kind: "directory", permission, materialRevision: 1,
+    targetKeyId: coordinates.targetKeyId, targetEpoch: coordinates.targetEpoch,
+    contentRevision: coordinates.revision, headDigest: hex(decodeTreeBytes(coordinates.headDigest, 32)),
+    labelId, ownerCopyDigest: await fingerprint(labels.ownerCopy), registryEpoch: addressed.registryEpoch,
+    devices: await Promise.all(material.map(async (device) => ({ accountId: recipient.accountId,
+      deviceId: device.deviceId, registryEpoch: device.registryEpoch, publicKeyDigest: await fingerprint(device.bytes),
+      contentDigest: await fingerprint(device.ciphertext), labelDigest: await fingerprint(device.label) }))),
+    candidateDigest: null, signerDeviceId: owner.deviceId };
+  const signed = await signOffer(offer, owner.assertion.privateKey);
+  const sent = await call(owner, "/api/private/sharing/shares", "PUT", { ...offer,
+    ownerCopy: encodeTreeBytes(labels.ownerCopy), offerBytes: encodeTreeBytes(signed.bytes),
+    offerDigest: encodeTreeBytes(signed.digest), offerSignature: encodeTreeBytes(signed.signature), candidate: null,
+    deliveries: material.map((device) => ({ deviceId: device.deviceId, registryEpoch: device.registryEpoch,
+      publicKey: device.publicKey, ciphertext: encodeTreeBytes(device.ciphertext),
+      labelCiphertext: encodeTreeBytes(device.label) })) });
+  if (sent.status !== 201) throw new Error(`share ${sent.status} ${await sent.text()}`);
+  const accepted = await call(recipient, `/api/private/sharing/shares/${shareId}/accept`, "POST", { materialRevision: 1 });
+  if (accepted.status !== 200) throw new Error(`accept ${accepted.status} ${await accepted.text()}`);
+  return { grantId, shareId };
 }

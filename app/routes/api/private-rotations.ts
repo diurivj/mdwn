@@ -2,7 +2,8 @@ import { hasEmptyBody, readAuthJsonText, requireSameOrigin } from "~/auth/reques
 import { getEnv } from "~/context/env";
 import { authorizePrivateRequest } from "~/device/proof.server";
 import { sharingBudget } from "~/sharing/budget.server";
-import { listRotations, nextRotationStep, resealDirectoryGrants, rotateFileTarget } from "~/sharing/rotation.server";
+import { finishRekey, listRotations, nextRotationStep, rekeyDirectory, rekeyReceivingFile, resealDirectoryGrants,
+  rotateFileTarget } from "~/sharing/rotation.server";
 import { isV7 } from "~/tree/wire";
 import type { Route } from "./+types/private-rotations";
 
@@ -18,12 +19,12 @@ const MAX_STEP_BYTES = 1536 * 1024;
 /** Resource-only Owner rotation API (ticket 19); private data never enters a loader or SSR payload. */
 export async function action({ request, context }: Route.ActionArgs): Promise<Response> {
   const path = new URL(request.url).pathname;
-  const target = /^\/api\/private\/rotations\/([0-9a-f-]+)\/(next|file|grants)$/.exec(path);
+  const target = /^\/api\/private\/rotations\/([0-9a-f-]+)\/(next|file|grants|directory|receiving|finish)$/.exec(path);
   const method = request.method;
   const route = path === "/api/private/rotations" && method === "POST" ? "list" :
     target?.[2] === "next" && method === "POST" ? "next" :
     target?.[2] === "file" && method === "PATCH" ? "file" :
-    target?.[2] === "grants" && method === "PATCH" ? "grants" : null;
+    target?.[2] && target[2] !== "next" && method === "PATCH" ? target[2] : null;
   if (!route || (target && !isV7(target[1]))) return absent();
   try { requireSameOrigin(request); } catch { return denied(); }
   let body = "", value: unknown;
@@ -46,7 +47,10 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   const id = target?.[1] ?? "";
   const response = await (route === "list" ? listRotations(env, auth) :
     route === "next" ? nextRotationStep(env, auth, id) :
-    route === "file" ? rotateFileTarget(env, auth, id, value) : resealDirectoryGrants(env, auth, id, value));
+    route === "file" ? rotateFileTarget(env, auth, id, value) :
+    route === "grants" ? resealDirectoryGrants(env, auth, id, value) :
+    route === "directory" ? rekeyDirectory(env, auth, id, value) :
+    route === "receiving" ? rekeyReceivingFile(env, auth, id, value) : finishRekey(env, auth, id, value));
   // Local-only query-budget diagnostic, never emitted in preview or production.
   if (platform.APP_ENV === "local") response.headers.set("X-Mdwn-Sharing-Budget",
     `${measured.budget.queries};${measured.budget.maxBindings}`);

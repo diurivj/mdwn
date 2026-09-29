@@ -1,11 +1,13 @@
 import { loadThreadKeySource, prepareThreadRotation, type ThreadKeySource } from "~/comments/client";
-import { sealToRecipient } from "~/crypto/enc-v1";
+import { createSymmetricWriter, inspectEnvelope, openSymmetric, sealToRecipient } from "~/crypto/enc-v1";
 import { openFileContentKeyFromReceiving, openFileReceivingKey } from "~/crypto/file-receiving";
+import { generateDirectoryCapabilityKey } from "~/crypto/vault";
 import { privateRequest } from "~/device/private-client";
-import { authenticateFileHead, loadAncestors, loadDirectory, openChildDirectory, TreeNotFoundError,
+import { authenticateFileHead, encryptedEntry, loadAncestors, loadDirectory, openChildDirectory, TreeNotFoundError,
   type RootAccess, type TreeEntry } from "~/tree/client";
 import { signFileHead } from "~/tree/file-head";
-import type { DirectoryState, FileRotationSource, StructureSigner } from "~/tree/structure-client";
+import { rotateReceivingPair, signListing, type DirectoryState, type FileRotationSource,
+  type StructureSigner } from "~/tree/structure-client";
 import { decodeTreeBytes, encodeTreeBytes } from "~/tree/wire";
 import { parseOffer, signOffer, type OfferDevice } from "./offer";
 
@@ -19,7 +21,13 @@ export type RotationStep =
   | { step: "file"; targetId: string; fileId: string; mode: "rekey" | "reprovision"; barrierEpoch: number;
       recipients: RotationRecipient[] }
   | { step: "grants"; targetId: string; directoryId: string; mode: "reprovision"; barrierEpoch: number;
-      epoch: number; grants: GrantMaterialWire[] };
+      epoch: number; grants: GrantMaterialWire[] }
+  | { step: "directory"; targetId: string; directoryId: string; parentId: string; mode: "rekey";
+      barrierEpoch: number; stepKey: string; epoch: number; grants: GrantMaterialWire[]; progress: RotationProgress }
+  | { step: "receiving"; targetId: string; fileId: string; parentId: string; mode: "rekey"; barrierEpoch: number;
+      stepKey: string; progress: RotationProgress }
+  | { step: "finish"; targetId: string; mode: "rekey"; barrierEpoch: number };
+export type RotationProgress = { done: number; total: number };
 
 const sha256 = async (value: Uint8Array) => new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(value)));
 const hex = (value: Uint8Array) => Array.from(value, (n) => n.toString(16).padStart(2, "0")).join("");
@@ -108,6 +116,79 @@ export async function prepareGrantSeals(options: { ownerId: string; directoryId:
   }));
 }
 
+/** The wrapper purposes a Directory entry may carry, keyed to the entry it belongs to. */
+function entryWrapperContext(vaultId: string, entry: TreeEntry) {
+  const context = inspectEnvelope(decodeTreeBytes(entry.keyEnvelope, 16_384)).context;
+  const expected = entry.kind === "directory" ? "directory-capability" :
+    entry.encoding === "receiving-file" ? "file-receiving-key" : "file-content-key";
+  if (context.purpose !== expected || context.vaultId !== vaultId || context.objectId !== entry.nodeId ||
+      (expected === "directory-capability" && context.keyId !== entry.nodeId) ||
+      (expected === "file-receiving-key" && context.keyId !== entry.receivingKeyId) ||
+      Object.hasOwn(context, "recipientId")) throw new Error("invalid Directory entry");
+  return context;
+}
+
+/**
+ * One Directory of a subtree rekey: a fresh capability at the next epoch, wrapped in its parent's
+ * entry; every entry re-sealed under it (names/orders at the new epoch, each wrapper opened with
+ * the old key under its committed context and re-sealed unchanged); both listings re-signed;
+ * and every Grant on it re-sealed under a re-signed offer.
+ */
+export async function prepareDirectoryRekey(options: { vaultId: string; signer: StructureSigner;
+  parent: DirectoryState; directory: DirectoryState; step: Extract<RotationStep, { step: "directory" }> }) {
+  const { vaultId, signer, parent, directory, step } = options;
+  const directoryId = directory.listing.directoryId, epoch = step.epoch + 1;
+  if (directoryId !== step.directoryId || parent.listing.directoryId !== step.parentId ||
+      directory.listing.capabilityEpoch !== step.epoch ||
+      !parent.listing.entries.some((entry) => entry.nodeId === directoryId && entry.kind === "directory")) {
+    throw new RotationChangedError();
+  }
+  const nextKey = generateDirectoryCapabilityKey();
+  try {
+    const wrapperWriter = await createSymmetricWriter(parent.key);
+    const wrapper = encodeTreeBytes(await wrapperWriter.seal(nextKey, { purpose: "directory-capability", vaultId,
+      objectId: directoryId, keyId: directoryId, keyEpoch: epoch, revision: 1 }));
+    const parentHead = await signListing(vaultId, signer, parent, parent.listing.entries.map((entry) =>
+      entry.nodeId === directoryId ? { ...entry, keyEnvelope: wrapper } : entry));
+    const writer = await createSymmetricWriter(nextKey);
+    const entries = await Promise.all(directory.listing.entries.map(async (entry) => {
+      const context = entryWrapperContext(vaultId, entry);
+      const inner = await openSymmetric(decodeTreeBytes(entry.keyEnvelope, 16_384), directory.key, { context });
+      try {
+        const keyEnvelope = encodeTreeBytes(await writer.seal(inner, context));
+        return { ...entry, ...await encryptedEntry(nextKey, vaultId, directoryId, entry.nodeId, entry.name,
+          entry.order, epoch), keyEnvelope };
+      } finally { inner.fill(0); }
+    }));
+    const rotated: DirectoryState = { listing: { ...directory.listing, capabilityEpoch: epoch }, key: nextKey };
+    const listingHead = await signListing(vaultId, signer, rotated, entries);
+    const grants = await prepareGrantSeals({ ownerId: vaultId, directoryId, key: nextKey, epoch, signer,
+      grants: step.grants });
+    return { barrierEpoch: step.barrierEpoch, stepKey: step.stepKey, directoryId, epoch,
+      parent: { expectedRevision: parent.listing.entriesRevision, keyEnvelope: wrapper, listingHead: parentHead },
+      directory: { expectedRevision: directory.listing.entriesRevision, listingHead,
+        entries: entries.map((entry) => ({ nodeId: entry.nodeId, nameCiphertext: entry.nameCiphertext,
+          orderCiphertext: entry.orderCiphertext, keyEnvelope: entry.keyEnvelope })) },
+      grants };
+  } finally { nextKey.fill(0); }
+}
+
+/** One receiving File of a subtree rekey: a move-style receiving-pair rotation within its (rotated) parent. */
+export async function prepareReceivingRekey(options: { vaultId: string; signer: StructureSigner;
+  parent: DirectoryState; file: FileRotationSource; thread: ThreadKeySource;
+  step: Extract<RotationStep, { step: "receiving" }> }) {
+  const { vaultId, signer, parent, step } = options;
+  const entry = parent.listing.entries.find((item) => item.nodeId === step.fileId);
+  if (!entry || parent.listing.directoryId !== step.parentId) throw new RotationChangedError();
+  const rotated = await rotateReceivingPair(vaultId, signer, entry, parent, parent, options.file, options.thread);
+  const { rotation } = rotated;
+  const listingHead = await signListing(vaultId, signer, parent, parent.listing.entries.map((item) =>
+    item.nodeId === step.fileId ? { ...item, keyEnvelope: rotated.keyEnvelope, receivingKeyId: rotation.receivingKeyId,
+      receivingEpoch: rotation.receivingEpoch, wrapRevision: rotation.wrapRevision } : item), 2);
+  return { ...rotation, barrierEpoch: step.barrierEpoch, stepKey: step.stepKey, fileId: step.fileId,
+    expectedRevision: parent.listing.entriesRevision, keyEnvelope: rotated.keyEnvelope, listingHead };
+}
+
 export class RotationChangedError extends Error {
   constructor() { super("rotation_changed"); }
 }
@@ -152,11 +233,15 @@ async function fileSource(fileId: string): Promise<RotationFile> {
   return file as RotationFile;
 }
 
-/** Runs one step of one job; returns false once the job has completed. */
-export async function runRotationStep(access: RootAccess, signer: StructureSigner, targetId: string): Promise<boolean> {
+/**
+ * Runs one step of one job; returns the step's progress while more remain, or null once the
+ * job has completed (or is gone).
+ */
+export async function runRotationStep(access: RootAccess, signer: StructureSigner,
+  targetId: string): Promise<RotationProgress | null> {
   let step: RotationStep;
   try { step = await rotationRequest<RotationStep>(`/api/private/rotations/${targetId}/next`, "POST"); }
-  catch (error) { if (error instanceof TreeNotFoundError) return false; throw error; }
+  catch (error) { if (error instanceof TreeNotFoundError) return null; throw error; }
   if (step.step === "file") {
     const { states, entry } = await openPath(access, step.fileId);
     const parentId = [...states.keys()].at(-1);
@@ -166,7 +251,7 @@ export async function runRotationStep(access: RootAccess, signer: StructureSigne
     const body = await prepareFileTargetRotation({ vaultId: access.vaultId, signer, parent, entry,
       file: await fileSource(step.fileId), step, thread });
     await rotationRequest(`/api/private/rotations/${targetId}/file`, "PATCH", body);
-    return false;
+    return null;
   }
   if (step.step === "grants") {
     const { states } = await openPath(access, step.directoryId);
@@ -176,7 +261,25 @@ export async function runRotationStep(access: RootAccess, signer: StructureSigne
       key: directory.key, epoch: step.epoch, signer, grants: step.grants });
     await rotationRequest(`/api/private/rotations/${targetId}/grants`, "PATCH",
       { barrierEpoch: step.barrierEpoch, epoch: step.epoch, grants });
-    return false;
+    return null;
   }
-  throw new Error("unsupported rotation step");
+  if (step.step === "directory") {
+    const { states } = await openPath(access, step.directoryId);
+    const parent = states.get(step.parentId), directory = states.get(step.directoryId);
+    if (!parent || !directory) throw new TreeNotFoundError();
+    await rotationRequest(`/api/private/rotations/${targetId}/directory`, "PATCH",
+      await prepareDirectoryRekey({ vaultId: access.vaultId, signer, parent, directory, step }));
+    return { done: step.progress.done + 1, total: step.progress.total };
+  }
+  if (step.step === "receiving") {
+    const { states } = await openPath(access, step.fileId);
+    const parent = states.get(step.parentId);
+    if (!parent) throw new TreeNotFoundError();
+    await rotationRequest(`/api/private/rotations/${targetId}/receiving`, "PATCH",
+      await prepareReceivingRekey({ vaultId: access.vaultId, signer, parent, file: await fileSource(step.fileId),
+        thread: await loadThreadKeySource(step.fileId), step }));
+    return { done: step.progress.done + 1, total: step.progress.total };
+  }
+  await rotationRequest(`/api/private/rotations/${targetId}/finish`, "PATCH", { barrierEpoch: step.barrierEpoch });
+  return null;
 }

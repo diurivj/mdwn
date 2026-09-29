@@ -1,17 +1,15 @@
 import type { SQL } from "drizzle-orm";
 import { record } from "~/auth/request.server";
-import { parseThreadRotation, ThreadRotationChangedError, threadRotationGuard, threadRotationStatements,
-  type ThreadRotation } from "~/comments/comments.server";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { commitDirectoryMutation, type AuthorizedDevice } from "~/device/proof.server";
 import { fileAccessGuard, moveAccessGuard, structuralAccessGuard } from "~/sharing/access.server";
 import { begin, finish, marker, proofTime, spent } from "~/sharing/sharing.server";
-import { assertFileHeadCommitTransition, verifyFileHead, verifyFileParentEnvelope,
-  verifyFileReceivingTarget } from "./file-head";
-import { headRow, parseHead, unblocked, verified } from "./file-v2.server";
+import { unblocked } from "./file-v2.server";
 import type { ListingVersion } from "./listing";
 import { signedListing } from "./listing.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "./wire";
+import { parseReceivingRotation, RECEIVING_ROTATION_FIELDS, ReceivingRotationError, receivingRotationGuard,
+  receivingRotationStatements, verifyReceivingRotation, type ReceivingRotation } from "./receiving-rotation.server";
+import { encodeTreeBytes, isV7, treeEnvelope } from "./wire";
 
 /** Directory hard deletion is all-or-nothing for at most this many nodes, root included. */
 export const MAX_TEARDOWN_NODES = 500;
@@ -24,8 +22,6 @@ const changed = () => json({ error: "namespace_changed" }, 409);
 const fileChanged = () => json({ error: "file_changed" }, 409);
 const rotationPending = () => json({ error: "rotation_pending" }, 409);
 const overLimit = () => json({ error: "subtree_limit_exceeded", limit: MAX_TEARDOWN_NODES }, 409);
-const bytes = (value: ArrayBuffer | Uint8Array) => new Uint8Array(value);
-const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((n, i) => n === b[i]);
 const exact = (value: Record<string, unknown>, fields: readonly string[]) =>
   Object.keys(value).length === fields.length && fields.every((key) => Object.hasOwn(value, key));
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) &&
@@ -54,7 +50,7 @@ function metadata(value: unknown, max: number, ownerId: string, nodeId: string, 
 }
 
 /** Same signed-head CAS as commitDirectoryMutation, but gated by an invocation witness. */
-function listingUpdate(auth: AuthorizedDevice, ownerId: string, directoryId: string, expectedRevision: number,
+export function listingUpdate(auth: AuthorizedDevice, ownerId: string, directoryId: string, expectedRevision: number,
   head: Head, previous: ListingVersion, next: ListingVersion, live: SQL): SQL {
   return sql`UPDATE directories SET entries_revision = entries_revision + 1, listing_version = ${next},
       capability_key_id = CASE WHEN ${previous} = 1 AND ${next} = 2 THEN ${directoryId} ELSE capability_key_id END,
@@ -138,8 +134,7 @@ type MoveRow = {
 };
 const MOVE_FIELDS = ["sourceId", "destinationId", "expectedSourceRevision", "expectedDestinationRevision",
   "nameCiphertext", "orderCiphertext", "keyEnvelope", "sourceListingHead", "destinationListingHead"] as const;
-const ROTATION_FIELDS = ["expectedHeadDigest", "receivingKeyId", "receivingEpoch", "wrapRevision",
-  "receivingPublicKey", "parentEnvelope", "signedHead", "thread"] as const;
+const ROTATION_FIELDS = RECEIVING_ROTATION_FIELDS;
 
 /**
  * One same-Owner move: both parent revisions are CAS'd, the edge is replaced and
@@ -194,10 +189,7 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
   const nextDestinationVersion: ListingVersion = rotating ? 2 : row.destination_version;
   let name: Uint8Array, order: Uint8Array, keyEnvelope: Uint8Array;
   let sourceHead: Head, destinationHead: Head;
-  let rotation: null | { expectedHeadDigest: Uint8Array; receivingKeyId: string; receivingEpoch: number;
-    wrapRevision: number; publicKey: Uint8Array; parentEnvelope: Uint8Array;
-    signed: ReturnType<typeof parseHead> } = null;
-  let thread: ThreadRotation = null;
+  let rotation: ReceivingRotation | null = null;
   try {
     name = metadata(input.nameCiphertext, 1024, ownerId, nodeId, destinationId, row.destination_epoch);
     order = metadata(input.orderCiphertext, 4096, ownerId, nodeId, destinationId, row.destination_epoch);
@@ -209,17 +201,8 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
       keyEnvelope = treeEnvelope(input.keyEnvelope, 16_384, { purpose: "file-content-key", vaultId: ownerId,
         objectId: nodeId, keyId: row.content_key_id!, keyEpoch: row.key_epoch!, revision: row.current_revision! });
     } else {
-      if (!isV7(input.receivingKeyId) || input.receivingKeyId === row.receiving_key_id ||
-          input.receivingEpoch !== row.receiving_epoch! + 1 || input.wrapRevision !== row.wrap_revision! + 1) {
-        return badRequest();
-      }
-      rotation = { expectedHeadDigest: decodeTreeBytes(input.expectedHeadDigest, 32),
-        receivingKeyId: input.receivingKeyId, receivingEpoch: input.receivingEpoch as number,
-        wrapRevision: input.wrapRevision as number, publicKey: decodeTreeBytes(input.receivingPublicKey, 65),
-        parentEnvelope: decodeTreeBytes(input.parentEnvelope, 16_384), signed: parseHead(input.signedHead) };
-      keyEnvelope = treeEnvelope(input.keyEnvelope, 16_384, { purpose: "file-receiving-key", vaultId: ownerId,
-        objectId: nodeId, keyId: rotation.receivingKeyId, keyEpoch: rotation.receivingEpoch,
-        revision: rotation.wrapRevision });
+      rotation = parseReceivingRotation(input, ownerId, nodeId, row);
+      keyEnvelope = rotation.keyEnvelope;
     }
     sourceHead = await signedListing(input.sourceListingHead, auth, { directoryId: sourceId,
       expectedRevision: expectedSource, ownerId, version: row.source_version, epoch: row.source_epoch });
@@ -227,32 +210,17 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
       expectedRevision: expectedDestination, ownerId, version: nextDestinationVersion, epoch: row.destination_epoch });
   } catch { return badRequest(); }
   if (rotation) {
-    const current = await headRow(env, auth, ownerId, nodeId);
-    if (!current) return notFound();
-    if (!equal(bytes(current.digest), rotation.expectedHeadDigest) ||
-        current.receiving_key_id !== row.receiving_key_id || current.receiving_epoch !== row.receiving_epoch) {
-      return fileChanged();
+    try { rotation = await verifyReceivingRotation(env, auth, ownerId, nodeId, row, rotation); }
+    catch (error) {
+      const code = error instanceof ReceivingRotationError ? error.code : "invalid";
+      return code === "missing" ? notFound() : code === "changed" ? fileChanged() : badRequest();
     }
-    try {
-      const before = await verified(current);
-      const after = await verifyFileHead(rotation.signed, { ownerId, vaultId: ownerId, fileId: nodeId,
-        signerDeviceId: auth.deviceId, publicKey: auth.assertionPublicKey, revision: current.revision });
-      assertFileHeadCommitTransition(before, after, { expectedSameRevisionTransition: "receiving-rotation" });
-      if (after.statement.receivingKey.id !== rotation.receivingKeyId ||
-          after.statement.receivingKey.epoch !== rotation.receivingEpoch) return badRequest();
-      await verifyFileReceivingTarget(after, rotation.publicKey);
-      await verifyFileParentEnvelope(after, rotation.parentEnvelope);
-      thread = await parseThreadRotation(env, ownerId, nodeId, input.thread,
-        { keyId: rotation.receivingKeyId, epoch: rotation.receivingEpoch });
-    } catch (error) { return error instanceof ThreadRotationChangedError ? fileChanged() : badRequest(); }
   }
   const nodeState = row.encoding === "directory" ? sql`1 = 1` : row.encoding === "legacy-file" ?
     sql`EXISTS (SELECT 1 FROM files f WHERE f.node_id = ${nodeId} AND f.owner_id = ${ownerId}
       AND f.current_revision = ${row.current_revision} AND f.current_representation_id = ${row.representation_id})` :
-    sql`EXISTS (SELECT 1 FROM file_heads h WHERE h.file_node_id = ${nodeId} AND h.owner_id = ${ownerId}
-      AND h.digest = ${rotation!.expectedHeadDigest} AND h.receiving_key_id = ${row.receiving_key_id}
-      AND h.receiving_epoch = ${row.receiving_epoch})
-      AND ${fileAccessGuard(auth, ownerId, nodeId, "file_edit")} AND ${threadRotationGuard(ownerId, nodeId, thread)}`;
+    sql`${receivingRotationGuard(ownerId, nodeId, row, rotation!)}
+      AND ${fileAccessGuard(auth, ownerId, nodeId, "file_edit")}`;
   const now = Date.now(), invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
   try {
     const [, witness] = await atomicSqlBatch(env.DB, [
@@ -283,13 +251,7 @@ export async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string
         SELECT ${nodeId}, ${ownerId}, ${destinationId}, ${name}, ${order}, ${keyEnvelope}, ${row.encoding},
           ${rotation?.receivingKeyId ?? null}, ${rotation?.receivingEpoch ?? null}, ${rotation?.wrapRevision ?? null}
         WHERE ${live}`,
-      ...(rotation ? [sql`UPDATE file_heads SET bytes = ${rotation.signed.bytes}, digest = ${rotation.signed.digest},
-          signature = ${rotation.signed.signature}, signer_device_id = ${auth.deviceId},
-          receiving_public_key = ${rotation.publicKey}, receiving_key_id = ${rotation.receivingKeyId},
-          receiving_epoch = ${rotation.receivingEpoch}, parent_envelope = ${rotation.parentEnvelope}
-        WHERE file_node_id = ${nodeId} AND owner_id = ${ownerId} AND digest = ${rotation.expectedHeadDigest}
-          AND ${live}`] : []),
-      ...await threadRotationStatements(thread, now, live),
+      ...(rotation ? await receivingRotationStatements(auth, ownerId, nodeId, rotation, now, live) : []),
       spent(auth, invocationId),
       proofTime(auth, invocationId),
       finish(auth, invocationId),

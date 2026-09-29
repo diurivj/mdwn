@@ -7,7 +7,12 @@ import { privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { assertExactFileRecipientDescriptors, assertFileHeadCommitTransition, verifyDirectFileRecipientEnvelope,
   verifyFileHead } from "~/tree/file-head";
 import { exactRecipientGuard, headRow, parseHead, recipients, verified, type Recipient } from "~/tree/file-v2.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
+import type { ListingVersion } from "~/tree/listing";
+import { signedListing } from "~/tree/listing.server";
+import { parseReceivingRotation, RECEIVING_ROTATION_FIELDS, ReceivingRotationError, receivingRotationGuard,
+  receivingRotationStatements, verifyReceivingRotation } from "~/tree/receiving-rotation.server";
+import { listingUpdate } from "~/tree/structure.server";
+import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
 import { digestBytes, hex, inspectOfferEnvelope, parseOffer, verifyOffer } from "./offer";
 import { begin, finish, marker, proofTime, spent } from "./sharing.server";
 
@@ -225,7 +230,228 @@ export async function nextRotationStep(env: Env, auth: AuthorizedDevice, targetI
       return json({ ...common, step: "grants", directoryId: targetId, epoch,
         grants: grantMaterialWire(await grantMaterial(env, job.owner_id, targetId)) });
     }
-    return json({ ...common, step: "unsupported" }, 501);
+    const node = await nextRekeyNode(env, job);
+    if (!node) return json({ ...common, step: "finish" });
+    const progress = { done: node.total - node.remaining, total: node.total };
+    if (node.kind === "directory") {
+      return json({ ...common, step: "directory", directoryId: node.id, parentId: node.parent_node_id,
+        stepKey: node.step_key, epoch: await directoryEpoch(env, job.owner_id, node.id), progress,
+        grants: grantMaterialWire(await grantMaterial(env, job.owner_id, node.id)) });
+    }
+    return json({ ...common, step: "receiving", fileId: node.id, parentId: node.parent_node_id,
+      stepKey: node.step_key, progress });
+  } catch { return invalid(); }
+}
+
+type RekeyNode = { id: string; kind: "directory" | "file"; parent_node_id: string; step_key: string;
+  total: number; remaining: number };
+
+/**
+ * The frozen subtree's rekey order: every Directory, then (a level deeper) every receiving
+ * File, as `depth:id`. A parent always precedes its children, so a new key is only ever
+ * wrapped under an already rotated one. The cursor is the last completed step.
+ */
+async function nextRekeyNode(env: Env, job: RotationJob): Promise<RekeyNode | undefined> {
+  return createDb(env.DB).get<RekeyNode>(sql`WITH RECURSIVE subtree(id, kind, parent_node_id, depth) AS (
+      SELECT id, kind, parent_node_id, 0 FROM vault_nodes WHERE id = ${job.target_node_id} AND owner_id = ${job.owner_id}
+      UNION ALL
+      SELECT n.id, n.kind, n.parent_node_id, s.depth + 1 FROM subtree s JOIN vault_nodes n ON n.parent_node_id = s.id
+        WHERE n.owner_id = ${job.owner_id} AND s.kind = 'directory' AND s.depth < 100
+    ), steps AS (
+      SELECT s.id, s.kind, s.parent_node_id, printf('%03d:%s', s.depth, s.id) AS step_key FROM subtree s
+      LEFT JOIN directory_entries e ON e.child_node_id = s.id AND e.owner_id = ${job.owner_id}
+      WHERE s.kind = 'directory' OR e.encoding = 'receiving-file'
+    )
+    SELECT id, kind, parent_node_id, step_key, (SELECT count(*) FROM steps) AS total,
+      (SELECT count(*) FROM steps WHERE step_key > ${job.cursor ?? ""}) AS remaining
+    FROM steps WHERE step_key > ${job.cursor ?? ""} ORDER BY step_key LIMIT 1`);
+}
+
+function advanceCursor(job: RotationJob, stepKey: string, now: number, live: SQL): SQL {
+  return sql`UPDATE sharing_rotation_jobs SET cursor = ${stepKey}, updated_at = ${now}
+    WHERE owner_id = ${job.owner_id} AND target_node_id = ${job.target_node_id}
+      AND barrier_epoch = ${job.barrier_epoch} AND cursor IS ${job.cursor} AND ${live}`;
+}
+
+type DirectoryRow = { entries_revision: number; listing_version: ListingVersion; capability_epoch: number };
+async function directoryRow(env: Env, ownerId: string, directoryId: string): Promise<DirectoryRow | undefined> {
+  return createDb(env.DB).get<DirectoryRow>(sql`SELECT entries_revision, listing_version, capability_epoch
+    FROM directories WHERE node_id = ${directoryId} AND owner_id = ${ownerId}`);
+}
+
+type EntryRow = { child_node_id: string; encoding: "directory" | "legacy-file" | "receiving-file";
+  receiving_key_id: string | null; receiving_epoch: number | null; wrap_revision: number | null;
+  child_epoch: number | null; content_key_id: string | null; key_epoch: number | null; current_revision: number | null };
+
+/**
+ * One Directory of a subtree rekey, in one batch: a fresh capability at epoch + 1 wrapped in its
+ * parent's entry (parent listing re-signed), every entry re-sealed under it (names and orders at
+ * the new epoch; child, legacy-File and receiving wrappers re-wrapped with unchanged contexts),
+ * its own listing re-signed at the new epoch, and every Grant on it re-sealed under a re-signed offer.
+ */
+export async function rekeyDirectory(env: Env, auth: AuthorizedDevice, targetId: string,
+  value: unknown): Promise<Response> {
+  const input = record(value), parent = record(input?.parent), directory = record(input?.directory);
+  if (!input || !exact(input, ["barrierEpoch", "stepKey", "directoryId", "epoch", "parent", "directory", "grants"]) ||
+      !parent || !exact(parent, ["expectedRevision", "keyEnvelope", "listingHead"]) ||
+      !directory || !exact(directory, ["expectedRevision", "entries", "listingHead"]) ||
+      !Number.isSafeInteger(input.barrierEpoch) || typeof input.stepKey !== "string" || !isV7(input.directoryId) ||
+      !Number.isSafeInteger(input.epoch) || !Number.isSafeInteger(parent.expectedRevision) ||
+      !Number.isSafeInteger(directory.expectedRevision) || !Array.isArray(directory.entries)) return invalid();
+  const job = await currentJob(env, auth, targetId);
+  if (!job || job.kind !== "directory" || job.mode !== "rekey") return absent();
+  if (job.barrier_epoch !== input.barrierEpoch) return changed();
+  const node = await nextRekeyNode(env, job);
+  if (!node || node.kind !== "directory" || node.id !== input.directoryId || node.step_key !== input.stepKey) {
+    return changed();
+  }
+  const ownerId = job.owner_id, directoryId = node.id, parentId = node.parent_node_id, epoch = input.epoch as number;
+  const [own, above] = await Promise.all([directoryRow(env, ownerId, directoryId), directoryRow(env, ownerId, parentId)]);
+  if (!own || !above) return absent();
+  if (own.capability_epoch + 1 !== epoch || own.entries_revision !== directory.expectedRevision ||
+      above.entries_revision !== parent.expectedRevision) return changed();
+  const rows = await createDb(env.DB).all<EntryRow>(sql`SELECT e.child_node_id, e.encoding, e.receiving_key_id,
+      e.receiving_epoch, e.wrap_revision, child.capability_epoch AS child_epoch, r.content_key_id, r.key_epoch,
+      f.current_revision
+    FROM directory_entries e LEFT JOIN directories child ON child.node_id = e.child_node_id AND child.owner_id = e.owner_id
+    LEFT JOIN files f ON f.node_id = e.child_node_id AND f.owner_id = e.owner_id
+    LEFT JOIN file_representations r ON r.id = f.current_representation_id AND r.file_node_id = f.node_id
+      AND r.owner_id = f.owner_id AND r.revision = f.current_revision
+    WHERE e.parent_node_id = ${directoryId} AND e.owner_id = ${ownerId} ORDER BY e.child_node_id`);
+  let wrapper: Uint8Array, parentHead: Awaited<ReturnType<typeof signedListing>>;
+  let ownHead: Awaited<ReturnType<typeof signedListing>>, seals: GrantSeal[], payload: string;
+  try {
+    wrapper = treeEnvelope(parent.keyEnvelope, 1024, { purpose: "directory-capability", vaultId: ownerId,
+      objectId: directoryId, keyId: directoryId, keyEpoch: epoch, revision: 1 });
+    parentHead = await signedListing(parent.listingHead, auth, { directoryId: parentId,
+      expectedRevision: above.entries_revision, ownerId, version: above.listing_version, epoch: above.capability_epoch });
+    const submitted: unknown[] = directory.entries;
+    if (submitted.length !== rows.length) return invalid();
+    const entries = rows.map((row) => {
+      const item = submitted.map(record).find((candidate) => candidate?.nodeId === row.child_node_id);
+      if (!item || !exact(item, ["nodeId", "nameCiphertext", "orderCiphertext", "keyEnvelope"])) {
+        throw new Error("invalid entry");
+      }
+      const metadata = { purpose: "directory-metadata" as const, vaultId: ownerId, objectId: row.child_node_id,
+        keyId: directoryId, keyEpoch: epoch, revision: 1 };
+      const keyEnvelope = row.encoding === "directory"
+        ? treeEnvelope(item.keyEnvelope, 1024, { purpose: "directory-capability", vaultId: ownerId,
+          objectId: row.child_node_id, keyId: row.child_node_id, keyEpoch: row.child_epoch!, revision: 1 })
+        : row.encoding === "legacy-file"
+          ? treeEnvelope(item.keyEnvelope, 16_384, { purpose: "file-content-key", vaultId: ownerId,
+            objectId: row.child_node_id, keyId: row.content_key_id!, keyEpoch: row.key_epoch!,
+            revision: row.current_revision! })
+          : treeEnvelope(item.keyEnvelope, 16_384, { purpose: "file-receiving-key", vaultId: ownerId,
+            objectId: row.child_node_id, keyId: row.receiving_key_id!, keyEpoch: row.receiving_epoch!,
+            revision: row.wrap_revision! });
+      return { nodeId: row.child_node_id, name: hex(treeEnvelope(item.nameCiphertext, 4096, metadata)),
+        order: hex(treeEnvelope(item.orderCiphertext, 4096, metadata)), keyEnvelope: hex(keyEnvelope) };
+    });
+    payload = JSON.stringify(entries);
+    ownHead = await signedListing(directory.listingHead, auth, { directoryId, expectedRevision: own.entries_revision,
+      ownerId, version: own.listing_version, epoch });
+    seals = await parseGrantSeals(auth, ownerId, directoryId, epoch, await grantMaterial(env, ownerId, directoryId),
+      input.grants);
+  } catch { return invalid(); }
+  const field = (name: string) => sql`unhex((SELECT json_extract(e.value, ${`$.${name}`}) FROM json_each(${payload}) e
+    WHERE json_extract(e.value, '$.nodeId') = directory_entries.child_node_id))`;
+  const now = Date.now(), invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
+  try {
+    const [witness] = await atomicSqlBatch(env.DB, [
+      begin(auth, invocationId, sql`${jobGuard(job)} AND ${grantSealGuard(ownerId, directoryId, seals)}
+        AND EXISTS (SELECT 1 FROM directories WHERE node_id = ${directoryId} AND owner_id = ${ownerId}
+          AND capability_epoch = ${epoch - 1} AND entries_revision = ${own.entries_revision})
+        AND EXISTS (SELECT 1 FROM directories WHERE node_id = ${parentId} AND owner_id = ${ownerId}
+          AND entries_revision = ${above.entries_revision} AND capability_epoch = ${above.capability_epoch})`),
+      listingUpdate(auth, ownerId, parentId, above.entries_revision, parentHead, above.listing_version,
+        above.listing_version, live),
+      sql`UPDATE directory_entries SET key_envelope = ${wrapper} WHERE child_node_id = ${directoryId}
+        AND parent_node_id = ${parentId} AND owner_id = ${ownerId} AND ${live}`,
+      sql`UPDATE directories SET capability_epoch = ${epoch} WHERE node_id = ${directoryId} AND owner_id = ${ownerId}
+        AND capability_epoch = ${epoch - 1} AND ${live}`,
+      sql`UPDATE directory_entries SET name_ciphertext = ${field("name")}, order_ciphertext = ${field("order")},
+          key_envelope = ${field("keyEnvelope")}
+        WHERE parent_node_id = ${directoryId} AND owner_id = ${ownerId} AND ${live}`,
+      listingUpdate(auth, ownerId, directoryId, own.entries_revision, ownHead, own.listing_version,
+        own.listing_version, live),
+      ...grantSealStatements(auth, directoryId, epoch, seals, live),
+      advanceCursor(job, node.step_key, now, live),
+      spent(auth, invocationId), proofTime(auth, invocationId), finish(auth, invocationId),
+    ]);
+    return witness?.meta.changes === 1 ? json({ status: "advanced" }) : changed();
+  } catch { return invalid(); }
+}
+
+/**
+ * One receiving File of a subtree rekey: its parent was already rotated, so the File gets a
+ * fresh receiving pair wrapped under the new parent capability, a same-revision
+ * `receiving-rotation` head and a new thread epoch, exactly as a move rotates it.
+ */
+export async function rekeyReceivingFile(env: Env, auth: AuthorizedDevice, targetId: string,
+  value: unknown): Promise<Response> {
+  const input = record(value);
+  if (!input || !exact(input, [...RECEIVING_ROTATION_FIELDS, "barrierEpoch", "stepKey", "fileId",
+    "expectedRevision", "keyEnvelope", "listingHead"]) || !Number.isSafeInteger(input.barrierEpoch) ||
+      typeof input.stepKey !== "string" || !isV7(input.fileId) || !Number.isSafeInteger(input.expectedRevision)) {
+    return invalid();
+  }
+  const job = await currentJob(env, auth, targetId);
+  if (!job || job.kind !== "directory" || job.mode !== "rekey") return absent();
+  if (job.barrier_epoch !== input.barrierEpoch) return changed();
+  const node = await nextRekeyNode(env, job);
+  if (!node || node.kind !== "file" || node.id !== input.fileId || node.step_key !== input.stepKey) return changed();
+  const ownerId = job.owner_id, fileId = node.id, parentId = node.parent_node_id;
+  const parent = await directoryRow(env, ownerId, parentId);
+  const entry = await createDb(env.DB).get<{ receiving_key_id: string; receiving_epoch: number; wrap_revision: number }>(sql`
+    SELECT receiving_key_id, receiving_epoch, wrap_revision FROM directory_entries
+    WHERE child_node_id = ${fileId} AND parent_node_id = ${parentId} AND owner_id = ${ownerId}
+      AND encoding = 'receiving-file'`);
+  if (!parent || !entry) return absent();
+  if (parent.entries_revision !== input.expectedRevision || parent.listing_version !== 2) return changed();
+  let rotation: ReturnType<typeof parseReceivingRotation>, head: Awaited<ReturnType<typeof signedListing>>;
+  try {
+    rotation = parseReceivingRotation(input, ownerId, fileId, entry);
+    head = await signedListing(input.listingHead, auth, { directoryId: parentId,
+      expectedRevision: parent.entries_revision, ownerId, version: 2, epoch: parent.capability_epoch });
+    rotation = await verifyReceivingRotation(env, auth, ownerId, fileId, entry, rotation);
+  } catch (error) {
+    return error instanceof ReceivingRotationError && error.code === "changed" ? changed() : invalid();
+  }
+  const now = Date.now(), invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
+  try {
+    const [witness] = await atomicSqlBatch(env.DB, [
+      begin(auth, invocationId, sql`${jobGuard(job)} AND ${receivingRotationGuard(ownerId, fileId, entry, rotation)}
+        AND EXISTS (SELECT 1 FROM directories WHERE node_id = ${parentId} AND owner_id = ${ownerId}
+          AND entries_revision = ${parent.entries_revision} AND capability_epoch = ${parent.capability_epoch})`),
+      listingUpdate(auth, ownerId, parentId, parent.entries_revision, head, 2, 2, live),
+      sql`UPDATE directory_entries SET key_envelope = ${rotation.keyEnvelope},
+          receiving_key_id = ${rotation.receivingKeyId}, receiving_epoch = ${rotation.receivingEpoch},
+          wrap_revision = ${rotation.wrapRevision}
+        WHERE child_node_id = ${fileId} AND parent_node_id = ${parentId} AND owner_id = ${ownerId}
+          AND receiving_key_id = ${entry.receiving_key_id} AND ${live}`,
+      ...await receivingRotationStatements(auth, ownerId, fileId, rotation, now, live),
+      advanceCursor(job, node.step_key, now, live),
+      spent(auth, invocationId), proofTime(auth, invocationId), finish(auth, invocationId),
+    ]);
+    return witness?.meta.changes === 1 ? json({ status: "advanced" }) : changed();
+  } catch { return invalid(); }
+}
+
+/** The last step: nothing is left after the cursor, so the job and then its barrier go. */
+export async function finishRekey(env: Env, auth: AuthorizedDevice, targetId: string, value: unknown): Promise<Response> {
+  const input = record(value);
+  if (!input || !exact(input, ["barrierEpoch"]) || !Number.isSafeInteger(input.barrierEpoch)) return invalid();
+  const job = await currentJob(env, auth, targetId);
+  if (!job || job.kind !== "directory" || job.mode !== "rekey") return absent();
+  if (job.barrier_epoch !== input.barrierEpoch || await nextRekeyNode(env, job)) return changed();
+  const invocationId = crypto.randomUUID(), live = marker(auth, invocationId);
+  try {
+    const [witness] = await atomicSqlBatch(env.DB, [
+      begin(auth, invocationId, jobGuard(job)),
+      ...finishJob(job, live),
+      spent(auth, invocationId), proofTime(auth, invocationId), finish(auth, invocationId),
+    ]);
+    return witness?.meta.changes === 1 ? json({ status: "complete" }) : changed();
   } catch { return invalid(); }
 }
 

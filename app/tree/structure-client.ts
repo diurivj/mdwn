@@ -61,7 +61,7 @@ function sealedEntries(entries: readonly SealedEntry[], version: ListingVersion)
         receivingEpoch: entry.receivingEpoch, wrapRevision: entry.wrapRevision } : {}) } : {}) }));
 }
 
-function signListing(vaultId: string, signer: StructureSigner, state: DirectoryState,
+export function signListing(vaultId: string, signer: StructureSigner, state: DirectoryState,
   entries: readonly SealedEntry[], version: ListingVersion = state.listing.listingVersion ?? 1): Promise<ListingHead> {
   return createListingHead(state.key, signer.assertionKey, { vaultId, directoryId: state.listing.directoryId,
     epoch: state.listing.capabilityEpoch, deviceId: signer.deviceId, revision: state.listing.entriesRevision + 1,
@@ -110,7 +110,7 @@ async function sha256(value: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
  * Opens the current File key through the SOURCE capability and re-targets it to a fresh
  * receiving pair; the File's Private thread (if any) moves to a new epoch for that pair.
  */
-async function rotateReceivingPair(vaultId: string, signer: StructureSigner, entry: TreeEntry,
+export async function rotateReceivingPair(vaultId: string, signer: StructureSigner, entry: TreeEntry,
   source: DirectoryState, destination: DirectoryState, file: FileRotationSource, threadSource: ThreadKeySource) {
   if (entry.encoding !== "receiving-file" || !entry.receivingKeyId || !entry.receivingEpoch || !entry.wrapRevision) {
     throw new Error("invalid File entry");
