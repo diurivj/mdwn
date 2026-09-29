@@ -28,7 +28,7 @@ Session 3 baseline (at `ca11599`): typecheck clean, 105 node + 244 Worker tests,
 | 16 | All boxes ticked; Comment follow-ups done in `5032a66`. |
 | 17 | All boxes ticked with evidence (session 3); needs only the final review. Handle *claiming* has no ticket. |
 | 18 | All boxes ticked with evidence (session 3); needs only the final review. |
-| 19 | ~15%: rotation executor not started; capability-epoch decision made (thread the real epoch, below). |
+| 19 | All boxes ticked with evidence (session 3); needs only the final review. |
 | 20 | ~20%: fulfillment not started beyond direct-File current-key retry; must include waiting direct thread devices. |
 | 21 | All boxes ticked with evidence; needs only the final review. |
 
@@ -77,6 +77,12 @@ Design and wire contract live in `docs/sharing-server.md` § Private Comment thr
 
 - UI copy must say rotation cannot recall already-downloaded content.
 
+## For ticket 20 (next)
+
+- Re-sealing a Directory capability for a device needs a **re-signed offer** listing that device (see `prepareGrantSeals`/`parseGrantSeals`/`grantSealStatements` in `app/sharing/rotation-{client,server}.ts`); a device without a current `grant_label_deliveries` row also needs its Shared-as label re-sealed. The Owner can open the label from `grant_labels.owner_copy` with the Vault root.
+- Direct File devices need a same-revision recipient-set update (`prepareFileTargetRotation` does this for the live set) plus Private thread envelopes (`provisionThreadDevices`).
+- `RotationStatus` already runs in the Owner's browser on owned Files pages; a fulfillment loop can share its runner pattern.
+
 ## Then
 
-19 (epoch refactor first) → 20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.
+20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.

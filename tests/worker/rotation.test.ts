@@ -284,8 +284,9 @@ describe("Directory subtree rekey", () => {
 
     expect((await call(owner, `/api/private/sharing/grants/${revoked.grantId}`, "DELETE")).status).toBe(200);
     expect(await job(owner.accountId, a.nodeId)).toMatchObject({ mode: "rekey", cursor: null });
-    // Removed at once, before any key changes.
+    // Removed at once, before any key changes; writes beneath the folder wait for the rekey.
     expect((await call(removed, `/api/private/tree/directories/${a.nodeId}`, "POST")).status).toBe(404);
+    await expect(legacyFile(owner, owner.accountId, await inA(), "blocked.md")).rejects.toThrow("legacy File 409");
     const steps = await runSteps(owner, a.nodeId);
     expect(steps[0]).toBe(`directory:${a.nodeId}`);
     expect(steps.slice(1, 3).sort()).toEqual([`directory:${b.nodeId}`, `receiving:${one}`].sort());
@@ -300,6 +301,7 @@ describe("Directory subtree rekey", () => {
     expect(newA.key).not.toEqual(a.key);
     expect(newB.key).not.toEqual(b.key);
     expect(newA.listing.entries.map((entry) => entry.name).sort()).toEqual(["B", "old.md", "one.md"]);
+    await legacyFile(owner, owner.accountId, newA, "after.md");
     expect(await markdown(owner, one, newA.key)).toBe("# one");
     expect(await markdown(owner, two, newB.key)).toBe("# two");
     expect(await legacyMarkdown(owner, old, newA.key)).toBe("# old");
