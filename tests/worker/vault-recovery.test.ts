@@ -345,3 +345,38 @@ describe("Vault recovery enrollment", () => {
       .bind(f.accountId).first<{ n: number }>())?.n).toBe(1);
   });
 });
+
+describe("ticket 20 needs recorded by Vault recovery", () => {
+  it("records a need for the replacement device at the final epoch, not the tombstoned one", async () => {
+    const f = await fixture();
+    const ownerId = uuidv7(), ownerRootId = uuidv7(), ownerDeviceId = uuidv7(), now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .bind(ownerId, uuidv7(), now, now),
+      env.DB.prepare("INSERT INTO account_encryption_identities (account_id, root_directory_id, registry_epoch) VALUES (?, ?, 1)")
+        .bind(ownerId, ownerRootId),
+      env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key,
+        state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, X'02', X'02', 'active', 'signup', 1, ?)`)
+        .bind(ownerDeviceId, ownerId, now),
+    ]);
+    const grantId = uuidv7();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_node_id, target_kind, permission,
+        generation, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 'read_only', 1, ?, ?)`)
+        .bind(grantId, ownerId, f.accountId, ownerRootId, now, now),
+      env.DB.prepare(`INSERT INTO grant_labels (grant_id, label_id, owner_copy, offer_bytes, offer_digest,
+        offer_signature, signer_device_id) VALUES (?, ?, X'01', X'01', zeroblob(32), zeroblob(64), ?)`)
+        .bind(grantId, uuidv7(), ownerDeviceId),
+    ]);
+    const start = await startRecovery(f);
+    const prepared = await prepare(f, start);
+    const { secret } = await challenge(f, start, prepared);
+    expect((await commit(f, start, prepared, secret)).status).toBe(200);
+    const epoch = (await env.DB.prepare("SELECT registry_epoch FROM account_encryption_identities WHERE account_id = ?")
+      .bind(f.accountId).first<{ registry_epoch: number }>())!.registry_epoch;
+    // Recovery advanced the epoch twice; the reconcile ran last and stamped the final value.
+    expect(epoch).toBe(3);
+    expect((await env.DB.prepare("SELECT device_id, registry_epoch FROM provisioning_needs WHERE grant_id = ?")
+      .bind(grantId).all()).results).toEqual([{ device_id: prepared.deviceId, registry_epoch: epoch }]);
+  });
+});
