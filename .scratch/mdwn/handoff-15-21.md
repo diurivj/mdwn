@@ -26,8 +26,8 @@ Session 3 baseline (at `ca11599`): typecheck clean, 105 node + 244 Worker tests,
 |---|---|
 | 15 | All boxes ticked; needs only the final review. |
 | 16 | All boxes ticked; Comment follow-ups done in `5032a66`. |
-| 17 | ~70%: Comment/Import permission-matrix rows and box ticking remain. |
-| 18 | ~65%: thread capability envelopes exist (21); box ticking remains. |
+| 17 | All boxes ticked with evidence (session 3); needs only the final review. Handle *claiming* has no ticket. |
+| 18 | All boxes ticked with evidence (session 3); needs only the final review. |
 | 19 | ~15%: rotation executor not started; capability-epoch decision made (thread the real epoch, below). |
 | 20 | ~20%: fulfillment not started beyond direct-File current-key retry; must include waiting direct thread devices. |
 | 21 | All boxes ticked with evidence; needs only the final review. |
@@ -73,4 +73,4 @@ Design and wire contract live in `docs/sharing-server.md` § Private Comment thr
 
 ## Then
 
-17/18 matrix rows and ticks → 19 (epoch refactor first) → 20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.
+19 (epoch refactor first) → 20 fulfillment (Owner browser processes `provisioning_needs`, including thread device envelopes; cancel on revoke) → full `npm run test:all` → code review against a pinned diff → RR8 gate (`.agents/skills/rr8-post-review/SKILL.md`) → report Standards/Spec/RR8 separately → ask the user before pushing or opening the PR.

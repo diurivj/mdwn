@@ -454,6 +454,11 @@ describe("Private threads under structural changes", () => {
     expect(moved.status, await moved.clone().text()).toBe(200);
     await budget(moved);
     expect(await threadOf(fileId)).toEqual({ id: thread.threadId, current_epoch: 2 });
+    // The direct File Grant follows File identity through the Owner's move: still authorized (this fixture
+    // Grant never received the File key, so 202 rather than 404) and still told nothing about the new parent.
+    const direct = await call(reader, `/api/private/sharing/direct-files/${fileId}`, "POST");
+    expect(direct.status).toBe(202);
+    expect(await direct.text()).toBe(JSON.stringify({ error: "provisioning_required" }));
 
     const next = await receiving(owner, owner.accountId, fileId, b.key);
     expect(next.receivingEpoch).toBe(target.receivingEpoch + 1);

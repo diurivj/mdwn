@@ -240,6 +240,18 @@ async function inviteFile(owner: Account, recipient: Account,
     labelId, budget: sent.headers.get("X-Mdwn-Sharing-Budget") };
 }
 
+/** Revocation hard-deletes the Grant and every envelope, label, retained key and need it carried. */
+const noResidue = { grants: 0, envelopes: 0, retained: 0, labels: 0, deliveries: 0, needs: 0 };
+async function grantResidue(grantId: string) {
+  return await env.DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM grants WHERE id = ?1) AS grants,
+    (SELECT COUNT(*) FROM grant_device_envelopes WHERE grant_id = ?1) AS envelopes,
+    (SELECT COUNT(*) FROM grant_retained_material WHERE grant_id = ?1) AS retained,
+    (SELECT COUNT(*) FROM grant_labels WHERE grant_id = ?1) AS labels,
+    (SELECT COUNT(*) FROM grant_label_deliveries WHERE grant_id = ?1) AS deliveries,
+    (SELECT COUNT(*) FROM provisioning_needs WHERE grant_id = ?1) AS needs`).bind(grantId).first();
+}
+
 describe("private sharing lifecycle through the built Worker", () => {
   it("bootstraps a retained File key with independently verifiable Owner-signed sender provenance", async () => {
     const owner = await account(), recipient = await account(), file = await createV2File(owner);
@@ -720,6 +732,9 @@ describe("private sharing lifecycle through the built Worker", () => {
     expect((await second.request(`/api/private/tree/directories/${owner.rootId}`, "POST")).status).toBe(404);
     const revoked = await owner.request(`/api/private/sharing/grants/${pending.grantId}`, "DELETE");
     expect(revoked.status, await revoked.clone().text()).toBe(200);
+    expect(await grantResidue(pending.grantId)).toEqual(noResidue);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM file_device_envelopes WHERE recipient_id = ?")
+      .bind(second.accountId).first()).toEqual({ count: 0 });
     expect((await second.request(`/api/private/sharing/direct-files/${file.fileId}`, "POST")).status).toBe(404);
     const job = await env.DB.prepare("SELECT state, barrier_epoch FROM sharing_rotation_jobs WHERE owner_id = ? AND target_node_id = ?")
       .bind(owner.accountId, file.fileId).first<{ state: string; barrier_epoch: number }>();
@@ -789,6 +804,7 @@ describe("private sharing lifecycle through the built Worker", () => {
     expect(signer?.listing_device_id).toBe(recipient.deviceId);
     const revoked = await owner.request(`/api/private/sharing/grants/${invitation.grantId}`, "DELETE");
     expect(revoked.status, await revoked.clone().text()).toBe(200);
+    expect(await grantResidue(invitation.grantId)).toEqual(noResidue);
     expect((await recipient.request(`/api/private/tree/directories/${directory.childId}`, "POST")).status).toBe(404);
     expect((await recipient.request("/api/private/sharing/roots", "POST")).status).toBe(200);
     await env.DB.prepare("UPDATE encryption_devices SET state = 'revoked', revocation_reason = 'test' WHERE id = ?")
