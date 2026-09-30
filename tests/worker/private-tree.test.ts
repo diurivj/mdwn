@@ -10,6 +10,7 @@ import { createTreeChild, NameConflictError, prepareTreeCreate, prepareTreeRenam
 import { RecoveryConfirmationPendingError } from "../../app/signup/recovery-gate";
 import { createListingHead, openListingHead, type SealedEntry, type StoredListingHead } from "../../app/tree/listing";
 import { seedNormalSession } from "./auth-fixtures";
+import { encodeTreeBytes } from "../../app/tree/wire";
 
 declare global {
   namespace Cloudflare { interface Env {
@@ -57,23 +58,27 @@ async function expectAgreedEdges(f: Fixture) {
 async function signedRequest(f: Fixture, path: string, method: "PUT" | "PATCH", value: object): Promise<object> {
   const create = /^\/api\/private\/tree\/directories\/([0-9a-f-]+)\/children$/.exec(path);
   const rename = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/name$/.exec(path);
-  if (!create && !rename) return value;
+  const save = /^\/api\/private\/tree\/files\/([0-9a-f-]+)$/.exec(path);
+  if (!create && !rename && !save || "listingHead" in value) return value;
   const parentId = create?.[1] ?? (await env.DB.prepare("SELECT parent_node_id FROM vault_nodes WHERE id = ?")
-    .bind(rename![1]).first<{ parent_node_id: string }>())?.parent_node_id;
+    .bind((rename || save)![1]).first<{ parent_node_id: string }>())?.parent_node_id;
   if (!parentId || !f.keys.has(parentId)) return value;
   const listingResponse = await request(f, `/api/private/tree/directories/${parentId}`, "POST");
   if (!listingResponse.ok) return value;
   const listing = await listingResponse.json() as { entries: SealedEntry[] };
   const input = value as { nodeId?: string; nameCiphertext: string; orderCiphertext: string;
-    keyEnvelope?: string; kind?: "directory" | "file"; expectedRevision: number };
+    keyEnvelope?: string; kind?: "directory" | "file"; expectedRevision: number; expectedParentRevision?: number };
   const entries = create ? [...listing.entries, {
     nodeId: input.nodeId!, kind: input.kind!, nameCiphertext: input.nameCiphertext,
     orderCiphertext: input.orderCiphertext, keyEnvelope: input.keyEnvelope!,
-  }] : listing.entries.map((entry) => entry.nodeId === rename![1]
-    ? { ...entry, nameCiphertext: input.nameCiphertext, orderCiphertext: input.orderCiphertext } : entry);
+  }] : listing.entries.map((entry) => entry.nodeId === (rename || save)![1]
+    ? save ? { ...entry, keyEnvelope: input.keyEnvelope! }
+      : { ...entry, nameCiphertext: input.nameCiphertext, orderCiphertext: input.orderCiphertext } : entry);
+  const revision = (save ? input.expectedParentRevision! : input.expectedRevision) + 1;
+  if (!Number.isSafeInteger(revision) || revision < 2) return value;
   return { ...value, listingHead: await createListingHead(f.keys.get(parentId)!, f.assertion.privateKey, {
     vaultId: f.accountId, directoryId: parentId, deviceId: f.deviceId,
-    revision: input.expectedRevision + 1, entries,
+    revision, entries,
   }) };
 }
 
@@ -130,7 +135,254 @@ async function fileRequest(f: Fixture, name: string, nodeId = id(), expectedRevi
       ciphertext: encodeBytes(file.contentEnvelope) } }, file };
 }
 
+async function saveRequest(f: Fixture, fileId: string, markdown = "# saved", expectedRevision = 1,
+  expectedParentRevision = 2, keyEpoch = 2) {
+  const contentKeyId = id();
+  const file = await createFileRepresentation(f.rootKey, { markdown, metadata: new Uint8Array() },
+    { vaultId: f.accountId, fileId, keyId: contentKeyId, keyEpoch, revision: expectedRevision + 1 });
+  return { body: { expectedRevision, expectedParentRevision, keyEnvelope: encodeBytes(file.fileContentKeyEnvelope),
+    representation: { id: id(), contentKeyId, keyEpoch, revision: expectedRevision + 1,
+      ciphertext: encodeBytes(file.contentEnvelope) } }, file };
+}
+
 describe("private tree", () => {
+  it("validates the parent listing signature, digest and exact shape before changing File pointers", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "head.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const save = await saveRequest(f, created.body.nodeId);
+    const signed = await signedRequest(f, path, "PATCH", save.body) as typeof save.body & {
+      listingHead: { ciphertext: string; digest: string; signature: string };
+    };
+    const before = await (await request(f, path, "POST")).json();
+    const listingBefore = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json();
+    for (const listingHead of [
+      { ...signed.listingHead, unknown: true },
+      { ...signed.listingHead, digest: encodeBytes(new Uint8Array(32)) },
+      { ...signed.listingHead, signature: encodeBytes(new Uint8Array(64)) },
+      await createListingHead(f.rootKey, f.assertion.privateKey, {
+        vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId, revision: 4, entries: [],
+      }),
+    ]) {
+      expect((await request(f, path, "PATCH", { ...save.body, listingHead })).status).toBe(400);
+      expect(await (await request(f, path, "POST")).json()).toEqual(before);
+      expect(await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json()).toEqual(listingBefore);
+    }
+  });
+
+  it("rolls back all save storage when a fresh representation identity collides and rejects a spent proof", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "atomic.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const sibling = await fileRequest(f, "sibling.md", id(), 2);
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", sibling.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const save = await saveRequest(f, created.body.nodeId, "atomic replacement", 1, 3);
+    const fileBefore = await (await request(f, path, "POST")).json();
+    const listingBefore = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json();
+    expect((await request(f, path, "PATCH", { ...save.body,
+      representation: { ...save.body.representation, id: sibling.body.representation.id } })).status).toBe(400);
+    const url = `https://mdwn.test${path}`;
+    const body = JSON.stringify(await signedRequest(f, path, "PATCH", save.body));
+    const proof = await signDeviceProof(f.assertion.privateKey, {
+      sessionBinding: await sessionBindingDigest(f.session.id), deviceId: f.deviceId,
+      registryEpoch: 1, method: "PATCH", url, body,
+    });
+    // Supplemental storage invariant: spend this exact proof between authorization and CAS.
+    await env.DB.prepare("INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at) VALUES (?, ?, ?, ?)")
+      .bind(f.accountId, proof.proofId, f.session.id, proof.expiresAt).run();
+    expect((await SELF.fetch(url, { method: "PATCH", body, headers: { cookie: f.session.cookie,
+      origin: "https://mdwn.test", "content-type": "application/json",
+      "X-Mdwn-Device-Proof": JSON.stringify(proof) } })).status).toBe(403);
+    expect(await (await request(f, path, "POST")).json()).toEqual(fileBefore);
+    expect(await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json()).toEqual(listingBefore);
+    expect(await env.DB.prepare("SELECT count(*) AS count FROM file_representations WHERE owner_id = ?")
+      .bind(f.accountId).first()).toEqual({ count: 2 });
+    expect(await env.DB.prepare("SELECT count(*) AS count FROM device_proof_uses WHERE account_id = ?")
+      .bind(f.accountId).first()).toEqual({ count: 3 });
+    expect((await request(f, path, "PATCH", save.body)).status).toBe(200);
+  });
+
+  it("bounds the whole decoded save ciphertext and JSON body without leaving partial storage", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "limit.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const save = await saveRequest(f, created.body.nodeId);
+    const writer = await createSymmetricWriter(save.file.fileContentKey);
+    const empty = await writer.seal(new Uint8Array(), save.file.contentContext);
+    const bounded = await writer.seal(new Uint8Array(524288 - empty.length), save.file.contentContext);
+    expect(bounded.length).toBe(524288);
+    const oversized = new Uint8Array(524289);
+    oversized.set(bounded);
+    const before = await (await request(f, path, "POST")).json();
+    const oversizedCiphertext = btoa(Array.from(oversized, (byte) => String.fromCharCode(byte)).join(""))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    for (const ciphertext of [oversizedCiphertext, "A".repeat(1536 * 1024)]) {
+      expect((await request(f, path, "PATCH", { ...save.body,
+        representation: { ...save.body.representation, ciphertext } })).status).toBe(400);
+      expect(await (await request(f, path, "POST")).json()).toEqual(before);
+    }
+    expect((await request(f, path, "PATCH", { ...save.body,
+      representation: { ...save.body.representation, ciphertext: encodeTreeBytes(bounded) } })).status).toBe(200);
+    expect(await env.DB.prepare("SELECT ciphertext_size FROM file_representations WHERE file_node_id = ?")
+      .bind(created.body.nodeId).first()).toEqual({ ciphertext_size: 524288 });
+  });
+
+  it("requires same-origin, exact-body device proofs and current owned File authority for saves", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "authority.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const save = await saveRequest(f, created.body.nodeId);
+    const value = await signedRequest(f, path, "PATCH", save.body);
+    const body = JSON.stringify(value);
+    const url = `https://mdwn.test${path}`;
+    const proof = await signDeviceProof(f.assertion.privateKey, {
+      sessionBinding: await sessionBindingDigest(f.session.id), deviceId: f.deviceId,
+      registryEpoch: 1, method: "PATCH", url, body,
+    });
+    const headers = { cookie: f.session.cookie, origin: "https://mdwn.test", "content-type": "application/json",
+      "X-Mdwn-Device-Proof": JSON.stringify(proof) };
+    const before = await (await request(f, path, "POST")).json();
+    for (const init of [
+      { headers: { ...headers, origin: "https://foreign.test" }, body },
+      { headers: { ...headers, origin: "" }, body },
+      { headers: { ...headers, "sec-fetch-site": "cross-site" }, body },
+      { headers: { ...headers, "X-Mdwn-Device-Proof": "null" }, body },
+      { headers: { ...headers, "X-Mdwn-Device-Proof": "{" }, body },
+      { headers, body: `${body} ` },
+    ]) {
+      expect((await SELF.fetch(url, { method: "PATCH", ...init })).status).toBe(403);
+      expect(await (await request(f, path, "POST")).json()).toEqual(before);
+    }
+    const other = await fixture();
+    const inaccessible = await request(other, path, "PATCH", value);
+    const missing = await request(other, `/api/private/tree/files/${id()}`, "PATCH", value);
+    expect(inaccessible.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(await inaccessible.text()).toBe(await missing.text());
+    await env.DB.prepare("UPDATE sessions SET device_id = NULL WHERE id = ?").bind(f.session.id).run();
+    expect((await SELF.fetch(url, { method: "PATCH", headers, body })).status).toBe(403);
+    await env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(f.deviceId, f.session.id).run();
+    await env.DB.prepare("UPDATE encryption_devices SET state = 'revoked' WHERE id = ?")
+      .bind(f.deviceId).run();
+    expect((await SELF.fetch(url, { method: "PATCH", headers, body })).status).toBe(403);
+    expect(await env.DB.prepare("SELECT current_revision FROM files WHERE node_id = ?")
+      .bind(created.body.nodeId).first()).toEqual({ current_revision: 1 });
+    expect(await env.DB.prepare("SELECT entries_revision FROM directories WHERE node_id = ?")
+      .bind(f.rootId).first()).toEqual({ entries_revision: 2 });
+  });
+
+  it("rejects malformed save shapes, reused identities, wrong contexts and unsafe increments without mutation", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "validate.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const save = await saveRequest(f, created.body.nodeId);
+    const before = await (await request(f, path, "POST")).json();
+    const wrongContext = await saveRequest(f, id());
+    const invalid = [
+      { ...save.body, extra: true },
+      { ...save.body, representation: { ...save.body.representation, extra: true } },
+      { ...save.body, representation: { ...save.body.representation, id: created.body.representation.id } },
+      { ...save.body, representation: { ...save.body.representation, contentKeyId: created.body.representation.contentKeyId } },
+      { ...save.body, representation: { ...save.body.representation, id: crypto.randomUUID() } },
+      { ...save.body, representation: { ...save.body.representation, revision: 3 } },
+      { ...save.body, representation: { ...save.body.representation, keyEpoch: 1 } },
+      { ...save.body, expectedRevision: 0 },
+      { ...save.body, expectedRevision: 1.5 },
+      { ...save.body, expectedRevision: Number.MAX_SAFE_INTEGER },
+      { ...save.body, expectedParentRevision: 0 },
+      { ...save.body, expectedParentRevision: Number.MAX_SAFE_INTEGER },
+      { ...save.body, keyEnvelope: "not+base64" },
+      { ...save.body, keyEnvelope: wrongContext.body.keyEnvelope },
+      { ...save.body, representation: { ...save.body.representation, ciphertext: wrongContext.body.representation.ciphertext } },
+    ];
+    for (const body of invalid) {
+      const response = await request(f, path, "PATCH", body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await (await request(f, path, "POST")).json()).toEqual(before);
+    }
+    expect(await env.DB.prepare("SELECT count(*) AS count FROM file_representations WHERE file_node_id = ?")
+      .bind(created.body.nodeId).first()).toEqual({ count: 1 });
+    expect(await env.DB.prepare("SELECT entries_revision FROM directories WHERE node_id = ?")
+      .bind(f.rootId).first()).toEqual({ entries_revision: 2 });
+  });
+
+  it("lets exactly one simultaneous save win without retaining the losing ciphertext", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "race.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const first = await saveRequest(f, created.body.nodeId, "one");
+    const second = await saveRequest(f, created.body.nodeId, "two");
+    const responses = await Promise.all([request(f, path, "PATCH", first.body), request(f, path, "PATCH", second.body)]);
+    expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(await responses.find((r) => r.status === 409)!.json()).toEqual({ error: "file_changed" });
+    const winner = responses[0]!.status === 200 ? first : second;
+    expect(await (await request(f, path, "POST")).json()).toMatchObject({ revision: 2,
+      representationId: winner.body.representation.id, keyEnvelope: winner.body.keyEnvelope });
+    expect(await env.DB.prepare("SELECT id FROM file_representations WHERE file_node_id = ?")
+      .bind(created.body.nodeId).all().then((r) => r.results)).toEqual([{ id: winner.body.representation.id }]);
+    expect(await env.DB.prepare("SELECT entries_revision FROM directories WHERE node_id = ?")
+      .bind(f.rootId).first()).toEqual({ entries_revision: 3 });
+  });
+
+  it("distinguishes stale File drafts from parent changes and retries only the namespace", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "edit.md");
+    const root = `/api/private/tree/directories/${f.rootId}`;
+    expect((await request(f, `${root}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const save = await saveRequest(f, created.body.nodeId);
+    const before = await (await request(f, path, "POST")).json();
+    expect((await request(f, `${root}/children`, "PUT", await directoryRequest(f, "sibling", id(), 2))).status).toBe(201);
+    const staleParent = await request(f, path, "PATCH", save.body);
+    expect(staleParent.status).toBe(409);
+    expect(await staleParent.json()).toEqual({ error: "namespace_changed" });
+    expect(await (await request(f, path, "POST")).json()).toEqual(before);
+    expect((await request(f, path, "PATCH", { ...save.body, expectedParentRevision: 3 })).status).toBe(200);
+    const after = await (await request(f, path, "POST")).json();
+    const staleFile = await request(f, path, "PATCH", { ...save.body, expectedParentRevision: 4 });
+    expect(staleFile.status).toBe(409);
+    expect(await staleFile.json()).toEqual({ error: "file_changed" });
+    expect(await (await request(f, path, "POST")).json()).toEqual(after);
+    expect(await env.DB.prepare("SELECT count(*) AS count FROM file_representations WHERE file_node_id = ?")
+      .bind(created.body.nodeId).first()).toEqual({ count: 1 });
+  });
+  it("saves a fresh File key and reads the replacement through an authenticated parent listing", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "edit.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    const path = `/api/private/tree/files/${created.body.nodeId}`;
+    const save = await saveRequest(f, created.body.nodeId);
+    const response = await request(f, path, "PATCH", save.body);
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(await response.json()).toEqual({ revision: 2, entriesRevision: 3 });
+    const read = await (await request(f, path, "POST")).json() as {
+      revision: number; representationId: string; contentKeyId: string; keyEpoch: number;
+      keyEnvelope: string; ciphertext: string;
+    };
+    expect(read).toMatchObject({ revision: 2, representationId: save.body.representation.id,
+      contentKeyId: save.body.representation.contentKeyId, keyEpoch: 2 });
+    const key = await openSymmetric(decodeBytes(read.keyEnvelope), f.rootKey, { context: save.file.keyContext });
+    expect(key).not.toEqual(created.file.fileContentKey);
+    expect(decodeFileRepresentation(await openSymmetric(decodeBytes(read.ciphertext), key,
+      { context: save.file.contentContext })).markdown).toBe("# saved");
+    const listing = await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json() as {
+      entriesRevision: number; entries: SealedEntry[];
+      listingHead: Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string };
+    };
+    expect(listing.entriesRevision).toBe(3);
+    await expect(openListingHead(f.rootKey, { vaultId: f.accountId, directoryId: f.rootId, revision: 3,
+      entries: listing.entries, head: { ...listing.listingHead,
+        signerPublicKey: decodeBytes(listing.listingHead.signerPublicKey) } })).resolves.toBeUndefined();
+    expect(await env.DB.prepare("SELECT id FROM file_representations WHERE file_node_id = ?")
+      .bind(created.body.nodeId).all().then((r) => r.results)).toEqual([{ id: save.body.representation.id }]);
+    await expectAgreedEdges(f);
+  });
   it("keeps the signup recovery-confirmation gate ahead of any content-creating request", async () => {
     vi.stubGlobal("window", { localStorage: { getItem: () => "pending" } });
     try {

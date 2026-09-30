@@ -79,6 +79,17 @@ and `e2e/device-store.spec.ts` exercise real signup, device enrollment, local
 recovery confirmation before any signup request, and persisted key handles
 through the same Worker/browser/engine harness.
 
+`e2e/editor-workspace.spec.ts` exercises the real Files routes and encrypted
+save resource across all three engines, including UTF-8 source limits, whole
+edit rejection, composition and paste, debounce/shortcut flushing, navigation
+warnings, stale-revision overwrite confirmation, legacy reduction, and
+same-browser editing leases. `e2e/workspace-fixture.ts` seeds local D1 and a
+Session at the external storage/authentication boundary; its harness-only
+script creates real browser key handles and signs the real Directory listing
+protocol. No production test route or persisted draft store is introduced.
+The File save API invariants run through `SELF.fetch` in
+`tests/worker/private-tree.test.ts`, with supplemental real-D1 rollback checks.
+
 - `window.isSecureContext` and AES-GCM WebCrypto;
 - a non-extractable `CryptoKey` structured-cloned into IndexedDB and recovered
   after closing and relaunching a persistent browser profile; and

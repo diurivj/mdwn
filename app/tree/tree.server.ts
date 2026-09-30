@@ -79,8 +79,8 @@ type FileRow = {
   name_ciphertext: ArrayBuffer; order_ciphertext: ArrayBuffer; key_envelope: ArrayBuffer;
 };
 
-async function readFile(env: Env, auth: AuthorizedDevice, fileId: string): Promise<Response> {
-  const row = await createDb(env.DB).get<FileRow>(sql`
+async function currentFile(env: Env, auth: AuthorizedDevice, fileId: string) {
+  return createDb(env.DB).get<FileRow>(sql`
     SELECT n.parent_node_id, f.current_revision AS revision, r.id AS representation_id,
       r.ciphertext, r.key_epoch, r.content_key_id,
       e.name_ciphertext, e.order_ciphertext, e.key_envelope
@@ -89,6 +89,10 @@ async function readFile(env: Env, auth: AuthorizedDevice, fileId: string): Promi
       AND r.file_node_id = f.node_id AND r.owner_id = f.owner_id AND r.revision = f.current_revision
     JOIN directory_entries e ON e.child_node_id = n.id AND e.parent_node_id = n.parent_node_id
     WHERE n.id = ${fileId} AND n.owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}`);
+}
+
+async function readFile(env: Env, auth: AuthorizedDevice, fileId: string): Promise<Response> {
+  const row = await currentFile(env, auth, fileId);
   if (!row) return notFound();
   return Response.json({ fileId, parentId: row.parent_node_id, revision: row.revision,
     representationId: row.representation_id, contentKeyId: row.content_key_id, keyEpoch: row.key_epoch,
@@ -229,6 +233,74 @@ async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
   return committed ? Response.json({ entriesRevision: (input.expectedRevision as number) + 1 }, { headers }) : changed();
 }
 
+async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value: unknown): Promise<Response> {
+  const current = await currentFile(env, auth, fileId);
+  if (!current) return notFound();
+  const input = record(value);
+  const repr = record(input?.representation);
+  const incrementable = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0 && Number.isSafeInteger(value + 1);
+  if (!input || !repr || !exact(input, ["expectedRevision", "expectedParentRevision", "keyEnvelope", "representation", "listingHead"]) ||
+      !exact(repr, ["id", "contentKeyId", "keyEpoch", "revision", "ciphertext"]) ||
+      !incrementable(input.expectedRevision) || !incrementable(input.expectedParentRevision) ||
+      !isV7(repr.id) || !isV7(repr.contentKeyId) || !incrementable(current.key_epoch) ||
+      !Number.isSafeInteger(repr.keyEpoch) || !Number.isSafeInteger(repr.revision) ||
+      repr.revision !== input.expectedRevision + 1) return badRequest();
+  const expectedRevision = input.expectedRevision as number;
+  const expectedParentRevision = input.expectedParentRevision as number;
+  if (current.revision !== expectedRevision) return Response.json({ error: "file_changed" }, { status: 409, headers });
+  if (repr.id === current.representation_id || repr.contentKeyId === current.content_key_id ||
+      repr.keyEpoch !== current.key_epoch + 1) return badRequest();
+  let keyEnvelope: Uint8Array, ciphertext: Uint8Array;
+  let head: Awaited<ReturnType<typeof signedListing>>;
+  try {
+    const context = { vaultId: auth.accountId, objectId: fileId, keyId: repr.contentKeyId as string,
+      keyEpoch: repr.keyEpoch as number, revision: expectedRevision + 1 };
+    keyEnvelope = treeEnvelope(input.keyEnvelope, 1024, { ...context, purpose: "file-content-key" });
+    ciphertext = treeEnvelope(repr.ciphertext, MAX_REPRESENTATION_BYTES, { ...context, purpose: "file-content" });
+    head = await signedListing(input.listingHead, auth, current.parent_node_id, expectedParentRevision);
+  } catch { return badRequest(); }
+  const { accountId } = auth;
+  try {
+    const committed = await commitDirectoryMutation(env, auth, current.parent_node_id, expectedParentRevision, head,
+      sql`EXISTS (SELECT 1 FROM files f JOIN file_representations r ON r.id = f.current_representation_id
+        JOIN vault_nodes n ON n.id = f.node_id AND n.owner_id = f.owner_id
+        JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id
+          AND e.parent_node_id = n.parent_node_id
+        WHERE f.node_id = ${fileId} AND f.owner_id = ${accountId} AND f.current_revision = ${expectedRevision}
+          AND f.current_representation_id = ${current.representation_id} AND r.file_node_id = f.node_id
+          AND r.owner_id = f.owner_id AND r.revision = f.current_revision
+          AND r.content_key_id = ${current.content_key_id} AND r.key_epoch = ${current.key_epoch}
+          AND n.parent_node_id = ${current.parent_node_id})`,
+      (previous) => [
+        sql`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id,
+          key_epoch, ciphertext, ciphertext_size, created_at)
+          SELECT ${repr.id as string}, ${fileId}, ${accountId}, ${expectedRevision + 1},
+            ${repr.contentKeyId as string}, ${repr.keyEpoch as number}, ${ciphertext}, ${ciphertext.byteLength}, ${Date.now()}
+          WHERE ${previous}`,
+        sql`UPDATE directory_entries SET key_envelope = ${keyEnvelope}
+          WHERE child_node_id = ${fileId} AND owner_id = ${accountId}
+            AND parent_node_id = ${current.parent_node_id} AND ${previous}`,
+        sql`UPDATE files SET current_representation_id = ${repr.id as string}, current_revision = ${expectedRevision + 1}
+          WHERE node_id = ${fileId} AND owner_id = ${accountId}
+            AND current_revision = ${expectedRevision} AND current_representation_id = ${current.representation_id}
+            AND ${previous}`,
+        sql`DELETE FROM file_representations WHERE id = ${current.representation_id}
+          AND file_node_id = ${fileId} AND owner_id = ${accountId} AND ${previous}
+          AND NOT EXISTS (SELECT 1 FROM files WHERE current_representation_id = ${current.representation_id})`,
+      ]);
+    if (committed) return Response.json({ revision: expectedRevision + 1, entriesRevision: expectedParentRevision + 1 }, { headers });
+    // A competing File save can win after the initial read. Never invite a namespace retry for a stale draft.
+    if (auth.expiresAt <= Date.now() || await createDb(env.DB).get(sql`
+      SELECT 1 FROM device_proof_uses WHERE account_id = ${accountId} AND proof_id = ${auth.proofId}`)) return denied();
+    const latest = await currentFile(env, auth, fileId);
+    if (!latest) return denied();
+    return latest.revision !== expectedRevision || latest.representation_id !== current.representation_id ||
+      latest.content_key_id !== current.content_key_id || latest.key_epoch !== current.key_epoch
+      ? Response.json({ error: "file_changed" }, { status: 409, headers }) : changed();
+  } catch { return badRequest(); }
+}
+
 /** Resource-only tree API; every private read is a proof-guarded, bodyless POST. */
 export async function treeAction(request: Request, env: Env): Promise<Response> {
   const path = new URL(request.url).pathname;
@@ -239,12 +311,12 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   const pathToNode = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/ancestors$/.exec(path);
   if (!(directory || create || file || rename || pathToNode) ||
       !((directory || file || pathToNode) && request.method === "POST" || create && request.method === "PUT" ||
-        rename && request.method === "PATCH")) return notFound();
+        (rename || file) && request.method === "PATCH")) return notFound();
   const nodeId = (directory || create || file || rename || pathToNode)![1]!;
   if (!isV7(nodeId)) return notFound();
   let raw = "", value: unknown;
   try {
-    if (directory || file || pathToNode) {
+    if (request.method === "POST") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
       const parsed = await readAuthJsonText(request, 1536 * 1024);
@@ -257,7 +329,7 @@ export async function treeAction(request: Request, env: Env): Promise<Response> 
   const auth = await authorizePrivateRequest(request, env, proof, raw);
   if (!auth) return denied();
   if (directory) return listDirectory(env, auth, nodeId);
-  if (file) return readFile(env, auth, nodeId);
+  if (file) return request.method === "PATCH" ? saveFile(env, auth, nodeId, value) : readFile(env, auth, nodeId);
   if (pathToNode) return ancestors(env, auth, nodeId);
   if (create) return createChild(env, auth, nodeId, value);
   return renameChild(env, auth, nodeId, value);
