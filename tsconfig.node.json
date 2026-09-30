@@ -17,11 +17,18 @@
     "app/device/proof.ts",
     "app/device/private-client.ts",
     "app/signup/protocol.ts",
-    "app/namespace-v1/**/*.ts"
+    "app/namespace-v1/**/*.ts",
+    "app/opaque-id.ts",
+    "app/signup/recovery-gate.ts",
+    "app/tree/client.ts",
+    "app/tree/listing.ts",
+    "app/tree/wire.ts",
+    "app/tree/file-client.ts"
   ],
   "exclude": ["tests/worker/**/*"],
   "compilerOptions": {
     "composite": true,
+    "paths": { "~/*": ["./app/*"] },
     "strict": true,
     "types": ["node", "@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
     "lib": ["DOM", "DOM.Iterable", "ES2022"],

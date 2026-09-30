@@ -1,4 +1,5 @@
 import { createSymmetricWriter, openSymmetric } from "~/crypto/enc-v1";
+import { fileSourceBytes } from "~/crypto/file-source";
 import {
   createChildDirectoryCapability, createFileRepresentation, decodeFileRepresentation,
   openDeviceEnrollmentEnvelope, openVaultRecoveryEnvelope,
@@ -184,7 +185,10 @@ export async function loadFile(access: RootAccess, fileId: string, parentKey: Ui
     { context: { ...context, purpose: "file-content-key" } });
   const content = await openSymmetric(decodeTreeBytes(file.ciphertext, 524_288), key,
     { context: { ...context, purpose: "file-content" } });
-  return { parentId: file.parentId, revision: file.revision, markdown: decodeFileRepresentation(content).markdown };
+  const decoded = decodeFileRepresentation(content);
+  return { parentId: file.parentId, revision: file.revision, keyEpoch: file.keyEpoch,
+    contentKeyId: file.contentKeyId, representationId: file.representationId,
+    ...decoded, sourceBytes: fileSourceBytes(decoded.markdown) };
 }
 
 function listingCheckpointKey(vaultId: string, directoryId: string): string {
@@ -192,7 +196,7 @@ function listingCheckpointKey(vaultId: string, directoryId: string): string {
 }
 
 /** Browser-local high-water mark detects rolled-back/same-revision heads across navigations. */
-function rememberListing(vaultId: string, directoryId: string, revision: number, digest: string): void {
+export function rememberListing(vaultId: string, directoryId: string, revision: number, digest: string): void {
   if (typeof window === "undefined") return;
   const key = listingCheckpointKey(vaultId, directoryId);
   const previous = localStorage.getItem(key);
@@ -205,7 +209,7 @@ function rememberListing(vaultId: string, directoryId: string, revision: number,
   localStorage.setItem(key, JSON.stringify([revision, digest]));
 }
 
-async function signListingChange(access: RootAccess, listing: DirectoryListing, parentKey: Uint8Array,
+export async function signListingChange(access: RootAccess, listing: DirectoryListing, parentKey: Uint8Array,
   updated: SealedEntry[]): Promise<ListingHead> {
   if (!listing.directoryId) throw new Error("invalid directory listing");
   const device = await getDevice(access.vaultId);
