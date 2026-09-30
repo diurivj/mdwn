@@ -17,7 +17,9 @@ export function DirectFilePage({ fileId, initial }: { fileId: string; initial: F
     initial.status === "ready" && initial.snapshot.scope === "direct-file" ? initial.snapshot : null);
   const flush = useRef<(() => Promise<boolean>) | null>(null);
   const status = initial.status;
+  const appliedInitial = useRef(initial);
   useEffect(() => {
+    appliedInitial.current = initial;
     if (initial.status === "ready" && initial.snapshot.scope === "direct-file") setSnapshot(initial.snapshot);
     else if (initial.status === "not-found" || initial.status === "provisioning") setSnapshot(null);
   }, [initial]);
@@ -55,7 +57,7 @@ export function DirectFilePage({ fileId, initial }: { fileId: string; initial: F
   if (status === "not-found") return <main className="p-8"><h1>Not found</h1><p>This File is unavailable.</p></main>;
   if (!snapshot || snapshot.file.fileId !== fileId) return <main className="p-8"><h1>Files unavailable</h1>
     <p>Check this device’s access or try again.</p></main>;
-  const verified = status === "ready" && revalidator.state === "idle";
+  const verified = status === "ready" && revalidator.state === "idle" && appliedInitial.current === initial;
   return <main className="mx-auto max-w-screen-xl p-4 md:p-8">
     <nav aria-label="Breadcrumbs"><Link to={`/f/${fileId}`}>{snapshot.name}</Link></nav>
     <header className="mt-4"><h1 className="text-2xl font-semibold">{snapshot.name}</h1><p className="text-sm text-stone-500">Shared as</p></header>

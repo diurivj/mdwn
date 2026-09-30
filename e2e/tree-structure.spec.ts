@@ -47,6 +47,7 @@ test("moves, reorders and hard-deletes Files and folders through the built Worke
     // Move the open File into Archive: content and File identity are unchanged.
     await open(page, new URL(`/f/${fileId}`, baseURL).href);
     await expect(source).toHaveValue("# carried along");
+    await source.evaluate((area) => { area.dataset.mountedEditor = "before-move"; });
     await page.getByRole("button", { name: "Move to…" }).click();
     const move = page.getByRole("dialog", { name: "Move" });
     await move.getByRole("combobox", { name: "Destination folder" }).selectOption({ label: "Files / Archive" });
@@ -54,8 +55,14 @@ test("moves, reorders and hard-deletes Files and folders through the built Worke
     await expect(page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Archive" }))
       .toHaveAttribute("href", `/d/${archive}`);
     await expect(page.getByRole("heading", { name: "Moving.md" })).toBeVisible();
+    await expect(source).toBeEditable();
+    await expect(source).toHaveAttribute("data-mounted-editor", "before-move");
+    await source.fill("# edited after move without reloading");
+    await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Saved", { timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Confirm overwrite" })).toHaveCount(0);
     await page.reload();
-    await expect(page.getByRole("textbox", { name: "Markdown source" })).toHaveValue("# carried along");
+    await expect(page.getByRole("textbox", { name: "Markdown source" }))
+      .toHaveValue("# edited after move without reloading");
 
     // Reorder root siblings: Beta moves above Archive.
     await open(page, new URL(`/d/${rootId}`, baseURL).href);

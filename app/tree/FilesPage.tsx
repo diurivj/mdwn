@@ -23,6 +23,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const revalidator = useRevalidator();
   const navigation = useNavigation();
   const [snapshot, setSnapshot] = useState<FilesSnapshot | null>(initial.snapshot);
+  const appliedInitial = useRef(initial);
   const [status, setStatus] = useState<RootFilesPageData["status"]>(initial.status);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [drawer, setDrawer] = useState(false);
@@ -34,10 +35,13 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const busy = submitting || revalidator.state !== "idle" || navigation.state !== "idle";
   // A failed same-route refresh has no new verified snapshot. Keep the last one for
   // this identity (and its mounted, tab-local editor), but never use it as write authority.
-  const authorityVerified = status === "ready" && initial.status === "ready" && revalidator.state === "idle";
+  const authorityVerified = status === "ready" && initial.status === "ready" && revalidator.state === "idle" &&
+    appliedInitial.current === initial;
   const recoveryPending = isSignupRecoveryConfirmationPending();
 
   useEffect(() => {
+    // Keep writes frozen for the render between route completion and snapshot adoption.
+    appliedInitial.current = initial;
     setSnapshot((previous) => initial.snapshot ?? (initial.status !== "provisioning" &&
       previous?.crumbs.at(-1)?.id === nodeId ? previous : null));
     setStatus(initial.status);

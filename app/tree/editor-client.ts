@@ -1,13 +1,15 @@
 import { createFileRepresentation } from "~/crypto/vault";
 import { createFileReceivingKey, createFileSave } from "~/crypto/file-receiving";
 import { openSymmetric, sealToRecipient } from "~/crypto/enc-v1";
+import { equal } from "~/crypto/enc-v1/format";
 import { privateRequest } from "~/device/private-client";
 import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { authenticateFileHead, loadDirectFile, loadDirectory, loadFile,
   type DirectoryListing, type FileHeadWire, type LoadedDirectFile, type LoadedFile, type RootAccess } from "./client";
 import { createListingHead } from "./listing";
-import { parseFileHeadBytes, signFileHead, type DirectRecipientDescriptor, type FileHeadStatement } from "./file-head";
+import { assertFileHeadCheckpointAdvance, parseFileHeadBytes, signFileHead,
+  type DirectRecipientDescriptor, type FileHeadStatement } from "./file-head";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
 
 export const FILE_SOURCE_LIMIT = 262_144;
@@ -22,6 +24,56 @@ export class FileChangedError extends Error {
 }
 export class FileSaveUncertainError extends Error {
   constructor() { super("file_save_uncertain"); }
+}
+
+/** One verified browser snapshot: never pair a retained File with a newer parent's key. */
+export type EditorFileSnapshot = { direct: true; actorAccountId: string; fileId: string; file: LoadedDirectFile } |
+  { direct: false; access: RootAccess; fileId: string; file: LoadedFile;
+    listing: DirectoryListing; parentKey: Uint8Array };
+
+function snapshotHead(snapshot: EditorFileSnapshot) {
+  return snapshot.direct ? snapshot.file.head : snapshot.file.v2?.head;
+}
+
+/** Inputs come from authenticated browser reads. Check against the mounted editor too:
+ * its own save may have advanced beyond an overlapping clientLoader's snapshot.
+ * Same-revision key/recipient transitions are not competing Markdown revisions.
+ */
+export function classifyEditorFileUpdate(before: EditorFileSnapshot, after: EditorFileSnapshot):
+  "same-state" | "same-content" | "content-changed" | "stale" {
+  const owner = (snapshot: EditorFileSnapshot) => snapshot.direct ? snapshot.file.ownerId : snapshot.access.vaultId;
+  const actor = (snapshot: EditorFileSnapshot) => snapshot.direct ? snapshot.actorAccountId :
+    snapshot.access.actorAccountId ?? snapshot.access.vaultId;
+  if (before.fileId !== after.fileId || before.direct !== after.direct || owner(before) !== owner(after) ||
+      actor(before) !== actor(after) || after.file.revision < before.file.revision) return "stale";
+  if (!after.direct) {
+    if (after.listing.directoryId !== after.file.parentId ||
+        !after.listing.entries.some((entry) => entry.nodeId === after.fileId && entry.kind === "file")) return "stale";
+    if (!before.direct && before.file.parentId === after.file.parentId &&
+        (after.listing.entriesRevision < before.listing.entriesRevision ||
+          after.listing.capabilityEpoch < before.listing.capabilityEpoch)) return "stale";
+  }
+  const prior = snapshotHead(before), next = snapshotHead(after);
+  if (prior && !next) return "stale"; // Never downgrade a verified v2 File to legacy.
+  if (prior && next) {
+    try { assertFileHeadCheckpointAdvance(prior, next); }
+    catch { return "stale"; } // Includes rollback and same-coordinate signed forks.
+  }
+  const content = (snapshot: EditorFileSnapshot) => snapshot.direct ? snapshot.file.head.statement : {
+    representation: { id: snapshot.file.representationId },
+    contentKey: { id: snapshot.file.contentKeyId, epoch: snapshot.file.keyEpoch },
+  };
+  const oldContent = content(before), newContent = content(after);
+  const sameContent = before.file.revision === after.file.revision &&
+    oldContent.representation.id === newContent.representation.id &&
+    oldContent.contentKey.id === newContent.contentKey.id && oldContent.contentKey.epoch === newContent.contentKey.epoch &&
+    before.file.markdown === after.file.markdown && equal(before.file.metadata, after.file.metadata);
+  if (!sameContent) return "content-changed";
+  const sameHead = prior && next ? equal(prior.digest, next.digest) : !prior && !next;
+  const sameParent = before.direct && after.direct || !before.direct && !after.direct &&
+    before.file.parentId === after.file.parentId && before.listing.entriesRevision === after.listing.entriesRevision &&
+    before.listing.capabilityEpoch === after.listing.capabilityEpoch && equal(before.parentKey, after.parentKey);
+  return sameHead && sameParent ? "same-state" : "same-content";
 }
 
 type WriteContext = { ownerId: string; fileId: string; currentHead: FileHeadWire;
@@ -53,8 +105,9 @@ async function recipientDescriptors(context: WriteContext, envelopes: readonly {
 }
 async function recipientKeys(recipients: WriteContext["recipients"]) {
   return Promise.all(recipients.map(async (r) => ({ deviceId: r.deviceId,
+    // HPKE serializes this already-public transport key; private keys remain non-extractable.
     publicKey: await crypto.subtle.importKey("raw", decodeTreeBytes(r.publicKey, 65),
-      { name: "ECDH", namedCurve: "P-256" }, false, []) })));
+      { name: "ECDH", namedCurve: "P-256" }, true, []) })));
 }
 
 /** Explicit one-time transition: current v1 bytes and the verified complete listing are CAS guards. */

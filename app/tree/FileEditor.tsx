@@ -3,19 +3,20 @@ import { useBlocker, useNavigation } from "react-router";
 
 import type { ThreadSubject } from "~/comments/client";
 import { CommentsPanel } from "~/comments/CommentsPanel";
+import { equal } from "~/crypto/enc-v1/format";
 
 import { loadDirectFile, loadDirectory, loadFile, type DirectoryListing, type LoadedDirectFile,
   type LoadedFile, type RootAccess } from "./client";
-import { commitDirectFileSave, commitFileSave, FileChangedError, FILE_LIMIT_FEEDBACK, FILE_SOURCE_LIMIT,
-  sourceBytes, withinFileLimit } from "./editor-client";
+import { classifyEditorFileUpdate, commitDirectFileSave, commitFileSave, FileChangedError,
+  FILE_LIMIT_FEEDBACK, FILE_SOURCE_LIMIT, sourceBytes, withinFileLimit, type EditorFileSnapshot } from "./editor-client";
 import { useFileLease } from "./edit-lease";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { decodeTreeBytes } from "./wire";
 
 type SaveStatus = "Unsaved" | "Saving" | "Saved" | "Couldn't save";
 type Operation = "save" | "overwrite" | "reload";
-type EditorState = { source: string; savedSource: string; file: LoadedFile | LoadedDirectFile;
-  listing: DirectoryListing | null; status: SaveStatus; conflict: boolean; rejected: boolean; busy: Operation | null };
+type EditorState = { source: string; savedSource: string; snapshot: EditorFileSnapshot;
+  status: SaveStatus; conflict: boolean; rejected: boolean; busy: Operation | null };
 
 type Pending = { kind: Operation; promise: Promise<boolean> };
 
@@ -34,33 +35,41 @@ type Props = Common & ({ direct: true; actorAccountId: string; file: LoadedDirec
 
 export function FileEditor(props: Props) {
   const { fileId, file, flushRef, editingFrozen, authorityVerified } = props;
-  const listing = props.direct ? null : props.listing;
   const writable = props.writable !== false;
-  function committed(next: LoadedFile | LoadedDirectFile, head: DirectoryListing | null) {
-    if (props.direct && "ownerId" in next) props.onCommitted(next);
-    else if (!props.direct && "parentId" in next && head) props.onCommitted(next, head);
+  const incoming = useMemo<EditorFileSnapshot>(() => props.direct
+    ? { direct: true, actorAccountId: props.actorAccountId, fileId, file: props.file }
+    : { direct: false, access: props.access, fileId, file: props.file,
+      listing: props.listing, parentKey: props.parentKey },
+  [fileId, file, props.direct, props.actorAccountId, props.access, props.listing, props.parentKey]);
+  const supplied = useRef({ snapshot: incoming, props });
+  supplied.current = { snapshot: incoming, props };
+  function committed(next: EditorFileSnapshot) {
+    const now = supplied.current;
+    // A late verification read must not replace a newer route snapshot or attach an old
+    // parent's File/listing to the new parent's key map in FilesPage.
+    if (classifyEditorFileUpdate(now.snapshot, next) === "stale") return;
+    if (now.props.direct && next.direct) now.props.onCommitted(next.file);
+    else if (!now.props.direct && !next.direct && now.props.file.parentId === next.file.parentId &&
+        equal(now.props.parentKey, next.parentKey)) now.props.onCommitted(next.file, next.listing);
   }
-  async function latest(): Promise<{ file: LoadedFile | LoadedDirectFile; listing: DirectoryListing | null }> {
-    if (props.direct) return { file: await loadDirectFile(props.actorAccountId, fileId), listing: null };
-    const parentId = current.current.file;
-    if (!("parentId" in parentId)) throw new Error("File unavailable");
-    const currentListing = await loadDirectory(props.access, parentId.parentId, props.parentKey);
-    const entry = currentListing.entries.find((item) => item.nodeId === fileId);
+  async function latest(): Promise<EditorFileSnapshot> {
+    const snapshot = supplied.current.snapshot;
+    if (snapshot.direct) return { ...snapshot,
+      file: await loadDirectFile(snapshot.actorAccountId, snapshot.fileId) };
+    const currentListing = await loadDirectory(snapshot.access, snapshot.file.parentId, snapshot.parentKey);
+    const entry = currentListing.entries.find((item) => item.nodeId === snapshot.fileId);
     if (!entry || entry.kind !== "file") throw new Error("File unavailable");
-    return { file: await loadFile(props.access, fileId, parentId.parentId, props.parentKey, entry),
-      listing: currentListing };
+    return { ...snapshot, file: await loadFile(snapshot.access, snapshot.fileId,
+      snapshot.file.parentId, snapshot.parentKey, entry), listing: currentListing };
   }
-  async function commit(draft: EditorState, source: string) {
-    if (props.direct) {
-      if (!("ownerId" in draft.file)) throw new Error("File unavailable");
-      return { file: await commitDirectFileSave(props.actorAccountId, fileId, draft.file, source), listing: null };
-    }
-    if (!("parentId" in draft.file) || !draft.listing) throw new Error("File unavailable");
-    return commitFileSave({ access: props.access, fileId, file: draft.file,
-      source, listing: draft.listing, parentKey: props.parentKey });
+  async function commit(snapshot: EditorFileSnapshot, source: string): Promise<EditorFileSnapshot> {
+    if (snapshot.direct) return { ...snapshot,
+      file: await commitDirectFileSave(snapshot.actorAccountId, snapshot.fileId, snapshot.file, source) };
+    return { ...snapshot, ...await commitFileSave({ access: snapshot.access, fileId: snapshot.fileId,
+      file: snapshot.file, source, listing: snapshot.listing, parentKey: snapshot.parentKey }) };
   }
   const [state, setState] = useState<EditorState>(() => ({ source: file.markdown,
-    savedSource: file.markdown, file, listing, busy: null,
+    savedSource: file.markdown, snapshot: incoming, busy: null,
     status: withinFileLimit(file.markdown) ? "Saved" : "Couldn't save", conflict: false, rejected: false }));
   const current = useRef(state);
   const [composition, setComposition] = useState<string | null>(null);
@@ -91,7 +100,7 @@ export function FileEditor(props: Props) {
     blocker.state === "proceeding" || !lease.owner || refreshingLease || state.busy === "reload";
 
   // The Private thread subject follows the verified receiving key; a legacy File has none yet.
-  const threadFile = state.file;
+  const threadFile = state.snapshot.file;
   const receivingKey = "ownerId" in threadFile ? threadFile.head.statement.receivingKey :
     threadFile.v2?.head.statement.receivingKey;
   const subject = useMemo<ThreadSubject | null>(() => {
@@ -118,38 +127,32 @@ export function FileEditor(props: Props) {
     setState(current.current);
   }
 
-  // A verified clientLoader may advance the parent listing independently of the File (e.g. same-tab rename).
-  // Never take a stale listing, and never replace an in-memory draft with a changed representation.
+  // Native clientLoader revalidation replaces the whole authenticated context, not
+  // Markdown drafts. Defer while an operation/IME owns the state, then reconcile again.
   useEffect(() => {
+    if (!authorityVerified || pending.current || composing.current) return;
     const old = current.current;
-    if (("parentId" in file) !== ("parentId" in old.file)) return;
-    if ("parentId" in file && ("parentId" in old.file &&
-        (file.parentId !== old.file.parentId || listing?.directoryId !== file.parentId))) return;
-    if (file.revision < old.file.revision) return;
-    const same = "parentId" in file && "parentId" in old.file ?
-      file.representationId === old.file.representationId && file.revision === old.file.revision :
-      "ownerId" in file && "ownerId" in old.file &&
-        file.signedHead.digest === old.file.signedHead.digest && file.revision === old.file.revision;
-    if (same) {
-      if (listing && old.listing && "parentId" in file) {
-        const oldEntry = old.listing.entries.find((entry) => entry.nodeId === fileId);
-        const entry = listing.entries.find((candidate) => candidate.nodeId === fileId);
-        if (entry?.kind === "file" && entry.keyEnvelope === oldEntry?.keyEnvelope &&
-            listing.entriesRevision > old.listing.entriesRevision) {
-          update((previous) => ({ ...previous, listing }));
-        }
-      }
-    } else if (!pending.current && !composing.current) {
-      if (old.source === old.savedSource && old.status === "Saved") {
-        update((previous) => ({ ...previous, source: file.markdown, savedSource: file.markdown,
-          file, listing, status: withinFileLimit(file.markdown) ? "Saved" : "Couldn't save",
-          conflict: false, rejected: false }));
-      } else if (!old.conflict) {
-        update((previous) => ({ ...previous, conflict: true, status: "Couldn't save" }));
-        setNotice("This File changed elsewhere. Your local draft was not overwritten.");
-      }
+    if (incoming === old.snapshot) return;
+    const change = classifyEditorFileUpdate(old.snapshot, incoming);
+    if (change === "stale") return;
+    if (change === "same-state" || change === "same-content") {
+      // A stale-head CAS may have settled while this verified non-content advance
+      // waited. Resolve that false conflict, but never clear one using unchanged props.
+      const resolvedConflict = old.conflict && change === "same-content";
+      update((previous) => ({ ...previous, snapshot: incoming, ...(resolvedConflict ? {
+        conflict: false, status: withinFileLimit(previous.source)
+          ? previous.source === previous.savedSource ? "Saved" : "Unsaved" : "Couldn't save",
+      } : {}) }));
+      if (resolvedConflict) setNotice("");
+    } else if (old.source === old.savedSource && old.status === "Saved") {
+      update((previous) => ({ ...previous, source: file.markdown, savedSource: file.markdown,
+        snapshot: incoming, status: withinFileLimit(file.markdown) ? "Saved" : "Couldn't save",
+        conflict: false, rejected: false }));
+    } else if (!old.conflict) {
+      update((previous) => ({ ...previous, conflict: true, status: "Couldn't save" }));
+      setNotice("This File changed elsewhere. Your local draft was not overwritten.");
     }
-  }, [fileId, file, listing]);
+  }, [incoming, authorityVerified, state.busy, compositionEpoch]);
 
   /** One exclusive operation covers encryption, the Worker mutation, and verification reads. */
   function exclusive(kind: Operation, action: () => Promise<boolean>): Promise<boolean> {
@@ -176,10 +179,9 @@ export function FileEditor(props: Props) {
         const freshFile = fresh.file;
         if (!alive.current || !lease.isOwner() || !currentAuthority.current) return false;
         update((old) => ({ ...old, source: freshFile.markdown, savedSource: freshFile.markdown,
-          file: freshFile, listing: fresh.listing,
-          status: withinFileLimit(freshFile.markdown) ? "Saved" : "Couldn't save",
+          snapshot: fresh, status: withinFileLimit(freshFile.markdown) ? "Saved" : "Couldn't save",
           conflict: false, rejected: false }));
-        committed(freshFile, fresh.listing);
+        committed(fresh);
         setNotice("");
         return true;
       } catch {
@@ -198,11 +200,10 @@ export function FileEditor(props: Props) {
       }
       if (draft.source === draft.savedSource && draft.status !== "Couldn't save") return true;
       try {
-        const saved = await commit(draft, draft.source);
+        const saved = await commit(draft.snapshot, draft.source);
         if (!alive.current || !lease.isOwner()) return false;
-        update((old) => ({ ...old, file: saved.file, listing: saved.listing,
-          savedSource: draft.source, status: "Saving" }));
-        committed(saved.file, saved.listing);
+        update((old) => ({ ...old, snapshot: saved, savedSource: draft.source, status: "Saving" }));
+        committed(saved);
         setNotice("");
       } catch (error) {
         if (alive.current) {
@@ -325,11 +326,10 @@ export function FileEditor(props: Props) {
       try {
         const fresh = await latest();
         if (!alive.current || !currentAuthority.current || !lease.isOwner()) return false;
-        const saved = await commit({ ...current.current, file: fresh.file, listing: fresh.listing }, source);
+        const saved = await commit(fresh, source);
         if (!alive.current || !lease.isOwner()) return false;
-        update((old) => ({ ...old, file: saved.file, listing: saved.listing, savedSource: source,
-          conflict: false, status: "Saving" }));
-        committed(saved.file, saved.listing);
+        update((old) => ({ ...old, snapshot: saved, savedSource: source, conflict: false, status: "Saving" }));
+        committed(saved);
         setNotice("");
         // Editing may have continued while the overwrite was in flight; flush that draft next.
         return true;
