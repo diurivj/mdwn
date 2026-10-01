@@ -1,0 +1,134 @@
+import { createCookie } from "react-router";
+import { createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/crypto/vault";
+import { test, expect, installWorkspaceScript, objectId } from "./workspace-fixture";
+import { TEST_SESSION_COOKIE_SECRET } from "./fixtures";
+import type { GrantKeyContext } from "../app/sharing/grant-keys";
+
+test.use({ initialSource: "# Shared secret\n\nOnly the target File." });
+
+for (const targetKind of ["file", "directory"] as const) for (const permission of ["read_write", "read_only"] as const) {
+test(`a ${permission} ${targetKind} recipient opens its scope, and a new device stays provisioning-only`, async ({
+  browser, page, workspace, workspaceScript, baseURL,
+}) => {
+  const recipientContext = await browser.newContext({ ignoreHTTPSErrors: true });
+  const recipient = await recipientContext.newPage();
+  const pendingContext = await browser.newContext({ ignoreHTTPSErrors: true });
+  const pendingDevice = await pendingContext.newPage();
+  const accountId = objectId(), rootId = objectId(), deviceId = objectId(), credentialId = objectId(), sessionId = objectId(), shareId = objectId();
+  const now = Date.now();
+  try {
+    await installWorkspaceScript(recipient, workspaceScript, baseURL!);
+    const publicKeys = await recipient.evaluate(async ({ accountId, deviceId }) => {
+      const device = await window.workspaceFixture.createDevice(accountId, deviceId);
+      await window.workspaceFixture.updateRegistryEpoch(accountId, 1);
+      return { transport: Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", device.transportKeyPair.publicKey))),
+        assertion: Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", device.assertionKeyPair.publicKey))) };
+    }, { accountId, deviceId });
+    const hierarchy = await createVaultKeyHierarchy({ accountId, rootDirectoryId: rootId });
+    const transport = await crypto.subtle.importKey("raw", Uint8Array.from(publicKeys.transport), { name: "ECDH", namedCurve: "P-256" }, true, []);
+    const enrollment = await sealDeviceEnrollmentEnvelope(hierarchy.vaultRootKey, transport, {
+      purpose: "device-enrollment", vaultId: accountId, objectId: deviceId, keyId: deviceId, keyEpoch: 1, revision: 1, recipientId: deviceId,
+    });
+    await workspace.db.batch([
+      workspace.db.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(accountId, shareId, now, now),
+      workspace.db.prepare("INSERT INTO passkeys (credential_id, account_id, public_key, counter, transports, device_type, backed_up, created_at, updated_at) VALUES (?, ?, X'01', 0, '[]', 'singleDevice', 0, ?, ?)").bind(credentialId, accountId, now, now),
+      workspace.db.prepare("INSERT INTO account_encryption_identities (account_id, root_directory_id, registry_epoch) VALUES (?, ?, 1)").bind(accountId, rootId),
+      workspace.db.prepare("INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key, state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, ?, ?, 'active', 'signup', 1, ?)").bind(deviceId, accountId, Uint8Array.from(publicKeys.transport), Uint8Array.from(publicKeys.assertion), now),
+      workspace.db.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'vault-recovery', ?, 'vault-root', ?, 1)").bind(accountId, rootId, hierarchy.rootDirectoryRecoveryEnvelope),
+      workspace.db.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'device-enrollment', ?, ?, ?, 1)").bind(accountId, deviceId, deviceId, enrollment),
+      workspace.db.prepare("INSERT INTO recovery_capsules (account_id, generation, recovery_salt, ciphertext, verification_public_key) VALUES (?, 1, zeroblob(32), X'01', X'01')").bind(accountId),
+      workspace.db.prepare("INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at) VALUES (?, X'01', 1, 1, ?, ?)").bind(accountId, now, now),
+      workspace.db.prepare("INSERT INTO sessions (id, account_id, purpose, authenticated_passkey_id, device_id, created_at, idle_expires_at, absolute_expires_at) VALUES (?, ?, 'normal', ?, ?, ?, ?, ?)").bind(sessionId, accountId, credentialId, deviceId, now, now + 3_600_000, now + 86_400_000),
+    ]);
+    const cookie = await createCookie("__Host-mdwn_session", { path: "/", secure: true, secrets: [TEST_SESSION_COOKIE_SECRET] }).serialize(sessionId);
+    await recipientContext.addCookies([{ name: "__Host-mdwn_session", value: cookie.split(";", 1)[0]!.slice("__Host-mdwn_session=".length),
+      url: new URL(baseURL!).origin, httpOnly: true, secure: true, sameSite: "Lax" }]);
+    await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
+    const grantId = await page.evaluate(async ({ fileId, shareId, targetKind, permission }) => {
+      const api = window.workspaceFixture, access = await api.openRoot();
+      const listing = await api.loadDirectory(access, access.rootId, access.rootKey);
+      const file = await api.loadFile(access, fileId, access.rootKey);
+      await api.convertFileCapability(access, fileId, file, access.rootKey, listing);
+      const converted = await api.loadFile(access, fileId, access.rootKey);
+      const invitation = await api.privateRequest("/api/private/shares", { method: "PUT", body: JSON.stringify({ targetId: targetKind === "file" ? fileId : access.rootId,
+        recipient: { shareId }, permission }) });
+      if (!invitation.ok) throw new Error("Invitation failed");
+      const { shareId: relationshipId } = await invitation.json() as { shareId: string };
+      const targetsResponse = await api.privateRequest(`/api/private/shares/${relationshipId}/keys`, { method: "POST" });
+      if (!targetsResponse.ok) throw new Error("Delivery targets failed");
+      const targets = await targetsResponse.json() as GrantKeyContext & { devices: { deviceId: string; transportPublicKey: string }[] };
+      const signer = await api.getDevice(access.actorAccountId);
+      if (!signer || !converted.capabilityKey) throw new Error("Missing approved keys");
+      const envelopes = await Promise.all(targets.devices.map(async (device: { deviceId: string; transportPublicKey: string }) => {
+        const raw = Uint8Array.from(atob(device.transportPublicKey.replace(/-/g, "+").replace(/_/g, "/")), (char) => char.charCodeAt(0));
+        const publicKey = await crypto.subtle.importKey("raw", raw, { name: "ECDH", namedCurve: "P-256" }, true, []);
+        return api.createGrantKeyEnvelope(targetKind === "file" ? converted.capabilityKey! : access.rootKey, publicKey, signer.assertionKeyPair.privateKey,
+          { ...targets, deviceId: device.deviceId, signerDeviceId: signer.deviceId });
+      }));
+      const prepared = await api.privateRequest(`/api/private/shares/${relationshipId}/keys`, { method: "PUT", body: JSON.stringify({
+        capabilityId: targets.capabilityId, capabilityEpoch: targets.capabilityEpoch, ownerRegistryEpoch: targets.ownerRegistryEpoch,
+        recipientRegistryEpoch: targets.recipientRegistryEpoch, envelopes,
+      }) });
+      if (!prepared.ok) throw new Error("Provisioning failed");
+      return relationshipId as string;
+    }, { fileId: workspace.fileId, shareId, targetKind, permission });
+    expect(await recipient.evaluate(async (id) => (await window.workspaceFixture.privateRequest(`/api/private/shares/${id}/accept`,
+      { method: "POST", body: "{}" })).status, grantId)).toBe(201);
+    const listingBefore = await workspace.db.prepare("SELECT entries_revision FROM directories WHERE node_id = ?").bind(workspace.rootId).first();
+    const privateReads: string[] = [];
+    recipient.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/private/tree/directories/")) privateReads.push(request.url()); });
+    await recipient.goto(new URL(`/f/${workspace.fileId}`, baseURL!).href);
+    await expect(recipient.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue("# Shared secret\n\nOnly the target File.");
+    if (targetKind === "file") {
+      await expect(recipient.getByRole("heading", { name: "Shared File", exact: true })).toBeVisible();
+      await expect(recipient.getByRole("button", { name: "New folder", exact: true })).toHaveCount(0);
+      await expect(recipient.getByText("Draft.md", { exact: true })).toHaveCount(0);
+      expect(privateReads).toEqual([]);
+    } else {
+      await expect(recipient.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md", exact: true })).toBeVisible();
+      expect(privateReads.map((url) => new URL(url).pathname)).toEqual([`/api/private/tree/directories/${workspace.rootId}`]);
+    }
+    if (permission === "read_write") {
+      const saveResponse = recipient.waitForResponse((response) => response.request().method() === "PATCH" &&
+        new URL(response.url()).pathname === `/api/private/tree/files/${workspace.fileId}`);
+      await recipient.getByRole("textbox", { name: "Markdown source", exact: true }).fill("# Saved directly");
+      expect((await saveResponse).status()).toBe(200);
+      await expect(recipient.getByRole("status", { name: "File save status" })).toHaveText("Saved");
+      expect(await workspace.db.prepare("SELECT entries_revision FROM directories WHERE node_id = ?").bind(workspace.rootId).first()).toEqual(listingBefore);
+      await recipient.reload();
+      await expect(recipient.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue("# Saved directly");
+      expect(await (await recipient.request.get(`/f/${workspace.fileId}`)).text()).not.toContain("Saved directly");
+    } else {
+      await expect(recipient.getByRole("textbox", { name: "Markdown source", exact: true })).not.toBeEditable();
+      await expect(recipient.getByRole("status").filter({ hasText: /^Read-only$/ })).toBeVisible();
+      await expect(recipient.getByRole("button", { name: "New folder", exact: true })).toHaveCount(0);
+    }
+
+    // Simulate a separately enrolled current device at the external registry/auth
+    // boundary. Its owned-root envelope contains no Grant key; ticket20 must fulfill it.
+    await installWorkspaceScript(pendingDevice, workspaceScript, baseURL!);
+    const replacementId = objectId();
+    const nextKeys = await pendingDevice.evaluate(async ({ accountId, replacementId }) => {
+      const device = await window.workspaceFixture.createDevice(accountId, replacementId);
+      await window.workspaceFixture.updateRegistryEpoch(accountId, 2);
+      return { transport: Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", device.transportKeyPair.publicKey))),
+        assertion: Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", device.assertionKeyPair.publicKey))) };
+    }, { accountId, replacementId });
+    const nextEnvelope = await sealDeviceEnrollmentEnvelope(hierarchy.vaultRootKey,
+      await crypto.subtle.importKey("raw", Uint8Array.from(nextKeys.transport), { name: "ECDH", namedCurve: "P-256" }, true, []), {
+        purpose: "device-enrollment", vaultId: accountId, objectId: replacementId, keyId: replacementId, keyEpoch: 1, revision: 1, recipientId: replacementId,
+      });
+    await workspace.db.batch([
+      workspace.db.prepare("INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key, state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, ?, ?, 'active', 'routine', 2, ?)").bind(replacementId, accountId, Uint8Array.from(nextKeys.transport), Uint8Array.from(nextKeys.assertion), now),
+      workspace.db.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'device-enrollment', ?, ?, ?, 1)").bind(accountId, replacementId, replacementId, nextEnvelope),
+      workspace.db.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(replacementId, sessionId),
+    ]);
+    await pendingContext.addCookies([{ name: "__Host-mdwn_session", value: cookie.split(";", 1)[0]!.slice("__Host-mdwn_session=".length),
+      url: new URL(baseURL!).origin, httpOnly: true, secure: true, sameSite: "Lax" }]);
+    await pendingDevice.goto(new URL(`/f/${workspace.fileId}`, baseURL!).href);
+    await expect(pendingDevice.getByText("Shared content is being securely provisioned", { exact: true })).toBeVisible();
+    await expect(pendingDevice.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveCount(0);
+    await expect(pendingDevice.getByText("Draft.md", { exact: true })).toHaveCount(0);
+  } finally { await Promise.all([recipientContext.close(), pendingContext.close()]); }
+});
+}

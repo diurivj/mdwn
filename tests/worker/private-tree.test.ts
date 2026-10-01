@@ -11,6 +11,7 @@ import { RecoveryConfirmationPendingError } from "../../app/signup/recovery-gate
 import { createListingHead, openListingHead, type SealedEntry, type StoredListingHead } from "../../app/tree/listing";
 import { seedNormalSession } from "./auth-fixtures";
 import { encodeTreeBytes } from "../../app/tree/wire";
+import { createFileHead } from "../../app/tree/file-head";
 
 declare global {
   namespace Cloudflare { interface Env {
@@ -67,7 +68,17 @@ async function signedRequest(f: Fixture, path: string, method: "PUT" | "PATCH" |
   if (!listingResponse.ok) return value;
   const listing = await listingResponse.json() as { entries: SealedEntry[] };
   const input = value as { nodeId?: string; nameCiphertext: string; orderCiphertext: string;
-    keyEnvelope?: string; kind?: "directory" | "file"; expectedRevision: number; expectedParentRevision?: number };
+    keyEnvelope?: string; kind?: "directory" | "file"; expectedRevision: number; expectedParentRevision?: number;
+    capability?: { id: string; epoch: number }; representation?: { id: string; contentKeyId: string; keyEpoch: number;
+      revision: number; ciphertext: string; keyEnvelope: string } };
+  if (create && input.capability && input.representation && input.nodeId) {
+    const representation = input.representation;
+    value = { ...value, representation: { ...representation, fileHead: await createFileHead(f.assertion.privateKey, {
+      vaultId: f.accountId, fileId: input.nodeId, capabilityId: input.capability.id, capabilityEpoch: input.capability.epoch,
+      representationId: representation.id, contentKeyId: representation.contentKeyId, keyEpoch: representation.keyEpoch,
+      revision: representation.revision, deviceId: f.deviceId, ciphertext: representation.ciphertext, keyEnvelope: representation.keyEnvelope,
+    }) } };
+  }
   const entries = create ? [...listing.entries, {
     nodeId: input.nodeId!, kind: input.kind!, nameCiphertext: input.nameCiphertext,
     orderCiphertext: input.orderCiphertext, keyEnvelope: input.keyEnvelope!,
@@ -797,11 +808,11 @@ describe("private tree", () => {
   it("keeps the signup recovery-confirmation gate ahead of any content-creating request", async () => {
     vi.stubGlobal("window", { localStorage: { getItem: () => "pending" } });
     try {
-      await expect(createTreeChild({ vaultId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
+      await expect(createTreeChild({ vaultId: id(), actorAccountId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
         id(), { nodeId: id(), kind: "file", expectedRevision: 1, nameCiphertext: "", orderCiphertext: "",
           keyEnvelope: "" }, { directoryId: id(), entriesRevision: 1, entries: [] },
         generateDirectoryCapabilityKey())).rejects.toBeInstanceOf(RecoveryConfirmationPendingError);
-      await expect(renameTreeChild({ vaultId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
+      await expect(renameTreeChild({ vaultId: id(), actorAccountId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
         id(), id(), { expectedRevision: 1, nameCiphertext: "", orderCiphertext: "" },
         { directoryId: id(), entriesRevision: 1, entries: [] }, generateDirectoryCapabilityKey()))
         .rejects.toBeInstanceOf(RecoveryConfirmationPendingError);

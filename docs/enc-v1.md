@@ -196,6 +196,7 @@ version, not a permissive v1 decoder.
 | 17 | `account-profile` |
 | 18 | `owned-device` |
 | 19 | `device-label` |
+| 20 | `file-capability` |
 
 Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
  key`, `Comment audience epoch`); only the numeric ID is serialized. Every HPKE
@@ -227,6 +228,10 @@ for an active device during bounded provisioning. `device-label` (purpose 19)
 protects an optional device label under the Vault root key; its context binds
 the Account and exact device ID. Neither purpose carries a Grant capability.
 
+## File capability (purpose 20)
+
+[ADR-0008](adr/0008-parent-free-file-capabilities.md) adds a stable-between-rotations File capability between a Directory capability and fresh representation keys. Purpose 20 wraps that capability under the parent Directory. It binds Owner Vault, File ID, capability ID/current epoch and revision 1; older purposes retain their original numeric IDs. Representation-key envelopes continue to use `file-content-key`, now under the File capability. The device-signed File head independently binds the wrapping capability and exact representation/wrapper bytes. Direct recipients receive only the File capability through an independently signed HPKE `grant` envelope. Neither successful HPKE nor header inspection establishes live authority; see [the sharing protocol](sharing.md).
+
 ## Consumers and open decisions
 
 Future tickets that build envelopes must use this module rather than a new format.
@@ -240,7 +245,8 @@ Their purpose names are pinned here:
 | 11 Vault recovery | `owned-device` |
 | 12 Routine device enrollment | `device-enrollment`, `owned-device`, `device-label` |
 | 14 Private tree | `directory-capability`, `file-content-key`, `directory-metadata` |
-| 18 Grant envelopes | `grant`, `private-comment-thread`, `public-comment-audience-epoch` |
+| 17 Parent-free File saves/basic Grant delivery | `file-capability`, `file-content-key`, `file-content`, `grant` |
+| 18 Extended Grant envelopes | `grant`, `private-comment-thread`, `public-comment-audience-epoch` |
 | 19 Key rotation, 20 Provisioning fulfillment | any affected purpose |
 | 21 Private comment threads | `private-comment-thread`, `comment-content`, `attribution` |
 | 22 Publish a File | `public-representation` |

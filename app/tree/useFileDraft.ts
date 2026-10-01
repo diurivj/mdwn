@@ -4,6 +4,7 @@ import { useBeforeUnload, useBlocker, useFetcher } from "react-router";
 import { FILE_SOURCE_LIMIT, fileSourceBytes } from "~/crypto/file-source";
 import { newOpaqueId } from "~/opaque-id";
 import { loadDirectory, loadFile, rememberListing, type DirectoryListing } from "./client";
+import { rememberFile } from "./file-capability-client";
 import { prepareFileSave, withFileListing, type FileDocument, type FileSavePayload, type FileSaveResult } from "./file-client";
 import type { FilesSnapshot } from "./navigation-client";
 import { useFileLease } from "./useFileLease";
@@ -12,16 +13,16 @@ export type SaveStatus = "Unsaved" | "Saving" | "Saved" | "Couldn't save";
 
 /** A serialized tab-local draft. Router mutations never carry Markdown or capability keys. */
 export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
-  onCurrent: (file: FileDocument, listing: DirectoryListing) => void, onNavigationStart: () => void) {
+  onCurrent: (file: FileDocument, listing: DirectoryListing | null) => void, onNavigationStart: () => void) {
   const document = useRef(snapshot.file!);
-  const parentKey = snapshot.keys[document.current.parentId]!;
-  const listing = useRef(snapshot.listings[document.current.parentId]!);
+  const parentKey = document.current.parentId ? snapshot.keys[document.current.parentId]! : snapshot.access.rootKey;
+  const listing = useRef<DirectoryListing | null>(document.current.parentId ? snapshot.listings[document.current.parentId] ?? null : null);
   const draftRef = useRef(document.current.markdown);
   const [draft, setDraft] = useState(draftRef.current);
   const [status, setStatus] = useState<SaveStatus>(document.current.sourceBytes > FILE_SOURCE_LIMIT ? "Couldn't save" : "Saved");
   const [navigationFailed, setNavigationFailed] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [overwriteProposal, setOverwriteProposal] = useState<{ document: FileDocument; listing: DirectoryListing } | null>(null);
+  const [overwriteProposal, setOverwriteProposal] = useState<{ document: FileDocument; listing: DirectoryListing | null } | null>(null);
   const [conflict, setConflict] = useState(false);
   const conflictRef = useRef(false);
   const [rejected, setRejected] = useState(false);
@@ -40,6 +41,7 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   const inFlight = useRef<Promise<boolean> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mounted = useRef(true);
+  const lifetime = useRef(new AbortController());
 
   useEffect(() => {
     if (fetcher.data && pending.current && fetcher.data.operationId === pending.current.id) {
@@ -49,8 +51,10 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   }, [fetcher.data]);
   useEffect(() => {
     mounted.current = true;
+    lifetime.current = new AbortController();
     return () => {
       mounted.current = false;
+      lifetime.current.abort();
       clearTimeout(timer.current);
       if (pending.current) pending.current.resolve({ operationId: pending.current.id, state: "failed" });
     };
@@ -67,7 +71,7 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   }
 
   async function save(): Promise<boolean> {
-    if (conflictRef.current || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) return false;
+    if (!document.current.canEdit || conflictRef.current || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) return false;
     if (draftRef.current === document.current.markdown) { setStatus("Saved"); return true; }
     setStatus("Saving");
     const source = draftRef.current;
@@ -81,7 +85,8 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
           conflictRef.current = true; setConflict(true); break;
         }
         if (result.state === "folder-changed") {
-          listing.current = await loadDirectory(snapshot.access, document.current.parentId, parentKey);
+          if ("capability" in prepared.payload || !document.current.parentId) break;
+          listing.current = await loadDirectory(snapshot.access, document.current.parentId, parentKey, lifetime.current.signal);
           prepared = { ...prepared, ...await withFileListing(snapshot.access, fileId, parentKey, prepared.payload, listing.current) };
           continue;
         }
@@ -89,8 +94,13 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
         // Advance only the saved snapshot: edits typed while it was in flight stay local.
         document.current = prepared.document;
         listing.current = prepared.listing;
-        rememberListing(snapshot.access.vaultId, listing.current.directoryId,
-          result.entriesRevision, prepared.payload.listingHead.digest);
+        if ("capability" in prepared.payload) {
+          rememberFile(snapshot.access.vaultId, fileId, prepared.payload.capability.epoch,
+            result.revision, prepared.payload.representation.fileHead.digest);
+        } else if (listing.current && result.entriesRevision !== undefined) {
+          rememberListing(snapshot.access.vaultId, listing.current.directoryId,
+            result.entriesRevision, prepared.payload.listingHead.digest);
+        }
         onCurrent(document.current, listing.current);
         setStatus(draftRef.current === source ? "Saved" : "Unsaved");
         return true;
@@ -138,8 +148,8 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   async function current() {
     const parentId = document.current.parentId;
     const [file, parent] = await Promise.all([
-      loadFile(snapshot.access, fileId, parentKey),
-      loadDirectory(snapshot.access, parentId, parentKey),
+      loadFile(snapshot.access, fileId, parentKey, lifetime.current.signal),
+      parentId ? loadDirectory(snapshot.access, parentId, parentKey, lifetime.current.signal) : Promise.resolve(null),
     ]);
     if (file.parentId !== parentId) throw new Error("File changed");
     return { document: file, listing: parent };
@@ -163,7 +173,7 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   }
 
   async function proposeOverwrite() {
-    if (!lease.editable) return;
+    if (!document.current.canEdit || !lease.editable) return;
     if (fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) { setRejected(true); return; }
     setLoading(true);
     try { const latest = await current(); if (mounted.current) setOverwriteProposal(latest); }
@@ -172,7 +182,7 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   }
 
   async function confirmOverwrite() {
-    if (!lease.editable || !overwriteProposal || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) return;
+    if (!document.current.canEdit || !lease.editable || !overwriteProposal || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) return;
     // The proposal pins the revision being replaced. A later winner still conflicts.
     document.current = overwriteProposal.document; listing.current = overwriteProposal.listing;
     conflictRef.current = false; setConflict(false); setOverwriteProposal(null);
@@ -188,7 +198,7 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   }
 
   function edit(value: string): boolean {
-    if (!lease.editable || loading || overwriteProposal) return false;
+    if (!document.current.canEdit || !lease.editable || loading || overwriteProposal) return false;
     const nextBytes = fileSourceBytes(value), previousBytes = fileSourceBytes(draftRef.current);
     if (nextBytes > FILE_SOURCE_LIMIT && !(previousBytes > FILE_SOURCE_LIMIT && nextBytes < previousBytes)) {
       setRejected(true); return false;

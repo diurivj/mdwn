@@ -27,6 +27,7 @@ describe("encrypted Account profiles", () => {
       "account-profile",
       "owned-device",
       "device-label",
+      "file-capability",
     ]);
     expect(accountProfileContext(expected)).toEqual({
       purpose: "account-profile",

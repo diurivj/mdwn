@@ -11,6 +11,7 @@ import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type RecoveryIntent } from "../../app/recovery/protocol";
 import { decodeBytes, encodeBytes } from "../../app/signup/protocol";
 import { seedNormalSession, type SeededSession } from "./auth-fixtures";
+import { seedRecipientEnvelopeDependents } from "./grant-envelope-lifecycle-fixtures";
 
 declare global {
   namespace Cloudflare { interface Env {
@@ -171,6 +172,7 @@ async function oldPrivateRead(f: Fixture, registryEpoch = 1) {
 describe("Vault recovery enrollment", () => {
   it("atomically replaces devices and Sessions, rotates the phrase, and preserves the owned root", async () => {
     const f = await fixture();
+    const shared = await seedRecipientEnvelopeDependents(f.accountId, [f.oldDeviceId]);
     expect((await oldPrivateRead(f)).status).toBe(200);
     const start = await startRecovery(f);
     const p = await prepare(f, start);
@@ -223,6 +225,17 @@ describe("Vault recovery enrollment", () => {
         ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body }) });
     };
+    for (const relationship of shared) {
+      const table = relationship.kind === "shares" ? "share_key_envelopes" : "grant_key_envelopes";
+      expect((await env.DB.prepare(`SELECT device_id FROM ${table} WHERE relationship_id = ?`).bind(relationship.id).all()).results).toEqual([]);
+      expect(await env.DB.prepare(`SELECT recipient_id FROM ${relationship.kind} WHERE id = ?`).bind(relationship.id).first())
+        .toEqual({ recipient_id: f.accountId });
+      if (relationship.kind === "grants") {
+        const missing = await recoveredRequest(`/api/private/grants/${relationship.id}/keys`, "POST");
+        expect(missing.status).toBe(409);
+        expect(await missing.json()).toEqual({ error: "shared_content_provisioning_required" });
+      }
+    }
     // Simulate interruption after commit: the job is still pending and resumes with only the new device.
     expect(await env.DB.prepare("SELECT state, cursor FROM crypto_jobs WHERE device_id = ?")
       .bind(p.deviceId).first()).toEqual({ state: "pending", cursor: null });

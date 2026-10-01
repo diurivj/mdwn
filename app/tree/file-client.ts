@@ -1,19 +1,27 @@
 import { FILE_SOURCE_LIMIT, fileSourceBytes } from "~/crypto/file-source";
 import { createFileRepresentation } from "~/crypto/vault";
 import { privateRequest } from "~/device/private-client";
+import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import type { ListingHead } from "./listing";
 import { signListingChange, type DirectoryListing, type loadFile, type RootAccess } from "./client";
+import { createFileHead, type FileHead } from "./file-head";
+import type { FileCapability } from "./file-capability-client";
 import { encodeTreeBytes } from "./wire";
 
 export type FileDocument = Awaited<ReturnType<typeof loadFile>>;
-export type FileSavePayload = {
+type Representation = { id: string; contentKeyId: string; keyEpoch: number; revision: number; ciphertext: string };
+export type LegacyFileSavePayload = {
   expectedRevision: number; expectedParentRevision: number; keyEnvelope: string;
-  representation: { id: string; contentKeyId: string; keyEpoch: number; revision: number; ciphertext: string };
-  listingHead: ListingHead;
+  representation: Representation; listingHead: ListingHead;
 };
+export type CapabilityFileSavePayload = {
+  expectedRevision: number; expectedRepresentationId: string; capability: FileCapability;
+  representation: Representation & { keyEnvelope: string; fileHead: FileHead };
+};
+export type FileSavePayload = LegacyFileSavePayload | CapabilityFileSavePayload;
 export type FileSaveResult = { operationId: string } & (
-  { state: "saved"; revision: number; entriesRevision: number } |
+  { state: "saved"; revision: number; entriesRevision?: number; representationId?: string; capability?: FileCapability } |
   { state: "conflict" | "folder-changed" | "failed" }
 );
 
@@ -26,23 +34,23 @@ export async function fileSaveAction(fileId: string, request: Request): Promise<
     });
     if (response.status === 409) {
       const body = await response.json() as { error: string };
-      return { operationId, state: body.error === "namespace_changed" ? "folder-changed" : "conflict" };
+      return { operationId, state: body.error === "namespace_changed" && !("capability" in payload) ? "folder-changed"
+        : body.error === "file_changed" ? "conflict" : "failed" };
     }
     if (!response.ok) return { operationId, state: "failed" };
-    const saved = await response.json() as { revision: number; entriesRevision: number };
-    if (saved.revision !== payload.expectedRevision + 1 || saved.entriesRevision !== payload.expectedParentRevision + 1) {
-      return { operationId, state: "failed" };
-    }
+    const saved = await response.json() as { revision: number; entriesRevision?: number; representationId?: string; capability?: FileCapability };
+    if (saved.revision !== payload.expectedRevision + 1 || ("capability" in payload
+      ? saved.representationId !== payload.representation.id || saved.capability?.id !== payload.capability.id ||
+        saved.capability?.epoch !== payload.capability.epoch
+      : saved.entriesRevision !== payload.expectedParentRevision + 1)) return { operationId, state: "failed" };
     return { operationId, state: "saved", ...saved };
   } catch { return { operationId, state: "failed" }; }
 }
 
-/** Rebuild the parent commitment without changing the draft's expected File revision. */
+/** Rebuild the legacy parent commitment without changing the draft's expected File revision. */
 export async function withFileListing(access: RootAccess, fileId: string, parentKey: Uint8Array,
-  payload: Omit<FileSavePayload, "listingHead" | "expectedParentRevision">, listing: DirectoryListing) {
-  if (!listing.entries.some((entry) => entry.nodeId === fileId && entry.kind === "file")) {
-    throw new Error("File unavailable");
-  }
+  payload: Omit<LegacyFileSavePayload, "listingHead" | "expectedParentRevision">, listing: DirectoryListing) {
+  if (!listing.entries.some((entry) => entry.nodeId === fileId && entry.kind === "file")) throw new Error("File unavailable");
   const updated: DirectoryListing = { ...listing, entriesRevision: listing.entriesRevision + 1,
     entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope: payload.keyEnvelope } : entry) };
   const head = await signListingChange(access, listing, parentKey, updated.entries);
@@ -50,16 +58,36 @@ export async function withFileListing(access: RootAccess, fileId: string, parent
 }
 
 export async function prepareFileSave(access: RootAccess, fileId: string, parentKey: Uint8Array,
-  document: FileDocument, markdown: string, listing: DirectoryListing) {
+  document: FileDocument, markdown: string, listing: DirectoryListing | null): Promise<{
+    payload: FileSavePayload; listing: DirectoryListing | null; document: FileDocument;
+  }> {
+  if (!document.canEdit) throw new Error("File is read-only");
   const sourceBytes = fileSourceBytes(markdown);
   if (sourceBytes > FILE_SOURCE_LIMIT) throw new Error("File limit reached");
   const revision = document.revision + 1, keyEpoch = document.keyEpoch + 1;
   const contentKeyId = newOpaqueId(), representationId = newOpaqueId();
-  const encrypted = await createFileRepresentation(parentKey, { markdown, metadata: document.metadata }, {
+  const encrypted = await createFileRepresentation(document.capabilityKey ?? parentKey, { markdown, metadata: document.metadata }, {
     vaultId: access.vaultId, fileId, keyId: contentKeyId, keyEpoch, revision,
   });
+  const wrapper = encodeTreeBytes(encrypted.fileContentKeyEnvelope);
+  const representation = { id: representationId, contentKeyId, keyEpoch, revision, ciphertext: encodeTreeBytes(encrypted.contentEnvelope) };
+  const savedDocument: FileDocument = { ...document, markdown, sourceBytes, revision, keyEpoch, contentKeyId, representationId,
+    ciphertext: representation.ciphertext, ...(document.capability ? { representationKeyEnvelope: wrapper } : { keyEnvelope: wrapper }) };
+  if (document.capability) {
+    if (!document.capabilityKey) throw new Error("missing File capability");
+    const device = await getDevice(access.actorAccountId);
+    if (!device) throw new Error("private tree unavailable");
+    const fileHead = await createFileHead(device.assertionKeyPair.privateKey, {
+      vaultId: access.vaultId, fileId, capabilityId: document.capability.id, capabilityEpoch: document.capability.epoch,
+      representationId, contentKeyId, keyEpoch, revision, deviceId: device.deviceId,
+      ciphertext: representation.ciphertext, keyEnvelope: wrapper,
+    });
+    return { payload: { expectedRevision: document.revision, expectedRepresentationId: document.representationId,
+      capability: document.capability, representation: { ...representation, keyEnvelope: wrapper, fileHead } },
+      listing, document: savedDocument };
+  }
+  if (!listing || !document.parentId) throw new Error("File parent unavailable");
   return { ...await withFileListing(access, fileId, parentKey, {
-    expectedRevision: document.revision, keyEnvelope: encodeTreeBytes(encrypted.fileContentKeyEnvelope),
-    representation: { id: representationId, contentKeyId, keyEpoch, revision, ciphertext: encodeTreeBytes(encrypted.contentEnvelope) },
-  }, listing), document: { ...document, markdown, sourceBytes, revision, keyEpoch, contentKeyId, representationId } };
+    expectedRevision: document.revision, keyEnvelope: wrapper, representation,
+  }, listing), document: savedDocument };
 }

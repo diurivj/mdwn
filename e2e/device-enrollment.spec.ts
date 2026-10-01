@@ -317,6 +317,9 @@ test("the QR scanner decodes a camera video stream", async ({ page, baseURL }) =
   await page.goto(`${new URL(baseURL!).origin}/enroll-device/approve`, { waitUntil: "commit" });
   await page.evaluate((imageUrl) => {
     const mediaDevices = navigator.mediaDevices;
+    // Keep the overridden DOM wrapper reachable; WebKit can otherwise collect
+    // it and give the scanner a fresh wrapper with native camera methods.
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: mediaDevices });
     Object.defineProperty(mediaDevices, "enumerateDevices", {
       configurable: true, value: async () => [{ kind: "videoinput", deviceId: "qr-test", groupId: "", label: "QR test" }],
     });
@@ -335,14 +338,30 @@ test("the QR scanner decodes a camera video stream", async ({ page, baseURL }) =
         context.drawImage(image, 64, 64, 512, 512);
         const stream = canvas.captureStream(15);
         const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
-        setInterval(() => {
+        const timer = setInterval(() => {
           context.drawImage(image, 64, 64, 512, 512);
           track.requestFrame?.();
         }, 100);
+        const stop = track.stop.bind(track);
+        const cleanup = () => track.stop();
+        track.stop = () => {
+          clearInterval(timer);
+          window.removeEventListener("pagehide", cleanup);
+          window.removeEventListener("qr-camera-cleanup", cleanup);
+          stop();
+        };
+        window.addEventListener("pagehide", cleanup, { once: true });
+        window.addEventListener("qr-camera-cleanup", cleanup, { once: true });
         return stream;
       },
     });
   }, qr);
-  await page.getByRole("button", { name: "Scan QR code" }).click();
-  await expect(page.getByRole("textbox", { name: "Pairing link" })).toHaveValue(value, { timeout: 30_000 });
+  try {
+    // Expose loss of the camera override when WebKit collects its DOM wrapper.
+    await page.requestGC();
+    await page.getByRole("button", { name: "Scan QR code" }).click();
+    await expect(page.getByRole("textbox", { name: "Pairing link" })).toHaveValue(value, { timeout: 30_000 });
+  } finally {
+    await page.evaluate(() => window.dispatchEvent(new Event("qr-camera-cleanup")));
+  }
 });

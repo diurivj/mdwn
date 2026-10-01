@@ -23,7 +23,10 @@
     "app/tree/client.ts",
     "app/tree/listing.ts",
     "app/tree/wire.ts",
-    "app/tree/file-client.ts"
+    "app/tree/file-client.ts",
+    "app/tree/file-head.ts",
+    "app/tree/file-capability-client.ts",
+    "app/sharing/grant-keys.ts"
   ],
   "exclude": ["tests/worker/**/*"],
   "compilerOptions": {

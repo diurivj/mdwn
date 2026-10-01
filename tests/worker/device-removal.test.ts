@@ -6,6 +6,7 @@ import { createSymmetricWriter, openSymmetric } from "../../app/crypto/enc-v1";
 import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
 import { decodeBytes, encodeBytes } from "../../app/signup/protocol";
 import { recoveryCookie, seedNormalSession } from "./auth-fixtures";
+import { seedRecipientEnvelopeDependents } from "./grant-envelope-lifecycle-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
@@ -130,6 +131,7 @@ describe("Encryption-device inventory and removal", () => {
   it("cuts off only the target and keeps cached material outside the removal guarantee", async () => {
     const f = await fixture(3);
     const [actor, target, peer] = f.devices as [Device, Device, Device];
+    const shared = await seedRecipientEnvelopeDependents(f.account.accountId, [target.id, peer.id]);
     const extra = await seedNormalSession(f.account);
     await env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(target.id, extra.id).run();
     const before = await f.confirmation(actor, target, 3);
@@ -184,6 +186,13 @@ describe("Encryption-device inventory and removal", () => {
       .bind(f.account.accountId, target.id).first()).toEqual({ n: 0 });
     expect(await env.DB.prepare("SELECT count(*) AS n FROM key_envelopes WHERE account_id = ? AND recipient_id = ? AND superseded_at IS NULL")
       .bind(f.account.accountId, peer.id).first()).toEqual({ n: 2 });
+    for (const relationship of shared) {
+      const table = relationship.kind === "shares" ? "share_key_envelopes" : "grant_key_envelopes";
+      expect((await env.DB.prepare(`SELECT device_id FROM ${table} WHERE relationship_id = ?`).bind(relationship.id).all()).results)
+        .toEqual([{ device_id: peer.id }]);
+      expect(await env.DB.prepare(`SELECT recipient_id FROM ${relationship.kind} WHERE id = ?`).bind(relationship.id).first())
+        .toEqual({ recipient_id: f.account.accountId });
+    }
     expect(await env.DB.prepare("SELECT count(*) AS n FROM key_envelopes WHERE account_id = ? AND purpose = 'vault-recovery' AND superseded_at IS NULL")
       .bind(f.account.accountId).first()).toEqual({ n: 1 });
     // A removed browser can still open the Vault-root envelope it fetched before removal.
