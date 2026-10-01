@@ -73,7 +73,7 @@ export async function authorizeDeviceForSession(
 export function privateReadGuard(authorization: AuthorizedDevice): SQL {
   const { accountId, sessionId, deviceId, registryEpoch } = authorization;
   const now = Date.now();
-  return sql`EXISTS (SELECT 1 FROM sessions s
+  return sql`${authorization.expiresAt} > ${now} AND EXISTS (SELECT 1 FROM sessions s
     JOIN encryption_devices d ON d.id = s.device_id AND d.account_id = s.account_id
     JOIN account_encryption_identities r ON r.account_id = s.account_id
     WHERE s.id = ${sessionId} AND s.account_id = ${accountId}
@@ -133,6 +133,41 @@ export async function commitPrivateMutation(
   return changed.meta.changes === 1 && consumed.meta.changes === 1;
 }
 
+function mutationProofStatements(authorization: AuthorizedDevice, now: number): {
+  committed: SQL; consume: SQL; recordActivity: SQL;
+} {
+  const { accountId, sessionId, deviceId, proofId, expiresAt } = authorization;
+  const token = crypto.randomUUID();
+  const proofDay = coarseProofTime(now);
+  const committed = sql`EXISTS (SELECT 1 FROM device_proof_uses WHERE account_id = ${accountId}
+    AND proof_id = ${proofId} AND commit_token = ${token})`;
+  return {
+    committed,
+    consume: sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at, commit_token)
+      SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt}, ${token} WHERE changes() = 1`,
+    recordActivity: sql`UPDATE encryption_devices SET last_proof_at = ${proofDay}
+      WHERE id = ${deviceId} AND account_id = ${accountId} AND ${committed}
+        AND (last_proof_at IS NULL OR last_proof_at < ${proofDay})`,
+  };
+}
+
+/** One conditional anchor and zero/many dependent writes under the same proof.
+ * A fresh invocation token, not changes() or a reusable proof ID, gates dependents.
+ */
+export async function commitPrivateBatch(
+  env: Env, authorization: AuthorizedDevice, anchor: (guard: SQL) => SQL,
+  statements: (committed: SQL) => readonly SQL[],
+): Promise<boolean> {
+  const now = Date.now();
+  if (authorization.expiresAt <= now) return false;
+  const { committed, consume, recordActivity } = mutationProofStatements(authorization, now);
+  const [changed, consumed] = await atomicSqlBatch(env.DB, [
+    anchor(privateMutationGuard(authorization, now)), consume,
+    ...statements(committed), recordActivity,
+  ]);
+  return changed!.meta.changes === 1 && consumed!.meta.changes === 1;
+}
+
 export type DirectoryChange = {
   directoryId: string; expectedRevision: number;
   head: { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array };
@@ -147,30 +182,24 @@ export type DirectoryChange = {
 export async function commitTreeMutation(
   env: Env, authorization: AuthorizedDevice, changes: readonly [DirectoryChange, ...DirectoryChange[]],
   eligible: SQL, statements: (committed: SQL) => readonly SQL[],
+  contentOwnerId = authorization.accountId,
 ): Promise<boolean> {
   const now = Date.now();
   if (authorization.expiresAt <= now || new Set(changes.map((change) => change.directoryId)).size !== changes.length) return false;
-  const { accountId, sessionId, deviceId, proofId, expiresAt } = authorization;
-  const token = crypto.randomUUID();
-  const committed = sql`EXISTS (SELECT 1 FROM device_proof_uses WHERE account_id = ${accountId}
-    AND proof_id = ${proofId} AND commit_token = ${token})`;
+  const { deviceId } = authorization;
+  const { committed, consume, recordActivity } = mutationProofStatements(authorization, now);
   const revisions = sql.join(changes.map((change) => sql`EXISTS (SELECT 1 FROM directories
-    WHERE node_id = ${change.directoryId} AND owner_id = ${accountId} AND entries_revision = ${change.expectedRevision})`), sql` AND `);
+    WHERE node_id = ${change.directoryId} AND owner_id = ${contentOwnerId} AND entries_revision = ${change.expectedRevision})`), sql` AND `);
   const update = (change: DirectoryChange, guard: SQL) => sql`UPDATE directories
     SET entries_revision = entries_revision + 1, listing_ciphertext = ${change.head.ciphertext},
       listing_digest = ${change.head.digest}, listing_signature = ${change.head.signature}, listing_device_id = ${deviceId}
-    WHERE node_id = ${change.directoryId} AND owner_id = ${accountId}
+    WHERE node_id = ${change.directoryId} AND owner_id = ${contentOwnerId}
       AND entries_revision = ${change.expectedRevision} AND ${guard}`;
   const [, changed, consumed] = await atomicSqlBatch(env.DB, [
     sql`PRAGMA defer_foreign_keys = ON`,
-    update(changes[0], sql`${privateMutationGuard(authorization, now)} AND ${revisions} AND ${eligible}`),
-    sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at, commit_token)
-      SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt}, ${token} WHERE changes() = 1`,
+    update(changes[0], sql`${privateMutationGuard(authorization, now)} AND ${revisions} AND ${eligible}`), consume,
     ...changes.slice(1).map((change) => update(change, committed)),
-    ...statements(committed),
-    sql`UPDATE encryption_devices SET last_proof_at = ${coarseProofTime(now)}
-      WHERE id = ${deviceId} AND account_id = ${accountId} AND ${committed}
-        AND (last_proof_at IS NULL OR last_proof_at < ${coarseProofTime(now)})`,
+    ...statements(committed), recordActivity,
   ]);
   return changed!.meta.changes === 1 && consumed!.meta.changes === 1;
 }
@@ -183,6 +212,7 @@ export async function commitDirectoryMutation(
   env: Env, authorization: AuthorizedDevice, parentId: string, expectedRevision: number,
   listingHead: { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array },
   eligible: SQL, statements: (committed: SQL) => readonly SQL[],
+  contentOwnerId = authorization.accountId,
 ): Promise<boolean> {
   const now = Date.now();
   if (authorization.expiresAt <= now) return false;
@@ -195,7 +225,7 @@ export async function commitDirectoryMutation(
     sql`UPDATE directories SET entries_revision = entries_revision + 1,
         listing_ciphertext = ${listingHead.ciphertext}, listing_digest = ${listingHead.digest},
         listing_signature = ${listingHead.signature}, listing_device_id = ${deviceId}
-      WHERE node_id = ${parentId} AND owner_id = ${accountId}
+      WHERE node_id = ${parentId} AND owner_id = ${contentOwnerId}
         AND entries_revision = ${expectedRevision} AND ${eligible} AND ${guard}`,
     sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at)
       SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt} WHERE changes() = 1`,

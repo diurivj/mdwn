@@ -1,0 +1,180 @@
+import { env, SELF } from "cloudflare:test";
+import { createSymmetricWriter, inspectEnvelope, openSymmetric } from "../../app/crypto/enc-v1";
+import { createChildDirectoryCapability, createFileRepresentation, generateDirectoryCapabilityKey } from "../../app/crypto/vault";
+import { signDeviceProof, sessionBindingDigest, type DeviceProof } from "../../app/device/proof";
+import { authorizePrivateRequest } from "../../app/device/proof.server";
+import { createListingHead, type SealedEntry } from "../../app/tree/listing";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+import { seedNormalSession } from "./auth-fixtures";
+
+export function opaqueId(): string {
+  const id = crypto.randomUUID();
+  return `${id.slice(0, 14)}7${id.slice(15)}`;
+}
+
+export async function sharingAccount() {
+  const accountId = opaqueId(), shareId = opaqueId(), rootId = opaqueId(), deviceId = opaqueId(), credentialId = opaqueId();
+  const assertion = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(accountId, shareId, now, now),
+    env.DB.prepare("INSERT INTO passkeys (credential_id, account_id, public_key, counter, transports, device_type, backed_up, created_at, updated_at) VALUES (?, ?, X'01', 0, '[]', 'singleDevice', 0, ?, ?)").bind(credentialId, accountId, now, now),
+    env.DB.prepare("INSERT INTO account_encryption_identities (account_id, root_directory_id, registry_epoch) VALUES (?, ?, 1)").bind(accountId, rootId),
+    env.DB.prepare("INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key, state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, X'01', ?, 'active', 'signup', 1, ?)")
+      .bind(deviceId, accountId, new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), now),
+  ]);
+  const session = await seedNormalSession({ accountId, credentialIds: [credentialId] });
+  await env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(deviceId, session.id).run();
+  return { accountId, shareId, rootId, deviceId, assertion, session,
+    proofs: new Map<string, DeviceProof>(), keys: new Map<string, Uint8Array>([[rootId, generateDirectoryCapabilityKey()]]) };
+}
+export type SharingAccount = Awaited<ReturnType<typeof sharingAccount>>;
+
+export async function sharingRequest(account: SharingAccount, path: string,
+  method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST", value?: object, proofId?: string) {
+  const url = `https://mdwn.test${path}`;
+  const body = value === undefined ? undefined : JSON.stringify(value);
+  const proof = (proofId && account.proofs.get(proofId)) || await signDeviceProof(account.assertion.privateKey, {
+    sessionBinding: await sessionBindingDigest(account.session.id), deviceId: account.deviceId,
+    registryEpoch: 1, method, url, body,
+  });
+  if (proofId) account.proofs.set(proofId, proof);
+  return SELF.fetch(url, { method, headers: { cookie: account.session.cookie, origin: "https://mdwn.test",
+    "X-Mdwn-Device-Proof": JSON.stringify(proof), ...(body ? { "content-type": "application/json" } : {}) }, body });
+}
+
+export async function sharingAuthorization(account: SharingAccount) {
+  const url = "https://mdwn.test/api/private/grants";
+  const proof = await signDeviceProof(account.assertion.privateKey, {
+    sessionBinding: await sessionBindingDigest(account.session.id), deviceId: account.deviceId,
+    registryEpoch: 1, method: "POST", url,
+  });
+  const auth = await authorizePrivateRequest(new Request(url, { method: "POST", headers: {
+    cookie: account.session.cookie,
+  } }), env, proof);
+  if (!auth) throw new Error("fixture authorization failed");
+  return auth;
+}
+
+export async function treeListing(account: SharingAccount, directoryId: string) {
+  const response = await sharingRequest(account, `/api/private/tree/directories/${directoryId}`);
+  if (!response.ok) throw new Error(`listing failed: ${response.status}`);
+  return response.json() as Promise<{ entriesRevision: number; entries: SealedEntry[] }>;
+}
+
+export async function treeChild(actor: SharingAccount, parentId: string, kind: "directory" | "file", ownerId = actor.accountId) {
+  const nodeId = opaqueId(), key = actor.keys.get(parentId)!;
+  const listing = await treeListing(actor, parentId);
+  const writer = await createSymmetricWriter(key);
+  const context = { purpose: "directory-metadata" as const, vaultId: ownerId, objectId: nodeId,
+    keyId: parentId, keyEpoch: 1, revision: 1 };
+  const metadata = { nameCiphertext: encodeTreeBytes(await writer.seal(new TextEncoder().encode(`${kind}.md`), context)),
+    orderCiphertext: encodeTreeBytes(await writer.seal(new TextEncoder().encode(nodeId), context)) };
+  const child = kind === "directory" ? await createChildDirectoryCapability(key, {
+    vaultId: ownerId, parentDirectoryId: parentId, childDirectoryId: nodeId,
+  }) : null;
+  const file = kind === "file" ? await createFileRepresentation(key, { markdown: "# private", metadata: new Uint8Array() }, {
+    vaultId: ownerId, fileId: nodeId,
+  }) : null;
+  const keyEnvelope = encodeTreeBytes(child ? child.envelope : file!.fileContentKeyEnvelope);
+  const entry = { nodeId, kind, ...metadata, keyEnvelope };
+  const listingHead = await createListingHead(key, actor.assertion.privateKey, {
+    vaultId: ownerId, directoryId: parentId, deviceId: actor.deviceId, revision: listing.entriesRevision + 1,
+    entries: [...listing.entries, entry],
+  });
+  const response = await sharingRequest(actor, `/api/private/tree/directories/${parentId}/children`, "PUT", {
+    ...entry, expectedRevision: listing.entriesRevision, listingHead,
+    ...(file ? { representation: { id: opaqueId(), contentKeyId: nodeId, keyEpoch: 1, revision: 1,
+      ciphertext: encodeTreeBytes(file.contentEnvelope) } } : {}),
+  });
+  if (response.status !== 201) throw new Error(`create failed: ${response.status} ${await response.text()}`);
+  if (child) actor.keys.set(nodeId, await openSymmetric(decodeTreeBytes(keyEnvelope), key, { context: {
+    purpose: "directory-capability", vaultId: ownerId, objectId: nodeId, keyId: nodeId, keyEpoch: 1, revision: 1,
+  } }));
+  return nodeId;
+}
+
+export async function renamePayload(actor: SharingAccount, ownerId: string, nodeId: string, parentId: string) {
+  const listing = await treeListing(actor, parentId);
+  const writer = await createSymmetricWriter(actor.keys.get(parentId)!);
+  const context = { purpose: "directory-metadata" as const, vaultId: ownerId, objectId: nodeId,
+    keyId: parentId, keyEpoch: 1, revision: 1 };
+  const nameCiphertext = encodeTreeBytes(await writer.seal(new TextEncoder().encode("renamed.md"), context));
+  const orderCiphertext = encodeTreeBytes(await writer.seal(new TextEncoder().encode("last"), context));
+  return { parentId, expectedRevision: listing.entriesRevision, nameCiphertext, orderCiphertext,
+    listingHead: await createListingHead(actor.keys.get(parentId)!, actor.assertion.privateKey, {
+      vaultId: ownerId, directoryId: parentId, deviceId: actor.deviceId, revision: listing.entriesRevision + 1,
+      entries: listing.entries.map((entry) => entry.nodeId === nodeId ? { ...entry, nameCiphertext, orderCiphertext } : entry),
+    }) };
+}
+
+export async function movePayload(actor: SharingAccount, ownerId: string, nodeId: string, sourceId: string, destinationId: string) {
+  const source = await treeListing(actor, sourceId), destination = await treeListing(actor, destinationId);
+  const entry = source.entries.find((entry) => entry.nodeId === nodeId)!;
+  const context = inspectEnvelope(decodeTreeBytes(entry.keyEnvelope)).context;
+  const key = await openSymmetric(decodeTreeBytes(entry.keyEnvelope), actor.keys.get(sourceId)!, { context });
+  const writer = await createSymmetricWriter(actor.keys.get(destinationId)!);
+  const metadata = { purpose: "directory-metadata" as const, vaultId: ownerId, objectId: nodeId,
+    keyId: destinationId, keyEpoch: 1, revision: 1 };
+  const updated = { ...entry,
+    nameCiphertext: encodeTreeBytes(await writer.seal(new TextEncoder().encode("moved.md"), metadata)),
+    orderCiphertext: encodeTreeBytes(await writer.seal(new TextEncoder().encode("last"), metadata)),
+    keyEnvelope: encodeTreeBytes(await writer.seal(key, context)) };
+  return { sourceId, destinationId, kind: entry.kind, expectedSourceRevision: source.entriesRevision,
+    expectedDestinationRevision: destination.entriesRevision, nameCiphertext: updated.nameCiphertext,
+    orderCiphertext: updated.orderCiphertext, keyEnvelope: updated.keyEnvelope,
+    sourceListingHead: await createListingHead(actor.keys.get(sourceId)!, actor.assertion.privateKey, {
+      vaultId: ownerId, directoryId: sourceId, deviceId: actor.deviceId, revision: source.entriesRevision + 1,
+      entries: source.entries.filter((entry) => entry.nodeId !== nodeId),
+    }),
+    destinationListingHead: await createListingHead(actor.keys.get(destinationId)!, actor.assertion.privateKey, {
+      vaultId: ownerId, directoryId: destinationId, deviceId: actor.deviceId, revision: destination.entriesRevision + 1,
+      entries: [...destination.entries, updated],
+    }) };
+}
+
+export async function savePayload(actor: SharingAccount, ownerId: string, fileId: string, parentId: string) {
+  const response = await sharingRequest(actor, `/api/private/tree/files/${fileId}`);
+  const current = await response.json() as { revision: number; keyEpoch: number };
+  const listing = await treeListing(actor, parentId);
+  const contentKeyId = opaqueId();
+  const file = await createFileRepresentation(actor.keys.get(parentId)!, {
+    markdown: "# saved by Collaborator", metadata: new Uint8Array(),
+  }, { vaultId: ownerId, fileId, keyId: contentKeyId, keyEpoch: current.keyEpoch + 1, revision: current.revision + 1 });
+  const keyEnvelope = encodeTreeBytes(file.fileContentKeyEnvelope);
+  return { expectedRevision: current.revision, expectedParentRevision: listing.entriesRevision, keyEnvelope,
+    representation: { id: opaqueId(), contentKeyId, keyEpoch: current.keyEpoch + 1, revision: current.revision + 1,
+      ciphertext: encodeTreeBytes(file.contentEnvelope) },
+    listingHead: await createListingHead(actor.keys.get(parentId)!, actor.assertion.privateKey, {
+      vaultId: ownerId, directoryId: parentId, deviceId: actor.deviceId, revision: listing.entriesRevision + 1,
+      entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope } : entry),
+    }) };
+}
+
+export async function deletePayload(actor: SharingAccount, ownerId: string, nodeId: string, parentId: string) {
+  const parent = await treeListing(actor, parentId);
+  const entry = parent.entries.find((entry) => entry.nodeId === nodeId)!;
+  return { parentId, kind: entry.kind, expectedRevision: parent.entriesRevision,
+    ...(entry.kind === "directory" ? { expectedDirectoryRevision: (await treeListing(actor, nodeId)).entriesRevision } : {}),
+    listingHead: await createListingHead(actor.keys.get(parentId)!, actor.assertion.privateKey, {
+      vaultId: ownerId, directoryId: parentId, deviceId: actor.deviceId, revision: parent.entriesRevision + 1,
+      entries: parent.entries.filter((entry) => entry.nodeId !== nodeId),
+    }) };
+}
+
+export async function invite(owner: SharingAccount, recipient: SharingAccount, targetId: string,
+  permission: "read_only" | "read_write" = "read_only") {
+  const response = await sharingRequest(owner, "/api/private/shares", "PUT", {
+    targetId, recipient: { shareId: recipient.shareId }, permission,
+  });
+  if (response.status !== 201) throw new Error(`invite failed: ${response.status}`);
+  return response.json() as Promise<{ shareId: string }>;
+}
+
+export async function grant(owner: SharingAccount, recipient: SharingAccount, targetId: string,
+  permission: "read_only" | "read_write" = "read_only") {
+  const share = await invite(owner, recipient, targetId, permission);
+  const response = await sharingRequest(recipient, `/api/private/shares/${share.shareId}/accept`, "POST", {});
+  if (response.status !== 201) throw new Error(`accept failed: ${response.status}`);
+  return response.json() as Promise<{ grantId: string }>;
+}

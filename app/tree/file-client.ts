@@ -26,7 +26,8 @@ export async function fileSaveAction(fileId: string, request: Request): Promise<
     });
     if (response.status === 409) {
       const body = await response.json() as { error: string };
-      return { operationId, state: body.error === "namespace_changed" ? "folder-changed" : "conflict" };
+      return { operationId, state: body.error === "namespace_changed" ? "folder-changed"
+        : body.error === "file_changed" ? "conflict" : "failed" };
     }
     if (!response.ok) return { operationId, state: "failed" };
     const saved = await response.json() as { revision: number; entriesRevision: number };

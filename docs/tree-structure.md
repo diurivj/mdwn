@@ -4,14 +4,13 @@ Ticket 16 adds encrypted sibling reordering, same-Owner moves, and irreversible 
 
 ## Current dependency stage
 
-Only owned, unshared content exists. Another Account cannot read or mutate this tree, including through a guessed Directory ID. Before tickets 17–19 enable Shares/Grants, they must extend both preflight and **transactional** authorization:
+Ticket 17 extends both preflight and **transactional** authorization through the bounded indexed access query; see [Shares, Grants, and server authority](sharing.md).
 
-- A Directory read/write Collaborator may mutate only inside the granted subtree, never its shared root or outside that subtree. A direct File Grant cannot authorize structural operations.
-- Owner-controlled exits from a shared subtree also require completed bounded rekeying or explicit refusal/deferral. Rewrapping a Directory's unchanged capability is safe only while the graph is unshared; it must not expose future writes to former inherited readers.
-- Rotation-blocked roots must not accept new structural writes. Direct File Grants follow identity without disclosing a parent/path.
-- Ticket 27 must extend the explicit hard-deletion dependency list before Grant, Publication, or Comment records can exist beneath deletable content.
-
-Do not enable sharing by merely relaxing the `owner_id` predicates in the current routes.
+- A Directory read/write Collaborator may mutate only inside a covering granted subtree, never its shared root or outside that scope. A direct File Grant cannot authorize structural operations.
+- Owner-controlled exits from any shared subtree are explicitly deferred until ticket 19 supplies completed bounded rekeying. Moves between disconnected Collaborator write scopes are denied.
+- Revocation/leave/permission changes create current safety seals; future encrypted and structural writes beneath sealed targets fail closed until rotation. Reads and hard deletion remain available.
+- Direct File Grants follow identity without disclosing a parent/path. Their parent-free fresh-key save protocol remains a ticket-18 dependency gap; the existing parent-capability save is never exposed to them.
+- Shares, Grants, and safety seals are now explicitly removed during hard deletion. Ticket 27 must extend that list when Publication or Comment records are introduced.
 
 ## Protocol and concurrency
 
@@ -27,11 +26,12 @@ References: [D1 batch transactions](https://developers.cloudflare.com/d1/worker-
 
 The 500-node cap includes the selected Directory. Enumeration reads at most 501 nodes, authorizes each node/edge, and pins every parent relationship, Directory revision, and File pointer. The transaction rechecks the complete snapshot and bounded membership count, then explicitly removes:
 
-1. Directory entries and their parent capability envelopes;
-2. object-addressed Key envelopes;
-3. private File representations;
-4. File and Directory records;
-5. Vault nodes.
+1. Pending Shares, active Grants, and current sharing safety seals targeting the selected nodes;
+2. Directory entries and their parent capability envelopes;
+3. object-addressed Key envelopes;
+4. private File representations;
+5. File and Directory records;
+6. Vault nodes.
 
 A late failure rolls back heads, proof use, and every dependent record. An over-cap request changes nothing and directs the person to reduce the subtree; it never deletes a valid subset. Hidden roots cannot be renamed, moved, reordered, or deleted. Deleted/inaccessible objects share the same non-revealing not-found response. There is no trash, restore state, or retained representation history. Deletion cannot recall downloads or guarantee provider-managed backup-erasure timing.
 

@@ -486,6 +486,7 @@ export const vaultNodes = sqliteTable("vault_nodes", {
   uniqueIndex("vault_nodes_one_root_idx").on(table.ownerId).where(sql`${table.parentNodeId} IS NULL`),
   uniqueIndex("vault_nodes_owner_edge_idx").on(table.ownerId, table.id, table.parentNodeId),
   index("vault_nodes_parent_idx").on(table.parentNodeId),
+  uniqueIndex("vault_nodes_owner_target_idx").on(table.ownerId, table.id, table.kind),
   // The reciprocal, deferred FKs to directories and directory_entries are in
   // the reviewed migration: Drizzle cannot express this circular relationship.
 ]);
@@ -557,4 +558,65 @@ export const fileRepresentations = sqliteTable("file_representations", {
   check("file_representations_ciphertext_bounded", sql`length(${table.ciphertext}) <= 524288 AND ${table.ciphertextSize} = length(${table.ciphertext})`),
   foreignKey({ columns: [table.ownerId, table.fileNodeId],
     foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+]);
+
+/** Only pending invitations are retained; cancellation/decline deletes the row. */
+export const shares = sqliteTable("shares", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  recipientId: text("recipient_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  targetId: text("target_id").notNull(),
+  targetKind: text("target_kind").notNull(),
+  permission: text("permission").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("shares_relationship_idx").on(table.ownerId, table.recipientId, table.targetId),
+  index("shares_recipient_idx").on(table.recipientId, table.id),
+  index("shares_owner_idx").on(table.ownerId, table.id),
+  index("shares_target_idx").on(table.targetId),
+  foreignKey({ columns: [table.ownerId, table.targetId, table.targetKind],
+    foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.kind] }).onDelete("restrict"),
+  check("shares_permission_valid", sql`${table.permission} IN ('read_only', 'read_write')`),
+  check("shares_target_kind_valid", sql`${table.targetKind} IN ('directory', 'file')`),
+  check("shares_no_self", sql`${table.ownerId} != ${table.recipientId}`),
+]);
+
+/** Every retained Grant is active. Independent targets never replace one another. */
+export const grants = sqliteTable("grants", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  recipientId: text("recipient_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  targetId: text("target_id").notNull(),
+  targetKind: text("target_kind").notNull(),
+  permission: text("permission").notNull(),
+  revision: integer("revision").notNull(),
+  keyEpoch: integer("key_epoch").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("grants_relationship_idx").on(table.ownerId, table.recipientId, table.targetId),
+  index("grants_recipient_target_idx").on(table.recipientId, table.targetId, table.ownerId, table.targetKind, table.permission),
+  index("grants_recipient_idx").on(table.recipientId, table.id),
+  index("grants_owner_idx").on(table.ownerId, table.id),
+  index("grants_target_idx").on(table.targetId),
+  foreignKey({ columns: [table.ownerId, table.targetId, table.targetKind],
+    foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.kind] }).onDelete("restrict"),
+  check("grants_permission_valid", sql`${table.permission} IN ('read_only', 'read_write')`),
+  check("grants_target_kind_valid", sql`${table.targetKind} IN ('directory', 'file')`),
+  check("grants_no_self", sql`${table.ownerId} != ${table.recipientId}`),
+  check("grants_revision_positive", sql`${table.revision} >= 1`),
+  check("grants_epoch_positive", sql`${table.keyEpoch} >= 1`),
+]);
+
+/** Current safety seal, not sharing history. Ticket 19 replaces this fail-closed
+ * inter-ticket state with a completed browser-driven key rotation.
+ */
+export const sharingWriteBlocks = sqliteTable("sharing_write_blocks", {
+  targetId: text("target_id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  targetKind: text("target_kind").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  foreignKey({ columns: [table.ownerId, table.targetId, table.targetKind],
+    foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.kind] }).onDelete("restrict"),
 ]);

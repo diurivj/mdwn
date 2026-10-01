@@ -4,12 +4,14 @@ import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitDirectoryMutation, commitTreeMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./listing";
+import { accessPredicate, effectiveAccessQuery, exitsSharedScope, moveAccessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
 
 const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
 const badRequest = () => Response.json({ error: "invalid_tree_request" }, { status: 400, headers });
 const changed = () => Response.json({ error: "namespace_changed" }, { status: 409, headers });
 const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers });
+const rotationRequired = () => Response.json({ error: "key_rotation_required" }, { status: 409, headers });
 
 type EntryRow = {
   node_id: string | null; kind: "directory" | "file" | null;
@@ -29,11 +31,10 @@ async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: stri
       d.listing_ciphertext, d.listing_digest, d.listing_signature, d.listing_device_id,
       signer.assertion_public_key AS signer_public_key
     FROM directories d JOIN vault_nodes parent ON parent.id = d.node_id AND parent.owner_id = d.owner_id
-    LEFT JOIN encryption_devices signer ON signer.id = d.listing_device_id AND signer.account_id = d.owner_id
+    LEFT JOIN encryption_devices signer ON signer.id = d.listing_device_id
     LEFT JOIN directory_entries e ON e.parent_node_id = d.node_id AND e.owner_id = d.owner_id
     LEFT JOIN vault_nodes n ON n.id = e.child_node_id AND n.owner_id = d.owner_id
-    WHERE d.node_id = ${directoryId} AND d.owner_id = ${auth.accountId}
-      AND ${privateReadGuard(auth)}
+    WHERE d.node_id = ${directoryId} AND ${accessPredicate(auth, directoryId)}
     ORDER BY e.child_node_id`);
   if (!rows.length) return notFound();
   if (rows.some((row) => row.node_id && (!row.kind || !row.name_ciphertext || !row.order_ciphertext || !row.key_envelope))) return denied();
@@ -59,47 +60,56 @@ async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: stri
 }
 
 async function ancestors(env: Env, auth: AuthorizedDevice, nodeId: string): Promise<Response> {
-  const rows = await createDb(env.DB).all<{ id: string; parent_node_id: string | null; depth: number }>(sql`
-    WITH RECURSIVE lineage(id, parent_node_id, depth) AS (
-      SELECT n.id, n.parent_node_id, 0 FROM vault_nodes n
-      WHERE n.id = ${nodeId} AND n.owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}
+  const rows = await createDb(env.DB).all<{ id: string; depth: number }>(sql`
+    WITH RECURSIVE access AS (${effectiveAccessQuery(auth, nodeId)}), lineage(id, parent_node_id, depth) AS (
+      SELECT n.id, n.parent_node_id, 0 FROM vault_nodes n JOIN access a ON a.node_id = n.id
       UNION ALL
       SELECT parent.id, parent.parent_node_id, child.depth + 1
       FROM vault_nodes parent JOIN lineage child ON child.parent_node_id = parent.id
-      WHERE parent.owner_id = ${auth.accountId} AND child.depth < 100
+      JOIN access a ON a.owner_id = parent.owner_id WHERE child.depth < 100
     )
-    SELECT id, parent_node_id, depth FROM lineage ORDER BY depth DESC`);
-  if (!rows.length || rows[0]!.parent_node_id !== null) return notFound();
+    SELECT l.id, l.depth FROM lineage l CROSS JOIN access a
+    WHERE (a.permission_rank = 3 OR l.depth = 0 OR EXISTS (
+      SELECT 1 FROM lineage root JOIN json_each(a.directory_read_roots) scope ON scope.value = root.id
+      WHERE l.depth <= root.depth))
+      AND (a.permission_rank != 3 OR EXISTS (SELECT 1 FROM lineage WHERE parent_node_id IS NULL))
+    ORDER BY l.depth DESC`);
+  if (!rows.length) return notFound();
   return Response.json({ ancestors: rows.map((row) => row.id) }, { headers });
 }
 
 type FileRow = {
-  parent_node_id: string; revision: number; representation_id: string;
+  parent_node_id: string; owner_id: string; has_directory_access: number; can_edit: number; revision: number; representation_id: string;
   ciphertext: ArrayBuffer; key_epoch: number; content_key_id: string;
   name_ciphertext: ArrayBuffer; order_ciphertext: ArrayBuffer; key_envelope: ArrayBuffer;
 };
 
 async function currentFile(env: Env, auth: AuthorizedDevice, fileId: string) {
   return createDb(env.DB).get<FileRow>(sql`
-    SELECT n.parent_node_id, f.current_revision AS revision, r.id AS representation_id,
+    SELECT n.parent_node_id, n.owner_id,
+      a.permission_rank = 3 OR json_array_length(a.directory_read_roots) > 0 AS has_directory_access,
+      a.permission_rank >= 2 AS can_edit,
+      f.current_revision AS revision, r.id AS representation_id,
       r.ciphertext, r.key_epoch, r.content_key_id,
       e.name_ciphertext, e.order_ciphertext, e.key_envelope
-    FROM vault_nodes n JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
+    FROM (${effectiveAccessQuery(auth, fileId)}) a
+    JOIN vault_nodes n ON n.id = a.node_id JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
     JOIN file_representations r ON r.id = f.current_representation_id
       AND r.file_node_id = f.node_id AND r.owner_id = f.owner_id AND r.revision = f.current_revision
     JOIN directory_entries e ON e.child_node_id = n.id AND e.parent_node_id = n.parent_node_id
-    WHERE n.id = ${fileId} AND n.owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}`);
+    WHERE n.id = ${fileId}`);
 }
 
 async function readFile(env: Env, auth: AuthorizedDevice, fileId: string): Promise<Response> {
   const row = await currentFile(env, auth, fileId);
   if (!row) return notFound();
-  return Response.json({ fileId, parentId: row.parent_node_id, revision: row.revision,
+  return Response.json({ fileId, ownerId: row.owner_id, revision: row.revision,
     representationId: row.representation_id, contentKeyId: row.content_key_id, keyEpoch: row.key_epoch,
     ciphertext: encodeTreeBytes(new Uint8Array(row.ciphertext)),
-    nameCiphertext: encodeTreeBytes(new Uint8Array(row.name_ciphertext)),
-    orderCiphertext: encodeTreeBytes(new Uint8Array(row.order_ciphertext)),
-    keyEnvelope: encodeTreeBytes(new Uint8Array(row.key_envelope)),
+    ...(row.has_directory_access ? { parentId: row.parent_node_id,
+      nameCiphertext: encodeTreeBytes(new Uint8Array(row.name_ciphertext)),
+      orderCiphertext: encodeTreeBytes(new Uint8Array(row.order_ciphertext)),
+      keyEnvelope: encodeTreeBytes(new Uint8Array(row.key_envelope)) } : {}),
   }, { headers });
 }
 
@@ -112,12 +122,12 @@ function exact(value: Record<string, unknown>, fields: readonly string[]): boole
 }
 
 async function signedListing(value: unknown, auth: AuthorizedDevice, directoryId: string,
-  expectedRevision: number): Promise<{ ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array }> {
+  expectedRevision: number, ownerId = auth.accountId): Promise<{ ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array }> {
   const input = record(value);
   if (!input || !exact(input, ["ciphertext", "digest", "signature"])) throw new Error("invalid listing head");
   const revision = expectedRevision + 1;
   const ciphertext = treeEnvelope(input.ciphertext, MAX_LISTING_BYTES, {
-    purpose: "directory-metadata", vaultId: auth.accountId, objectId: directoryId,
+    purpose: "directory-metadata", vaultId: ownerId, objectId: directoryId,
     keyId: directoryId, keyEpoch: 1, revision,
   });
   const digest = decodeTreeBytes(input.digest, 32);
@@ -126,7 +136,7 @@ async function signedListing(value: unknown, auth: AuthorizedDevice, directoryId
   if (digest.length !== 32 || signature.length !== 64 ||
       !computed.every((byte, i) => byte === digest[i]) ||
       !await verifyListingSignature(input as ListingHead, {
-        vaultId: auth.accountId, directoryId, deviceId: auth.deviceId, revision,
+        vaultId: ownerId, directoryId, deviceId: auth.deviceId, revision,
         publicKey: auth.assertionPublicKey,
       })) throw new Error("invalid listing head");
   return { ciphertext, digest, signature };
@@ -164,19 +174,19 @@ function createPayload(value: unknown, accountId: string, parentId: string): Cre
 }
 
 async function createChild(env: Env, auth: AuthorizedDevice, parentId: string, value: unknown): Promise<Response> {
+  const parent = await authorizedDirectory(env, auth, parentId, "create");
+  if (!parent) return notFound();
+  const accountId = parent.owner_id;
+  const blocked = sharingWriteBlocked(parentId);
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
   let input: Create;
-  try { input = createPayload(value, auth.accountId, parentId); }
+  try { input = createPayload(value, accountId, parentId); }
   catch { return badRequest(); }
-  const exists = await createDb(env.DB).get<{ id: string }>(sql`
-    SELECT id FROM vault_nodes WHERE id = ${parentId} AND owner_id = ${auth.accountId}
-      AND kind = 'directory' AND ${privateReadGuard(auth)}`);
-  if (!exists) return notFound();
-  const { accountId } = auth;
   const now = Date.now();
   try {
-    const head = await signedListing(record(value)?.listingHead, auth, parentId, input.expectedRevision);
+    const head = await signedListing(record(value)?.listingHead, auth, parentId, input.expectedRevision, accountId);
     const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision, head,
-      sql`EXISTS (SELECT 1 FROM vault_nodes WHERE id = ${parentId}
+      sql`${accessPredicate(auth, parentId, "create")} AND NOT ${blocked} AND EXISTS (SELECT 1 FROM vault_nodes WHERE id = ${parentId}
         AND owner_id = ${accountId} AND kind = 'directory')`,
       (previous) => [
         sql`INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at)
@@ -198,7 +208,7 @@ async function createChild(env: Env, auth: AuthorizedDevice, parentId: string, v
           name_ciphertext, order_ciphertext, key_envelope)
           SELECT ${input.nodeId}, ${accountId}, ${parentId}, ${input.nameCiphertext},
             ${input.orderCiphertext}, ${input.keyEnvelope} WHERE ${previous}`,
-      ]);
+      ], accountId);
     return committed ? Response.json({ nodeId: input.nodeId, entriesRevision: input.expectedRevision + 1 },
       { status: 201, headers }) : changed();
   } catch { return badRequest(); }
@@ -208,32 +218,36 @@ async function renameChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
   const input = record(value);
   if (!input || !exact(input, ["parentId", "expectedRevision", "nameCiphertext", "orderCiphertext", "listingHead"]) ||
       !isV7(input.parentId) || !validRevision(input.expectedRevision)) return badRequest();
-  const parent = await authorizedDirectory(env, auth, input.parentId);
+  const parent = await authorizedDirectory(env, auth, input.parentId, "create");
   if (!parent) return notFound();
+  const ownerId = parent.owner_id;
   if (parent.entries_revision !== input.expectedRevision) return changed();
   const row = await createDb(env.DB).get<{ parent_node_id: string }>(sql`
     SELECT n.parent_node_id FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
-    WHERE n.id = ${nodeId} AND n.owner_id = ${auth.accountId} AND n.parent_node_id = ${input.parentId}
-      AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id AND ${privateReadGuard(auth)}`);
+    WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId} AND n.parent_node_id = ${input.parentId}
+      AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id AND ${accessPredicate(auth, nodeId, "structure")}`);
   if (!row) return structuralFailure(env, auth, [{ directoryId: input.parentId, expectedRevision: input.expectedRevision }], notFound());
   // The hidden root cannot be renamed.
   const parentId = row.parent_node_id;
+  const blocked = sharingWriteBlocked(nodeId);
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
   let name: Uint8Array, order: Uint8Array;
   try {
-    const context = { purpose: "directory-metadata" as const, vaultId: auth.accountId,
+    const context = { purpose: "directory-metadata" as const, vaultId: ownerId,
       objectId: nodeId, keyId: parentId, keyEpoch: 1, revision: 1 };
     name = treeEnvelope(input.nameCiphertext, 1024, context);
     order = treeEnvelope(input.orderCiphertext, 4096, context);
   } catch { return badRequest(); }
   let head: Awaited<ReturnType<typeof signedListing>>;
-  try { head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision as number); }
+  try { head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision as number, ownerId); }
   catch { return badRequest(); }
   const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision as number, head,
-    sql`EXISTS (SELECT 1 FROM directory_entries WHERE child_node_id = ${nodeId}
-      AND owner_id = ${auth.accountId} AND parent_node_id = ${parentId})`,
+    sql`${accessPredicate(auth, parentId, "create")} AND ${accessPredicate(auth, nodeId, "structure")} AND NOT ${blocked}
+      AND EXISTS (SELECT 1 FROM directory_entries WHERE child_node_id = ${nodeId}
+        AND owner_id = ${ownerId} AND parent_node_id = ${parentId})`,
     (previous) => [sql`UPDATE directory_entries SET name_ciphertext = ${name}, order_ciphertext = ${order}
-      WHERE child_node_id = ${nodeId} AND owner_id = ${auth.accountId}
-        AND parent_node_id = ${parentId} AND ${previous}`]);
+      WHERE child_node_id = ${nodeId} AND owner_id = ${ownerId}
+        AND parent_node_id = ${parentId} AND ${previous}`], ownerId);
   return committed ? Response.json({ entriesRevision: (input.expectedRevision as number) + 1 }, { headers }) : changed();
 }
 
@@ -241,11 +255,10 @@ function validRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && Number.isSafeInteger(value + 1);
 }
 
-async function authorizedDirectory(env: Env, auth: AuthorizedDevice, directoryId: string) {
-  return createDb(env.DB).get<{ entries_revision: number }>(sql`
-    SELECT d.entries_revision FROM directories d JOIN vault_nodes n ON n.id = d.node_id AND n.owner_id = d.owner_id
-    WHERE d.node_id = ${directoryId} AND d.owner_id = ${auth.accountId} AND n.kind = 'directory'
-      AND ${privateReadGuard(auth)}`);
+async function authorizedDirectory(env: Env, auth: AuthorizedDevice, directoryId: string, operation: "read" | "create" = "read") {
+  return createDb(env.DB).get<{ entries_revision: number; owner_id: string }>(sql`
+    SELECT d.entries_revision, d.owner_id FROM directories d JOIN vault_nodes n ON n.id = d.node_id AND n.owner_id = d.owner_id
+    WHERE d.node_id = ${directoryId} AND n.kind = 'directory' AND ${accessPredicate(auth, directoryId, operation)}`);
 }
 
 type ExpectedDirectory = { directoryId: string; expectedRevision: number };
@@ -257,8 +270,9 @@ type ExpectedDirectory = { directoryId: string; expectedRevision: number };
 async function structuralFailure(env: Env, auth: AuthorizedDevice, expected: ExpectedDirectory[], fallback: Response) {
   const changedSinceRead = await createDb(env.DB).get(sql`
     SELECT 1 FROM json_each(${JSON.stringify(expected)}) expected JOIN directories d
-      ON d.node_id = json_extract(expected.value, '$.directoryId') AND d.owner_id = ${auth.accountId}
-    WHERE d.entries_revision != json_extract(expected.value, '$.expectedRevision') AND ${privateReadGuard(auth)} LIMIT 1`);
+      ON d.node_id = json_extract(expected.value, '$.directoryId')
+    WHERE d.entries_revision != json_extract(expected.value, '$.expectedRevision')
+      AND ${accessPredicate(auth, sql`d.node_id`)} LIMIT 1`);
   return changedSinceRead ? changed() : fallback;
 }
 
@@ -267,16 +281,18 @@ async function reorderChild(env: Env, auth: AuthorizedDevice, nodeId: string, va
   if (!input || !exact(input, ["parentId", "expectedRevision", "orders", "listingHead"]) ||
       !isV7(input.parentId) || !validRevision(input.expectedRevision) || !Array.isArray(input.orders) ||
       input.orders.length < 1 || input.orders.length > 2) return badRequest();
-  const parent = await authorizedDirectory(env, auth, input.parentId);
+  const parent = await authorizedDirectory(env, auth, input.parentId, "create");
   if (!parent) return notFound();
   if (parent.entries_revision !== input.expectedRevision) return changed();
-  const parentId = input.parentId;
+  const parentId = input.parentId, ownerId = parent.owner_id;
+  const blocked = sharingWriteBlocked(parentId);
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
   try {
     const orders = input.orders.map((value) => {
       const order = record(value);
       if (!order || !exact(order, ["nodeId", "orderCiphertext"]) || !isV7(order.nodeId)) throw new Error("invalid order");
       return { nodeId: order.nodeId, ciphertext: treeEnvelope(order.orderCiphertext, 4096, {
-        purpose: "directory-metadata", vaultId: auth.accountId, objectId: order.nodeId,
+        purpose: "directory-metadata", vaultId: ownerId, objectId: order.nodeId,
         keyId: parentId, keyEpoch: 1, revision: 1,
       }) };
     });
@@ -284,16 +300,20 @@ async function reorderChild(env: Env, auth: AuthorizedDevice, nodeId: string, va
     const members = sql.join(orders.map((order) => sql`${order.nodeId}`), sql`, `);
     const eligible = sql`(SELECT count(*) FROM directory_entries e JOIN vault_nodes n ON n.id = e.child_node_id
       AND n.owner_id = e.owner_id AND n.parent_node_id = e.parent_node_id
-      WHERE e.owner_id = ${auth.accountId} AND e.parent_node_id = ${parentId}
-        AND e.child_node_id IN (${members})) = ${orders.length}`;
+      WHERE e.owner_id = ${ownerId} AND e.parent_node_id = ${parentId}
+        AND e.child_node_id IN (${members})) = ${orders.length}
+      AND ${accessPredicate(auth, parentId, "create")}
+      AND ${accessPredicate(auth, nodeId, "structure")} AND NOT ${blocked}`;
     if (!await createDb(env.DB).get(sql`SELECT 1 WHERE ${eligible} AND ${privateReadGuard(auth)}`)) {
       return structuralFailure(env, auth, [{ directoryId: parentId, expectedRevision: input.expectedRevision }], notFound());
     }
-    const head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision);
-    const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision, head, eligible,
-      (previous) => orders.map((order) => sql`UPDATE directory_entries SET order_ciphertext = ${order.ciphertext}
-        WHERE child_node_id = ${order.nodeId} AND owner_id = ${auth.accountId}
-          AND parent_node_id = ${parentId} AND ${previous}`));
+    const blockedOrders = sql.join(orders.map((order) => sharingWriteBlocked(order.nodeId)), sql` OR `);
+    if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blockedOrders}`)) return rotationRequired();
+    const head = await signedListing(input.listingHead, auth, parentId, input.expectedRevision, ownerId);
+    const committed = await commitDirectoryMutation(env, auth, parentId, input.expectedRevision, head,
+      sql`${eligible} AND NOT (${blockedOrders})`, (previous) => orders.map((order) => sql`UPDATE directory_entries SET order_ciphertext = ${order.ciphertext}
+        WHERE child_node_id = ${order.nodeId} AND owner_id = ${ownerId}
+          AND parent_node_id = ${parentId} AND ${previous}`), ownerId);
     return committed ? Response.json({ entriesRevision: input.expectedRevision + 1 }, { headers }) : changed();
   } catch { return badRequest(); }
 }
@@ -308,22 +328,27 @@ async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string, value
   const sourceId = input.sourceId, destinationId = input.destinationId;
   const expected = [{ directoryId: sourceId, expectedRevision: input.expectedSourceRevision },
     { directoryId: destinationId, expectedRevision: input.expectedDestinationRevision }];
-  // At this dependency stage there are no Shares/Grants. Only owned namespaces
-  // can be read or changed. Tickets 17-19 must gate any shared-scope exit on
-  // completed rotation before enabling collaborator/scope-changing moves.
   const [source, destination] = await Promise.all([
-    authorizedDirectory(env, auth, sourceId), authorizedDirectory(env, auth, destinationId),
+    authorizedDirectory(env, auth, sourceId, "create"), authorizedDirectory(env, auth, destinationId, "create"),
   ]);
-  if (!source || !destination) return notFound();
+  if (!source || !destination || source.owner_id !== destination.owner_id) return notFound();
+  const ownerId = source.owner_id;
   if (source.entries_revision !== input.expectedSourceRevision ||
       destination.entries_revision !== input.expectedDestinationRevision) return changed();
+  const moveAuthority = moveAccessPredicate(auth, nodeId, destinationId);
+  if (!await createDb(env.DB).get(sql`SELECT 1 WHERE ${moveAuthority}`)) {
+    return structuralFailure(env, auth, expected, notFound());
+  }
   const node = await createDb(env.DB).get<{ kind: string }>(sql`
     SELECT n.kind FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
       AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
-    WHERE n.id = ${nodeId} AND n.owner_id = ${auth.accountId} AND n.parent_node_id = ${sourceId}
-      AND ${privateReadGuard(auth)}`);
+    WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId} AND n.parent_node_id = ${sourceId}
+      AND ${moveAuthority}`);
   if (!node) return structuralFailure(env, auth, expected, notFound());
   if (node.kind !== input.kind) return structuralFailure(env, auth, expected, badRequest());
+  const scopeExit = exitsSharedScope(nodeId, destinationId);
+  const blocked = sql`${scopeExit} OR ${sharingWriteBlocked(nodeId)} OR ${sharingWriteBlocked(destinationId)}`;
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
   // Match the existing 100-edge private path bound. Never silently truncate
   // ancestry: an overflow or an unrooted chain fails closed, just like a cycle.
   const invalidLineage = sql`EXISTS (WITH RECURSIVE lineage(id) AS (
@@ -333,36 +358,36 @@ async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string, value
   ) SELECT 1 WHERE (SELECT count(*) FROM lineage) > 100
     OR EXISTS (SELECT 1 FROM lineage WHERE id = ${nodeId})
     OR NOT EXISTS (SELECT 1 FROM lineage a JOIN vault_nodes n ON n.id = a.id
-      WHERE n.owner_id = ${auth.accountId} AND n.parent_node_id IS NULL))`;
+      WHERE n.owner_id = ${ownerId} AND n.parent_node_id IS NULL))`;
   if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${invalidLineage}`)) return structuralFailure(env, auth, expected, badRequest());
   const file = input.kind === "file" ? await currentFile(env, auth, nodeId) : null;
   if (input.kind === "file" && !file) return structuralFailure(env, auth, expected, notFound());
   try {
-    const metadata = { purpose: "directory-metadata" as const, vaultId: auth.accountId,
+    const metadata = { purpose: "directory-metadata" as const, vaultId: ownerId,
       objectId: nodeId, keyId: destinationId, keyEpoch: 1, revision: 1 };
     const name = treeEnvelope(input.nameCiphertext, 1024, metadata);
     const order = treeEnvelope(input.orderCiphertext, 4096, metadata);
     const keyEnvelope = treeEnvelope(input.keyEnvelope, 1024, file ? {
-      purpose: "file-content-key", vaultId: auth.accountId, objectId: nodeId,
+      purpose: "file-content-key", vaultId: ownerId, objectId: nodeId,
       keyId: file.content_key_id, keyEpoch: file.key_epoch, revision: file.revision,
-    } : { purpose: "directory-capability", vaultId: auth.accountId, objectId: nodeId,
+    } : { purpose: "directory-capability", vaultId: ownerId, objectId: nodeId,
       keyId: nodeId, keyEpoch: 1, revision: 1 });
-    const sourceHead = await signedListing(input.sourceListingHead, auth, sourceId, input.expectedSourceRevision);
-    const destinationHead = await signedListing(input.destinationListingHead, auth, destinationId, input.expectedDestinationRevision);
+    const sourceHead = await signedListing(input.sourceListingHead, auth, sourceId, input.expectedSourceRevision, ownerId);
+    const destinationHead = await signedListing(input.destinationListingHead, auth, destinationId, input.expectedDestinationRevision, ownerId);
     const eligible = sql`EXISTS (SELECT 1 FROM vault_nodes n JOIN directory_entries e ON e.child_node_id = n.id
       AND e.owner_id = n.owner_id AND e.parent_node_id = n.parent_node_id
-      WHERE n.id = ${nodeId} AND n.owner_id = ${auth.accountId} AND n.kind = ${input.kind}
-        AND n.parent_node_id = ${sourceId}) AND NOT ${invalidLineage}`;
+      WHERE n.id = ${nodeId} AND n.owner_id = ${ownerId} AND n.kind = ${input.kind}
+        AND n.parent_node_id = ${sourceId}) AND NOT ${invalidLineage} AND ${moveAuthority} AND NOT (${blocked})`;
     const committed = await commitTreeMutation(env, auth, [
       { directoryId: sourceId, expectedRevision: input.expectedSourceRevision, head: sourceHead },
       { directoryId: destinationId, expectedRevision: input.expectedDestinationRevision, head: destinationHead },
     ], eligible, (committed) => [
       sql`UPDATE vault_nodes SET parent_node_id = ${destinationId}, updated_at = ${Date.now()}
-        WHERE id = ${nodeId} AND owner_id = ${auth.accountId} AND parent_node_id = ${sourceId} AND ${committed}`,
+        WHERE id = ${nodeId} AND owner_id = ${ownerId} AND parent_node_id = ${sourceId} AND ${committed}`,
       sql`UPDATE directory_entries SET parent_node_id = ${destinationId}, name_ciphertext = ${name},
           order_ciphertext = ${order}, key_envelope = ${keyEnvelope}
-        WHERE child_node_id = ${nodeId} AND owner_id = ${auth.accountId} AND parent_node_id = ${sourceId} AND ${committed}`,
-    ]);
+        WHERE child_node_id = ${nodeId} AND owner_id = ${ownerId} AND parent_node_id = ${sourceId} AND ${committed}`,
+    ], ownerId);
     return committed ? Response.json({ sourceEntriesRevision: input.expectedSourceRevision + 1,
       destinationEntriesRevision: input.expectedDestinationRevision + 1 }, { headers }) : changed();
   } catch { return structuralFailure(env, auth, expected, badRequest()); }
@@ -393,8 +418,9 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
         : ["parentId", "kind", "expectedRevision", "listingHead"]) ||
       !isV7(input.parentId) || !validRevision(input.expectedRevision) ||
       (input.kind === "directory" && !validRevision(input.expectedDirectoryRevision))) return badRequest();
-  const parent = await authorizedDirectory(env, auth, input.parentId);
+  const parent = await authorizedDirectory(env, auth, input.parentId, "create");
   if (!parent) return notFound();
+  const ownerId = parent.owner_id;
   // Even a second same-revision delete is a namespace conflict, not a revealing
   // deleted-object response. The supplied parent must first be authorized.
   if (parent.entries_revision !== input.expectedRevision) return changed();
@@ -407,28 +433,30 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
     LEFT JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id
     WHERE n.id IN (${deletionIds(nodeId)}) AND ${privateReadGuard(auth)}
       AND EXISTS (SELECT 1 FROM vault_nodes root WHERE root.id = ${nodeId}
-        AND root.owner_id = ${auth.accountId} AND root.parent_node_id = ${input.parentId})`);
+        AND root.owner_id = ${ownerId} AND root.parent_node_id = ${input.parentId})
+      AND ${accessPredicate(auth, nodeId, "structure")}`);
   if (!rows.length) return structuralFailure(env, auth, [{ directoryId: input.parentId, expectedRevision: input.expectedRevision }], notFound());
   const root = rows.find((row) => row.id === nodeId)!;
   if (root.kind !== input.kind) return badRequest();
   if (input.kind === "directory" && root.entries_revision !== input.expectedDirectoryRevision) return changed();
-  if (rows.some((row) => row.owner_id !== auth.accountId || row.parent_node_id === null ||
+  if (rows.some((row) => row.owner_id !== ownerId || row.parent_node_id === null ||
       row.edge_parent !== row.parent_node_id || (row.kind === "directory"
-        ? row.directory_owner !== auth.accountId || row.entries_revision === null
-        : row.kind !== "file" || row.file_owner !== auth.accountId || row.current_revision === null || !row.current_representation_id))) {
+        ? row.directory_owner !== ownerId || row.entries_revision === null
+        : row.kind !== "file" || row.file_owner !== ownerId || row.current_revision === null || !row.current_representation_id))) {
     return notFound();
   }
   if (rows.length > MAX_DELETE_NODES) return Response.json({ error: "directory_too_large", maxNodes: MAX_DELETE_NODES }, { status: 413, headers });
   try {
-    const head = await signedListing(input.listingHead, auth, input.parentId, input.expectedRevision);
+    const head = await signedListing(input.listingHead, auth, input.parentId, input.expectedRevision, ownerId);
     const snapshot = JSON.stringify(rows);
     const ids = sql`SELECT json_extract(value, '$.id') FROM json_each(${snapshot})`;
     // Pin the full enumerated graph, all Directory revisions, and File pointers.
     // Descendant inserts, moves, renames, saves or deletions after enumeration
     // make the first CAS lose; no proof, head, envelope or node can then change.
-    const eligible = sql`(SELECT count(*) FROM (${deletionIds(nodeId)})) = ${rows.length}
+    const eligible = sql`${accessPredicate(auth, input.parentId, "create")} AND ${accessPredicate(auth, nodeId, "structure")}
+      AND (SELECT count(*) FROM (${deletionIds(nodeId)})) = ${rows.length}
       AND NOT EXISTS (SELECT 1 FROM json_each(${snapshot}) expected
-        LEFT JOIN vault_nodes n ON n.id = json_extract(expected.value, '$.id') AND n.owner_id = ${auth.accountId}
+        LEFT JOIN vault_nodes n ON n.id = json_extract(expected.value, '$.id') AND n.owner_id = ${ownerId}
         LEFT JOIN directories d ON d.node_id = n.id AND d.owner_id = n.owner_id
         LEFT JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
         LEFT JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id
@@ -440,20 +468,31 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
     const committed = await commitTreeMutation(env, auth, [
       { directoryId: input.parentId, expectedRevision: input.expectedRevision, head },
     ], eligible, (committed) => [
-      sql`DELETE FROM directory_entries WHERE child_node_id IN (${ids}) AND owner_id = ${auth.accountId} AND ${committed}`,
-      sql`DELETE FROM key_envelopes WHERE object_id IN (${ids}) AND account_id = ${auth.accountId} AND ${committed}`,
-      sql`DELETE FROM file_representations WHERE file_node_id IN (${ids}) AND owner_id = ${auth.accountId} AND ${committed}`,
-      sql`DELETE FROM files WHERE node_id IN (${ids}) AND owner_id = ${auth.accountId} AND ${committed}`,
-      sql`DELETE FROM directories WHERE node_id IN (${ids}) AND owner_id = ${auth.accountId} AND ${committed}`,
-      sql`DELETE FROM vault_nodes WHERE id IN (${ids}) AND owner_id = ${auth.accountId} AND ${committed}`,
-    ]);
+      sql`DELETE FROM shares WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM sharing_write_blocks WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM directory_entries WHERE child_node_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM key_envelopes WHERE object_id IN (${ids}) AND account_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM file_representations WHERE file_node_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM files WHERE node_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM directories WHERE node_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM vault_nodes WHERE id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+    ], ownerId);
     return committed ? Response.json({ entriesRevision: input.expectedRevision + 1 }, { headers }) : changed();
   } catch { return badRequest(); }
 }
 
 async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value: unknown): Promise<Response> {
   const current = await currentFile(env, auth, fileId);
-  if (!current) return notFound();
+  if (!current || !current.can_edit) return notFound();
+  const accountId = current.owner_id;
+  const blocked = sharingWriteBlocked(fileId);
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
+  // Pure direct-File authority may not obtain a parent capability or signed
+  // namespace. Ticket 18 must supply the fresh-key, parent-free write contract.
+  if (!current.has_directory_access || !await authorizedDirectory(env, auth, current.parent_node_id, "create")) {
+    return Response.json({ error: "shared_content_provisioning_required" }, { status: 409, headers });
+  }
   const input = record(value);
   const repr = record(input?.representation);
   const incrementable = (value: unknown): value is number =>
@@ -469,7 +508,7 @@ async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value:
   let expectedParentId: string;
   try {
     const context = inspectEnvelope(decodeTreeBytes(record(input.listingHead)?.ciphertext, MAX_LISTING_BYTES)).context;
-    if (context.purpose !== "directory-metadata" || context.vaultId !== auth.accountId ||
+    if (context.purpose !== "directory-metadata" || context.vaultId !== accountId ||
         context.objectId !== context.keyId) return badRequest();
     expectedParentId = context.objectId;
   } catch { return badRequest(); }
@@ -483,16 +522,16 @@ async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value:
   let keyEnvelope: Uint8Array, ciphertext: Uint8Array;
   let head: Awaited<ReturnType<typeof signedListing>>;
   try {
-    const context = { vaultId: auth.accountId, objectId: fileId, keyId: repr.contentKeyId as string,
+    const context = { vaultId: accountId, objectId: fileId, keyId: repr.contentKeyId as string,
       keyEpoch: repr.keyEpoch as number, revision: expectedRevision + 1 };
     keyEnvelope = treeEnvelope(input.keyEnvelope, 1024, { ...context, purpose: "file-content-key" });
     ciphertext = treeEnvelope(repr.ciphertext, MAX_REPRESENTATION_BYTES, { ...context, purpose: "file-content" });
-    head = await signedListing(input.listingHead, auth, current.parent_node_id, expectedParentRevision);
+    head = await signedListing(input.listingHead, auth, current.parent_node_id, expectedParentRevision, accountId);
   } catch { return structuralFailure(env, auth, expected, badRequest()); }
-  const { accountId } = auth;
   try {
     const committed = await commitDirectoryMutation(env, auth, current.parent_node_id, expectedParentRevision, head,
-      sql`EXISTS (SELECT 1 FROM files f JOIN file_representations r ON r.id = f.current_representation_id
+      sql`${accessPredicate(auth, fileId, "edit")} AND ${accessPredicate(auth, current.parent_node_id, "create")} AND NOT ${blocked}
+        AND EXISTS (SELECT 1 FROM files f JOIN file_representations r ON r.id = f.current_representation_id
         JOIN vault_nodes n ON n.id = f.node_id AND n.owner_id = f.owner_id
         JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id
           AND e.parent_node_id = n.parent_node_id
@@ -517,11 +556,11 @@ async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value:
         sql`DELETE FROM file_representations WHERE id = ${current.representation_id}
           AND file_node_id = ${fileId} AND owner_id = ${accountId} AND ${previous}
           AND NOT EXISTS (SELECT 1 FROM files WHERE current_representation_id = ${current.representation_id})`,
-      ]);
+      ], accountId);
     if (committed) return Response.json({ revision: expectedRevision + 1, entriesRevision: expectedParentRevision + 1 }, { headers });
     // A competing File save can win after the initial read. Never invite a namespace retry for a stale draft.
     if (auth.expiresAt <= Date.now() || await createDb(env.DB).get(sql`
-      SELECT 1 FROM device_proof_uses WHERE account_id = ${accountId} AND proof_id = ${auth.proofId}`)) return denied();
+      SELECT 1 FROM device_proof_uses WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`)) return denied();
     const latest = await currentFile(env, auth, fileId);
     if (!latest) return structuralFailure(env, auth, expected, denied());
     if (latest.parent_node_id !== expectedParentId) return changed();

@@ -94,7 +94,12 @@ async function jsonResource<T>(path: string, method: "POST" | "PUT" | "PATCH" | 
   signal?: AbortSignal): Promise<T> {
   const response = await privateRequest(path, { method, signal, ...(body ? { body: JSON.stringify(body) } : {}) });
   if (response.status === 404) throw new TreeNotFoundError();
-  if (response.status === 409) throw new NamespaceChangedError();
+  if (response.status === 409) {
+    const body = await response.json() as { error?: string };
+    if (body.error === "namespace_changed") throw new NamespaceChangedError();
+    if (body.error === "key_rotation_required") throw new Error("Secure access must finish updating before this folder can change.");
+    throw new Error("Shared content is being securely provisioned.");
+  }
   if (response.status === 413 && (await response.json() as { error?: string }).error === "directory_too_large") {
     throw new DirectoryTooLargeError();
   }
