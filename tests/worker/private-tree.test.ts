@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createSymmetricWriter, openSymmetric } from "../../app/crypto/enc-v1";
+import { createSymmetricWriter, inspectEnvelope, openSymmetric } from "../../app/crypto/enc-v1";
 import { createChildDirectoryCapability, createFileRepresentation, decodeFileRepresentation, generateDirectoryCapabilityKey } from "../../app/crypto/vault";
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { NamespaceError, canonicalizeSegment } from "../../app/namespace-v1";
@@ -55,7 +55,7 @@ async function expectAgreedEdges(f: Fixture) {
   expect(row?.broken).toBe(0);
 }
 
-async function signedRequest(f: Fixture, path: string, method: "PUT" | "PATCH", value: object): Promise<object> {
+async function signedRequest(f: Fixture, path: string, method: "PUT" | "PATCH" | "DELETE", value: object): Promise<object> {
   const create = /^\/api\/private\/tree\/directories\/([0-9a-f-]+)\/children$/.exec(path);
   const rename = /^\/api\/private\/tree\/nodes\/([0-9a-f-]+)\/name$/.exec(path);
   const save = /^\/api\/private\/tree\/files\/([0-9a-f-]+)$/.exec(path);
@@ -82,7 +82,7 @@ async function signedRequest(f: Fixture, path: string, method: "PUT" | "PATCH", 
   }) };
 }
 
-async function request(f: Fixture, path: string, method: "POST" | "PUT" | "PATCH", value?: object, proofId?: string) {
+async function request(f: Fixture, path: string, method: "POST" | "PUT" | "PATCH" | "DELETE", value?: object, proofId?: string) {
   const url = `https://mdwn.test${path}`;
   const signed = value && method !== "POST" ? await signedRequest(f, path, method, value) : value;
   const body = signed === undefined ? undefined : JSON.stringify(signed);
@@ -145,7 +145,418 @@ async function saveRequest(f: Fixture, fileId: string, markdown = "# saved", exp
       ciphertext: encodeBytes(file.contentEnvelope) } }, file };
 }
 
+async function listing(f: Fixture, directoryId: string) {
+  const response = await request(f, `/api/private/tree/directories/${directoryId}`, "POST");
+  expect(response.status).toBe(200);
+  return response.json() as Promise<{ entriesRevision: number; entries: SealedEntry[];
+    listingHead: Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string } | null }>;
+}
+
+async function moveRequest(f: Fixture, nodeId: string, sourceId: string, destinationId: string, name = "moved") {
+  const source = await listing(f, sourceId), destination = await listing(f, destinationId);
+  const entry = source.entries.find((entry) => entry.nodeId === nodeId)!;
+  const keyContext = inspectEnvelope(decodeBytes(entry.keyEnvelope)).context;
+  const key = await openSymmetric(decodeBytes(entry.keyEnvelope), f.keys.get(sourceId)!, { context: keyContext });
+  const writer = await createSymmetricWriter(f.keys.get(destinationId)!);
+  const context = { purpose: "directory-metadata" as const, vaultId: f.accountId,
+    objectId: nodeId, keyId: destinationId, keyEpoch: 1, revision: 1 };
+  const updated = { ...entry,
+    nameCiphertext: encodeBytes(await writer.seal(new TextEncoder().encode(name), context)),
+    orderCiphertext: encodeBytes(await writer.seal(new TextEncoder().encode("last"), context)),
+    keyEnvelope: encodeBytes(await writer.seal(key, keyContext)) };
+  return { sourceId, destinationId, kind: entry.kind,
+    expectedSourceRevision: source.entriesRevision, expectedDestinationRevision: destination.entriesRevision,
+    nameCiphertext: updated.nameCiphertext, orderCiphertext: updated.orderCiphertext, keyEnvelope: updated.keyEnvelope,
+    sourceListingHead: await createListingHead(f.keys.get(sourceId)!, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: sourceId, deviceId: f.deviceId,
+      revision: source.entriesRevision + 1, entries: source.entries.filter((entry) => entry.nodeId !== nodeId),
+    }),
+    destinationListingHead: await createListingHead(f.keys.get(destinationId)!, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: destinationId, deviceId: f.deviceId,
+      revision: destination.entriesRevision + 1, entries: [...destination.entries, updated],
+    }) };
+}
+
+async function deleteRequest(f: Fixture, nodeId: string, parentId: string) {
+  const parent = await listing(f, parentId);
+  const entry = parent.entries.find((entry) => entry.nodeId === nodeId)!;
+  return { parentId, kind: entry.kind, expectedRevision: parent.entriesRevision,
+    ...(entry.kind === "directory" ? { expectedDirectoryRevision: (await listing(f, nodeId)).entriesRevision } : {}),
+    listingHead: await createListingHead(f.keys.get(parentId)!, f.assertion.privateKey, {
+      vaultId: f.accountId, directoryId: parentId, deviceId: f.deviceId,
+      revision: parent.entriesRevision + 1, entries: parent.entries.filter((entry) => entry.nodeId !== nodeId),
+    }) };
+}
+
+async function seedDeletionSubtree(f: Fixture, size: number) {
+  const root = await directoryRequest(f, "bounded");
+  expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", root)).status).toBe(201);
+  const nestedId = id();
+  const nodes = [{ id: nestedId, kind: "directory", parent: root.nodeId },
+    ...Array.from({ length: size - 2 }, (_, index) => ({ id: id(), kind: "file", parent: index % 2 ? nestedId : root.nodeId }))];
+  const serialized = JSON.stringify(nodes);
+  // Opaque storage-boundary fixture: deletion never decrypts descendant ciphertext.
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at)
+      SELECT json_extract(value, '$.id'), json_extract(value, '$.kind'), ?, json_extract(value, '$.parent'), 1, 1 FROM json_each(?)`)
+      .bind(f.accountId, serialized),
+    env.DB.prepare("INSERT INTO directories (node_id, owner_id, entries_revision) VALUES (?, ?, 1)").bind(nestedId, f.accountId),
+    env.DB.prepare(`INSERT INTO files (node_id, owner_id, current_representation_id, current_revision)
+      SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.id'), 1 FROM json_each(?) WHERE json_extract(value, '$.kind') = 'file'`)
+      .bind(f.accountId, serialized),
+    env.DB.prepare(`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id, key_epoch, ciphertext, ciphertext_size, created_at)
+      SELECT node_id, node_id, owner_id, 1, node_id, 1, X'01', 1, 1 FROM files WHERE owner_id = ?`).bind(f.accountId),
+    env.DB.prepare(`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext, order_ciphertext, key_envelope)
+      SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.parent'), X'01', X'01', X'01' FROM json_each(?)`).bind(f.accountId, serialized),
+    env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
+      SELECT ?, 'owned-device', json_extract(value, '$.id'), ?, X'01', 1 FROM json_each(?)`).bind(f.accountId, f.deviceId, serialized),
+  ]);
+  const entries = nodes.filter((node) => node.parent === root.nodeId).map((node): SealedEntry => ({ nodeId: node.id,
+    kind: node.kind as "directory" | "file", nameCiphertext: "AQ", orderCiphertext: "AQ", keyEnvelope: "AQ" }));
+  const head = await createListingHead(f.keys.get(root.nodeId)!, f.assertion.privateKey, { vaultId: f.accountId,
+    directoryId: root.nodeId, deviceId: f.deviceId, revision: 2, entries });
+  await env.DB.prepare(`UPDATE directories SET entries_revision = 2, listing_ciphertext = ?, listing_digest = ?,
+    listing_signature = ?, listing_device_id = ? WHERE node_id = ?`).bind(decodeBytes(head.ciphertext), decodeBytes(head.digest),
+      decodeBytes(head.signature), f.deviceId, root.nodeId).run();
+  return root.nodeId;
+}
+
 describe("private tree", () => {
+  it("keeps a concurrent File key replacement and move atomic with a refreshable loser", async () => {
+    for (let index = 0; index < 12; index++) {
+      const f = await fixture();
+      const created = await fileRequest(f, "current.md");
+      expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+      const destination = await directoryRequest(f, "target", id(), 2);
+      expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", destination)).status).toBe(201);
+      const filePath = `/api/private/tree/files/${created.body.nodeId}`;
+      const save = await signedRequest(f, filePath, "PATCH", (await saveRequest(f, created.body.nodeId, "# winning save", 1, 3)).body);
+      const move = await moveRequest(f, created.body.nodeId, f.rootId, destination.nodeId);
+      const operations = [() => request(f, filePath, "PATCH", save),
+        () => request(f, `/api/private/tree/nodes/${created.body.nodeId}/parent`, "PATCH", move)];
+      const responses = await Promise.all((index % 2 ? operations.reverse() : operations).map((run) => run()));
+      expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+      expect(await responses.find((response) => response.status === 409)!.json()).toEqual({ error: "namespace_changed" });
+      await expectAgreedEdges(f);
+    }
+  });
+  it("keeps concurrent target deletion and rename losers on the namespace refresh path", async () => {
+    for (let index = 0; index < 12; index++) {
+      const f = await fixture();
+      const child = await directoryRequest(f, "before");
+      expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", child)).status).toBe(201);
+      const renamePath = `/api/private/tree/nodes/${child.nodeId}/name`;
+      const rename = await signedRequest(f, renamePath, "PATCH", await prepareTreeRename({ vaultId: f.accountId,
+        parentId: f.rootId, parentKey: f.rootKey, nodeId: child.nodeId, entriesRevision: 2,
+        existingNames: [], requestedName: "after", order: "first" }));
+      const deletion = await deleteRequest(f, child.nodeId, f.rootId);
+      const operations = [() => request(f, renamePath, "PATCH", rename),
+        () => request(f, `/api/private/tree/nodes/${child.nodeId}`, "DELETE", deletion)];
+      const responses = await Promise.all((index % 2 ? operations.reverse() : operations).map((run) => run()));
+      expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+      expect(await responses.find((response) => response.status === 409)!.json()).toEqual({ error: "namespace_changed" });
+      expect((await listing(f, f.rootId)).entriesRevision).toBe(3);
+      await expectAgreedEdges(f);
+    }
+  });
+  it("fails closed on move ancestry beyond the supported path bound in both the API and D1", async () => {
+    const f = await fixture();
+    const file = await fileRequest(f, "bounded path.md");
+    const rootPath = `/api/private/tree/directories/${f.rootId}`;
+    expect((await request(f, `${rootPath}/children`, "PUT", file.body)).status).toBe(201);
+    const top = await directoryRequest(f, "deep fixture", id(), 2);
+    expect((await request(f, `${rootPath}/children`, "PUT", top)).status).toBe(201);
+    let parent = top.nodeId;
+    const chain = Array.from({ length: 101 }, () => {
+      const nodeId = id(), node = { id: nodeId, parent }; parent = nodeId; return node;
+    });
+    const encoded = JSON.stringify(chain);
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at)
+        SELECT json_extract(value, '$.id'), 'directory', ?, json_extract(value, '$.parent'), 1, 1 FROM json_each(?)`).bind(f.accountId, encoded),
+      env.DB.prepare(`INSERT INTO directories (node_id, owner_id, entries_revision)
+        SELECT json_extract(value, '$.id'), ?, 1 FROM json_each(?)`).bind(f.accountId, encoded),
+      env.DB.prepare(`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext, order_ciphertext, key_envelope)
+        SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.parent'), X'01', X'01', X'01' FROM json_each(?)`).bind(f.accountId, encoded),
+    ]);
+    f.keys.set(parent, generateDirectoryCapabilityKey());
+    const body = await moveRequest(f, file.body.nodeId, f.rootId, parent);
+    const before = await listing(f, f.rootId);
+    expect((await request(f, `/api/private/tree/nodes/${file.body.nodeId}/parent`, "PATCH", body)).status).toBe(400);
+    expect(await listing(f, f.rootId)).toEqual(before);
+    await expect(env.DB.batch([
+      env.DB.prepare("PRAGMA defer_foreign_keys = ON"),
+      env.DB.prepare("UPDATE vault_nodes SET parent_node_id = ? WHERE id = ?").bind(parent, file.body.nodeId),
+      env.DB.prepare("UPDATE directory_entries SET parent_node_id = ? WHERE child_node_id = ?").bind(parent, file.body.nodeId),
+    ])).rejects.toThrow();
+    await expectAgreedEdges(f);
+  });
+  it("moves the current File key after a save and preserves readable content and representation identity", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "current.md");
+    const root = `/api/private/tree/directories/${f.rootId}`;
+    expect((await request(f, `${root}/children`, "PUT", created.body)).status).toBe(201);
+    const saved = await saveRequest(f, created.body.nodeId, "# current key");
+    expect((await request(f, `/api/private/tree/files/${created.body.nodeId}`, "PATCH", saved.body)).status).toBe(200);
+    const destination = await directoryRequest(f, "target", id(), 3);
+    expect((await request(f, `${root}/children`, "PUT", destination)).status).toBe(201);
+    const body = await moveRequest(f, created.body.nodeId, f.rootId, destination.nodeId, "renamed.md");
+    expect(JSON.stringify(body)).not.toContain("renamed.md");
+    expect((await request(f, `/api/private/tree/nodes/${created.body.nodeId}/parent`, "PATCH", body)).status).toBe(200);
+    const file = await (await request(f, `/api/private/tree/files/${created.body.nodeId}`, "POST")).json() as {
+      parentId: string; representationId: string; revision: number; keyEnvelope: string; ciphertext: string;
+    };
+    expect(file).toMatchObject({ parentId: destination.nodeId, representationId: saved.body.representation.id, revision: 2 });
+    const key = await openSymmetric(decodeBytes(file.keyEnvelope), f.keys.get(destination.nodeId)!, { context: saved.file.keyContext });
+    expect(decodeFileRepresentation(await openSymmetric(decodeBytes(file.ciphertext), key,
+      { context: saved.file.contentContext })).markdown).toBe("# current key");
+    await expectAgreedEdges(f);
+  });
+
+  it("refuses cross-owner, cyclic, wrong-kind, hidden-root and malformed moves without changing either namespace", async () => {
+    const f = await fixture();
+    const source = await directoryRequest(f, "source");
+    const destination = await directoryRequest(f, "destination", id(), 2);
+    const root = `/api/private/tree/directories/${f.rootId}`;
+    expect((await request(f, `${root}/children`, "PUT", source)).status).toBe(201);
+    expect((await request(f, `${root}/children`, "PUT", destination)).status).toBe(201);
+    const child = await prepareTreeCreate({ vaultId: f.accountId, parentId: source.nodeId, parentKey: f.keys.get(source.nodeId)!,
+      entriesRevision: 1, existingNames: [], requestedName: "child", kind: "directory" });
+    expect((await request(f, `/api/private/tree/directories/${source.nodeId}/children`, "PUT", child)).status).toBe(201);
+    const body = await moveRequest(f, source.nodeId, f.rootId, destination.nodeId);
+    const before = await listing(f, f.rootId), destinationBefore = await listing(f, destination.nodeId);
+    const other = await fixture();
+    for (const [input, status] of [
+      [{ ...body, destinationId: other.rootId }, 404],
+      [{ ...body, destinationId: id() }, 404],
+      [{ ...body, kind: "file" }, 400],
+      [{ ...body, sourceId: destination.nodeId }, 400],
+      [{ ...body, expectedSourceRevision: 2 }, 409],
+      [{ ...body, expectedDestinationRevision: 2 }, 409],
+      [{ ...body, nameCiphertext: source.nameCiphertext }, 400],
+      [{ ...body, destinationListingHead: { ...body.destinationListingHead, signature: encodeBytes(new Uint8Array(64)) } }, 400],
+      [{ ...body, extra: "plaintext must never be accepted" }, 400],
+      [await moveRequest(f, source.nodeId, f.rootId, child.nodeId), 400],
+    ] as const) {
+      expect((await request(f, `/api/private/tree/nodes/${source.nodeId}/parent`, "PATCH", input)).status).toBe(status);
+      expect(await listing(f, f.rootId)).toEqual(before);
+      expect(await listing(f, destination.nodeId)).toEqual(destinationBefore);
+      await expectAgreedEdges(f);
+    }
+    expect((await request(f, `/api/private/tree/nodes/${f.rootId}/parent`, "PATCH", body)).status).toBe(404);
+    expect(await listing(f, f.rootId)).toEqual(before);
+  });
+
+  it("makes a destination structural winner and a reused mutation proof leave no partial source move", async () => {
+    const f = await fixture();
+    const source = await directoryRequest(f, "source");
+    const destination = await directoryRequest(f, "destination", id(), 2);
+    const root = `/api/private/tree/directories/${f.rootId}`;
+    expect((await request(f, `${root}/children`, "PUT", source)).status).toBe(201);
+    expect((await request(f, `${root}/children`, "PUT", destination)).status).toBe(201);
+    const stale = await moveRequest(f, source.nodeId, f.rootId, destination.nodeId);
+    const added = await prepareTreeCreate({ vaultId: f.accountId, parentId: destination.nodeId,
+      parentKey: f.keys.get(destination.nodeId)!, entriesRevision: 1, existingNames: [], requestedName: "winner", kind: "file" });
+    expect((await request(f, `/api/private/tree/directories/${destination.nodeId}/children`, "PUT", added)).status).toBe(201);
+    const before = await listing(f, f.rootId), targetBefore = await listing(f, destination.nodeId);
+    const path = `/api/private/tree/nodes/${source.nodeId}/parent`;
+    const loser = await request(f, path, "PATCH", stale);
+    expect(loser.status).toBe(409);
+    expect(await loser.json()).toEqual({ error: "namespace_changed" });
+    expect(await listing(f, f.rootId)).toEqual(before);
+    expect(await listing(f, destination.nodeId)).toEqual(targetBefore);
+    const fresh = await moveRequest(f, source.nodeId, f.rootId, destination.nodeId);
+    const body = JSON.stringify(fresh), url = `https://mdwn.test${path}`;
+    const proof = await signDeviceProof(f.assertion.privateKey, { sessionBinding: await sessionBindingDigest(f.session.id),
+      deviceId: f.deviceId, registryEpoch: 1, method: "PATCH", url, body });
+    // A spent proof predating this invocation must not unlock any multi-row writes.
+    await env.DB.prepare("INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at, commit_token) VALUES (?, ?, ?, ?, ?)")
+      .bind(f.accountId, proof.proofId, f.session.id, proof.expiresAt, id()).run();
+    expect((await SELF.fetch(url, { method: "PATCH", body, headers: { cookie: f.session.cookie,
+      origin: "https://mdwn.test", "content-type": "application/json", "X-Mdwn-Device-Proof": JSON.stringify(proof) } })).status).toBe(409);
+    expect(await listing(f, f.rootId)).toEqual(before);
+    expect(await listing(f, destination.nodeId)).toEqual(targetBefore);
+    await expectAgreedEdges(f);
+    expect((await request(f, path, "PATCH", fresh)).status).toBe(200);
+    await expectAgreedEdges(f);
+  });
+
+  it("requires refreshed subtree revisions for Directory deletion and keeps hidden roots and foreign objects inaccessible", async () => {
+    const f = await fixture();
+    const dir = await directoryRequest(f, "retained");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", dir)).status).toBe(201);
+    const body = await deleteRequest(f, dir.nodeId, f.rootId);
+    const child = await prepareTreeCreate({ vaultId: f.accountId, parentId: dir.nodeId, parentKey: f.keys.get(dir.nodeId)!,
+      entriesRevision: 1, existingNames: [], requestedName: "winner.md", kind: "file" });
+    expect((await request(f, `/api/private/tree/directories/${dir.nodeId}/children`, "PUT", child)).status).toBe(201);
+    const parentBefore = await listing(f, f.rootId), subtreeBefore = await listing(f, dir.nodeId);
+    const stale = await request(f, `/api/private/tree/nodes/${dir.nodeId}`, "DELETE", body);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: "namespace_changed" });
+    const other = await fixture();
+    const inaccessible = await request(other, `/api/private/tree/nodes/${dir.nodeId}`, "DELETE", { ...body, parentId: other.rootId, expectedRevision: 1 });
+    const missing = await request(other, `/api/private/tree/nodes/${id()}`, "DELETE", { ...body, parentId: other.rootId, expectedRevision: 1 });
+    expect(inaccessible.status).toBe(404);
+    expect(await inaccessible.text()).toBe(await missing.text());
+    expect((await request(f, `/api/private/tree/nodes/${f.rootId}`, "DELETE", body)).status).toBe(404);
+    expect(await listing(f, f.rootId)).toEqual(parentBefore);
+    expect(await listing(f, dir.nodeId)).toEqual(subtreeBefore);
+    await expectAgreedEdges(f);
+  });
+  it("refuses an over-cap Directory without changing any node, ciphertext, revision or proof record", async () => {
+    const f = await fixture();
+    const rootId = await seedDeletionSubtree(f, 501);
+    const payload = await deleteRequest(f, rootId, f.rootId);
+    const tables = ["vault_nodes", "directories", "directory_entries", "files", "file_representations", "key_envelopes", "device_proof_uses"];
+    const state = () => Promise.all(tables.map((table) => env.DB.prepare(`SELECT * FROM ${table} WHERE
+      ${table === "key_envelopes" || table === "device_proof_uses" ? "account_id" : "owner_id"} = ? ORDER BY rowid`)
+      .bind(f.accountId).all().then((result) => result.results)));
+    const before = await state();
+    const response = await request(f, `/api/private/tree/nodes/${rootId}`, "DELETE", payload);
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "directory_too_large", maxNodes: 500 });
+    expect(await state()).toEqual(before);
+    await expectAgreedEdges(f);
+  });
+
+  it("commits exactly one same-revision Directory delete and gives its competitor a nameless namespace conflict", async () => {
+    const f = await fixture();
+    const rootId = await seedDeletionSubtree(f, 6);
+    const payload = await deleteRequest(f, rootId, f.rootId);
+    const path = `/api/private/tree/nodes/${rootId}`;
+    const responses = await Promise.all([request(f, path, "DELETE", payload), request(f, path, "DELETE", payload)]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect(await responses.find((response) => response.status === 409)!.json()).toEqual({ error: "namespace_changed" });
+    const parent = await listing(f, f.rootId);
+    expect(parent.entriesRevision).toBe(3);
+    expect(parent.entries).toEqual([]);
+    expect(await env.DB.prepare("SELECT count(*) AS count FROM device_proof_uses WHERE account_id = ?")
+      .bind(f.accountId).first()).toEqual({ count: 2 });
+    await expectAgreedEdges(f);
+  });
+
+  it("rolls back the full deletion graph and parent head if any explicit dependent step fails", async () => {
+    const f = await fixture();
+    const rootId = await seedDeletionSubtree(f, 8);
+    const payload = await deleteRequest(f, rootId, f.rootId);
+    const before = await listing(f, f.rootId);
+    await env.DB.prepare(`CREATE TRIGGER test_tree_delete_abort BEFORE DELETE ON vault_nodes
+      WHEN OLD.id = '${rootId}' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END`).run();
+    try {
+      expect((await request(f, `/api/private/tree/nodes/${rootId}`, "DELETE", payload)).status).toBe(400);
+      expect(await listing(f, f.rootId)).toEqual(before);
+      expect(await env.DB.prepare("SELECT count(*) AS count FROM vault_nodes WHERE owner_id = ?")
+        .bind(f.accountId).first()).toEqual({ count: 9 });
+      expect(await env.DB.prepare("SELECT count(*) AS count FROM file_representations WHERE owner_id = ?")
+        .bind(f.accountId).first()).toEqual({ count: 6 });
+      expect(await env.DB.prepare("SELECT count(*) AS count FROM key_envelopes WHERE account_id = ?")
+        .bind(f.accountId).first()).toEqual({ count: 7 });
+      expect(await env.DB.prepare("SELECT count(*) AS count FROM device_proof_uses WHERE account_id = ?")
+        .bind(f.accountId).first()).toEqual({ count: 1 });
+      await expectAgreedEdges(f);
+    } finally { await env.DB.exec("DROP TRIGGER test_tree_delete_abort"); }
+    expect((await request(f, `/api/private/tree/nodes/${rootId}`, "DELETE", payload)).status).toBe(200);
+  });
+  it("atomically hard-deletes a 500-node Directory including nested Directories and all dependent records", async () => {
+    const f = await fixture();
+    const rootId = await seedDeletionSubtree(f, 500);
+    const response = await request(f, `/api/private/tree/nodes/${rootId}`, "DELETE", await deleteRequest(f, rootId, f.rootId));
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect((await listing(f, f.rootId)).entries).toEqual([]);
+    expect((await request(f, `/api/private/tree/directories/${rootId}`, "POST")).status).toBe(404);
+    for (const table of ["vault_nodes", "directories", "directory_entries", "files", "file_representations", "key_envelopes"]) {
+      const owner = table === "key_envelopes" ? "account_id" : "owner_id";
+      expect(await env.DB.prepare(`SELECT count(*) AS count FROM ${table} WHERE ${owner} = ?`)
+        .bind(f.accountId).first()).toEqual({ count: table === "vault_nodes" || table === "directories" ? 1 : 0 });
+    }
+    await expectAgreedEdges(f);
+  });
+  it("hard-deletes a File's encrypted edge, representation and owned Key envelopes with no restore state", async () => {
+    const f = await fixture();
+    const created = await fileRequest(f, "delete.md");
+    expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", created.body)).status).toBe(201);
+    await env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
+      VALUES (?, 'owned-device', ?, ?, X'01', 1)`).bind(f.accountId, created.body.nodeId, f.deviceId).run();
+    const path = `/api/private/tree/nodes/${created.body.nodeId}`;
+    const deleted = await request(f, path, "DELETE", await deleteRequest(f, created.body.nodeId, f.rootId));
+    expect(deleted.status, await deleted.clone().text()).toBe(200);
+    expect(await deleted.json()).toEqual({ entriesRevision: 3 });
+    expect((await listing(f, f.rootId)).entries).toEqual([]);
+    const missing = await request(f, `/api/private/tree/files/${id()}`, "POST");
+    const inaccessible = await request(await fixture(), `/api/private/tree/files/${created.body.nodeId}`, "POST");
+    const removed = await request(f, `/api/private/tree/files/${created.body.nodeId}`, "POST");
+    expect(removed.status).toBe(404);
+    expect(await removed.text()).toBe(await missing.text());
+    expect(await inaccessible.text()).toBe('{"error":"not_found"}');
+    // Supplemental graph/lifecycle invariants at the agreed real-D1 storage seam.
+    for (const [table, column] of [["vault_nodes", "id"], ["directory_entries", "child_node_id"],
+      ["files", "node_id"], ["file_representations", "file_node_id"], ["key_envelopes", "object_id"]]) {
+      expect(await env.DB.prepare(`SELECT count(*) AS count FROM ${table} WHERE ${column} = ?`)
+        .bind(created.body.nodeId).first()).toEqual({ count: 0 });
+    }
+    await expectAgreedEdges(f);
+  });
+  it("moves a Directory with its existing descendants, rewrapping its capability and advancing both namespaces", async () => {
+    const f = await fixture();
+    const source = await directoryRequest(f, "source");
+    const destination = await directoryRequest(f, "destination", id(), 2);
+    const root = `/api/private/tree/directories/${f.rootId}`;
+    expect((await request(f, `${root}/children`, "PUT", source)).status).toBe(201);
+    expect((await request(f, `${root}/children`, "PUT", destination)).status).toBe(201);
+    const child = await prepareTreeCreate({ vaultId: f.accountId, parentId: source.nodeId, parentKey: f.keys.get(source.nodeId)!,
+      entriesRevision: 1, existingNames: [], requestedName: "nested.md", kind: "file", markdown: "# retained" });
+    expect((await request(f, `/api/private/tree/directories/${source.nodeId}/children`, "PUT", child)).status).toBe(201);
+    const fileBefore = await (await request(f, `/api/private/tree/files/${child.nodeId}`, "POST")).json();
+    const payload = await moveRequest(f, source.nodeId, f.rootId, destination.nodeId);
+    const response = await request(f, `/api/private/tree/nodes/${source.nodeId}/parent`, "PATCH", payload);
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(await response.json()).toEqual({ sourceEntriesRevision: 4, destinationEntriesRevision: 2 });
+    expect((await listing(f, f.rootId)).entries.map((entry) => entry.nodeId)).toEqual([destination.nodeId]);
+    const moved = await listing(f, destination.nodeId);
+    expect(moved.entries[0]?.keyEnvelope).toBe(payload.keyEnvelope);
+    const capability = await openSymmetric(decodeBytes(payload.keyEnvelope), f.keys.get(destination.nodeId)!, { context: {
+      purpose: "directory-capability", vaultId: f.accountId, objectId: source.nodeId, keyId: source.nodeId, keyEpoch: 1, revision: 1,
+    } });
+    expect(capability).toEqual(f.keys.get(source.nodeId));
+    await expect(openListingHead(f.keys.get(destination.nodeId)!, { vaultId: f.accountId, directoryId: destination.nodeId,
+      revision: 2, entries: moved.entries, head: { ...moved.listingHead!, signerPublicKey: decodeBytes(moved.listingHead!.signerPublicKey) } }))
+      .resolves.toBeUndefined();
+    expect(await (await request(f, `/api/private/tree/files/${child.nodeId}`, "POST")).json()).toEqual(fileBefore);
+    expect(await (await request(f, `/api/private/tree/nodes/${child.nodeId}/ancestors`, "POST")).json())
+      .toEqual({ ancestors: [f.rootId, destination.nodeId, source.nodeId, child.nodeId] });
+    await expectAgreedEdges(f);
+  });
+  it("reorders encrypted siblings under one revision without changing their names, keys or edges", async () => {
+    const f = await fixture();
+    const first = await directoryRequest(f, "one");
+    const second = await directoryRequest(f, "two", id(), 2);
+    const root = `/api/private/tree/directories/${f.rootId}`;
+    expect((await request(f, `${root}/children`, "PUT", first)).status).toBe(201);
+    expect((await request(f, `${root}/children`, "PUT", second)).status).toBe(201);
+    const before = await (await request(f, root, "POST")).json() as { entries: SealedEntry[] };
+    const orders = await Promise.all([second.nodeId, first.nodeId].map(async (nodeId, index) => {
+      const writer = await createSymmetricWriter(f.rootKey);
+      return { nodeId, orderCiphertext: encodeBytes(await writer.seal(new TextEncoder().encode(String(index)), {
+        purpose: "directory-metadata", vaultId: f.accountId, objectId: nodeId,
+        keyId: f.rootId, keyEpoch: 1, revision: 1,
+      })) };
+    }));
+    const entries = before.entries.map((entry) => ({ ...entry,
+      orderCiphertext: orders.find((order) => order.nodeId === entry.nodeId)!.orderCiphertext }));
+    const body = { parentId: f.rootId, expectedRevision: 3, orders,
+      listingHead: await createListingHead(f.rootKey, f.assertion.privateKey, {
+        vaultId: f.accountId, directoryId: f.rootId, deviceId: f.deviceId, revision: 4, entries,
+      }) };
+    const path = `/api/private/tree/nodes/${first.nodeId}/order`;
+    expect((await request(f, path, "PATCH", body)).status).toBe(200);
+    const after = await (await request(f, root, "POST")).json() as { entriesRevision: number; entries: SealedEntry[] };
+    expect(after).toMatchObject({ entriesRevision: 4, entries });
+    await expectAgreedEdges(f);
+    const stale = await request(f, path, "PATCH", body);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: "namespace_changed" });
+    expect(await (await request(f, root, "POST")).json()).toEqual(after);
+  });
   it("validates the parent listing signature, digest and exact shape before changing File pointers", async () => {
     const f = await fixture();
     const created = await fileRequest(f, "head.md");

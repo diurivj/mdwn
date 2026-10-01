@@ -133,6 +133,48 @@ export async function commitPrivateMutation(
   return changed.meta.changes === 1 && consumed.meta.changes === 1;
 }
 
+export type DirectoryChange = {
+  directoryId: string; expectedRevision: number;
+  head: { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array };
+};
+
+/** Multi-namespace/bulk tree boundary. Every revision and live authority is
+ * checked before the first CAS. A fresh server-only marker (not the client proof
+ * ID alone) gates all subsequent writes, including zero/many-row deletions.
+ * D1 defers the reciprocal RESTRICT FKs only within this atomic batch; they must
+ * agree again at commit. A reused proof can never authorize these dependents.
+ */
+export async function commitTreeMutation(
+  env: Env, authorization: AuthorizedDevice, changes: readonly [DirectoryChange, ...DirectoryChange[]],
+  eligible: SQL, statements: (committed: SQL) => readonly SQL[],
+): Promise<boolean> {
+  const now = Date.now();
+  if (authorization.expiresAt <= now || new Set(changes.map((change) => change.directoryId)).size !== changes.length) return false;
+  const { accountId, sessionId, deviceId, proofId, expiresAt } = authorization;
+  const token = crypto.randomUUID();
+  const committed = sql`EXISTS (SELECT 1 FROM device_proof_uses WHERE account_id = ${accountId}
+    AND proof_id = ${proofId} AND commit_token = ${token})`;
+  const revisions = sql.join(changes.map((change) => sql`EXISTS (SELECT 1 FROM directories
+    WHERE node_id = ${change.directoryId} AND owner_id = ${accountId} AND entries_revision = ${change.expectedRevision})`), sql` AND `);
+  const update = (change: DirectoryChange, guard: SQL) => sql`UPDATE directories
+    SET entries_revision = entries_revision + 1, listing_ciphertext = ${change.head.ciphertext},
+      listing_digest = ${change.head.digest}, listing_signature = ${change.head.signature}, listing_device_id = ${deviceId}
+    WHERE node_id = ${change.directoryId} AND owner_id = ${accountId}
+      AND entries_revision = ${change.expectedRevision} AND ${guard}`;
+  const [, changed, consumed] = await atomicSqlBatch(env.DB, [
+    sql`PRAGMA defer_foreign_keys = ON`,
+    update(changes[0], sql`${privateMutationGuard(authorization, now)} AND ${revisions} AND ${eligible}`),
+    sql`INSERT INTO device_proof_uses (account_id, proof_id, session_id, expires_at, commit_token)
+      SELECT ${accountId}, ${proofId}, ${sessionId}, ${expiresAt}, ${token} WHERE changes() = 1`,
+    ...changes.slice(1).map((change) => update(change, committed)),
+    ...statements(committed),
+    sql`UPDATE encryption_devices SET last_proof_at = ${coarseProofTime(now)}
+      WHERE id = ${deviceId} AND account_id = ${accountId} AND ${committed}
+        AND (last_proof_at IS NULL OR last_proof_at < ${coarseProofTime(now)})`,
+  ]);
+  return changed!.meta.changes === 1 && consumed!.meta.changes === 1;
+}
+
 /** One proof, one parent namespace CAS and its dependent writes in a D1 transaction.
  * No dependent statement may mutate without the freshly consumed proof row.
  * If the CAS loses, the batch commits zero changes, including zero proof uses.

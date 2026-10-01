@@ -1,19 +1,42 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useNavigation, useRevalidator } from "react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 
 import {
   createTreeChild, loadDirectory, NameConflictError, NamespaceChangedError,
+  reorderTreeChild, moveTreeChild, deleteTreeChild, DirectoryTooLargeError,
   openChildDirectory, prepareTreeCreate, prepareTreeRename, renameTreeChild, TreeCommitUncertainError, TreeNotFoundError,
   type DirectoryListing, type TreeEntry, type TreeKind,
 } from "./client";
 import { FileEditor } from "./FileEditor";
 import { expandedPreferenceKey, savedExpanded, type FilesPageData, type FilesSnapshot } from "./navigation-client";
 
-type Dialog = {
-  operation: "create" | "rename"; kind: TreeKind; parentId: string; nodeId?: string;
-  requestedName: string; review?: "local" | "changed";
+type DialogFields = {
+  kind: TreeKind; parentId: string; requestedName: string;
+  review?: "local" | "changed"; needsRefresh?: boolean;
 };
+type Dialog = DialogFields & (
+  { operation: "create" } |
+  { operation: "rename"; nodeId: string } |
+  { operation: "move"; nodeId: string; destinationId: string; path: { id: string; name: string }[] } |
+  { operation: "delete"; nodeId: string; consent: boolean; tooLarge?: boolean } |
+  { operation: "reorder"; nodeId: string; direction: "up" | "down" }
+);
+const dialogLabels = {
+  create: { label: "Create a name", heading: "New", submit: "Create" },
+  rename: { label: "Rename", heading: "Rename", submit: "Rename" },
+  move: { label: "Move", heading: "Move", submit: "Move" },
+  delete: { label: "Delete permanently", heading: "Delete permanently", submit: "Delete permanently" },
+  reorder: { label: "Reorder", heading: "Reorder", submit: "Retry reorder" },
+};
+
+/** RR supports one blocker: File drafts own it; other views observe the
+ * same synchronous navigation-intent boundary without blocking the person.
+ */
+function NavigationIntentObserver({ onStart }: { onStart: () => void }) {
+  useBlocker(() => { onStart(); return false; });
+  return null;
+}
 
 export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: TreeKind; initial: FilesPageData }) {
   const navigate = useNavigate();
@@ -26,16 +49,50 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [view, setView] = useState<"edit" | "preview">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submission = useRef(false);
+  const lifetime = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => { controller.abort(); lifetime.current?.abort(); };
+  }, []);
+  const onNavigationStart = useCallback(() => {
+    lifetime.current?.abort();
+    lifetime.current = new AbortController();
+    if (submission.current) setMessage("Navigation interrupted this operation. Refresh Files before trying again.");
+    submission.current = false;
+    setSubmitting(false);
+    setDialog(null);
+  }, []);
+  const route = useRef(`${kind}/${nodeId}`);
+  const [structuralReady, setStructuralReady] = useState(false);
+  const [editorParent, setEditorParent] = useState(initial.snapshot?.file?.parentId);
+  const fileReady = structuralReady && editorParent === snapshot?.file?.parentId;
+
+  useEffect(() => {
+    if (editorParent === snapshot?.file?.parentId) return;
+    // Release the previous editor's Web Lock before the new parent-bound draft mounts.
+    setStructuralReady(false);
+    const frame = requestAnimationFrame(() => setEditorParent(snapshot?.file?.parentId));
+    return () => cancelAnimationFrame(frame);
+  }, [editorParent, snapshot?.file?.parentId]);
   const [message, setMessage] = useState("");
   const nameInput = useRef<HTMLInputElement>(null);
   const busy = submitting || revalidator.state !== "idle" || navigation.state !== "idle";
   const recoveryPending = isSignupRecoveryConfirmationPending();
 
   useEffect(() => {
-    setSnapshot(initial.snapshot);
+    setSnapshot((previous) => initial.snapshot && previous && dialog && route.current === `${kind}/${nodeId}`
+      ? { ...initial.snapshot, keys: { ...previous.keys, ...initial.snapshot.keys },
+        listings: { ...previous.listings, ...initial.snapshot.listings } }
+      : initial.snapshot);
     setStatus(initial.status);
-    setDialog(null);
-    setView("edit");
+    if (route.current !== `${kind}/${nodeId}`) {
+      setDialog(null);
+      setStructuralReady(false);
+      setView("edit");
+      route.current = `${kind}/${nodeId}`;
+    }
     if (initial.snapshot) setExpanded(Array.from(new Set([
       ...savedExpanded(initial.snapshot.access.vaultId),
       ...initial.snapshot.crumbs.slice(0, -1).map((item) => item.id), initial.snapshot.access.rootId,
@@ -43,7 +100,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }, [initial, nodeId, kind]);
 
   async function toggle(entry: TreeEntry) {
-    if (!snapshot || entry.kind !== "directory") return;
+    const signal = lifetime.current?.signal;
+    if (!snapshot || entry.kind !== "directory" || !signal || signal.aborted) return;
     if (expanded.includes(entry.nodeId)) {
       const next = expanded.filter((id) => id !== entry.nodeId);
       setExpanded(next);
@@ -56,7 +114,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       const parentKey = parentId && snapshot.keys[parentId];
       if (!parentKey) throw new Error("private tree unavailable");
       const key = await openChildDirectory(snapshot.access, parentKey, entry);
-      const listing = await loadDirectory(snapshot.access, entry.nodeId, key);
+      const listing = await loadDirectory(snapshot.access, entry.nodeId, key, signal);
+      if (signal.aborted) return;
       setSnapshot((previous) => previous && ({ ...previous,
         keys: { ...previous.keys, [entry.nodeId]: key },
         listings: { ...previous.listings, [entry.nodeId]: listing },
@@ -64,7 +123,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       const next = [...expanded, entry.nodeId];
       setExpanded(next);
       localStorage.setItem(expandedPreferenceKey(snapshot.access.vaultId), JSON.stringify(next));
-    } catch { setMessage("This folder could not be opened. Refresh and try again."); }
+    } catch { if (!signal.aborted) setMessage("This folder could not be opened. Refresh and try again."); }
   }
 
   function startCreate(createKind: TreeKind) {
@@ -84,22 +143,82 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     setDialog({ operation: "rename", kind, parentId, nodeId, requestedName: entry.name });
   }
 
-  async function submit(current: Dialog, listing?: DirectoryListing) {
-    if (!snapshot || busy) return;
+  async function refreshed(current: Dialog, signal: AbortSignal): Promise<FilesSnapshot> {
+    if (!snapshot) throw new Error("private tree unavailable");
+    const ids = new Set([current.parentId, ...(current.operation === "move" ? [current.destinationId] : []),
+      ...(current.operation === "delete" && current.kind === "directory" ? [current.nodeId] : [])]);
+    const listings = { ...snapshot.listings };
+    for (const id of ids) listings[id] = await loadDirectory(snapshot.access, id, snapshot.keys[id]!, signal);
+    signal.throwIfAborted();
+    const next = { ...snapshot, listings };
+    setSnapshot(next);
+    return next;
+  }
+
+  function startStructural(action: { operation: "move" } | { operation: "delete" } | { operation: "reorder"; direction: "up" | "down" }) {
+    if (!snapshot || busy || (kind === "file" && !fileReady)) return;
+    const parentId = snapshot.crumbs.at(-2)?.id;
+    const entry = parentId && snapshot.listings[parentId]?.entries.find((item) => item.nodeId === nodeId);
+    if (!parentId || !entry) return;
+    const fields = { kind, parentId, nodeId, requestedName: entry.name };
+    const current: Dialog = action.operation === "move" ? { ...fields, operation: "move",
+      destinationId: snapshot.access.rootId, path: [{ id: snapshot.access.rootId, name: "Files" }] }
+      : action.operation === "delete" ? { ...fields, operation: "delete", consent: false }
+        : { ...fields, ...action };
+    setMessage("");
+    setDialog(current);
+    if (current.operation === "reorder") void submit(current);
+  }
+
+  async function chooseFolder(entry: TreeEntry) {
+    const signal = lifetime.current?.signal;
+    if (!snapshot || dialog?.operation !== "move" || busy || submission.current || !signal || signal.aborted) return;
+    submission.current = true; setSubmitting(true);
+    try {
+      const parentId = dialog.destinationId;
+      const key = await openChildDirectory(snapshot.access, snapshot.keys[parentId]!, entry);
+      const listing = await loadDirectory(snapshot.access, entry.nodeId, key, signal);
+      if (signal.aborted) return;
+      setSnapshot((previous) => previous && ({ ...previous,
+        keys: { ...previous.keys, [entry.nodeId]: key }, listings: { ...previous.listings, [entry.nodeId]: listing } }));
+      setDialog({ ...dialog, destinationId: entry.nodeId, path: [...dialog.path, { id: entry.nodeId, name: entry.name }],
+        review: undefined });
+    } catch { if (!signal.aborted) setMessage("This folder could not be opened. Refresh and try again."); }
+    finally { if (!signal.aborted) { submission.current = false; setSubmitting(false); } }
+  }
+
+  async function submit(current: Dialog) {
+    const signal = lifetime.current?.signal;
+    if (!snapshot || busy || submission.current || !signal || signal.aborted || (current.operation !== "create" && kind === "file" && !fileReady)) return;
+    if (current.operation === "delete" && (!current.consent || current.tooLarge)) return;
+    if (current.operation === "move" && current.destinationId === current.parentId) return;
+    submission.current = true;
     setSubmitting(true);
     setMessage("");
     try {
-      const parent = listing ?? snapshot.listings[current.parentId];
-      const key = snapshot.keys[current.parentId];
+      const active = current.needsRefresh ? await refreshed(current, signal) : snapshot;
+      const parent = active.listings[current.parentId];
+      const key = active.keys[current.parentId];
       if (!parent || !key) throw new Error("private tree unavailable");
       if (current.operation === "create") {
         const payload = await prepareTreeCreate({ vaultId: snapshot.access.vaultId,
           parentId: current.parentId, parentKey: key, entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.map((entry) => entry.name), requestedName: current.requestedName,
           kind: current.kind });
-        const created = await createTreeChild(snapshot.access, current.parentId, payload, parent, key);
+        const created = await createTreeChild(snapshot.access, current.parentId, payload, parent, key, signal);
+        if (signal.aborted) return;
         setDialog(null);
         navigate(`/${current.kind === "directory" ? "d" : "f"}/${created.nodeId}`);
+      } else if (current.operation === "reorder" || current.operation === "move" || current.operation === "delete") {
+        if (current.operation === "reorder") await reorderTreeChild(active.access, parent, key, current.nodeId, current.direction, signal);
+        else if (current.operation === "move") await moveTreeChild(active.access, parent, key,
+          active.listings[current.destinationId]!, active.keys[current.destinationId]!, current.nodeId, current.requestedName, signal);
+        else await deleteTreeChild(active.access, parent, key, current.nodeId, current.kind === "directory"
+          ? active.listings[current.nodeId]?.entriesRevision : undefined, signal);
+        if (signal.aborted) return;
+        setDialog(null);
+        if (current.operation === "delete") navigate(`/d/${current.parentId}`);
+        else revalidator.revalidate();
       } else {
         const entry = parent.entries.find((item) => item.nodeId === current.nodeId);
         if (!entry) throw new TreeNotFoundError();
@@ -108,13 +227,21 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.filter((item) => item.nodeId !== entry.nodeId).map((item) => item.name),
           requestedName: current.requestedName, order: entry.order });
-        await renameTreeChild(snapshot.access, current.parentId, entry.nodeId, payload, parent, key);
+        await renameTreeChild(snapshot.access, current.parentId, entry.nodeId, payload, parent, key, signal);
+        if (signal.aborted) return;
         setDialog(null);
         revalidator.revalidate();
       }
     } catch (error) {
-      if (error instanceof NameConflictError) setDialog({ ...current, review: "local" });
-      else if (error instanceof NamespaceChangedError) setDialog({ ...current, review: "changed" });
+      if (signal.aborted) return;
+      if (error instanceof NameConflictError) setDialog({ ...current, review: "local", needsRefresh: true });
+      else if (error instanceof NamespaceChangedError) {
+        setDialog(current.operation === "delete" ? { ...current, review: "changed", needsRefresh: true, consent: false }
+          : { ...current, review: "changed", needsRefresh: true });
+        try { await refreshed(current, signal); }
+        catch { if (!signal.aborted) setMessage("The folder could not be refreshed. Try again."); }
+      }
+      else if (error instanceof DirectoryTooLargeError && current.operation === "delete") setDialog({ ...current, tooLarge: true, consent: false });
       else if (error instanceof TreeNotFoundError) { setDialog(null); setStatus("not-found"); }
       else if (error instanceof TreeCommitUncertainError) {
         setDialog(null);
@@ -123,23 +250,22 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         setDialog(null);
         setMessage("Confirm your saved recovery phrase and codes before creating Files.");
       } else setMessage("The change could not be confirmed. Refresh Files before trying again.");
-    } finally { setSubmitting(false); }
+    } finally { if (!signal.aborted) { submission.current = false; setSubmitting(false); } }
   }
 
   async function refreshAndRetry(current: Dialog) {
-    if (!snapshot || busy) return;
-    setSubmitting(true);
-    try {
-      const listing = await loadDirectory(snapshot.access, current.parentId, snapshot.keys[current.parentId]!);
-      setSnapshot((previous) => previous && ({ ...previous,
-        listings: { ...previous.listings, [current.parentId]: listing } }));
-      setDialog({ ...current, review: undefined });
-      setSubmitting(false);
-      await submit({ ...current, review: undefined }, listing);
-    } catch {
-      setMessage("The folder could not be refreshed. Try again.");
-      setSubmitting(false);
-    }
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted) return;
+    if (current.operation === "delete") {
+      if (busy || submission.current) return;
+      submission.current = true; setSubmitting(true);
+      try {
+        await refreshed(current, signal);
+        if (signal.aborted) return;
+        setDialog({ ...current, review: undefined, needsRefresh: false, consent: false });
+      } catch { if (!signal.aborted) setMessage("The folder could not be refreshed. Try again."); }
+      finally { if (!signal.aborted) { submission.current = false; setSubmitting(false); } }
+    } else await submit({ ...current, review: undefined, needsRefresh: true });
   }
 
   function directoryItems(directoryId: string, depth = 0): React.ReactNode {
@@ -166,6 +292,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
 
   const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
   return <main className="mx-auto min-h-dvh max-w-screen-2xl lg:grid lg:grid-cols-[18rem_minmax(0,1fr)]">
+    {(kind === "directory" || editorParent !== snapshot.file?.parentId) && <NavigationIntentObserver onStart={onNavigationStart} />}
     {drawer && <button type="button" aria-label="Close Files tree" onClick={() => setDrawer(false)}
       className="fixed inset-0 z-10 bg-black/30 lg:hidden" />}
     <aside className={`${drawer ? "block" : "hidden"} fixed inset-y-0 left-0 z-20 w-72 overflow-y-auto border-r border-stone-200 bg-stone-50 p-4 shadow-lg lg:static lg:block lg:w-auto lg:shadow-none`} aria-label="Files tree">
@@ -188,8 +315,20 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       <div className="mt-6 flex flex-wrap items-center gap-2"><h1 className="mr-auto text-2xl font-semibold">{selected}</h1>
         <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
         <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button>
-        {nodeId !== snapshot.access.rootId && <button type="button" disabled={busy || recoveryPending} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
+        {nodeId !== snapshot.access.rootId && <button type="button" disabled={busy || recoveryPending || (kind === "file" && !fileReady)} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
       </div>
+      {nodeId !== snapshot.access.rootId && <div className="mt-3 flex flex-wrap gap-2">
+        {(["up", "down"] as const).map((direction) => {
+          const entries = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];
+          const index = entries.findIndex((entry) => entry.nodeId === nodeId);
+          return <button key={direction} type="button" disabled={busy || recoveryPending || (kind === "file" && !fileReady) ||
+            index < 0 || (direction === "up" ? index === 0 : index === entries.length - 1)}
+            onClick={() => startStructural({ operation: "reorder", direction })} className="rounded border px-2 py-1">Move {direction}</button>;
+        })}
+        <button type="button" disabled={busy || recoveryPending || (kind === "file" && !fileReady)} onClick={() => startStructural({ operation: "move" })} className="rounded border px-2 py-1">Move</button>
+        <button type="button" disabled={busy || recoveryPending || (kind === "file" && !fileReady)} onClick={() => startStructural({ operation: "delete" })} className="rounded border px-2 py-1">Delete</button>
+        {kind === "file" && !fileReady && <p role="status">Save your draft before changing this File’s name or location, order, or deleting it.</p>}
+      </div>}
       {recoveryPending && <p role="status" className="mt-3">Confirm your saved recovery phrase and codes before creating Files.</p>}
       {busy && <p role="status" className="mt-3">Updating Files…</p>}
       {message && <p role="alert" className="mt-3 text-rose-700">{message}</p>}
@@ -197,29 +336,51 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         <div className="mt-6 flex gap-2 lg:hidden"><button type="button" onClick={() => setView("edit")}
           aria-pressed={view === "edit"}>Edit</button><button type="button" onClick={() => setView("preview")}
           aria-pressed={view === "preview"}>Preview</button></div>
-        <FileEditor fileId={nodeId} snapshot={snapshot} view={view} showEdit={() => setView("edit")}
+        {editorParent === snapshot.file?.parentId ? <FileEditor key={`${nodeId}/${snapshot.file?.parentId}`} fileId={nodeId} snapshot={snapshot} view={view} showEdit={() => setView("edit")}
+          onStructuralReady={setStructuralReady} structuralBusy={busy || dialog !== null} onNavigationStart={onNavigationStart}
           onCurrent={(file, listing) => setSnapshot((previous) => previous && ({ ...previous,
-            file, listings: { ...previous.listings, [listing.directoryId]: listing } }))} />
+            file, listings: { ...previous.listings, [listing.directoryId]: listing } }))} /> : <p role="status">Opening moved File…</p>}
       </> : <p className="mt-8 text-stone-500">Choose a File from the tree or create one here.</p>}
     </section>
-    {dialog && <div role="dialog" aria-modal="true" aria-label={dialog.operation === "create" ? "Create a name" : "Rename"}
+    {dialog && <div role="dialog" aria-modal="true" aria-label={dialogLabels[dialog.operation].label}
       className="fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4">
       <form onSubmit={(event) => { event.preventDefault(); void submit(dialog); }}
         className="w-full max-w-md rounded bg-white p-5 shadow-lg">
-        <h2 className="text-lg font-semibold">{dialog.operation === "create" ? `New ${dialog.kind === "file" ? "File" : "folder"}` : "Rename"}</h2>
-        <label className="mt-4 block">Name <input ref={nameInput} autoFocus value={dialog.requestedName}
+        <h2 className="text-lg font-semibold">{dialog.operation === "create" ? `New ${dialog.kind === "file" ? "File" : "folder"}` : dialogLabels[dialog.operation].heading}</h2>
+        {!["delete", "reorder"].includes(dialog.operation) && <label className="mt-4 block">Name <input ref={nameInput} autoFocus value={dialog.requestedName} disabled={busy}
           onChange={(event) => setDialog({ ...dialog, requestedName: event.target.value, review: undefined })}
-          className="mt-1 w-full rounded border p-2" /></label>
+          className="mt-1 w-full rounded border p-2" /></label>}
+        {dialog.operation === "move" && <section aria-label="Destination folder" className="mt-4">
+          <p>Destination: {dialog.path.at(-1)?.name}</p>
+          <nav aria-label="Destination breadcrumbs" className="flex flex-wrap gap-2">
+            {dialog.path.map((folder, index) => <button key={folder.id} type="button" disabled={busy}
+              onClick={() => setDialog({ ...dialog, destinationId: folder.id, path: dialog.path.slice(0, index + 1), review: undefined })}>{folder.name}</button>)}
+          </nav>
+          <div className="mt-2 flex flex-col items-start">
+            {snapshot.listings[dialog.destinationId]?.entries.filter((entry) => entry.kind === "directory" && entry.nodeId !== nodeId)
+              .map((entry) => <button key={entry.nodeId} type="button" disabled={busy} onClick={() => void chooseFolder(entry)}
+                aria-label={`Open destination ${entry.name}`}>{entry.name}</button>)}
+          </div>
+          {dialog.destinationId === dialog.parentId && <p>Select a different folder.</p>}
+        </section>}
+        {dialog.operation === "delete" && <>
+          <p className="mt-4">Permanently delete {dialog.requestedName}{kind === "directory" ? " and all its descendants" : ""}? There is no trash or restore. This cannot recall downloads or guarantee when provider-managed backups are erased.</p>
+          <p>Folders can only be deleted whole when they contain at most 500 nodes.</p>
+          {dialog.tooLarge ? <p role="alert">This folder contains more than 500 nodes. Reduce the subtree by moving or deleting smaller folders or Files first. Nothing was deleted.</p> :
+            <label className="mt-3 block"><input type="checkbox" checked={dialog.consent ?? false} disabled={busy || !!dialog.review}
+              onChange={(event) => setDialog({ ...dialog, consent: event.target.checked })} /> I understand deletion is irreversible.</label>}
+        </>}
         {dialog.review === "local" && <p role="alert" className="mt-3">That name is already in this folder. Choose another name; nothing was overwritten.</p>}
         {dialog.review === "changed" && <p role="alert" className="mt-3">This folder changed on another device. Nothing was added, replaced, or overwritten.</p>}
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <button type="button" onClick={() => setDialog(null)} className="rounded border px-3 py-1">Cancel</button>
+          <button type="button" disabled={busy} onClick={() => setDialog(null)} className="rounded border px-3 py-1">Cancel</button>
           {dialog.review === "changed" && <button type="button" disabled={busy}
             onClick={() => void refreshAndRetry(dialog)} className="rounded border px-3 py-1">Refresh and retry</button>}
-          {dialog.review && <button type="button" onClick={() => { setDialog({ ...dialog, review: undefined }); nameInput.current?.focus(); }}
+          {dialog.review && !["delete", "reorder"].includes(dialog.operation) && <button type="button" disabled={busy} onClick={() => { setDialog({ ...dialog, review: undefined, needsRefresh: true }); nameInput.current?.focus(); }}
             className="rounded border px-3 py-1">Rename</button>}
-          {!dialog.review && <button type="submit" disabled={busy} className="rounded bg-stone-900 px-3 py-1 text-white">
-            {submitting ? "Working…" : dialog.operation === "create" ? "Create" : "Rename"}</button>}
+          {!dialog.review && !(dialog.operation === "delete" && dialog.tooLarge) && <button type="submit" disabled={busy ||
+            (dialog.operation === "delete" && !dialog.consent) || (dialog.operation === "move" && dialog.destinationId === dialog.parentId)} className="rounded bg-stone-900 px-3 py-1 text-white">
+            {submitting ? "Working…" : dialogLabels[dialog.operation].submit}</button>}
         </div>
       </form>
     </div>}
