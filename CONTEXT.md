@@ -121,8 +121,12 @@ _Avoid_: Duplicate filename, automatic merge
 Cryptographic authority to decrypt a directory subtree, including descendants added later. It grants access without transferring ownership.
 _Avoid_: Public link, ownership
 
+**File capability**:
+Client-held cryptographic authority to decrypt one File and its current representation keys without access to its containing Directory. It remains stable across ordinary saves, but changes when access changes require Key rotation.
+_Avoid_: File content key, Directory capability, permanent key
+
 **File content key**:
-A cryptographic key that protects the current representation of one file. It is distinct from a Directory capability, a Passkey, and a Public link.
+A fresh cryptographic key that protects one current representation of one File, wrapped by its File capability. It is distinct from a Directory capability, a Passkey, and a Public link.
 _Avoid_: Vault root key, recovery code
 
 **Private content**:

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { blob, check, foreignKey, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { blob, check, foreignKey, index, integer, primaryKey, sqliteTable, text, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 /**
  * mdwn foundation schema.
@@ -513,9 +513,14 @@ export const files = sqliteTable("files", {
   ownerId: text("owner_id").notNull(),
   currentRepresentationId: text("current_representation_id").notNull(),
   currentRevision: integer("current_revision").notNull(),
+  /** Both null identifies the legacy parent-wrapped format. */
+  capabilityId: text("capability_id"),
+  capabilityEpoch: integer("capability_epoch"),
 }, (table) => [
   uniqueIndex("files_owner_node_idx").on(table.ownerId, table.nodeId),
   check("files_revision_positive", sql`${table.currentRevision} >= 1`),
+  check("files_capability_pair", sql`(${table.capabilityId} IS NULL AND ${table.capabilityEpoch} IS NULL)
+    OR (${table.capabilityId} IS NOT NULL AND ${table.capabilityEpoch} IS NOT NULL AND ${table.capabilityEpoch} >= 1)`),
   // The current-pointer composite deferred FK is in the reviewed migration.
 ]);
 
@@ -550,11 +555,20 @@ export const fileRepresentations = sqliteTable("file_representations", {
   ciphertext: blob("ciphertext").notNull(),
   ciphertextSize: integer("ciphertext_size").notNull(),
   createdAt: integer("created_at").notNull(),
+  keyEnvelope: blob("key_envelope"),
+  headDigest: blob("head_digest"),
+  headSignature: blob("head_signature"),
+  headDeviceId: text("head_device_id").references(() => encryptionDevices.id, { onDelete: "restrict" }),
 }, (table) => [
   uniqueIndex("file_representations_owner_pointer_idx").on(table.ownerId, table.fileNodeId, table.id, table.revision),
   uniqueIndex("file_representations_file_revision_idx").on(table.fileNodeId, table.revision),
   check("file_representations_revision_positive", sql`${table.revision} >= 1`),
   check("file_representations_epoch_positive", sql`${table.keyEpoch} >= 1`),
+  check("file_representations_head_complete", sql`(${table.keyEnvelope} IS NULL AND ${table.headDigest} IS NULL
+    AND ${table.headSignature} IS NULL AND ${table.headDeviceId} IS NULL) OR
+    (${table.keyEnvelope} IS NOT NULL AND length(${table.keyEnvelope}) BETWEEN 1 AND 16384
+      AND ${table.headDigest} IS NOT NULL AND length(${table.headDigest}) = 32
+      AND ${table.headSignature} IS NOT NULL AND length(${table.headSignature}) = 64 AND ${table.headDeviceId} IS NOT NULL)`),
   check("file_representations_ciphertext_bounded", sql`length(${table.ciphertext}) <= 524288 AND ${table.ciphertextSize} = length(${table.ciphertext})`),
   foreignKey({ columns: [table.ownerId, table.fileNodeId],
     foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
@@ -606,6 +620,36 @@ export const grants = sqliteTable("grants", {
   check("grants_no_self", sql`${table.ownerId} != ${table.recipientId}`),
   check("grants_revision_positive", sql`${table.revision} >= 1`),
   check("grants_epoch_positive", sql`${table.keyEpoch} >= 1`),
+]);
+
+/** Pending and active delivery have separate RESTRICT lifecycles: acceptance
+ * copies current material and deletes pending material in one proof-gated batch.
+ */
+function sharingEnvelopeColumns(relationship: () => AnySQLiteColumn) {
+  return {
+    relationshipId: text("relationship_id").notNull().references(relationship, { onDelete: "restrict" }),
+    deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+    capabilityId: text("capability_id").notNull(),
+    capabilityEpoch: integer("capability_epoch").notNull(),
+    grantKeyEpoch: integer("grant_key_epoch").notNull(),
+    ownerRegistryEpoch: integer("owner_registry_epoch").notNull(),
+    recipientRegistryEpoch: integer("recipient_registry_epoch").notNull(),
+    ciphertext: blob("ciphertext").notNull(),
+    signature: blob("signature").notNull(),
+    signerDeviceId: text("signer_device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  };
+}
+export const shareKeyEnvelopes = sqliteTable("share_key_envelopes", sharingEnvelopeColumns(() => shares.id), (table) => [
+  primaryKey({ columns: [table.relationshipId, table.deviceId] }),
+  check("share_key_envelopes_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.signature}) = 64`),
+  check("share_key_envelopes_epochs", sql`${table.capabilityEpoch} >= 1 AND ${table.grantKeyEpoch} >= 1
+    AND ${table.ownerRegistryEpoch} >= 1 AND ${table.recipientRegistryEpoch} >= 1`),
+]);
+export const grantKeyEnvelopes = sqliteTable("grant_key_envelopes", sharingEnvelopeColumns(() => grants.id), (table) => [
+  primaryKey({ columns: [table.relationshipId, table.deviceId] }),
+  check("grant_key_envelopes_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.signature}) = 64`),
+  check("grant_key_envelopes_epochs", sql`${table.capabilityEpoch} >= 1 AND ${table.grantKeyEpoch} >= 1
+    AND ${table.ownerRegistryEpoch} >= 1 AND ${table.recipientRegistryEpoch} >= 1`),
 ]);
 
 /** Current safety seal, not sharing history. Ticket 19 replaces this fail-closed

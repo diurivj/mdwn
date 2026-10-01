@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
-import { grant, invite, opaqueId, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
+import { convertFixtureFile, grant, invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
 import { shareHandleLookupToken } from "../../app/sharing/address";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }
@@ -13,6 +13,7 @@ it("an Owner invites an exact existing Account and acceptance creates one active
   const inbox = await sharingRequest(recipient, "/api/private/shares");
   expect(inbox.status).toBe(200);
   expect(await inbox.json()).toMatchObject({ incoming: [{ shareId: pending.shareId, targetId: fileId, permission: "read_write" }] });
+  await prepareGrantKeys(owner, pending.shareId);
   const accepted = await sharingRequest(recipient, `/api/private/shares/${pending.shareId}/accept`, "POST", {});
   expect(accepted.status).toBe(201);
   const active = await sharingRequest(recipient, "/api/private/grants");
@@ -42,6 +43,7 @@ it("keeps a pending invitation unique and lets only the Owner cancel or recipien
 it("addresses one exact normalized handle without prefix, wildcard, or Account-directory discovery", async () => {
   const owner = await sharingAccount(), recipient = await sharingAccount();
   const targetId = await treeChild(owner, owner.rootId, "file");
+  await convertFixtureFile(owner, targetId);
   await env.DB.prepare("UPDATE accounts SET share_handle_lookup_token = ? WHERE id = ?")
     .bind(await shareHandleLookupToken("Cobalt_Wren"), recipient.accountId).run();
   for (const handle of ["Cobalt", "Cobalt_Wre", "Cobalt_Wren%", " Cobalt_Wren"]) {
@@ -132,6 +134,7 @@ it("a Collaborator cannot reshare, accept someone else's invitation, or target a
   const fileId = await treeChild(owner, owner.rootId, "file");
   const pending = await invite(owner, collaborator, fileId, "read_write");
   expect((await sharingRequest(other, `/api/private/shares/${pending.shareId}/accept`, "POST", {})).status).toBe(404);
+  await prepareGrantKeys(owner, pending.shareId);
   expect((await sharingRequest(collaborator, `/api/private/shares/${pending.shareId}/accept`, "POST", {})).status).toBe(201);
   expect((await sharingRequest(collaborator, "/api/private/shares", "PUT", {
     targetId: fileId, recipient: { shareId: other.shareId }, permission: "read_write",
@@ -145,6 +148,7 @@ it("concurrent acceptance creates exactly one active Grant and removes the pendi
   const owner = await sharingAccount(), recipient = await sharingAccount();
   const targetId = await treeChild(owner, owner.rootId, "file");
   const pending = await invite(owner, recipient, targetId);
+  await prepareGrantKeys(owner, pending.shareId);
   const responses = await Promise.all(Array.from({ length: 2 }, () =>
     sharingRequest(recipient, `/api/private/shares/${pending.shareId}/accept`, "POST", {})));
   expect(responses.filter((response) => response.status === 201)).toHaveLength(1);

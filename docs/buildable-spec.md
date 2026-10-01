@@ -150,9 +150,9 @@ The browser client is part of the trusted computing base. End-to-end content pri
 - The browser generates one Vault root key for an Account's owned content.
 - Every Directory has an independently random Directory capability key.
 - A parent Directory capability wraps each child Directory capability.
-- Every persisted current File representation has a fresh independently random File content key.
-- The File content key encrypts Markdown and File metadata and is wrapped by the containing Directory capability.
-- Each successful File save uses a fresh File content key; replacing the prior representation is not version history.
+- Every File has an independently random File capability wrapped by the containing Directory capability; direct File Grants deliver that capability without parent access.
+- Every persisted current File representation has a fresh independently random File content key, which encrypts Markdown/File metadata and is wrapped by the File capability.
+- Each successful File save uses a fresh content key but leaves its File capability and Directory listing unchanged. File capabilities change when access-driven Key rotation requires it. Replacing a representation is not version history. Legacy parent-wrapped Files require the conditional browser conversion in section 8.3.
 - An Account has a client-generated encryption identity separate from WebAuthn credentials. The identity is account-scoped and realized by its registered Encryption devices: every capability envelope that grants access targets a specific device's transport public key (or a Publication link capability for public epochs), so no separate account-wide decryption key exists.
 - Each enrolled device has separate P-256 HPKE transport and device-assertion signing key pairs plus an approved-device registry entry. A current device proof—not a passkey alone—authorizes private operations. In the normal enrollment flow, an existing approved device must approve a new device through a QR-bound ceremony; the service cannot substitute an unapproved public key. Signup is the one exception: the Account-creation transaction is the trust anchor that creates the first device (section 5.2).
 - A separately generated 256-bit Vault recovery secret is represented as a checksum-protected 24-word phrase. It is shown only at creation, recovery, or explicit reissue; it is never user-chosen, sent to the service, logged, or used as a password.
@@ -179,7 +179,7 @@ The exact maintained HPKE package and internal binary serialization are implemen
 A Key envelope is the only persisted mechanism that grants one capability access to another key. Required purposes cover:
 
 - parent Directory to child Directory;
-- parent Directory to current File key;
+- parent Directory to File capability, then File capability to fresh representation content key;
 - active direct File/Directory Grant to recipient device;
 - device enrollment;
 - Vault recovery;
@@ -284,7 +284,7 @@ This ceremony is for an Account with no usable active Encryption device. It requ
 3. The service verifies that intent with the stored recovery-verification public key, then sends a one-use HPKE possession challenge to the exact candidate transport key. The browser decrypts it locally and signs it with the candidate device-assertion key. Changing either candidate key makes the intent or challenge fail.
 4. The browser creates a new recovery phrase, salt, and recovery-enrollment key pair, then creates the next capsule with the unchanged Vault root key and new recovery private key. It displays the replacement phrase only after success.
 5. One short D1 transaction consumes the enrollment record; verifies the live Session, recent assertion, current generation and registry revision, signed intent, possession proof, exact candidate keys, and next-capsule digest; creates the exact candidate Encryption device as active; installs its initial Vault-root Key envelope; advances the device-registry epoch; installs the next capsule/verification key/generation; revokes every prior Encryption device; revokes every other Session; creates a fresh normal Session for the recovering browser; and writes a bounded Security event. Revoked devices remain tombstoned and their device-targeted envelopes are superseded.
-6. The transaction preserves the Vault root key, Directory capabilities, File content keys, and current representations: the MVP does not re-encrypt the entire Vault. An old device may retain data it already cached, but cannot retrieve future ciphertext, envelopes, or mutations because private endpoints require a normal Session plus a current device assertion from an active device at the current registry epoch.
+6. The transaction preserves the Vault root key, Directory/File capabilities, File content keys, and current representations: the MVP does not re-encrypt the entire Vault. An old device may retain data it already cached, but cannot retrieve future ciphertext, envelopes, or mutations because private endpoints require a normal Session plus a current device assertion from an active device at the current registry epoch.
 7. After commit, the replacement device uses the Vault root and recovery envelopes to traverse Account-owned content. Remaining device envelopes are created in bounded, idempotent `crypto_jobs`; the UI may show **Restoring your Files securely…** while they finish. A crash before commit activates no device; a crash after commit resumes only this non-authorizing provisioning work.
 
 Vault recovery never includes a Grant capability or Grant-derived Comment capability. For an active Grant missing an envelope for the replacement device, the service records only an opaque provisioning need. An already authorized source browser—normally the File or Directory Owner's browser—provisions the current Grant/Comment capability when it next processes that need. Until then the recipient sees **Shared content is being securely provisioned**, without names, plaintext, or a URL-fragment fallback. A revoked or expired Grant cancels its need and can never provision an old capability.
@@ -544,9 +544,9 @@ Physical table factoring may vary only if all relationships, constraints, visibi
 
 - `vault_nodes`: node ID, `directory | file` kind, Owner Account, nullable parent node, nullable immutable Import ID, and lifecycle metadata.
 - `directories`: Directory node key and monotonic `entries_revision`.
-- `files`: File node key, current representation pointer, and current revision.
-- `directory_entries`: one current parent/child edge with encrypted display name and ordering plus, directly or by constrained reference, the parent capability's envelope for the child Directory capability/current File key.
-- `file_representations`: one decoded encrypted private Markdown/File-metadata payload, content-key/epoch identity, ciphertext size, revision, and lifecycle metadata. It has no chunk or manifest rows, and its stored BLOB is at most 524,288 bytes. The browser measures decrypted source against 262,144 UTF-8 bytes; an over-limit legacy source remains readable/exportable but is ineligible for save or conflict overwrite until reduced within the limit.
+- `files`: File node key, current representation pointer/revision, and File capability identity/epoch; an explicitly legacy File has no File capability until browser conversion.
+- `directory_entries`: one current parent/child edge with encrypted display name and ordering plus the parent capability's envelope for the child Directory or File capability. Legacy Files retain parent-wrapped content keys until conditional browser conversion.
+- `file_representations`: one decoded encrypted private Markdown/File-metadata payload, content-key/epoch identity, bounded File-capability-wrapped content-key envelope, signed File head, ciphertext size, revision, and lifecycle metadata. It has no chunk or manifest rows, and its stored BLOB is at most 524,288 bytes. The browser measures decrypted source against 262,144 UTF-8 bytes; an over-limit legacy source remains readable/exportable but is ineligible for save or conflict overwrite until reduced within the limit.
 
 Required constraints:
 
@@ -640,14 +640,14 @@ A create, rename, reorder, delete, or move transaction:
 
 Before submission, the browser checks the 262,144-byte UTF-8 Markdown source bound. After decryption it measures the source too: an over-limit legacy representation remains readable/exportable but cannot save or confirm a conflict overwrite until reduced within the limit. The Worker independently rejects an oversized decoded representation BLOB, and D1 enforces the 524,288-byte `CHECK` bound. A File save transaction:
 
-1. checks current effective write authority and expected File revision;
-2. validates every submitted private/Public representation payload before inserting a fresh private representation/key identity;
-3. replaces the parent-entry envelope and every active direct-Grant envelope for the fresh File key;
+1. checks current effective write authority, expected File pointer/revision, current File capability identity/epoch, and absence of a pending-rotation write seal;
+2. validates every submitted private/Public representation payload, the fresh content-key identity/epoch and the device-signed File head before inserting a fresh private representation;
+3. installs its content-key envelope under the unchanged File capability; ordinary saves neither change a Directory listing nor replace recipient-device Grant envelopes;
 4. when a Publication is active, conditionally installs the matching freshly encrypted Public representation in the same operation;
 5. conditionally swaps both current pointers/revision; and
 6. removes the superseded private/Public representation after it is no longer referenced.
 
-A malformed, oversize, or stale save changes no current pointer or revision and leaves no partial private/Public update. A stale revision returns the conflict needed by the UI.
+A malformed, oversize, or stale save changes no current pointer or revision and leaves no partial private/Public update. A stale revision returns the conflict needed by the UI. Direct File editors require no parent capability or listing, even when a separate inherited Directory Grant is read-only. New Files use this format. An authorized browser converts a legacy File by wrapping its existing content key beneath a random File capability and replacing the parent edge/signed listing atomically, pinned to the original File pointer/revision and Directory revision. Conversion preserves content ciphertext and does not complete access-driven rotation. Until conversion, legacy parent-listing saves remain supported only with Directory write authority; legacy direct editing fails closed. See [ADR-0008](adr/0008-parent-free-file-capabilities.md).
 
 #### Share acceptance/revocation
 

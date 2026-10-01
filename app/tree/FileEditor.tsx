@@ -9,7 +9,7 @@ import type { DirectoryListing } from "./client";
 
 export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStructuralReady, structuralBusy, onNavigationStart }: {
   fileId: string; snapshot: FilesSnapshot; view: "edit" | "preview"; showEdit: () => void;
-  onCurrent: (file: FileDocument, listing: DirectoryListing) => void;
+  onCurrent: (file: FileDocument, listing: DirectoryListing | null) => void;
   onStructuralReady: (ready: boolean) => void; structuralBusy: boolean; onNavigationStart: () => void;
 }) {
   const { draft, status, conflict, rejected, edit, composition, blocker, navigationFailed,
@@ -20,7 +20,8 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStru
   useEffect(() => {
     onStructuralReady(status === "Saved" && compositionValue === null && !loading && !overwriteProposal);
   }, [status, compositionValue, loading, overwriteProposal, onStructuralReady]);
-  const editingBlocked = structuralBusy || !lease.editable || loading || overwriteProposal !== null;
+  const canEdit = snapshot.file?.canEdit === true;
+  const editingBlocked = !canEdit || structuralBusy || !lease.editable || loading || overwriteProposal !== null;
   const bytes = fileSourceBytes(draft);
   const [copyFailed, setCopyFailed] = useState(false);
   async function copy() {
@@ -33,7 +34,8 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStru
     setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
   return <><p role="status" aria-label="File save status" className="mt-3">{status}</p>
-    {!lease.editable && <div role="status" className="mt-2">
+    {!canEdit && <p role="status">Read-only</p>}
+    {canEdit && !lease.editable && <div role="status" className="mt-2">
       {lease.state === "unavailable" ? "Editing unavailable. This browser could not coordinate File editing." :
         lease.state === "checking" ? "Checking editing access…" :
           lease.state === "transferring" ? "Saving before transferring editing…" : "Read-only — this File is being edited in another tab."}
@@ -50,7 +52,7 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStru
         {bytes > FILE_SOURCE_LIMIT && <button type="button" onClick={() => {
           showEdit(); requestAnimationFrame(() => sourceInput.current?.focus());
         }}>Reduce content</button>}
-        {conflict && <button type="button" disabled={loading || !lease.editable || bytes > FILE_SOURCE_LIMIT} onClick={() => void proposeOverwrite()}>Overwrite…</button>}
+        {canEdit && conflict && <button type="button" disabled={loading || !lease.editable || bytes > FILE_SOURCE_LIMIT} onClick={() => void proposeOverwrite()}>Overwrite…</button>}
       </div>
       {copyFailed && <p role="alert">Copy failed. Download your local draft instead.</p>}
     </section>}

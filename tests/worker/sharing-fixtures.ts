@@ -6,6 +6,8 @@ import { authorizePrivateRequest } from "../../app/device/proof.server";
 import { createListingHead, type SealedEntry } from "../../app/tree/listing";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import { seedNormalSession } from "./auth-fixtures";
+import { createFileHead } from "../../app/tree/file-head";
+import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "../../app/sharing/grant-keys";
 
 export function opaqueId(): string {
   const id = crypto.randomUUID();
@@ -15,17 +17,19 @@ export function opaqueId(): string {
 export async function sharingAccount() {
   const accountId = opaqueId(), shareId = opaqueId(), rootId = opaqueId(), deviceId = opaqueId(), credentialId = opaqueId();
   const assertion = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const transport = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
   const now = Date.now();
   await env.DB.batch([
     env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(accountId, shareId, now, now),
     env.DB.prepare("INSERT INTO passkeys (credential_id, account_id, public_key, counter, transports, device_type, backed_up, created_at, updated_at) VALUES (?, ?, X'01', 0, '[]', 'singleDevice', 0, ?, ?)").bind(credentialId, accountId, now, now),
     env.DB.prepare("INSERT INTO account_encryption_identities (account_id, root_directory_id, registry_epoch) VALUES (?, ?, 1)").bind(accountId, rootId),
-    env.DB.prepare("INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key, state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, X'01', ?, 'active', 'signup', 1, ?)")
-      .bind(deviceId, accountId, new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), now),
+    env.DB.prepare("INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key, state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, ?, ?, 'active', 'signup', 1, ?)")
+      .bind(deviceId, accountId, new Uint8Array(await crypto.subtle.exportKey("raw", transport.publicKey)),
+        new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), now),
   ]);
   const session = await seedNormalSession({ accountId, credentialIds: [credentialId] });
   await env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(deviceId, session.id).run();
-  return { accountId, shareId, rootId, deviceId, assertion, session,
+  return { accountId, shareId, rootId, deviceId, assertion, transport, session,
     proofs: new Map<string, DeviceProof>(), keys: new Map<string, Uint8Array>([[rootId, generateDirectoryCapabilityKey()]]) };
 }
 export type SharingAccount = Awaited<ReturnType<typeof sharingAccount>>;
@@ -62,7 +66,7 @@ export async function treeListing(account: SharingAccount, directoryId: string) 
   return response.json() as Promise<{ entriesRevision: number; entries: SealedEntry[] }>;
 }
 
-export async function treeChild(actor: SharingAccount, parentId: string, kind: "directory" | "file", ownerId = actor.accountId) {
+export async function treeChild(actor: SharingAccount, parentId: string, kind: "directory" | "file", ownerId = actor.accountId, converted = false) {
   const nodeId = opaqueId(), key = actor.keys.get(parentId)!;
   const listing = await treeListing(actor, parentId);
   const writer = await createSymmetricWriter(key);
@@ -73,10 +77,17 @@ export async function treeChild(actor: SharingAccount, parentId: string, kind: "
   const child = kind === "directory" ? await createChildDirectoryCapability(key, {
     vaultId: ownerId, parentDirectoryId: parentId, childDirectoryId: nodeId,
   }) : null;
-  const file = kind === "file" ? await createFileRepresentation(key, { markdown: "# private", metadata: new Uint8Array() }, {
+  const capability = converted && kind === "file" ? { id: opaqueId(), epoch: 1 } : null;
+  const fileCapabilityKey = capability ? generateDirectoryCapabilityKey() : null;
+  const file = kind === "file" ? await createFileRepresentation(fileCapabilityKey ?? key, { markdown: "# private", metadata: new Uint8Array() }, {
     vaultId: ownerId, fileId: nodeId,
   }) : null;
-  const keyEnvelope = encodeTreeBytes(child ? child.envelope : file!.fileContentKeyEnvelope);
+  const keyEnvelope = encodeTreeBytes(capability ? await writer.seal(fileCapabilityKey!, { purpose: "file-capability",
+    vaultId: ownerId, objectId: nodeId, keyId: capability.id, keyEpoch: 1, revision: 1 }) : child ? child.envelope : file!.fileContentKeyEnvelope);
+  const representationId = opaqueId();
+  const fileHead = capability ? await createFileHead(actor.assertion.privateKey, { vaultId: ownerId, fileId: nodeId,
+    capabilityId: capability.id, capabilityEpoch: 1, representationId, contentKeyId: nodeId, keyEpoch: 1, revision: 1,
+    deviceId: actor.deviceId, ciphertext: encodeTreeBytes(file!.contentEnvelope), keyEnvelope: encodeTreeBytes(file!.fileContentKeyEnvelope) }) : null;
   const entry = { nodeId, kind, ...metadata, keyEnvelope };
   const listingHead = await createListingHead(key, actor.assertion.privateKey, {
     vaultId: ownerId, directoryId: parentId, deviceId: actor.deviceId, revision: listing.entriesRevision + 1,
@@ -84,10 +95,13 @@ export async function treeChild(actor: SharingAccount, parentId: string, kind: "
   });
   const response = await sharingRequest(actor, `/api/private/tree/directories/${parentId}/children`, "PUT", {
     ...entry, expectedRevision: listing.entriesRevision, listingHead,
-    ...(file ? { representation: { id: opaqueId(), contentKeyId: nodeId, keyEpoch: 1, revision: 1,
-      ciphertext: encodeTreeBytes(file.contentEnvelope) } } : {}),
+    ...(capability ? { capability } : {}),
+    ...(file ? { representation: { id: representationId, contentKeyId: nodeId, keyEpoch: 1, revision: 1,
+      ciphertext: encodeTreeBytes(file.contentEnvelope),
+      ...(capability ? { keyEnvelope: encodeTreeBytes(file.fileContentKeyEnvelope), fileHead } : {}) } } : {}),
   });
   if (response.status !== 201) throw new Error(`create failed: ${response.status} ${await response.text()}`);
+  if (fileCapabilityKey) actor.keys.set(nodeId, fileCapabilityKey);
   if (child) actor.keys.set(nodeId, await openSymmetric(decodeTreeBytes(keyEnvelope), key, { context: {
     purpose: "directory-capability", vaultId: ownerId, objectId: nodeId, keyId: nodeId, keyEpoch: 1, revision: 1,
   } }));
@@ -135,7 +149,23 @@ export async function movePayload(actor: SharingAccount, ownerId: string, nodeId
 
 export async function savePayload(actor: SharingAccount, ownerId: string, fileId: string, parentId: string) {
   const response = await sharingRequest(actor, `/api/private/tree/files/${fileId}`);
-  const current = await response.json() as { revision: number; keyEpoch: number };
+  const current = await response.json() as { revision: number; keyEpoch: number; representationId: string;
+    keyEnvelope?: string; capability?: { id: string; epoch: number } };
+  if (current.capability) {
+    const key = actor.keys.get(fileId) ?? await openSymmetric(decodeTreeBytes(current.keyEnvelope), actor.keys.get(parentId)!, {
+      context: { purpose: "file-capability", vaultId: ownerId, objectId: fileId,
+        keyId: current.capability.id, keyEpoch: current.capability.epoch, revision: 1 },
+    });
+    const contentKeyId = opaqueId(), id = opaqueId(), keyEpoch = current.keyEpoch + 1, revision = current.revision + 1;
+    const file = await createFileRepresentation(key, { markdown: "# saved by Collaborator", metadata: new Uint8Array() },
+      { vaultId: ownerId, fileId, keyId: contentKeyId, keyEpoch, revision });
+    const ciphertext = encodeTreeBytes(file.contentEnvelope), keyEnvelope = encodeTreeBytes(file.fileContentKeyEnvelope);
+    const fileHead = await createFileHead(actor.assertion.privateKey, { vaultId: ownerId, fileId,
+      capabilityId: current.capability.id, capabilityEpoch: current.capability.epoch, representationId: id,
+      contentKeyId, keyEpoch, revision, deviceId: actor.deviceId, ciphertext, keyEnvelope });
+    return { expectedRevision: current.revision, expectedRepresentationId: current.representationId, capability: current.capability,
+      representation: { id, contentKeyId, keyEpoch, revision, ciphertext, keyEnvelope, fileHead } };
+  }
   const listing = await treeListing(actor, parentId);
   const contentKeyId = opaqueId();
   const file = await createFileRepresentation(actor.keys.get(parentId)!, {
@@ -162,8 +192,67 @@ export async function deletePayload(actor: SharingAccount, ownerId: string, node
     }) };
 }
 
+export async function convertFixtureFile(owner: SharingAccount, fileId: string) {
+  const response = await sharingRequest(owner, `/api/private/tree/files/${fileId}`);
+  if (!response.ok) return; // A Directory target is not a File.
+  const current = await response.json() as { ownerId: string; parentId: string; revision: number;
+    representationId: string; contentKeyId: string; keyEpoch: number; ciphertext: string; keyEnvelope: string;
+    capability?: { id: string; epoch: number } };
+  if (current.ownerId !== owner.accountId) return;
+  const parentKey = owner.keys.get(current.parentId)!;
+  if (current.capability) {
+    owner.keys.set(fileId, await openSymmetric(decodeTreeBytes(current.keyEnvelope), parentKey, {
+      context: { purpose: "file-capability", vaultId: owner.accountId, objectId: fileId,
+        keyId: current.capability.id, keyEpoch: current.capability.epoch, revision: 1 },
+    }));
+    return;
+  }
+  const listing = await treeListing(owner, current.parentId);
+  const key = generateDirectoryCapabilityKey(), capability = { id: opaqueId(), epoch: 1 };
+  const contentContext = { purpose: "file-content-key" as const, vaultId: owner.accountId, objectId: fileId,
+    keyId: current.contentKeyId, keyEpoch: current.keyEpoch, revision: current.revision };
+  const contentKey = await openSymmetric(decodeTreeBytes(current.keyEnvelope), parentKey, { context: contentContext });
+  const keyEnvelope = encodeTreeBytes(await (await createSymmetricWriter(parentKey)).seal(key, {
+    purpose: "file-capability", vaultId: owner.accountId, objectId: fileId, keyId: capability.id, keyEpoch: 1, revision: 1,
+  }));
+  const representationKeyEnvelope = encodeTreeBytes(await (await createSymmetricWriter(key)).seal(contentKey, contentContext));
+  const fileHead = await createFileHead(owner.assertion.privateKey, { vaultId: owner.accountId, fileId,
+    capabilityId: capability.id, capabilityEpoch: 1, representationId: current.representationId,
+    contentKeyId: current.contentKeyId, keyEpoch: current.keyEpoch, revision: current.revision, deviceId: owner.deviceId,
+    ciphertext: current.ciphertext, keyEnvelope: representationKeyEnvelope });
+  const listingHead = await createListingHead(parentKey, owner.assertion.privateKey, {
+    vaultId: owner.accountId, directoryId: current.parentId, deviceId: owner.deviceId, revision: listing.entriesRevision + 1,
+    entries: listing.entries.map((entry) => entry.nodeId === fileId ? { ...entry, keyEnvelope } : entry),
+  });
+  const converted = await sharingRequest(owner, `/api/private/tree/files/${fileId}/capability`, "PUT", {
+    expectedRevision: current.revision, expectedRepresentationId: current.representationId,
+    expectedParentRevision: listing.entriesRevision, capability, keyEnvelope, representationKeyEnvelope, fileHead, listingHead,
+  });
+  if (!converted.ok) throw new Error(`conversion failed: ${converted.status}`);
+  owner.keys.set(fileId, key);
+}
+
+/** Basic acceptance covers every device in one pinned current snapshot. */
+export async function prepareGrantKeys(owner: SharingAccount, relationshipId: string, kind: "shares" | "grants" = "shares") {
+  let cursor: string | null = null;
+  do {
+    const path = `/api/private/${kind}/${relationshipId}/keys`;
+    const response = await sharingRequest(owner, `${path}${cursor ? `?cursor=${cursor}` : ""}`);
+    if (!response.ok) throw new Error(`delivery targets failed: ${response.status}`);
+    const targets = await response.json() as GrantKeyContext & { devices: { deviceId: string; transportPublicKey: string }[]; nextCursor: string | null };
+    const envelopes = await Promise.all(targets.devices.map(async (device) => createGrantKeyEnvelope(owner.keys.get(targets.targetId)!,
+      await crypto.subtle.importKey("raw", decodeTreeBytes(device.transportPublicKey, 65), { name: "ECDH", namedCurve: "P-256" }, true, []),
+      owner.assertion.privateKey, { ...targets, deviceId: device.deviceId, signerDeviceId: owner.deviceId })));
+    const uploaded = await sharingRequest(owner, path, "PUT", { capabilityId: targets.capabilityId, capabilityEpoch: targets.capabilityEpoch,
+      ownerRegistryEpoch: targets.ownerRegistryEpoch, recipientRegistryEpoch: targets.recipientRegistryEpoch, envelopes });
+    if (!uploaded.ok) throw new Error(`delivery upload failed: ${uploaded.status}`);
+    cursor = targets.nextCursor;
+  } while (cursor);
+}
+
 export async function invite(owner: SharingAccount, recipient: SharingAccount, targetId: string,
   permission: "read_only" | "read_write" = "read_only") {
+  await convertFixtureFile(owner, targetId);
   const response = await sharingRequest(owner, "/api/private/shares", "PUT", {
     targetId, recipient: { shareId: recipient.shareId }, permission,
   });
@@ -174,7 +263,12 @@ export async function invite(owner: SharingAccount, recipient: SharingAccount, t
 export async function grant(owner: SharingAccount, recipient: SharingAccount, targetId: string,
   permission: "read_only" | "read_write" = "read_only") {
   const share = await invite(owner, recipient, targetId, permission);
+  await prepareGrantKeys(owner, share.shareId);
   const response = await sharingRequest(recipient, `/api/private/shares/${share.shareId}/accept`, "POST", {});
   if (response.status !== 201) throw new Error(`accept failed: ${response.status}`);
-  return response.json() as Promise<{ grantId: string }>;
+  const granted = await response.json() as { grantId: string };
+  const envelope = await (await sharingRequest(recipient, `/api/private/grants/${granted.grantId}/keys`)).json() as
+    Parameters<typeof openGrantKeyEnvelope>[0];
+  recipient.keys.set(targetId, await openGrantKeyEnvelope({ ...envelope, recipient: recipient.transport }));
+  return granted;
 }

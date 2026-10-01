@@ -9,14 +9,14 @@ Ticket 17 extends both preflight and **transactional** authorization through the
 - A Directory read/write Collaborator may mutate only inside a covering granted subtree, never its shared root or outside that scope. A direct File Grant cannot authorize structural operations.
 - Owner-controlled exits from any shared subtree are explicitly deferred until ticket 19 supplies completed bounded rekeying. Moves between disconnected Collaborator write scopes are denied.
 - Revocation/leave/permission changes create current safety seals; future encrypted and structural writes beneath sealed targets fail closed until rotation. Reads and hard deletion remain available.
-- Direct File Grants follow identity without disclosing a parent/path. Their parent-free fresh-key save protocol remains a ticket-18 dependency gap; the existing parent-capability save is never exposed to them.
-- Shares, Grants, and safety seals are now explicitly removed during hard deletion. Ticket 27 must extend that list when Publication or Comment records are introduced.
+- Direct File Grants follow identity without disclosing a parent/path. Converted Files support parent-free fresh-key saves through a stable File capability; legacy conversion requires authorized browser parent-write access. Ordinary converted saves do not advance a Directory revision.
+- Shares, Grants, their pending/active device envelopes, and safety seals are explicitly removed during hard deletion. Ticket 27 must extend that list when Publication or Comment records are introduced.
 
 ## Protocol and concurrency
 
 All operations use fresh Device proofs bound to the exact request body and current Session/device registry. Namespace heads are encrypted member commitments signed by the active Encryption device. Reorder replaces only encrypted order values and the parent head. Move supplies expected source/destination revisions, re-encrypted destination metadata, a rewrapped child key, and replacement heads for both Directories. File moves preserve the current representation/key identity; Directory moves preserve descendants.
 
-Rename now pins the expected parent ID as well as its revision. Structural preflight errors recheck the authorized namespace revisions so a target disappearing or a File key advancing between reads still produces nameless `409 namespace_changed`, not misleading not-found/invalid-request errors. File saves similarly pin their original parent through the submitted listing-head context.
+Rename now pins the expected parent ID as well as its revision. Structural preflight errors recheck the authorized namespace revisions so a target disappearing or a File key advancing between reads still produces nameless `409 namespace_changed`, not misleading not-found/invalid-request errors. Legacy File saves similarly pin their original parent through the submitted listing-head context. Converted saves instead pin the File pointer/revision and capability epoch, so unrelated parent changes or an Owner rename/move do not invalidate a prepared direct save.
 
 The multi-Directory/bulk mutation helper checks all revisions, eligibility, and live authority before its first CAS. A freshly generated, server-only `device_proof_uses.commit_token` gates every dependent statement; an old spent proof cannot unlock writes, and zero/many-row deletion counts cannot break the guard. D1 `batch()` supplies the transaction. Reciprocal foreign keys remain `ON DELETE RESTRICT`; `PRAGMA defer_foreign_keys = ON` defers them only until this batch commits, after explicit updates/deletions restore agreement. The migration preserves immutable ownership, kinds, Import IDs, and hidden roots, and adds bounded update-time ancestry/cycle checks matching the existing private-path bound.
 
@@ -26,7 +26,7 @@ References: [D1 batch transactions](https://developers.cloudflare.com/d1/worker-
 
 The 500-node cap includes the selected Directory. Enumeration reads at most 501 nodes, authorizes each node/edge, and pins every parent relationship, Directory revision, and File pointer. The transaction rechecks the complete snapshot and bounded membership count, then explicitly removes:
 
-1. Pending Shares, active Grants, and current sharing safety seals targeting the selected nodes;
+1. Pending/active Share/Grant device envelopes, their relationships, and current sharing safety seals targeting the selected nodes;
 2. Directory entries and their parent capability envelopes;
 3. object-addressed Key envelopes;
 4. private File representations;

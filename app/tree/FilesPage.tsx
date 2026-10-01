@@ -94,7 +94,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       route.current = `${kind}/${nodeId}`;
     }
     if (initial.snapshot) setExpanded(Array.from(new Set([
-      ...savedExpanded(initial.snapshot.access.vaultId),
+      ...savedExpanded(initial.snapshot.access.actorAccountId),
       ...initial.snapshot.crumbs.slice(0, -1).map((item) => item.id), initial.snapshot.access.rootId,
     ])));
   }, [initial, nodeId, kind]);
@@ -105,7 +105,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     if (expanded.includes(entry.nodeId)) {
       const next = expanded.filter((id) => id !== entry.nodeId);
       setExpanded(next);
-      localStorage.setItem(expandedPreferenceKey(snapshot.access.vaultId), JSON.stringify(next));
+      localStorage.setItem(expandedPreferenceKey(snapshot.access.actorAccountId), JSON.stringify(next));
       return;
     }
     try {
@@ -122,14 +122,14 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       }));
       const next = [...expanded, entry.nodeId];
       setExpanded(next);
-      localStorage.setItem(expandedPreferenceKey(snapshot.access.vaultId), JSON.stringify(next));
+      localStorage.setItem(expandedPreferenceKey(snapshot.access.actorAccountId), JSON.stringify(next));
     } catch { if (!signal.aborted) setMessage("This folder could not be opened. Refresh and try again."); }
   }
 
   function startCreate(createKind: TreeKind) {
     if (!snapshot) return;
     const parentId = kind === "directory" ? nodeId : snapshot.crumbs.at(-2)?.id;
-    if (!parentId || !snapshot.listings[parentId]) return;
+    if (!parentId || !snapshot.listings[parentId] || snapshot.listings[parentId].canCreate === false) return;
     setMessage("");
     setDialog({ operation: "create", kind: createKind, parentId, requestedName: "" });
   }
@@ -199,7 +199,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       const active = current.needsRefresh ? await refreshed(current, signal) : snapshot;
       const parent = active.listings[current.parentId];
       const key = active.keys[current.parentId];
-      if (!parent || !key) throw new Error("private tree unavailable");
+      if (!parent || !key || parent.canCreate === false) throw new Error("private tree unavailable");
       if (current.operation === "create") {
         const payload = await prepareTreeCreate({ vaultId: snapshot.access.vaultId,
           parentId: current.parentId, parentKey: key, entriesRevision: parent.entriesRevision,
@@ -287,10 +287,16 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
 
   if (status === "not-found") return <main className="p-8"><h1 className="text-xl font-semibold">Not found</h1>
     <p>This File or folder is unavailable.</p><Link to="/account/device-access" className="underline">Files access</Link></main>;
+  if (status === "provisioning") return <main className="p-8"><p role="status">Shared content is being securely provisioned</p></main>;
   if (status !== "ready" || !snapshot) return <main className="p-8"><h1 className="text-xl font-semibold">Files unavailable</h1>
     <p>Check this device’s access or try again.</p><Link to="/account/device-access" className="underline">Device access</Link></main>;
 
   const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
+  const structuralParent = kind === "directory" ? nodeId : snapshot.file?.parentId;
+  const canCreate = !!structuralParent && snapshot.listings[structuralParent]?.canCreate !== false &&
+    !!snapshot.listings[structuralParent];
+  const canChangeStructure = nodeId !== snapshot.access.rootId &&
+    snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.canCreate !== false;
   return <main className="mx-auto min-h-dvh max-w-screen-2xl lg:grid lg:grid-cols-[18rem_minmax(0,1fr)]">
     {(kind === "directory" || editorParent !== snapshot.file?.parentId) && <NavigationIntentObserver onStart={onNavigationStart} />}
     {drawer && <button type="button" aria-label="Close Files tree" onClick={() => setDrawer(false)}
@@ -298,7 +304,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     <aside className={`${drawer ? "block" : "hidden"} fixed inset-y-0 left-0 z-20 w-72 overflow-y-auto border-r border-stone-200 bg-stone-50 p-4 shadow-lg lg:static lg:block lg:w-auto lg:shadow-none`} aria-label="Files tree">
       <div className="mb-4 flex items-center justify-between"><Link to="/" className="font-semibold">mdwn</Link>
         <button type="button" onClick={() => setDrawer(false)} className="lg:hidden">Close tree</button></div>
-      <Link to={`/d/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">Files</Link>
+      <Link to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">{snapshot.access.rootKind === "file" ? "Shared File" : "Files"}</Link>
       <nav aria-label="Files">{directoryItems(snapshot.access.rootId)}</nav>
     </aside>
     <section className="min-w-0 p-4 md:p-6">
@@ -313,11 +319,11 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         </nav>
       </div>
       <div className="mt-6 flex flex-wrap items-center gap-2"><h1 className="mr-auto text-2xl font-semibold">{selected}</h1>
-        <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
-        <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button>
-        {nodeId !== snapshot.access.rootId && <button type="button" disabled={busy || recoveryPending || (kind === "file" && !fileReady)} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
+        {canCreate && <><button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
+        <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button></>}
+        {canChangeStructure && <button type="button" disabled={busy || recoveryPending || (kind === "file" && !fileReady)} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
       </div>
-      {nodeId !== snapshot.access.rootId && <div className="mt-3 flex flex-wrap gap-2">
+      {canChangeStructure && <div className="mt-3 flex flex-wrap gap-2">
         {(["up", "down"] as const).map((direction) => {
           const entries = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];
           const index = entries.findIndex((entry) => entry.nodeId === nodeId);
@@ -339,7 +345,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         {editorParent === snapshot.file?.parentId ? <FileEditor key={`${nodeId}/${snapshot.file?.parentId}`} fileId={nodeId} snapshot={snapshot} view={view} showEdit={() => setView("edit")}
           onStructuralReady={setStructuralReady} structuralBusy={busy || dialog !== null} onNavigationStart={onNavigationStart}
           onCurrent={(file, listing) => setSnapshot((previous) => previous && ({ ...previous,
-            file, listings: { ...previous.listings, [listing.directoryId]: listing } }))} /> : <p role="status">Opening moved File…</p>}
+            file, listings: listing ? { ...previous.listings, [listing.directoryId]: listing } : previous.listings }))} /> : <p role="status">Opening moved File…</p>}
       </> : <p className="mt-8 text-stone-500">Choose a File from the tree or create one here.</p>}
     </section>
     {dialog && <div role="dialog" aria-modal="true" aria-label={dialogLabels[dialog.operation].label}

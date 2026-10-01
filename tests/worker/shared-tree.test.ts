@@ -28,7 +28,8 @@ it("a Directory read/write Collaborator creates Owner-owned descendants and inhe
   const owner = await sharingAccount(), collaborator = await sharingAccount();
   const directoryId = await treeChild(owner, owner.rootId, "directory");
   await grant(owner, collaborator, directoryId, "read_write");
-  collaborator.keys.set(directoryId, owner.keys.get(directoryId)!); // Capability delivery belongs to ticket 18.
+  // grant() opened the actual device-specific capability delivery.
+  expect(collaborator.keys.get(directoryId)).toEqual(owner.keys.get(directoryId));
   const nestedId = await treeChild(collaborator, directoryId, "directory", owner.accountId);
   const fileId = await treeChild(collaborator, nestedId, "file", owner.accountId);
   const file = await sharingRequest(collaborator, `/api/private/tree/files/${fileId}`);
@@ -56,7 +57,7 @@ it("Directory read/write permits renaming descendants but neither read-only nor 
   expect((await sharingRequest(direct, path, "PATCH", ownerPayload)).status).toBe(404);
   const written = await sharingRequest(writer, path, "PATCH", await renamePayload(writer, owner.accountId, fileId, directoryId));
   expect(written.status).toBe(200);
-  expect((await treeListing(owner, directoryId)).entriesRevision).toBe(3);
+  expect((await treeListing(owner, directoryId)).entriesRevision).toBe(ownerPayload.expectedRevision + 1);
   expect((await sharingRequest(writer, `/api/private/tree/nodes/${directoryId}/name`, "PATCH",
     await renamePayload(owner, owner.accountId, directoryId, owner.rootId))).status).toBe(404);
 });
@@ -184,13 +185,11 @@ it("direct File authority follows Owner rename/move but exposes no structural en
   const file = await result.json();
   expect(file).toMatchObject({ fileId, revision: 1 });
   expect(file).not.toHaveProperty("parentId");
-  const save = await savePayload(owner, owner.accountId, fileId, destinationId);
-  const pending = await sharingRequest(collaborator, `/api/private/tree/files/${fileId}`, "PATCH", {
-    expectedRevision: save.expectedRevision, representation: save.representation,
-  });
-  expect(pending.status).toBe(409);
-  expect(await pending.json()).toEqual({ error: "shared_content_provisioning_required" });
-  expect(await (await sharingRequest(owner, `/api/private/tree/files/${fileId}`)).json()).toMatchObject({ revision: 1 });
+  const save = await savePayload(collaborator, owner.accountId, fileId, destinationId);
+  const saved = await sharingRequest(collaborator, `/api/private/tree/files/${fileId}`, "PATCH", save);
+  expect(saved.status).toBe(200);
+  expect(save).not.toHaveProperty("expectedParentRevision");
+  expect(await (await sharingRequest(owner, `/api/private/tree/files/${fileId}`)).json()).toMatchObject({ revision: 2 });
 });
 
 it("a File-only revocation seal also blocks reordering that File, not unrelated sibling creation", async () => {
