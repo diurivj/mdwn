@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FILE_SOURCE_FEEDBACK, FILE_SOURCE_LIMIT, fileSourceBytes } from "~/crypto/file-source";
 
 import { MarkdownPreview } from "./MarkdownPreview";
@@ -7,15 +7,20 @@ import { useFileDraft } from "./useFileDraft";
 import type { FileDocument } from "./file-client";
 import type { DirectoryListing } from "./client";
 
-export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent }: {
+export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStructuralReady, structuralBusy, onNavigationStart }: {
   fileId: string; snapshot: FilesSnapshot; view: "edit" | "preview"; showEdit: () => void;
   onCurrent: (file: FileDocument, listing: DirectoryListing) => void;
+  onStructuralReady: (ready: boolean) => void; structuralBusy: boolean; onNavigationStart: () => void;
 }) {
   const { draft, status, conflict, rejected, edit, composition, blocker, navigationFailed,
-    loading, reload, proposeOverwrite, overwriteProposal, confirmOverwrite, cancelOverwrite, lease } = useFileDraft(fileId, snapshot, onCurrent);
+    loading, reload, proposeOverwrite, overwriteProposal, confirmOverwrite, cancelOverwrite, lease } = useFileDraft(fileId, snapshot, onCurrent, onNavigationStart);
   const composing = useRef(false);
   const sourceInput = useRef<HTMLTextAreaElement>(null);
   const [compositionValue, setCompositionValue] = useState<string | null>(null);
+  useEffect(() => {
+    onStructuralReady(status === "Saved" && compositionValue === null && !loading && !overwriteProposal);
+  }, [status, compositionValue, loading, overwriteProposal, onStructuralReady]);
+  const editingBlocked = structuralBusy || !lease.editable || loading || overwriteProposal !== null;
   const bytes = fileSourceBytes(draft);
   const [copyFailed, setCopyFailed] = useState(false);
   async function copy() {
@@ -52,20 +57,23 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent }: {
     <div className="mt-4 grid min-h-[50vh] gap-4 lg:grid-cols-2">
     <section className={view === "preview" ? "hidden lg:block" : ""} aria-label="Editor">
       <h2 className="mb-2 font-medium">Markdown source</h2>
-      <textarea ref={sourceInput} readOnly={!lease.editable || loading || overwriteProposal !== null} value={compositionValue ?? draft}
+      <textarea ref={sourceInput} readOnly={editingBlocked} value={compositionValue ?? draft}
         onChange={(event) => {
+          if (editingBlocked) return;
           if (composing.current) setCompositionValue(event.target.value);
           else edit(event.target.value);
         }}
         onCompositionStart={(event) => {
+          if (editingBlocked) return;
           composing.current = true; composition(true); setCompositionValue(event.currentTarget.value);
         }}
         onCompositionEnd={(event) => {
           const value = event.currentTarget.value;
           composing.current = false; composition(false); setCompositionValue(null);
-          if (!edit(value)) event.currentTarget.value = draft;
+          if (editingBlocked || !edit(value)) event.currentTarget.value = draft;
         }}
         onPaste={(event) => {
+          if (editingBlocked) { event.preventDefault(); return; }
           if (composing.current) return;
           event.preventDefault();
           const textarea = event.currentTarget;

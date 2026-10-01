@@ -12,7 +12,7 @@ export type SaveStatus = "Unsaved" | "Saving" | "Saved" | "Couldn't save";
 
 /** A serialized tab-local draft. Router mutations never carry Markdown or capability keys. */
 export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
-  onCurrent: (file: FileDocument, listing: DirectoryListing) => void) {
+  onCurrent: (file: FileDocument, listing: DirectoryListing) => void, onNavigationStart: () => void) {
   const document = useRef(snapshot.file!);
   const parentKey = snapshot.keys[document.current.parentId]!;
   const listing = useRef(snapshot.listings[document.current.parentId]!);
@@ -117,8 +117,12 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
 
   const warn = () => composing.current || inFlight.current !== null || status === "Couldn't save" ||
     draftRef.current !== document.current.markdown || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT;
-  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
-    currentLocation.pathname !== nextLocation.pathname && warn());
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    // Invalidate structural continuations synchronously, before a slow next
+    // clientLoader starts. Waiting for unmount leaves the old page alive.
+    onNavigationStart();
+    return currentLocation.pathname !== nextLocation.pathname && warn();
+  });
   useBeforeUnload((event) => { if (warn()) { event.preventDefault(); event.returnValue = ""; } });
   useEffect(() => {
     if (blocker.state !== "blocked") { setNavigationFailed(false); return; }

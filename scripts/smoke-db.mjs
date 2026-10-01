@@ -49,7 +49,7 @@ const EXPECTED_COLUMNS = {
   key_envelopes: { account_id: "TEXT", purpose: "TEXT", object_id: "TEXT", recipient_id: "TEXT", ciphertext: "BLOB", key_epoch: "INTEGER" },
   recovery_capsules: { account_id: "TEXT", generation: "INTEGER", recovery_salt: "BLOB", ciphertext: "BLOB", verification_public_key: "BLOB" },
   authentication_recovery_codes: { account_id: "TEXT", ordinal: "INTEGER", code_hash: "BLOB" },
-  device_proof_uses: { account_id: "TEXT", proof_id: "TEXT", session_id: "TEXT", expires_at: "INTEGER" },
+  device_proof_uses: { account_id: "TEXT", proof_id: "TEXT", session_id: "TEXT", expires_at: "INTEGER", commit_token: "TEXT" },
   vault_nodes: { id: "TEXT", kind: "TEXT", owner_id: "TEXT", parent_node_id: "TEXT", import_id: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
   directories: { node_id: "TEXT", owner_id: "TEXT", entries_revision: "INTEGER",
     listing_ciphertext: "BLOB", listing_digest: "BLOB", listing_signature: "BLOB", listing_device_id: "TEXT" },

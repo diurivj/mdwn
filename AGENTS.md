@@ -22,4 +22,4 @@ After every code review, load `.agents/skills/rr8-post-review/SKILL.md` and run 
 
 ### Merge discipline
 
-The team is just the maintainer and agents, and `main` is a private Free repo with no enforceable branch protection — so the review gate is a convention, not a rule. Land work as a branch and pull request to `main`, and merge only once the `ci` workflow is green; the `deploy` workflow applies reviewed migrations and releases the Worker on merge.
+The team is just the maintainer and agents, and `main` is a private Free repo with no enforceable branch protection — so the review gate is a convention, not a rule. At ticket completion, commit the reviewed and verified work on its issue branch, push the branch, and open or update a pull request to `main`. Report the commit and PR URL. Merge only once the `ci` workflow is green; the `deploy` workflow applies reviewed migrations and releases the Worker on merge.

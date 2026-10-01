@@ -461,6 +461,8 @@ export const authenticationRecoveryCodes = sqliteTable("authentication_recovery_
 export const deviceProofUses = sqliteTable("device_proof_uses", {
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
   proofId: text("proof_id").notNull(),
+  /** Fresh server invocation marker gates multi-row writes, never a client capability. */
+  commitToken: text("commit_token"),
   sessionId: text("session_id").notNull(),
   expiresAt: integer("expires_at").notNull(),
 }, (table) => [

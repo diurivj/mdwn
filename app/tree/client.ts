@@ -1,4 +1,4 @@
-import { createSymmetricWriter, openSymmetric } from "~/crypto/enc-v1";
+import { createSymmetricWriter, inspectEnvelope, openSymmetric } from "~/crypto/enc-v1";
 import { fileSourceBytes } from "~/crypto/file-source";
 import {
   createChildDirectoryCapability, createFileRepresentation, decodeFileRepresentation,
@@ -24,6 +24,9 @@ export class TreeNotFoundError extends Error {
 }
 export class TreeCommitUncertainError extends Error {
   constructor() { super("tree_commit_uncertain"); }
+}
+export class DirectoryTooLargeError extends Error {
+  constructor() { super("directory_too_large"); }
 }
 
 export type TreeKind = "directory" | "file";
@@ -83,15 +86,18 @@ export async function prepareTreeRename(options: {
   entriesRevision: number; existingNames: readonly string[]; requestedName: string; order: string;
 }) {
   const name = nameAgainstNamespace(options.requestedName, options.existingNames);
-  return { expectedRevision: options.entriesRevision,
+  return { parentId: options.parentId, expectedRevision: options.entriesRevision,
     ...await encryptedEntry(options.parentKey, options.vaultId, options.parentId, options.nodeId, name, options.order) };
 }
 
-async function jsonResource<T>(path: string, method: "POST" | "PUT" | "PATCH", body?: object,
+async function jsonResource<T>(path: string, method: "POST" | "PUT" | "PATCH" | "DELETE", body?: object,
   signal?: AbortSignal): Promise<T> {
   const response = await privateRequest(path, { method, signal, ...(body ? { body: JSON.stringify(body) } : {}) });
   if (response.status === 404) throw new TreeNotFoundError();
   if (response.status === 409) throw new NamespaceChangedError();
+  if (response.status === 413 && (await response.json() as { error?: string }).error === "directory_too_large") {
+    throw new DirectoryTooLargeError();
+  }
   if (!response.ok) throw new Error("private tree unavailable");
   return response.json() as Promise<T>;
 }
@@ -223,19 +229,98 @@ export async function signListingChange(access: RootAccess, listing: DirectoryLi
 export async function createTreeChild(access: RootAccess, parentId: string,
   input: { nodeId: string; kind: TreeKind; expectedRevision: number;
     nameCiphertext: string; orderCiphertext: string; keyEnvelope: string },
-  listing: DirectoryListing, parentKey: Uint8Array) {
+  listing: DirectoryListing, parentKey: Uint8Array, signal?: AbortSignal) {
   if (isSignupRecoveryConfirmationPending()) throw new RecoveryConfirmationPendingError();
   if (listing.directoryId !== parentId || input.expectedRevision !== listing.entriesRevision) throw new Error("invalid directory listing");
   const head = await signListingChange(access, listing, parentKey, [...listing.entries, input]);
   const result = await jsonResource<{ nodeId: string; entriesRevision: number }>(
-    `/api/private/tree/directories/${parentId}/children`, "PUT", { ...input, listingHead: head });
+    `/api/private/tree/directories/${parentId}/children`, "PUT", { ...input, listingHead: head }, signal);
   try { rememberListing(access.vaultId, parentId, result.entriesRevision, head.digest); }
   catch { throw new TreeCommitUncertainError(); }
   return result;
 }
+
+/** Swap only adjacent encrypted order values; names, capabilities and source stay unchanged. */
+export async function reorderTreeChild(access: RootAccess, listing: DirectoryListing, parentKey: Uint8Array,
+  nodeId: string, direction: "up" | "down", signal?: AbortSignal) {
+  if (isSignupRecoveryConfirmationPending()) throw new RecoveryConfirmationPendingError();
+  const index = listing.entries.findIndex((entry) => entry.nodeId === nodeId);
+  const entry = listing.entries[index], neighbor = listing.entries[index + (direction === "up" ? -1 : 1)];
+  if (!entry) throw new TreeNotFoundError();
+  if (!neighbor) return;
+  if (entry.order === neighbor.order) throw new Error("ambiguous ordering");
+  const writer = await createSymmetricWriter(parentKey);
+  const swaps = [{ child: entry, order: neighbor.order }, { child: neighbor, order: entry.order }];
+  const orders = await Promise.all(swaps.map(async ({ child, order }) => ({
+    nodeId: child.nodeId, orderCiphertext: encodeTreeBytes(await writer.seal(encoder.encode(order),
+      metadataContext(access.vaultId, listing.directoryId, child.nodeId))),
+  })));
+  const updated = listing.entries.map((item) => ({ ...item,
+    orderCiphertext: orders.find((order) => order.nodeId === item.nodeId)?.orderCiphertext ?? item.orderCiphertext }));
+  const head = await signListingChange(access, listing, parentKey, updated);
+  const result = await jsonResource<{ entriesRevision: number }>(`/api/private/tree/nodes/${nodeId}/order`, "PATCH", {
+    parentId: listing.directoryId, expectedRevision: listing.entriesRevision, orders, listingHead: head,
+  }, signal);
+  try { rememberListing(access.vaultId, listing.directoryId, result.entriesRevision, head.digest); }
+  catch { throw new TreeCommitUncertainError(); }
+  return result;
+}
+
+/** Only an authenticated parent listing supplies the child-key context here.
+ * The service never receives either parent's capability or a plaintext name.
+ */
+export async function moveTreeChild(access: RootAccess, source: DirectoryListing, sourceKey: Uint8Array,
+  destination: DirectoryListing, destinationKey: Uint8Array, nodeId: string, requestedName: string, signal?: AbortSignal) {
+  if (isSignupRecoveryConfirmationPending()) throw new RecoveryConfirmationPendingError();
+  if (source.directoryId === destination.directoryId) throw new Error("invalid destination");
+  const entry = source.entries.find((entry) => entry.nodeId === nodeId);
+  if (!entry) throw new TreeNotFoundError();
+  const name = nameAgainstNamespace(requestedName, destination.entries.map((entry) => entry.name));
+  const context = inspectEnvelope(decodeTreeBytes(entry.keyEnvelope)).context;
+  if (context.vaultId !== access.vaultId || context.objectId !== nodeId ||
+      context.purpose !== (entry.kind === "directory" ? "directory-capability" : "file-content-key")) {
+    throw new Error("invalid child capability");
+  }
+  const key = await openSymmetric(decodeTreeBytes(entry.keyEnvelope), sourceKey, { context });
+  const writer = await createSymmetricWriter(destinationKey);
+  const updated = { ...entry, ...await encryptedEntry(destinationKey, access.vaultId, destination.directoryId,
+    nodeId, name, newOpaqueId()), keyEnvelope: encodeTreeBytes(await writer.seal(key, context)) };
+  const [sourceHead, destinationHead] = await Promise.all([
+    signListingChange(access, source, sourceKey, source.entries.filter((entry) => entry.nodeId !== nodeId)),
+    signListingChange(access, destination, destinationKey, [...destination.entries, updated]),
+  ]);
+  const result = await jsonResource<{ sourceEntriesRevision: number; destinationEntriesRevision: number }>(
+    `/api/private/tree/nodes/${nodeId}/parent`, "PATCH", {
+      sourceId: source.directoryId, destinationId: destination.directoryId, kind: entry.kind,
+      expectedSourceRevision: source.entriesRevision, expectedDestinationRevision: destination.entriesRevision,
+      nameCiphertext: updated.nameCiphertext, orderCiphertext: updated.orderCiphertext, keyEnvelope: updated.keyEnvelope,
+      sourceListingHead: sourceHead, destinationListingHead: destinationHead,
+    }, signal);
+  try {
+    rememberListing(access.vaultId, source.directoryId, result.sourceEntriesRevision, sourceHead.digest);
+    rememberListing(access.vaultId, destination.directoryId, result.destinationEntriesRevision, destinationHead.digest);
+  } catch { throw new TreeCommitUncertainError(); }
+  return result;
+}
+
+export async function deleteTreeChild(access: RootAccess, listing: DirectoryListing, parentKey: Uint8Array,
+  nodeId: string, expectedDirectoryRevision?: number, signal?: AbortSignal) {
+  if (isSignupRecoveryConfirmationPending()) throw new RecoveryConfirmationPendingError();
+  const entry = listing.entries.find((entry) => entry.nodeId === nodeId);
+  if (!entry) throw new TreeNotFoundError();
+  const head = await signListingChange(access, listing, parentKey, listing.entries.filter((entry) => entry.nodeId !== nodeId));
+  const result = await jsonResource<{ entriesRevision: number }>(`/api/private/tree/nodes/${nodeId}`, "DELETE", {
+    parentId: listing.directoryId, expectedRevision: listing.entriesRevision, kind: entry.kind, listingHead: head,
+    ...(entry.kind === "directory" ? { expectedDirectoryRevision } : {}),
+  }, signal);
+  try { rememberListing(access.vaultId, listing.directoryId, result.entriesRevision, head.digest); }
+  catch { throw new TreeCommitUncertainError(); }
+  return result;
+}
+
 export async function renameTreeChild(access: RootAccess, parentId: string, nodeId: string,
   input: { expectedRevision: number; nameCiphertext: string; orderCiphertext: string },
-  listing: DirectoryListing, parentKey: Uint8Array) {
+  listing: DirectoryListing, parentKey: Uint8Array, signal?: AbortSignal) {
   if (isSignupRecoveryConfirmationPending()) throw new RecoveryConfirmationPendingError();
   if (listing.directoryId !== parentId || input.expectedRevision !== listing.entriesRevision) throw new Error("invalid directory listing");
   const entry = listing.entries.find((item) => item.nodeId === nodeId);
@@ -243,7 +328,7 @@ export async function renameTreeChild(access: RootAccess, parentId: string, node
   const head = await signListingChange(access, listing, parentKey,
     listing.entries.map((item) => item.nodeId === nodeId ? { ...item, ...input } : item));
   const result = await jsonResource<{ entriesRevision: number }>(`/api/private/tree/nodes/${nodeId}/name`, "PATCH",
-    { ...input, listingHead: head });
+    { ...input, parentId, listingHead: head }, signal);
   try { rememberListing(access.vaultId, parentId, result.entriesRevision, head.digest); }
   catch { throw new TreeCommitUncertainError(); }
   return result;
