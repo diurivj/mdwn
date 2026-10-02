@@ -153,6 +153,9 @@ export async function removeEncryptionDevice(env: Env, session: ActiveSession,
       sql`DELETE FROM webauthn_challenges WHERE account_id = ${authorized.accountId}
         AND session_id IN (SELECT id FROM sessions WHERE account_id = ${authorized.accountId}
           AND device_id = ${body.targetDeviceId}) AND ${marker}`,
+      sql`DELETE FROM share_comment_key_envelopes WHERE device_id = ${body.targetDeviceId} AND ${marker}`,
+      sql`DELETE FROM grant_comment_key_envelopes WHERE device_id = ${body.targetDeviceId} AND ${marker}`,
+      sql`DELETE FROM provisioning_needs WHERE device_id = ${body.targetDeviceId} AND ${marker}`,
       sql`DELETE FROM share_key_envelopes WHERE device_id = ${body.targetDeviceId} AND ${marker}`,
       sql`DELETE FROM grant_key_envelopes WHERE device_id = ${body.targetDeviceId} AND ${marker}`,
       sql`UPDATE crypto_jobs SET state = 'complete', updated_at = ${now}

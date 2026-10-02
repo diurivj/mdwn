@@ -10,7 +10,7 @@ Ticket 17 extends both preflight and **transactional** authorization through the
 - Owner-controlled exits from any shared subtree are explicitly deferred until ticket 19 supplies completed bounded rekeying. Moves between disconnected Collaborator write scopes are denied.
 - Revocation/leave/permission changes create current safety seals; future encrypted and structural writes beneath sealed targets fail closed until rotation. Reads and hard deletion remain available.
 - Direct File Grants follow identity without disclosing a parent/path. Converted Files support parent-free fresh-key saves through a stable File capability; legacy conversion requires authorized browser parent-write access. Ordinary converted saves do not advance a Directory revision.
-- Shares, Grants, their pending/active device envelopes, and safety seals are explicitly removed during hard deletion. Ticket 27 must extend that list when Publication or Comment records are introduced.
+- Shares, Grants, their pending/active root and Comment device envelopes, provisioning needs, Comment capability requirements and safety seals are explicitly removed during hard deletion. Surviving ancestor Grants keep their root envelopes; deleting their last missing Comment requirement can complete their need. Ticket 27 must extend that list when Publication or Comment body records are introduced.
 
 ## Protocol and concurrency
 
@@ -26,7 +26,7 @@ References: [D1 batch transactions](https://developers.cloudflare.com/d1/worker-
 
 The 500-node cap includes the selected Directory. Enumeration reads at most 501 nodes, authorizes each node/edge, and pins every parent relationship, Directory revision, and File pointer. The transaction rechecks the complete snapshot and bounded membership count, then explicitly removes:
 
-1. Pending/active Share/Grant device envelopes, their relationships, and current sharing safety seals targeting the selected nodes;
+1. Pending/active Share/Grant root and Comment device envelopes, Comment capability requirements, affected provisioning needs, their targeted relationships, and current sharing safety seals;
 2. Directory entries and their parent capability envelopes;
 3. object-addressed Key envelopes;
 4. private File representations;

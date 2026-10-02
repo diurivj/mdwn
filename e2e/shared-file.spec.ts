@@ -3,6 +3,7 @@ import { createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/cr
 import { test, expect, installWorkspaceScript, objectId } from "./workspace-fixture";
 import { TEST_SESSION_COOKIE_SECRET } from "./fixtures";
 import type { GrantKeyContext } from "../app/sharing/grant-keys";
+import type { CommentKeyContext } from "../app/sharing/comment-keys";
 
 test.use({ initialSource: "# Shared secret\n\nOnly the target File." });
 
@@ -15,6 +16,7 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
   const pendingContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const pendingDevice = await pendingContext.newPage();
   const accountId = objectId(), rootId = objectId(), deviceId = objectId(), credentialId = objectId(), sessionId = objectId(), shareId = objectId();
+  const commentIds = [objectId(), objectId()];
   const now = Date.now();
   try {
     await installWorkspaceScript(recipient, workspaceScript, baseURL!);
@@ -43,6 +45,11 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
     const cookie = await createCookie("__Host-mdwn_session", { path: "/", secure: true, secrets: [TEST_SESSION_COOKIE_SECRET] }).serialize(sessionId);
     await recipientContext.addCookies([{ name: "__Host-mdwn_session", value: cookie.split(";", 1)[0]!.slice("__Host-mdwn_session=".length),
       url: new URL(baseURL!).origin, httpOnly: true, secure: true, sameSite: "Lax" }]);
+    for (const [index, objectId] of commentIds.entries()) await workspace.db.prepare(`INSERT INTO sharing_comment_capabilities
+      (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1)`)
+      .bind(objectId, workspace.accountId, workspace.fileId, objectId,
+        index === 0 ? "private-comment-thread" : "public-comment-audience-epoch", index === 0 ? null : objectId, objectId).run();
     await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
     const grantId = await page.evaluate(async ({ fileId, shareId, targetKind, permission }) => {
       const api = window.workspaceFixture, access = await api.openRoot();
@@ -70,6 +77,23 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
         recipientRegistryEpoch: targets.recipientRegistryEpoch, envelopes,
       }) });
       if (!prepared.ok) throw new Error("Provisioning failed");
+      const comments = await (await api.privateRequest(`/api/private/shares/${relationshipId}/comment-keys`, { method: "POST" })).json() as
+        { capabilities: CommentKeyContext[] };
+      for (const context of comments.capabilities) {
+        const keyPath = `/api/private/shares/${relationshipId}/comment-keys/${context.objectId}`;
+        const commentTargets = await (await api.privateRequest(keyPath, { method: "POST" })).json() as
+          CommentKeyContext & { devices: { deviceId: string; transportPublicKey: string }[] };
+        const packets = await Promise.all(commentTargets.devices.map(async (device) => {
+          const raw = Uint8Array.from(atob(device.transportPublicKey.replace(/-/g, "+").replace(/_/g, "/")), (char) => char.charCodeAt(0));
+          const publicKey = await crypto.subtle.importKey("raw", raw, { name: "ECDH", namedCurve: "P-256" }, true, []);
+          return api.createCommentKeyEnvelope(new Uint8Array(32).fill(86), publicKey, signer.assertionKeyPair.privateKey,
+            { ...commentTargets, deviceId: device.deviceId, signerDeviceId: signer.deviceId });
+        }));
+        const uploaded = await api.privateRequest(keyPath, { method: "PUT", body: JSON.stringify({ capabilityId: context.capabilityId,
+          capabilityEpoch: context.capabilityEpoch, ownerRegistryEpoch: context.ownerRegistryEpoch,
+          recipientRegistryEpoch: context.recipientRegistryEpoch, envelopes: packets }) });
+        if (!uploaded.ok) throw new Error("Comment provisioning failed");
+      }
       return relationshipId as string;
     }, { fileId: workspace.fileId, shareId, targetKind, permission });
     expect(await recipient.evaluate(async (id) => (await window.workspaceFixture.privateRequest(`/api/private/shares/${id}/accept`,
@@ -88,6 +112,22 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
       await expect(recipient.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md", exact: true })).toBeVisible();
       expect(privateReads.map((url) => new URL(url).pathname)).toEqual([`/api/private/tree/directories/${workspace.rootId}`]);
     }
+    await recipient.addScriptTag({ url: new URL("/__test__/workspace.js", recipient.url()).href });
+    expect(await recipient.evaluate(async (id) => {
+      const api = window.workspaceFixture;
+      const { capabilities } = await (await api.privateRequest(`/api/private/grants/${id}/comment-keys`, { method: "POST" })).json() as
+        { capabilities: CommentKeyContext[] };
+      const device = await api.getDevice(capabilities[0]!.recipientId);
+      if (!device) throw new Error("Missing recipient");
+      for (const expected of capabilities) {
+        const response = await api.privateRequest(`/api/private/grants/${id}/comment-keys/${expected.objectId}`, { method: "POST" });
+        if (!response.ok) throw new Error("Comment access unavailable");
+        const envelope = await response.json() as Parameters<typeof api.openCommentKeyEnvelope>[0];
+        const key = await api.openCommentKeyEnvelope({ ...envelope, recipient: device.transportKeyPair });
+        if (key.length !== 32 || key.some((byte) => byte !== 86)) throw new Error("Wrong Comment capability");
+      }
+      return capabilities.map((item) => item.purpose).sort();
+    }, grantId)).toEqual(["private-comment-thread", "public-comment-audience-epoch"]);
     if (permission === "read_write") {
       const saveResponse = recipient.waitForResponse((response) => response.request().method() === "PATCH" &&
         new URL(response.url()).pathname === `/api/private/tree/files/${workspace.fileId}`);
@@ -125,10 +165,28 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
     ]);
     await pendingContext.addCookies([{ name: "__Host-mdwn_session", value: cookie.split(";", 1)[0]!.slice("__Host-mdwn_session=".length),
       url: new URL(baseURL!).origin, httpOnly: true, secure: true, sameSite: "Lax" }]);
-    await pendingDevice.goto(new URL(`/f/${workspace.fileId}`, baseURL!).href);
+    const fragment = await page.evaluate(async (fileId) => {
+      const api = window.workspaceFixture, access = await api.openRoot();
+      const file = await api.loadFile(access, fileId, access.rootKey);
+      const key = file.capabilityKey!;
+      return btoa(String.fromCharCode(...key)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }, workspace.fileId);
+    const requests: string[] = [];
+    pendingDevice.on("request", (request) => requests.push(request.url() + (request.postData() ?? "")));
+    await pendingDevice.goto(new URL(`/f/${workspace.fileId}#${fragment}`, baseURL!).href);
     await expect(pendingDevice.getByText("Shared content is being securely provisioned", { exact: true })).toBeVisible();
     await expect(pendingDevice.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveCount(0);
     await expect(pendingDevice.getByText("Draft.md", { exact: true })).toHaveCount(0);
+    expect(requests.some((request) => request.includes(fragment))).toBe(false);
+    await pendingDevice.addScriptTag({ url: new URL("/__test__/workspace.js", pendingDevice.url()).href });
+    for (const objectId of commentIds) {
+      expect(await pendingDevice.evaluate(async ({ grantId, objectId }) => {
+        const response = await window.workspaceFixture.privateRequest(`/api/private/grants/${grantId}/comment-keys/${objectId}`, { method: "POST" });
+        return { status: response.status, value: await response.json() };
+      }, { grantId, objectId })).toEqual({ status: 409, value: { error: "secure_access_preparing" } });
+    }
+    const needs = await workspace.db.prepare("SELECT device_id, grant_key_epoch FROM provisioning_needs WHERE grant_id = ?").bind(grantId).all();
+    expect(needs.results).toEqual([{ device_id: replacementId, grant_key_epoch: 1 }]);
   } finally { await Promise.all([recipientContext.close(), pendingContext.close()]); }
 });
 }

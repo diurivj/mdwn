@@ -1,44 +1,19 @@
-import { record } from "~/auth/request.server";
 import { createDb, sql } from "~/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
+import { encodeTreeBytes } from "~/tree/wire";
 import { sharingWriteBlocked } from "./access.server";
+import { grantRootMatches, grantRootMatchesForEnvelope } from "./capability-coverage.server";
+import { retireFulfilledNeeds } from "./provisioning-needs.server";
 import { verifyGrantKeySignature, type GrantKeyContext } from "./grant-keys";
+import { readDeviceEnvelopePacket } from "./envelope-packet.server";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
-const exact = (value: Record<string, unknown>, keys: string[]) =>
-  Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const table = (kind: "shares" | "grants") => kind === "shares" ? sql`shares` : sql`grants`;
 const envelopes = (kind: "shares" | "grants") => kind === "shares" ? sql`share_key_envelopes` : sql`grant_key_envelopes`;
 
-/** Correlated against relationship alias s; directories remain epoch 1 until rotation. */
-export function grantRootMatches(capabilityId: string, capabilityEpoch: number) {
-  return sql`((s.target_kind = 'directory' AND s.target_id = ${capabilityId} AND ${capabilityEpoch} = 1)
-    OR (s.target_kind = 'file' AND EXISTS (SELECT 1 FROM files f WHERE f.node_id = s.target_id
-      AND f.owner_id = s.owner_id AND f.capability_id = ${capabilityId} AND f.capability_epoch = ${capabilityEpoch})))`;
-}
-
-/** Every current recipient device needs a current pending snapshot and active Owner signer. */
-export function pendingGrantCoverage(auth: AuthorizedDevice) {
-  return sql`EXISTS (SELECT 1 FROM encryption_devices d WHERE d.account_id = s.recipient_id AND d.state = 'active')
-    AND NOT EXISTS (SELECT 1 FROM encryption_devices d WHERE d.account_id = s.recipient_id AND d.state = 'active'
-      AND NOT EXISTS (SELECT 1 FROM share_key_envelopes e JOIN encryption_devices signer ON signer.id = e.signer_device_id
-        JOIN account_encryption_identities owner_registry ON owner_registry.account_id = s.owner_id
-        WHERE e.relationship_id = s.id AND e.device_id = d.id AND e.grant_key_epoch = 1
-          AND e.recipient_registry_epoch = ${auth.registryEpoch}
-          AND e.owner_registry_epoch = owner_registry.registry_epoch
-          AND signer.account_id = s.owner_id AND signer.state = 'active'
-          AND ${grantRootMatchesForEnvelope()}))`;
-}
-function grantRootMatchesForEnvelope() {
-  return sql`((s.target_kind = 'directory' AND e.capability_id = s.target_id AND e.capability_epoch = 1)
-    OR (s.target_kind = 'file' AND EXISTS (SELECT 1 FROM files f WHERE f.node_id = s.target_id
-      AND f.owner_id = s.owner_id AND f.capability_id = e.capability_id AND f.capability_epoch = e.capability_epoch)))`;
-}
-
 type ContextRow = GrantKeyContext & { capabilityId: string | null; capabilityEpoch: number | null };
-async function contextFor(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string) {
+export async function contextFor(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string) {
   return createDb(env.DB).get<ContextRow>(sql`SELECT s.id AS relationshipId, s.owner_id AS ownerId,
     s.recipient_id AS recipientId, s.target_id AS targetId, s.target_kind AS targetKind,
     CASE WHEN s.target_kind = 'directory' THEN s.target_id ELSE f.capability_id END AS capabilityId,
@@ -90,29 +65,20 @@ export async function readGrantKeys(env: Env, auth: AuthorizedDevice, kind: "sha
 }
 
 export async function uploadGrantKeys(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string, value: unknown) {
-  const input = record(value);
-  if (!input || !exact(input, ["capabilityId", "capabilityEpoch", "ownerRegistryEpoch", "recipientRegistryEpoch", "envelopes"]) ||
-      !isV7(input.capabilityId) || ![input.capabilityEpoch, input.ownerRegistryEpoch, input.recipientRegistryEpoch]
-        .every((epoch) => typeof epoch === "number" && Number.isSafeInteger(epoch) && epoch > 0) ||
-      !Array.isArray(input.envelopes) || input.envelopes.length < 1 || input.envelopes.length > 20) return failure("invalid_sharing_request", 400);
+  const input = readDeviceEnvelopePacket(value);
+  if (!input) return failure("invalid_sharing_request", 400);
   const context = await contextFor(env, auth, kind, id);
   if (!context || context.ownerId !== auth.accountId) return failure("not_found", 404);
   if (!context.capabilityId || !context.capabilityEpoch) return failure("shared_content_provisioning_required", 409);
   if (input.capabilityId !== context.capabilityId || input.capabilityEpoch !== context.capabilityEpoch ||
       input.ownerRegistryEpoch !== auth.registryEpoch || input.recipientRegistryEpoch !== context.recipientRegistryEpoch)
     return failure("sharing_changed", 409);
-  const batch: { deviceId: string; ciphertext: Uint8Array<ArrayBuffer>; signature: Uint8Array<ArrayBuffer> }[] = [];
+  const batch = input.envelopes;
   try {
-    for (const item of input.envelopes) {
-      const envelope = record(item);
-      if (!envelope || !exact(envelope, ["deviceId", "ciphertext", "signature"]) || !isV7(envelope.deviceId) ||
-          typeof envelope.ciphertext !== "string" || typeof envelope.signature !== "string" ||
-          batch.some((entry) => entry.deviceId === envelope.deviceId) ||
-          !await verifyGrantKeySignature({ ...context, deviceId: envelope.deviceId, signerDeviceId: auth.deviceId,
-            ciphertext: envelope.ciphertext, signature: envelope.signature }, encodeTreeBytes(auth.assertionPublicKey)))
+    for (const envelope of batch) {
+      if (!await verifyGrantKeySignature({ ...context, deviceId: envelope.deviceId, signerDeviceId: auth.deviceId,
+        ciphertext: envelope.ciphertext, signature: envelope.signature }, encodeTreeBytes(auth.assertionPublicKey)))
         return failure("invalid_sharing_request", 400);
-      batch.push({ deviceId: envelope.deviceId, ciphertext: decodeTreeBytes(envelope.ciphertext, 16_384),
-        signature: decodeTreeBytes(envelope.signature, 64) });
     }
   } catch { return failure("invalid_sharing_request", 400); }
   const membership = sql.join(batch.map((entry) => sql`EXISTS (SELECT 1 FROM encryption_devices d
@@ -132,11 +98,12 @@ export async function uploadGrantKeys(env: Env, auth: AuthorizedDevice, kind: "s
     ...batch.map((entry) => sql`INSERT INTO ${envelopes(kind)} (relationship_id, device_id, capability_id, capability_epoch,
       grant_key_epoch, owner_registry_epoch, recipient_registry_epoch, ciphertext, signature, signer_device_id)
       SELECT ${id}, ${entry.deviceId}, ${context.capabilityId}, ${context.capabilityEpoch}, ${context.grantKeyEpoch},
-        ${context.ownerRegistryEpoch}, ${context.recipientRegistryEpoch}, ${entry.ciphertext}, ${entry.signature}, ${auth.deviceId}
+        ${context.ownerRegistryEpoch}, ${context.recipientRegistryEpoch}, ${entry.bytes.ciphertext}, ${entry.bytes.signature}, ${auth.deviceId}
       WHERE ${marker} ON CONFLICT (relationship_id, device_id) DO UPDATE SET capability_id = excluded.capability_id,
         capability_epoch = excluded.capability_epoch, grant_key_epoch = excluded.grant_key_epoch,
         owner_registry_epoch = excluded.owner_registry_epoch, recipient_registry_epoch = excluded.recipient_registry_epoch,
         ciphertext = excluded.ciphertext, signature = excluded.signature, signer_device_id = excluded.signer_device_id`),
+    ...(kind === "grants" ? [retireFulfilledNeeds(id, marker)] : []),
   ]);
   return committed ? Response.json({ uploaded: batch.length }, { headers }) : failure("sharing_changed", 409);
 }

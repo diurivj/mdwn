@@ -7,6 +7,7 @@ import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeE
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./listing";
 import { verifyFileHead, type FileHead, type FileHeadIdentity } from "./file-head";
 import { accessPredicate, effectiveAccessQuery, exitsSharedScope, moveAccessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
+import { retireDeletedScopeNeeds } from "~/sharing/provisioning-needs.server";
 
 const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -505,6 +506,14 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
         (SELECT id FROM shares WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM grant_key_envelopes WHERE relationship_id IN
         (SELECT id FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      sql`DELETE FROM share_comment_key_envelopes WHERE object_id IN
+        (SELECT object_id FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      sql`DELETE FROM grant_comment_key_envelopes WHERE object_id IN
+        (SELECT object_id FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      sql`DELETE FROM provisioning_needs WHERE grant_id IN
+        (SELECT id FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      sql`DELETE FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      retireDeletedScopeNeeds(ownerId, nodeId, committed),
       sql`DELETE FROM shares WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
       sql`DELETE FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
       sql`DELETE FROM sharing_write_blocks WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,

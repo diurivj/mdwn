@@ -35,6 +35,9 @@ if (isRemoteCli && !(typeof remoteTarget === "string" && isEnvironment(remoteTar
 
 // The D1 binding name in wrangler.jsonc (single binding per environment).
 const BINDING = "DB";
+const COMMENT_ENVELOPE_COLUMNS = { relationship_id: "TEXT", device_id: "TEXT", capability_id: "TEXT", capability_epoch: "INTEGER",
+  grant_key_epoch: "INTEGER", owner_registry_epoch: "INTEGER", recipient_registry_epoch: "INTEGER", ciphertext: "BLOB",
+  signature: "BLOB", signer_device_id: "TEXT", object_id: "TEXT" };
 
 /** @type {Record<string, Record<string, string>>} */
 const EXPECTED_COLUMNS = {
@@ -61,6 +64,10 @@ const EXPECTED_COLUMNS = {
   shares: { id: "TEXT", owner_id: "TEXT", recipient_id: "TEXT", target_id: "TEXT", target_kind: "TEXT", permission: "TEXT", created_at: "INTEGER" },
   grants: { id: "TEXT", owner_id: "TEXT", recipient_id: "TEXT", target_id: "TEXT", target_kind: "TEXT", permission: "TEXT", revision: "INTEGER", key_epoch: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
   sharing_write_blocks: { target_id: "TEXT", owner_id: "TEXT", target_kind: "TEXT", created_at: "INTEGER" },
+  sharing_comment_capabilities: { object_id: "TEXT", owner_id: "TEXT", file_id: "TEXT", thread_id: "TEXT", purpose: "TEXT", publication_id: "TEXT", capability_id: "TEXT", capability_epoch: "INTEGER" },
+  share_comment_key_envelopes: COMMENT_ENVELOPE_COLUMNS,
+  grant_comment_key_envelopes: COMMENT_ENVELOPE_COLUMNS,
+  provisioning_needs: { grant_id: "TEXT", device_id: "TEXT", grant_key_epoch: "INTEGER" },
   rate_limit_counters: { purpose: "TEXT", scope_type: "TEXT", scope_id: "TEXT", window_ms: "INTEGER", time_epoch: "INTEGER", count: "INTEGER", expires_at: "INTEGER" },
   security_events: { id: "TEXT", created_at: "INTEGER", expires_at: "INTEGER", action_class: "TEXT", outcome: "TEXT", reason: "TEXT", account_id: "TEXT", publication_id: "TEXT", size_class: "TEXT", proof_state: "TEXT", counter_state: "TEXT", retry_at: "INTEGER", network_bucket: "TEXT", network_bucket_expires_at: "INTEGER" },
 };
@@ -95,6 +102,13 @@ const EXPECTED_INDEXES = [
   ["grants", "grants_recipient_idx", 0],
   ["grants", "grants_owner_idx", 0],
   ["grants", "grants_target_idx", 0],
+  ["sharing_comment_capabilities", "sharing_comment_capabilities_file_idx", 0],
+  ["sharing_comment_capabilities", "sharing_comment_capabilities_private_idx", 1],
+  ["share_comment_key_envelopes", "share_comment_key_envelopes_device_idx", 0],
+  ["share_comment_key_envelopes", "share_comment_key_envelopes_object_idx", 0],
+  ["grant_comment_key_envelopes", "grant_comment_key_envelopes_device_idx", 0],
+  ["grant_comment_key_envelopes", "grant_comment_key_envelopes_object_idx", 0],
+  ["provisioning_needs", "provisioning_needs_device_idx", 0],
   ["directories", "directories_owner_node_idx", 1],
   ["directories", "directories_listing_device_idx", 0],
   ["directory_entries", "directory_entries_owner_edge_idx", 1],
@@ -144,7 +158,21 @@ const EXPECTED_FOREIGN_KEYS = [
   "sharing_write_blocks:owner_id:vault_nodes:owner_id:RESTRICT",
   "sharing_write_blocks:target_id:vault_nodes:id:RESTRICT",
   "sharing_write_blocks:target_kind:vault_nodes:kind:RESTRICT",
+  "sharing_comment_capabilities:owner_id:files:owner_id:RESTRICT",
+  "sharing_comment_capabilities:file_id:files:node_id:RESTRICT",
+  "share_comment_key_envelopes:relationship_id:shares:id:RESTRICT",
+  "share_comment_key_envelopes:device_id:encryption_devices:id:RESTRICT",
+  "share_comment_key_envelopes:signer_device_id:encryption_devices:id:RESTRICT",
+  "share_comment_key_envelopes:object_id:sharing_comment_capabilities:object_id:RESTRICT",
+  "grant_comment_key_envelopes:relationship_id:grants:id:RESTRICT",
+  "grant_comment_key_envelopes:device_id:encryption_devices:id:RESTRICT",
+  "grant_comment_key_envelopes:signer_device_id:encryption_devices:id:RESTRICT",
+  "grant_comment_key_envelopes:object_id:sharing_comment_capabilities:object_id:RESTRICT",
+  "provisioning_needs:grant_id:grants:id:RESTRICT",
+  "provisioning_needs:device_id:encryption_devices:id:RESTRICT",
 ];
+const EXPECTED_TRIGGERS = ["sharing_new_device_need", "sharing_new_comment_need",
+  "sharing_comment_context_immutable", "sharing_rotated_comment_need"];
 
 /**
  * Run a wrangler command; on failure print its output and exit non-zero.
@@ -191,6 +219,8 @@ function verifySchema(bindArgs, label) {
     SELECT 'table:' || name AS name FROM sqlite_master
       WHERE type = 'table' AND name IN (${names}, 'd1_migrations')
     UNION ALL
+    SELECT 'trigger:' || name FROM sqlite_master WHERE type = 'trigger'
+    UNION ALL
     SELECT 'column:' || m.name || ':' || p.name || ':' || upper(p.type)
       FROM sqlite_master AS m, pragma_table_info(m.name) AS p
       WHERE m.type = 'table' AND m.name IN (${names})
@@ -211,6 +241,7 @@ function verifySchema(bindArgs, label) {
     ]),
     ...EXPECTED_INDEXES.map(([table, name, unique]) => `index:${table}:${name}:${unique}`),
     ...EXPECTED_FOREIGN_KEYS.map((key) => `fk:${key}`),
+    ...EXPECTED_TRIGGERS.map((name) => `trigger:${name}`),
   ];
   for (const fact of required) {
     if (!facts.has(fact)) failNow(`${label}: missing schema fact ${fact}`);

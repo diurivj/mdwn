@@ -192,9 +192,15 @@ describe("Encryption-device inventory and removal", () => {
         .toEqual([{ device_id: peer.id }]);
       expect(await env.DB.prepare(`SELECT recipient_id FROM ${relationship.kind} WHERE id = ?`).bind(relationship.id).first())
         .toEqual({ recipient_id: f.account.accountId });
+      const comments = relationship.kind === "shares" ? "share_comment_key_envelopes" : "grant_comment_key_envelopes";
+      expect(await env.DB.prepare(`SELECT count(*) AS n FROM ${comments} WHERE relationship_id = ? AND device_id = ?`)
+        .bind(relationship.id, target.id).first()).toEqual({ n: 0 });
+      expect(await env.DB.prepare(`SELECT count(*) AS n FROM ${comments} WHERE relationship_id = ? AND device_id = ?`)
+        .bind(relationship.id, peer.id).first()).toEqual({ n: 2 });
     }
     expect(await env.DB.prepare("SELECT count(*) AS n FROM key_envelopes WHERE account_id = ? AND purpose = 'vault-recovery' AND superseded_at IS NULL")
       .bind(f.account.accountId).first()).toEqual({ n: 1 });
+    expect(await env.DB.prepare("SELECT count(*) AS n FROM provisioning_needs WHERE device_id = ?").bind(target.id).first()).toEqual({ n: 0 });
     // A removed browser can still open the Vault-root envelope it fetched before removal.
     const cachedRoot = await openDeviceEnrollmentEnvelope(decodeBytes(savedRootEnvelope), target.transport, {
       purpose: "device-enrollment", vaultId: f.account.accountId,

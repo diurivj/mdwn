@@ -26,7 +26,8 @@
     "app/tree/file-client.ts",
     "app/tree/file-head.ts",
     "app/tree/file-capability-client.ts",
-    "app/sharing/grant-keys.ts"
+    "app/sharing/grant-keys.ts",
+    "app/sharing/comment-keys.ts"
   ],
   "exclude": ["tests/worker/**/*"],
   "compilerOptions": {

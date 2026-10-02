@@ -652,6 +652,61 @@ export const grantKeyEnvelopes = sqliteTable("grant_key_envelopes", sharingEnvel
     AND ${table.ownerRegistryEpoch} >= 1 AND ${table.recipientRegistryEpoch} >= 1`),
 ]);
 
+/** Opaque current/retained Comment capability requirements. Comment producers
+ * register/remove these in their own lifecycle transaction (tickets 21/23/25).
+ * No Comment body, name, key, or Publication-link capability is stored here.
+ */
+export const sharingCommentCapabilities = sqliteTable("sharing_comment_capabilities", {
+  objectId: text("object_id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  fileId: text("file_id").notNull(),
+  threadId: text("thread_id").notNull(),
+  purpose: text("purpose").notNull(),
+  publicationId: text("publication_id"),
+  capabilityId: text("capability_id").notNull(),
+  capabilityEpoch: integer("capability_epoch").notNull(),
+}, (table) => [
+  foreignKey({ columns: [table.ownerId, table.fileId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+  index("sharing_comment_capabilities_file_idx").on(table.fileId, table.objectId),
+  uniqueIndex("sharing_comment_capabilities_private_idx").on(table.fileId).where(sql`${table.purpose} = 'private-comment-thread'`),
+  check("sharing_comment_capabilities_context", sql`(${table.purpose} = 'private-comment-thread'
+    AND ${table.publicationId} IS NULL AND ${table.objectId} = ${table.threadId}) OR
+    (${table.purpose} = 'public-comment-audience-epoch' AND ${table.publicationId} IS NOT NULL)`),
+  check("sharing_comment_capabilities_epoch", sql`${table.capabilityEpoch} >= 1`),
+]);
+
+function commentEnvelopeColumns(relationship: () => AnySQLiteColumn) {
+  return { ...sharingEnvelopeColumns(relationship),
+    objectId: text("object_id").notNull().references(() => sharingCommentCapabilities.objectId, { onDelete: "restrict" }) };
+}
+export const shareCommentKeyEnvelopes = sqliteTable("share_comment_key_envelopes", commentEnvelopeColumns(() => shares.id), (table) => [
+  primaryKey({ columns: [table.relationshipId, table.objectId, table.deviceId] }),
+  index("share_comment_key_envelopes_device_idx").on(table.deviceId),
+  index("share_comment_key_envelopes_object_idx").on(table.objectId),
+  check("share_comment_key_envelopes_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.signature}) = 64`),
+  check("share_comment_key_envelopes_epochs", sql`${table.capabilityEpoch} >= 1 AND ${table.grantKeyEpoch} >= 1
+    AND ${table.ownerRegistryEpoch} >= 1 AND ${table.recipientRegistryEpoch} >= 1`),
+]);
+export const grantCommentKeyEnvelopes = sqliteTable("grant_comment_key_envelopes", commentEnvelopeColumns(() => grants.id), (table) => [
+  primaryKey({ columns: [table.relationshipId, table.objectId, table.deviceId] }),
+  index("grant_comment_key_envelopes_device_idx").on(table.deviceId),
+  index("grant_comment_key_envelopes_object_idx").on(table.objectId),
+  check("grant_comment_key_envelopes_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 16384 AND length(${table.signature}) = 64`),
+  check("grant_comment_key_envelopes_epochs", sql`${table.capabilityEpoch} >= 1 AND ${table.grantKeyEpoch} >= 1
+    AND ${table.ownerRegistryEpoch} >= 1 AND ${table.recipientRegistryEpoch} >= 1`),
+]);
+
+/** Only an opaque active-Grant/device need, never a capability or content job. */
+export const provisioningNeeds = sqliteTable("provisioning_needs", {
+  grantId: text("grant_id").notNull().references(() => grants.id, { onDelete: "restrict" }),
+  deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+  grantKeyEpoch: integer("grant_key_epoch").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.grantId, table.deviceId] }),
+  index("provisioning_needs_device_idx").on(table.deviceId),
+  check("provisioning_needs_epoch", sql`${table.grantKeyEpoch} >= 1`),
+]);
+
 /** Current safety seal, not sharing history. Ticket 19 replaces this fail-closed
  * inter-ticket state with a completed browser-driven key rotation.
  */

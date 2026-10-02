@@ -230,12 +230,25 @@ describe("Vault recovery enrollment", () => {
       expect((await env.DB.prepare(`SELECT device_id FROM ${table} WHERE relationship_id = ?`).bind(relationship.id).all()).results).toEqual([]);
       expect(await env.DB.prepare(`SELECT recipient_id FROM ${relationship.kind} WHERE id = ?`).bind(relationship.id).first())
         .toEqual({ recipient_id: f.accountId });
+      const comments = relationship.kind === "shares" ? "share_comment_key_envelopes" : "grant_comment_key_envelopes";
+      expect(await env.DB.prepare(`SELECT count(*) AS n FROM ${comments} WHERE relationship_id = ?`).bind(relationship.id).first()).toEqual({ n: 0 });
       if (relationship.kind === "grants") {
+        expect(await (await recoveredRequest(`/api/private/grants/${relationship.id}/needs`, "POST")).json()).toEqual({
+          needs: [{ grantId: relationship.id, deviceId: p.deviceId, grantKeyEpoch: 1 }], nextCursor: null,
+        });
+        for (const objectId of relationship.commentObjectIds) {
+          const comment = await recoveredRequest(`/api/private/grants/${relationship.id}/comment-keys/${objectId}`, "POST");
+          expect(comment.status).toBe(409);
+          expect(await comment.json()).toEqual({ error: "secure_access_preparing" });
+        }
         const missing = await recoveredRequest(`/api/private/grants/${relationship.id}/keys`, "POST");
         expect(missing.status).toBe(409);
         expect(await missing.json()).toEqual({ error: "shared_content_provisioning_required" });
       }
     }
+    expect(await env.DB.prepare(`SELECT count(*) AS n FROM provisioning_needs WHERE device_id IN
+      (SELECT id FROM encryption_devices WHERE account_id = ? AND id != ?)`)
+      .bind(f.accountId, p.deviceId).first()).toEqual({ n: 0 });
     // Simulate interruption after commit: the job is still pending and resumes with only the new device.
     expect(await env.DB.prepare("SELECT state, cursor FROM crypto_jobs WHERE device_id = ?")
       .bind(p.deviceId).first()).toEqual({ state: "pending", cursor: null });
