@@ -18,10 +18,13 @@ export function SharedProvisioning() {
     if (state !== "idle" || !data) return;
     const more = "available" in data ? data.ready && data.available : data.state === "ready" && !data.complete;
     if (!more) return;
-    const timer = setTimeout(() => { void submit({}, { method: "post", action: "/account/shared-access" }); }, 250);
+    // The action returns current provisioning status itself. Background upkeep
+    // must not reload Files and unmount an unsaved draft if that reload fails.
+    const timer = setTimeout(() => { void submit({}, { method: "post", action: "/account/shared-access",
+      defaultShouldRevalidate: false }); }, 250);
     return () => clearTimeout(timer);
   }, [state, data, submit]);
-  return <div className="mt-4 text-sm">
+  return <div className="mt-4 text-sm" role="region" aria-label="Shared access provisioning" aria-busy={state !== "idle"}>
     {data?.pending && <p role="status">Shared content is being securely provisioned</p>}
     {data && "state" in data && data.state === "failed" && <p>Shared provisioning paused safely.</p>}
     <Link to="/account/shared-access" className="underline">Shared access</Link>

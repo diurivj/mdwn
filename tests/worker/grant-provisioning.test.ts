@@ -1,10 +1,30 @@
-import { applyD1Migrations, env } from "cloudflare:test";
+import { applyD1Migrations, env, SELF } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
 import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "../../app/sharing/grant-keys";
+import { sessionBindingDigest, signDeviceProof } from "../../app/device/proof";
 import { addSharingDevice, grant, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
 
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
+
+it.each(["next", "expire"] as const)("provisioning %s rejects missing/foreign Origin and cross-site requests even with a valid proof", async (operation) => {
+  const actor = await sharingAccount(), url = `https://mdwn.test/api/private/grant-provisioning/${operation}`;
+  const method = operation === "next" ? "POST" : "PATCH", body = operation === "next" ? undefined : "{}";
+  for (const origin of [null, "https://elsewhere.test", "https://mdwn.test"]) {
+    const proof = await signDeviceProof(actor.assertion.privateKey, { sessionBinding: await sessionBindingDigest(actor.session.id),
+      deviceId: actor.deviceId, registryEpoch: actor.registryEpoch, method, url, body });
+    const headers = new Headers({ cookie: actor.session.cookie, "X-Mdwn-Device-Proof": JSON.stringify(proof),
+      "Content-Type": "application/json" });
+    if (origin) headers.set("Origin", origin);
+    if (origin === "https://mdwn.test") headers.set("Sec-Fetch-Site", "cross-site");
+    const rejected = await SELF.fetch(url, { method, body, headers });
+    expect(rejected.status).toBe(403);
+    expect(rejected.headers.get("cache-control")).toBe("no-store");
+    expect(await rejected.json()).toEqual({ error: "device_proof_required" });
+    headers.set("Origin", "https://mdwn.test"); headers.set("Sec-Fetch-Site", "same-origin");
+    expect((await SELF.fetch(url, { method, body, headers })).status).toBe(200);
+  }
+});
 
 it("the bounded provisioning resource returns only current opaque work to an Owner or current capability holder", async () => {
   const owner = await sharingAccount(), recipient = await sharingAccount(), stranger = await sharingAccount();
