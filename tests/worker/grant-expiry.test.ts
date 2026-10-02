@@ -175,6 +175,42 @@ it("expiry drains only twenty dependent rows per pass, then hands its seal to an
   expect(await expirePass(owner)).toEqual({ pending: false });
 });
 
+it.each(["entries", "items", "receipts"] as const)("expiry drains superseded rotation %s in bounded passes before handing off the seal", async (kind) => {
+  const owner = await sharingAccount(), recipient = await sharingAccount(), removed = await sharingAccount();
+  const directory = await treeChild(owner, owner.rootId, "directory");
+  const children = [];
+  for (let index = 0; index < 21; index++) children.push(await treeChild(owner, directory, "file"));
+  const active = await grant(owner, recipient, directory), revoked = await grant(owner, removed, directory);
+  const response = await sharingRequest(owner, `/api/private/grants/${revoked.grantId}`, "DELETE", { expectedRevision: 1 });
+  const { rotation } = await response.json() as { rotation: { jobId: string } };
+  // Persist an interrupted job at the D1 boundary. Cleanup must bound each table,
+  // including staged edges whose parent traversal item cannot yet be removed.
+  for (const child of children) {
+    if (kind === "entries") await env.DB.prepare(`INSERT INTO key_rotation_entries
+      (job_id, directory_id, child_id, name_ciphertext, order_ciphertext, key_envelope)
+      VALUES (?, ?, ?, X'01', X'01', X'01')`).bind(rotation.jobId, directory, child).run();
+    if (kind === "items") await env.DB.prepare(`INSERT INTO key_rotation_items
+      (job_id, object_id, kind, depth, state) VALUES (?, ?, 'file', 1, 'ready')`).bind(rotation.jobId, child).run();
+    if (kind === "receipts") await env.DB.prepare(`INSERT INTO key_rotation_receipts
+      (job_id, operation_id, digest) VALUES (?, ?, zeroblob(32))`).bind(rotation.jobId, opaqueId()).run();
+  }
+  await passDeadline(active.grantId);
+  for (let pass = 0; pass < 2; pass++) {
+    expect(await expirePass(owner)).toEqual({ pending: true });
+    expect(await (await sharingRequest(owner, "/api/private/key-rotations")).json()).toMatchObject({
+      jobs: [{ jobId: rotation.jobId, keyEpoch: 2, runnable: false }],
+    });
+    expect((await sharingRequest(owner, `/api/private/key-rotations/${rotation.jobId}/next`)).status).toBe(409);
+    expect((await sharingRequest(owner, `/api/private/tree/files/${children[0]}`, "PATCH", {})).status).toBe(409);
+    expect((await sharingRequest(recipient, `/api/private/tree/files/${children[0]}`)).status).toBe(404);
+  }
+  expect(await expirePass(owner)).toEqual({ pending: false });
+  expect(await (await sharingRequest(owner, "/api/private/key-rotations")).json()).toMatchObject({
+    jobs: [{ targetId: directory, keyEpoch: 3, runnable: true }],
+  });
+  expect((await sharingRequest(owner, `/api/private/key-rotations/${rotation.jobId}/next`)).status).toBe(409);
+});
+
 it("device and Comment insertion/rotation never recreate an expired Grant need", async () => {
   const owner = await sharingAccount(), recipient = await sharingAccount();
   const directory = await treeChild(owner, owner.rootId, "directory"), file = await treeChild(owner, directory, "file");

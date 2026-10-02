@@ -37,7 +37,7 @@ D1 statement-time millisecond predicates enforce expiry in final access/envelope
 An expired retained Grant is also an immediate write seal on its target/subtree. Physical cleanup does not lift it:
 
 - The scheduled Worker deletes at most 20 rows from each of the selected expired Grant's need/root-envelope/Comment-envelope tables. It retains the Grant seal and skips already-drained Grants on subsequent runs. It does not invent device authority or create cryptographic jobs.
-- `PATCH /api/private/grant-provisioning/expire` accepts only `{}` and the Owner's current Device proof. Each pass drains the same bounded dependencies, or—once empty—atomically replaces the expired Grant seal with the existing Owner-device-provenance rotation fence/job.
+- `PATCH /api/private/grant-provisioning/expire` accepts only `{}` and the Owner's current Device proof. Each pass drains the same bounded dependencies and at most 20 rows per staging/traversal/receipt table from any superseded same-target rotation. Traversal items remain until their staged edges are gone. Once all dependencies are empty, the handoff CAS pins that emptiness and the current fence, then atomically replaces the expired Grant seal with the existing Owner-device-provenance rotation fence/job.
 - Browser provisioning passes prioritize this cleanup/handoff. They count each cleanup pass toward the same operation bound. Rotation remains browser-driven through **Secure access updates**, not an unbounded service job.
 - An Owner's rotation jobs pause while any expired Grant still awaits handoff, preventing an older delivery/promotion from bypassing the new seal. Normal writes outside affected subtrees and owned reads are not blocked by that pause. The updates page links to shared access cleanup.
 
@@ -45,7 +45,7 @@ Migration `0018_handy_bishop.sql` adds the nullable deadline and covering/cleanu
 
 ## Verification seams
 
-`tests/worker/grant-provisioning.test.ts` and `grant-expiry.test.ts` exercise signed resource requests against real migrated D1: source possession/authority, same-Account forwarding, 20-device packets, byte-preserving retries, Comment coverage, revocation, expired access and write seals, non-reactivation, overlapping Grants, bounded cleanup/cron and rotation handoff. The migration constraint test independently checks an expired Collaborator cannot sign a new Directory head.
+`tests/worker/grant-provisioning.test.ts` and `grant-expiry.test.ts` exercise signed resource requests against real migrated D1: source possession/authority, same-Account forwarding, 20-device packets, byte-preserving retries, Comment coverage, revocation, expired access and write seals, non-reactivation, overlapping Grants, bounded cleanup/cron and rotation handoff (including more than one page of superseded staging, traversal items and receipts). The migration constraint test independently checks an expired Collaborator cannot sign a new Directory head.
 
 `e2e/grant-provisioning.spec.ts` exercises actual QR enrollment and phrase recovery, holder/Owner root plus retained Comment fulfillment, an acknowledged-but-lost upload response, interrupted bounded resumption and revocation of a prepared upload. `e2e/shared-file.spec.ts` covers automatic Files-visit fulfillment, nameless pending/SSR state with an actual fragment capability, and timed-expiry handoff. These use Chromium, Firefox and WebKit. Comment producers remain fixture-seeded until their own tickets implement the producer lifecycle.
 

@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { expiredGrant, hasExpiredGrants } from "./grant-lifetime.server";
-import { planRotation, rotationSnapshot, startRotation, type RotationTarget } from "./rotation.server";
+import { pendingRotationJob, planRotation, rotationSnapshot, startRotation, type RotationTarget } from "./rotation.server";
 
 export { expiredGrant, hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
 const headers = { "Cache-Control": "no-store" };
@@ -28,6 +28,29 @@ function drainDependents(id: string, marker: SQL): SQL[] {
   ];
 }
 
+function hasRotationDependents(targetId: string | SQL): SQL {
+  const jobs = pendingRotationJob(targetId);
+  return sql`(EXISTS (SELECT 1 FROM key_rotation_entries WHERE job_id IN (${jobs}))
+    OR EXISTS (SELECT 1 FROM key_rotation_items WHERE job_id IN (${jobs}))
+    OR EXISTS (SELECT 1 FROM key_rotation_receipts WHERE job_id IN (${jobs})))`;
+}
+
+/** Expiry pauses the old job. Drain its staging before supersession rather than
+ * letting startRotation delete an unbounded job in the final handoff. */
+function drainRotationDependents(targetId: string, marker: SQL): SQL[] {
+  const jobs = pendingRotationJob(targetId);
+  return [
+    sql`DELETE FROM key_rotation_entries WHERE rowid IN (SELECT rowid FROM key_rotation_entries
+      WHERE job_id IN (${jobs}) ORDER BY job_id, directory_id, child_id LIMIT 20) AND ${marker}`,
+    sql`DELETE FROM key_rotation_items WHERE rowid IN (SELECT i.rowid FROM key_rotation_items i
+      WHERE i.job_id IN (${jobs}) AND NOT EXISTS (SELECT 1 FROM key_rotation_entries e
+        WHERE e.job_id = i.job_id AND e.directory_id = i.object_id)
+      ORDER BY i.job_id, i.object_id LIMIT 20) AND ${marker}`,
+    sql`DELETE FROM key_rotation_receipts WHERE rowid IN (SELECT rowid FROM key_rotation_receipts
+      WHERE job_id IN (${jobs}) ORDER BY job_id, operation_id LIMIT 20) AND ${marker}`,
+  ];
+}
+
 /** One fresh proof per pass. Draining and rotation handoff are separate bounded
  * passes, so the handoff's first CAS can pin empty dependencies and the fence.
  * The durable fence/job replaces the implicit seal in the same transaction.
@@ -36,7 +59,8 @@ export async function expireGrantBatch(env: Env, auth: AuthorizedDevice): Promis
   try {
     const db = createDb(env.DB);
     const target = await db.get<RotationTarget & { id: string; dependents: number }>(sql`
-      SELECT s.id, s.owner_id, s.target_id, s.target_kind, ${hasDependents(sql`s.id`)} AS dependents
+      SELECT s.id, s.owner_id, s.target_id, s.target_kind,
+        (${hasDependents(sql`s.id`)} OR ${hasRotationDependents(sql`s.target_id`)}) AS dependents
       FROM grants s WHERE s.owner_id = ${auth.accountId} AND ${expiredGrant()} AND ${privateReadGuard(auth)}
       ORDER BY s.expires_at, s.id LIMIT 1`);
     if (!target) return Response.json({ pending: false }, { headers });
@@ -44,13 +68,14 @@ export async function expireGrantBatch(env: Env, auth: AuthorizedDevice): Promis
     if (target.dependents) {
       committed = await commitPrivateBatch(env, auth, (guard) => sql`UPDATE grants SET updated_at = updated_at
         WHERE id = ${target.id} AND owner_id = ${auth.accountId} AND ${expiredGrant(sql`expires_at`)} AND ${guard}`,
-      (marker) => drainDependents(target.id, marker));
+      (marker) => [...drainDependents(target.id, marker), ...drainRotationDependents(target.target_id, marker)]);
     } else {
       const rotation = await planRotation(env, auth, target);
       if (!rotation) return changed();
       committed = await commitPrivateBatch(env, auth, (guard) => sql`DELETE FROM grants
         WHERE id = ${target.id} AND owner_id = ${auth.accountId} AND ${expiredGrant(sql`expires_at`)}
-          AND NOT ${hasDependents(target.id)} AND ${rotationSnapshot(target, rotation)} AND ${guard}`,
+          AND NOT ${hasDependents(target.id)} AND NOT ${hasRotationDependents(target.target_id)}
+          AND ${rotationSnapshot(target, rotation)} AND ${guard}`,
       (marker) => startRotation(auth, target, rotation, marker));
     }
     if (!committed) return changed();

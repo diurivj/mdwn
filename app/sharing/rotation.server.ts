@@ -42,9 +42,13 @@ export function rotationSnapshot(target: RotationTarget, plan: RotationPlan) {
       AND b.key_epoch IS ${plan.previousFence})`;
 }
 
+/** The partial unique target index permits at most one pending rotation. */
+export function pendingRotationJob(targetId: string | SQL) {
+  return sql`SELECT id FROM crypto_jobs WHERE kind = 'key_rotation' AND target_id = ${targetId} AND state = 'pending'`;
+}
+
 export function startRotation(auth: AuthorizedDevice, target: RotationTarget, plan: RotationPlan, marker: SQL) {
-  const now = Date.now(), oldJobs = sql`SELECT id FROM crypto_jobs WHERE kind = 'key_rotation'
-    AND target_id = ${target.target_id} AND state = 'pending'`;
+  const now = Date.now(), oldJobs = pendingRotationJob(target.target_id);
   return [
     sql`DELETE FROM key_rotation_entries WHERE job_id IN (${oldJobs}) AND ${marker}`,
     sql`DELETE FROM key_rotation_items WHERE job_id IN (${oldJobs}) AND ${marker}`,
