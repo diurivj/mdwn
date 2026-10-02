@@ -30,9 +30,23 @@ export async function sharingAccount() {
   const session = await seedNormalSession({ accountId, credentialIds: [credentialId] });
   await env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(deviceId, session.id).run();
   return { accountId, shareId, rootId, deviceId, assertion, transport, session,
-    proofs: new Map<string, DeviceProof>(), keys: new Map<string, Uint8Array>([[rootId, generateDirectoryCapabilityKey()]]) };
+    registryEpoch: 1, proofs: new Map<string, DeviceProof>(), keys: new Map<string, Uint8Array>([[rootId, generateDirectoryCapabilityKey()]]) };
 }
 export type SharingAccount = Awaited<ReturnType<typeof sharingAccount>>;
+
+/** Simulated approved membership at the external registry boundary. */
+export async function addSharingDevice(account: SharingAccount) {
+  const deviceId = opaqueId();
+  const transport = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const assertion = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const next = account.registryEpoch + 1;
+  await env.DB.prepare(`INSERT INTO encryption_devices (id, account_id, transport_public_key, assertion_public_key,
+    state, approval_provenance, registry_epoch, created_at) VALUES (?, ?, ?, ?, 'active', 'routine', ?, ?)`)
+    .bind(deviceId, account.accountId, new Uint8Array(await crypto.subtle.exportKey("raw", transport.publicKey)),
+      new Uint8Array(await crypto.subtle.exportKey("raw", assertion.publicKey)), next, Date.now()).run();
+  account.registryEpoch = next;
+  return { deviceId, transport, assertion };
+}
 
 export async function sharingRequest(account: SharingAccount, path: string,
   method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST", value?: object, proofId?: string) {
@@ -40,7 +54,7 @@ export async function sharingRequest(account: SharingAccount, path: string,
   const body = value === undefined ? undefined : JSON.stringify(value);
   const proof = (proofId && account.proofs.get(proofId)) || await signDeviceProof(account.assertion.privateKey, {
     sessionBinding: await sessionBindingDigest(account.session.id), deviceId: account.deviceId,
-    registryEpoch: 1, method, url, body,
+    registryEpoch: account.registryEpoch, method, url, body,
   });
   if (proofId) account.proofs.set(proofId, proof);
   return SELF.fetch(url, { method, headers: { cookie: account.session.cookie, origin: "https://mdwn.test",
@@ -51,7 +65,7 @@ export async function sharingAuthorization(account: SharingAccount) {
   const url = "https://mdwn.test/api/private/grants";
   const proof = await signDeviceProof(account.assertion.privateKey, {
     sessionBinding: await sessionBindingDigest(account.session.id), deviceId: account.deviceId,
-    registryEpoch: 1, method: "POST", url,
+    registryEpoch: account.registryEpoch, method: "POST", url,
   });
   const auth = await authorizePrivateRequest(new Request(url, { method: "POST", headers: {
     cookie: account.session.cookie,

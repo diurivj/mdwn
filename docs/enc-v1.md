@@ -232,6 +232,12 @@ the Account and exact device ID. Neither purpose carries a Grant capability.
 
 [ADR-0008](adr/0008-parent-free-file-capabilities.md) adds a stable-between-rotations File capability between a Directory capability and fresh representation keys. Purpose 20 wraps that capability under the parent Directory. It binds Owner Vault, File ID, capability ID/current epoch and revision 1; older purposes retain their original numeric IDs. Representation-key envelopes continue to use `file-content-key`, now under the File capability. The device-signed File head independently binds the wrapping capability and exact representation/wrapper bytes. Direct recipients receive only the File capability through an independently signed HPKE `grant` envelope. Neither successful HPKE nor header inspection establishes live authority; see [the sharing protocol](sharing.md).
 
+## Grant-derived Comment envelopes (ticket 18)
+
+`app/sharing/comment-keys` uses purposes 10 and 11 for direct HPKE device delivery, with an independent Owner-device intent signature. Its externally expected context and signature additionally bind File, logical thread, root Grant relationship/target and both approved registry snapshots. Purpose 11 binds the logical Publication, never a URL fragment. Grant routes reject symmetric wrappers and all crossed contexts; acceptance requires complete current-device root and registered Comment/history coverage. These envelopes remain outside Account-owned recovery/enrollment stores. See [sharing](sharing.md) for the producer registration and lifecycle integration contract.
+
+This consumer pins HPKE locally; it does not assign a global suite to purposes that still have other consumers. Ticket 23 must give the Publication-link symmetric wrapper a distinct new purpose rather than repurpose a direct-device Grant envelope or renumber existing purposes.
+
 ## Consumers and open decisions
 
 Future tickets that build envelopes must use this module rather than a new format.

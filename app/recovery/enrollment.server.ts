@@ -275,6 +275,12 @@ export async function commitRecoveryEnrollment(env: Env, session: ActiveSession,
           'pending', NULL, ${now}, ${now}
         WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ${newSessionId} AND account_id = ${session.accountId}
           AND revoked_at IS NULL AND device_id = ${body.intent.deviceId})`,
+      sql`DELETE FROM share_comment_key_envelopes WHERE device_id IN (SELECT id FROM encryption_devices
+        WHERE account_id = ${session.accountId} AND id != ${body.intent.deviceId}) AND ${activatedDevice}`,
+      sql`DELETE FROM grant_comment_key_envelopes WHERE device_id IN (SELECT id FROM encryption_devices
+        WHERE account_id = ${session.accountId} AND id != ${body.intent.deviceId}) AND ${activatedDevice}`,
+      sql`DELETE FROM provisioning_needs WHERE device_id IN (SELECT id FROM encryption_devices
+        WHERE account_id = ${session.accountId} AND id != ${body.intent.deviceId}) AND ${activatedDevice}`,
       sql`DELETE FROM share_key_envelopes WHERE device_id IN (SELECT id FROM encryption_devices
         WHERE account_id = ${session.accountId} AND id != ${body.intent.deviceId}) AND ${activatedDevice}`,
       sql`DELETE FROM grant_key_envelopes WHERE device_id IN (SELECT id FROM encryption_devices
