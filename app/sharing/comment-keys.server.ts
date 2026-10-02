@@ -9,6 +9,8 @@ import type { GrantKeyContext } from "./grant-keys";
 import { retireFulfilledNeeds } from "./provisioning-needs.server";
 import { readDeviceEnvelopePacket } from "./envelope-packet.server";
 import { rotationDeliveryPermit } from "./rotation-data.server";
+import { commentDeliveryAuthority } from "./delivery-authority.server";
+import { liveGrant } from "./grant-lifetime.server";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
@@ -30,20 +32,20 @@ export async function listCommentKeys(env: Env, auth: AuthorizedDevice, kind: Ki
     JOIN sharing_comment_capabilities c ON c.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
     WHERE s.id = ${id} AND (s.owner_id = ${auth.accountId} OR s.recipient_id = ${auth.accountId})
       AND ${grantRootMatches(context.capabilityId, context.capabilityEpoch)}
-      AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${context.grantKeyEpoch}`}
+      AND ${kind === "shares" ? sql`1` : sql`${liveGrant()} AND s.key_epoch = ${context.grantKeyEpoch}`}
       AND c.object_id > ${cursor ?? ""} AND ${privateReadGuard(auth)} ORDER BY c.object_id LIMIT 21`);
   return Response.json({ capabilities: rows.slice(0, 20).map((row) => commentContext(context, row)),
     nextCursor: rows.length > 20 ? rows[19]!.object_id : null }, { headers });
 }
 
-async function deliveryContext(env: Env, auth: AuthorizedDevice, kind: Kind, id: string, objectId: string) {
+export async function deliveryContext(env: Env, auth: AuthorizedDevice, kind: Kind, id: string, objectId: string) {
   const root = await contextFor(env, auth, kind, id);
   if (!root?.capabilityId || !root.capabilityEpoch) return null;
   const row = await createDb(env.DB).get<CommentRow>(sql`SELECT c.* FROM ${relationships(kind)} s
     JOIN sharing_comment_capabilities c ON c.object_id = ${objectId}
     WHERE s.id = ${id} AND (s.owner_id = ${auth.accountId} OR s.recipient_id = ${auth.accountId})
       AND ${grantRootMatches(root.capabilityId, root.capabilityEpoch)}
-      AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${root.grantKeyEpoch}`}
+      AND ${kind === "shares" ? sql`1` : sql`${liveGrant()} AND s.key_epoch = ${root.grantKeyEpoch}`}
       AND c.object_id IN (SELECT object_id FROM (${requiredGrantComments()})) AND ${privateReadGuard(auth)}`);
   return row ? { root, comment: commentContext(root, row) } : null;
 }
@@ -69,7 +71,7 @@ export async function readCommentKey(env: Env, auth: AuthorizedDevice, kind: Kin
       WHERE s.id = ${id} AND s.owner_id = ${auth.accountId} AND d.id > ${cursor ?? ""}
         AND r.registry_epoch = ${comment.recipientRegistryEpoch}
         AND ${grantRootMatches(root.capabilityId, root.capabilityEpoch)} AND ${commentMatches(comment)}
-        AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${comment.grantKeyEpoch}`}
+        AND ${kind === "shares" ? sql`1` : sql`${liveGrant()} AND s.key_epoch = ${comment.grantKeyEpoch}`}
         AND ${missingOnly ? sql`NOT EXISTS (SELECT 1 FROM grant_comment_key_envelopes e WHERE e.relationship_id = s.id
           AND e.device_id = d.id AND e.object_id = ${objectId} AND e.capability_id = ${comment.capabilityId}
           AND e.capability_epoch = ${comment.capabilityEpoch} AND e.grant_key_epoch = s.key_epoch)` : sql`1`}
@@ -83,8 +85,8 @@ export async function readCommentKey(env: Env, auth: AuthorizedDevice, kind: Kin
     signer_device_id: string; assertion_public_key: ArrayBuffer; ciphertext: ArrayBuffer; signature: ArrayBuffer }>(sql`
     SELECT e.*, signer.assertion_public_key FROM grant_comment_key_envelopes e
     JOIN grants s ON s.id = e.relationship_id JOIN encryption_devices signer ON signer.id = e.signer_device_id
-    WHERE s.id = ${id} AND s.recipient_id = ${auth.accountId} AND e.object_id = ${objectId} AND e.device_id = ${auth.deviceId}
-      AND signer.account_id = s.owner_id AND e.grant_key_epoch = s.key_epoch
+    WHERE s.id = ${id} AND ${liveGrant()} AND s.recipient_id = ${auth.accountId} AND e.object_id = ${objectId} AND e.device_id = ${auth.deviceId}
+      AND signer.account_id IN (s.owner_id, s.recipient_id) AND e.grant_key_epoch = s.key_epoch
       AND e.capability_id = ${comment.capabilityId} AND e.capability_epoch = ${comment.capabilityEpoch}
       AND ${commentMatches(comment)} AND ${privateReadGuard(auth)}`);
   if (!row) return failure("secure_access_preparing", 409);
@@ -98,10 +100,13 @@ export async function uploadCommentKeys(env: Env, auth: AuthorizedDevice, kind: 
   const input = readDeviceEnvelopePacket(value);
   if (!input) return failure("invalid_sharing_request", 400);
   const delivery = await deliveryContext(env, auth, kind, id, objectId);
-  if (!delivery || delivery.comment.ownerId !== auth.accountId) return failure("not_found", 404);
+  if (!delivery || !await createDb(env.DB).get(sql`SELECT 1 FROM ${relationships(kind)} s
+    WHERE s.id = ${id} AND ${kind === "shares" ? sql`1` : liveGrant()}
+      AND ${commentDeliveryAuthority(auth, kind, delivery.comment)} AND ${privateReadGuard(auth)}`))
+    return failure("not_found", 404);
   const { root, comment } = delivery;
   if (input.capabilityId !== comment.capabilityId || input.capabilityEpoch !== comment.capabilityEpoch ||
-      input.ownerRegistryEpoch !== auth.registryEpoch || input.recipientRegistryEpoch !== comment.recipientRegistryEpoch)
+      input.ownerRegistryEpoch !== comment.ownerRegistryEpoch || input.recipientRegistryEpoch !== comment.recipientRegistryEpoch)
     return failure("sharing_changed", 409);
   const batch = input.envelopes;
   try {
@@ -115,11 +120,13 @@ export async function uploadCommentKeys(env: Env, auth: AuthorizedDevice, kind: 
     WHERE d.id = ${entry.deviceId} AND d.account_id = s.recipient_id AND d.state = 'active')`), sql` AND `);
   const committed = await commitPrivateBatch(env, auth, (guard) => sql`
     UPDATE ${relationships(kind)} AS s SET ${kind === "shares" ? sql`created_at = created_at` : sql`updated_at = updated_at`}
-    WHERE s.id = ${id} AND s.owner_id = ${auth.accountId} AND ${grantRootMatches(root.capabilityId, root.capabilityEpoch)}
-      AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${comment.grantKeyEpoch}`}
+    WHERE s.id = ${id} AND ${commentDeliveryAuthority(auth, kind, comment)} AND ${grantRootMatches(root.capabilityId, root.capabilityEpoch)}
+      AND ${kind === "shares" ? sql`1` : sql`${liveGrant()} AND s.key_epoch = ${comment.grantKeyEpoch}`}
       AND ${commentMatches(comment)} AND ${membership}
       AND EXISTS (SELECT 1 FROM account_encryption_identities r WHERE r.account_id = s.recipient_id
         AND r.registry_epoch = ${comment.recipientRegistryEpoch})
+      AND EXISTS (SELECT 1 FROM account_encryption_identities r WHERE r.account_id = s.owner_id
+        AND r.registry_epoch = ${comment.ownerRegistryEpoch})
       AND (NOT ${sharingWriteBlocked(comment.fileId)} OR ${rotationJobId
         ? rotationDeliveryPermit(auth, rotationJobId, id) : sql`0`}) AND ${guard}`, (marker) => [
     sql`DELETE FROM ${envelopes(kind)} WHERE relationship_id = ${id} AND object_id = ${objectId} AND ${marker}
@@ -135,7 +142,7 @@ export async function uploadCommentKeys(env: Env, auth: AuthorizedDevice, kind: 
         capability_epoch = excluded.capability_epoch, grant_key_epoch = excluded.grant_key_epoch,
         owner_registry_epoch = excluded.owner_registry_epoch, recipient_registry_epoch = excluded.recipient_registry_epoch,
         ciphertext = excluded.ciphertext, signature = excluded.signature, signer_device_id = excluded.signer_device_id
-        WHERE ${rotationJobId ? 0 : 1} = 1`),
+        WHERE ${kind === "shares" ? 1 : 0} = 1`),
     ...(kind === "grants" ? [retireFulfilledNeeds(id, marker)] : []),
   ]);
   return committed ? Response.json({ uploaded: batch.length }, { headers }) : failure("sharing_changed", 409);

@@ -5,6 +5,7 @@ import { purgeExpiredSignupProofs } from "~/device/proof.server";
 import { purgeExpiredAbuseRecords } from "~/security/abuse-control.server";
 import { buildSecurityHeaders, DYNAMIC_CACHE_CONTROL, generateCspNonce } from "~/security/headers";
 import { cspNonceContext } from "~/security/nonce";
+import { purgeExpiredGrantDependents } from "~/sharing/grant-expiry.server";
 
 /**
  * The event object the fetch handler passes to the adapter. The adapter's
@@ -49,6 +50,7 @@ export default {
   async scheduled(_controller, env) {
     await purgeExpiredAbuseRecords(env.DB);
     await purgeExpiredSignupProofs(env);
+    await purgeExpiredGrantDependents(env);
   },
 
   async fetch(request, env, ctx) {

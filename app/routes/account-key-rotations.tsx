@@ -64,6 +64,7 @@ export default function KeyRotations({ loaderData }: Route.ComponentProps) {
     <p className="mt-3 text-sm">Removed permissions take effect immediately. New writes beneath affected Files and folders wait until their secure access update finishes.</p>
     <p className="mt-3 text-sm">This cannot recall previously downloaded plaintext, ciphertext, or keys.</p>
     <p className="mt-3 text-sm">You can leave and resume from another enrolled Owner device. No plaintext keys or content are stored in the job.</p>
+    <p className="mt-3 text-sm">Expired Shares must finish <Link to="/account/shared-access" className="underline">shared access cleanup</Link> before queued updates can resume.</p>
     {loaderData.state === "ready" ? <>
       {loaderData.jobs.length ? <ul className="mt-6 space-y-3">{loaderData.jobs.map((job) => <Update key={job.jobId} job={job} />)}</ul>
         : <p role="status" className="mt-6">No secure access updates are waiting.</p>}

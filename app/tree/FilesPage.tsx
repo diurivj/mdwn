@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
+import { SharedProvisioning } from "~/sharing/SharedProvisioning";
 
 import {
   createTreeChild, loadDirectory, NameConflictError, NamespaceChangedError,
@@ -287,7 +288,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
 
   if (status === "not-found") return <main className="p-8"><h1 className="text-xl font-semibold">Not found</h1>
     <p>This File or folder is unavailable.</p><Link to="/account/device-access" className="underline">Files access</Link></main>;
-  if (status === "provisioning") return <main className="p-8"><p role="status">Shared content is being securely provisioned</p></main>;
+  if (status === "provisioning") return <main className="p-8"><p role="status">Shared content is being securely provisioned</p>
+    <button type="button" onClick={() => void revalidator.revalidate()} disabled={revalidator.state !== "idle"}
+      className="mt-4 rounded border px-3 py-2">Check shared access</button></main>;
   if (status !== "ready" || !snapshot) return <main className="p-8"><h1 className="text-xl font-semibold">Files unavailable</h1>
     <p>Check this device’s access or try again.</p><Link to="/account/device-access" className="underline">Device access</Link></main>;
 
@@ -306,6 +309,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         <button type="button" onClick={() => setDrawer(false)} className="lg:hidden">Close tree</button></div>
       <Link to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">{snapshot.access.rootKind === "file" ? "Shared File" : "Files"}</Link>
       <nav aria-label="Files">{directoryItems(snapshot.access.rootId)}</nav>
+      <SharedProvisioning />
       {snapshot.access.actorAccountId === snapshot.access.vaultId && <Link to="/account/key-rotations" className="mt-6 block text-sm underline">Secure access updates</Link>}
     </aside>
     <section className="min-w-0 p-4 md:p-6">

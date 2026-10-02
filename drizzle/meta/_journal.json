@@ -127,6 +127,13 @@
       "when": 1790907409868,
       "tag": "0017_normal_carmella_unuscione",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1790918833737,
+      "tag": "0018_handy_bishop",
+      "breakpoints": true
     }
   ]
 }

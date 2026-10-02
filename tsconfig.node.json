@@ -30,6 +30,7 @@
     "app/sharing/grant-keys.ts",
     "app/sharing/comment-keys.ts",
     "app/sharing/rotation-client.ts",
+    "app/sharing/provisioning-client.ts",
     "app/sharing/rotation-wire.ts"
   ],
   "exclude": ["tests/worker/**/*"],

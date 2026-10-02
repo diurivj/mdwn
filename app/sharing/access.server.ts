@@ -1,5 +1,6 @@
 import type { SQL } from "drizzle-orm";
 import { createDb, sql } from "~/db/client.server";
+import { expiredGrant, liveGrant } from "./grant-lifetime.server";
 import { privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 
 export type EffectiveAccess = {
@@ -29,6 +30,7 @@ export function effectiveAccessQuery(auth: AuthorizedDevice, nodeId: string | SQ
     SELECT g.target_id, g.target_kind, g.permission, a.depth
     FROM lineage a CROSS JOIN grants g INDEXED BY grants_recipient_target_idx
     WHERE g.recipient_id = ${auth.accountId} AND g.target_id = a.id AND g.owner_id = a.owner_id
+      AND ${liveGrant(sql`g.expires_at`)}
       AND ((a.kind = 'directory' AND g.target_kind = 'directory')
         OR (a.depth = 0 AND a.kind = 'file' AND g.target_kind = 'file'))
   ), authority AS (
@@ -98,14 +100,16 @@ export function permits(access: EffectiveAccess | null, operation: Operation,
 }
 
 /** Revocation/leave/permission changes seal future writes before key rotation.
+ * Expired retained Grants are implicit seals even before scheduled cleanup.
  * Reads and hard deletion stay available. Never expire this seal into an old key.
  */
-export function sharingWriteBlocked(nodeId: string): SQL {
+export function sharingWriteBlocked(nodeId: string | SQL): SQL {
   return sql`EXISTS (WITH RECURSIVE lineage(id, parent_node_id, depth) AS (
     SELECT id, parent_node_id, 0 FROM vault_nodes WHERE id = ${nodeId}
     UNION ALL SELECT n.id, n.parent_node_id, a.depth + 1 FROM vault_nodes n JOIN lineage a ON n.id = a.parent_node_id
       WHERE a.depth < 100
-  ) SELECT 1 FROM lineage a JOIN sharing_write_blocks b ON b.target_id = a.id)`;
+  ) SELECT 1 FROM lineage a WHERE EXISTS (SELECT 1 FROM sharing_write_blocks b WHERE b.target_id = a.id)
+    OR EXISTS (SELECT 1 FROM grants g WHERE g.target_id = a.id AND ${expiredGrant(sql`g.expires_at`)}))`;
 }
 
 /** A move needs one common write scope, not two independent writable islands. */

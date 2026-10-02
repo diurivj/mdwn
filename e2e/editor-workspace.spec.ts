@@ -32,7 +32,9 @@ test("debounces autosave for 750 ms and Ctrl/Cmd+S flushes encrypted content imm
   // Advance timers without putting request-bound proofs ahead of the Worker's real clock.
   const time = new Date(Date.now() - 10_000);
   await page.clock.install({ time });
-  await page.clock.pauseAt(time);
+  // Installation starts a running clock; pausing at its initial instant races
+  // elapsed wall time. Leave headroom for the following 750 ms timer advance.
+  await page.clock.pauseAt(new Date(Date.now() - 5_000));
   const saves: string[] = [];
   page.on("request", (request) => {
     if (request.method() === "PATCH" && new URL(request.url()).pathname.endsWith(`/files/${workspace.fileId}`)) saves.push(request.postData() ?? "");

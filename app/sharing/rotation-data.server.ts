@@ -4,6 +4,7 @@ import { privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { encodeTreeBytes } from "~/tree/wire";
 import type { RotationEntries, RotationItem, RotationJob, RotationSource } from "./rotation-wire";
 import { activeGrantCoverage, requiredGrantComments } from "./capability-coverage.server";
+import { hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
 
 export const ROTATION_PAGE = 20;
 const encoded = (value: ArrayBuffer | null) => value ? encodeTreeBytes(new Uint8Array(value)) : null;
@@ -42,7 +43,7 @@ export function liveRotation(auth: AuthorizedDevice, job: RotationJob) {
   return sql`EXISTS (SELECT 1 FROM crypto_jobs j JOIN sharing_write_blocks b ON b.target_id = j.target_id
     WHERE j.id = ${job.jobId} AND j.account_id = ${auth.accountId} AND j.kind = 'key_rotation' AND j.state = 'pending'
       AND j.key_epoch = ${job.keyEpoch} AND b.key_epoch = j.key_epoch
-      AND ${rotationOrder()})`;
+      AND NOT ${hasExpiredGrants(auth)} AND ${rotationOrder()})`;
 }
 
 export async function readRotationItem(env: Env, auth: AuthorizedDevice, job: RotationJob, objectId?: string) {
@@ -146,13 +147,13 @@ export function affectedRotationGrant(jobId: string) {
 }
 export function currentRotationCoverage(jobId: string) {
   return sql`NOT EXISTS (SELECT 1 FROM grants s JOIN encryption_devices d ON d.account_id = s.recipient_id AND d.state = 'active'
-    WHERE ${affectedRotationGrant(jobId)} AND NOT (${activeGrantCoverage(sql`d.id`)}))`;
+    WHERE ${liveGrant()} AND ${affectedRotationGrant(jobId)} AND NOT (${activeGrantCoverage(sql`d.id`)}))`;
 }
 export function rotationDeliveryPermit(auth: AuthorizedDevice, jobId: string, relationshipId: string) {
   return sql`EXISTS (SELECT 1 FROM crypto_jobs j JOIN sharing_write_blocks b ON b.target_id = j.target_id
     JOIN grants s ON s.id = ${relationshipId} AND s.owner_id = j.account_id
     WHERE j.id = ${jobId} AND j.account_id = ${auth.accountId} AND j.kind = 'key_rotation' AND j.state = 'pending'
-      AND b.key_epoch = j.key_epoch AND ${affectedRotationGrant(jobId)}
+      AND b.key_epoch = j.key_epoch AND ${liveGrant()} AND NOT ${hasExpiredGrants(auth)} AND ${affectedRotationGrant(jobId)}
       AND NOT EXISTS (SELECT 1 FROM key_rotation_items i WHERE i.job_id = j.id AND i.state != 'complete')
       AND ${rotationOrder()})`;
 }

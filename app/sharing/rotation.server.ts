@@ -10,6 +10,7 @@ import { readCommentKey, uploadCommentKeys } from "./comment-keys.server";
 import { affectedRotationGrant, liveRotation, readRotationItem, readRotationJob, readRotationSource, rotationDeliveryPermit, rotationEntries, rotationOrder } from "./rotation-data.server";
 import { rotationSourceVersion, type RotationJob } from "./rotation-wire";
 import { stepRotation } from "./rotation-step.server";
+import { hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
@@ -92,16 +93,16 @@ async function nextRotation(env: Env, auth: AuthorizedDevice, job: RotationJob) 
     return Response.json({ job, item, source, operation: page?.entries.length ? "stage" : "promote" }, { headers });
   }
   const missing = await createDb(env.DB).get<{ id: string }>(sql`SELECT s.id FROM grants s
-    WHERE s.owner_id = ${auth.accountId} AND ${affectedRotationGrant(job.jobId)} AND EXISTS (
+    WHERE s.owner_id = ${auth.accountId} AND ${liveGrant()} AND ${affectedRotationGrant(job.jobId)} AND EXISTS (
       SELECT 1 FROM encryption_devices d WHERE d.account_id = s.recipient_id AND d.state = 'active'
         AND NOT (${activeGrantCoverage(sql`d.id`)})) AND ${privateReadGuard(auth)} ORDER BY s.id LIMIT 1`);
   if (!missing) return Response.json({ job, operation: "finish" }, { headers });
   const rootMissing = await createDb(env.DB).get(sql`SELECT 1 FROM grants s JOIN encryption_devices d
-    ON d.account_id = s.recipient_id AND d.state = 'active' WHERE s.id = ${missing.id}
+    ON d.account_id = s.recipient_id AND d.state = 'active' WHERE s.id = ${missing.id} AND ${liveGrant()}
       AND NOT (${activeRootCoverage(sql`d.id`)}) AND ${privateReadGuard(auth)} LIMIT 1`);
   const comment = !rootMissing ? await createDb(env.DB).get<{ object_id: string }>(sql`SELECT c.object_id FROM grants s
     JOIN sharing_comment_capabilities c ON c.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
-    WHERE s.id = ${missing.id} AND EXISTS (SELECT 1 FROM encryption_devices d WHERE d.account_id = s.recipient_id AND d.state = 'active'
+    WHERE s.id = ${missing.id} AND ${liveGrant()} AND EXISTS (SELECT 1 FROM encryption_devices d WHERE d.account_id = s.recipient_id AND d.state = 'active'
       AND NOT EXISTS (SELECT 1 FROM grant_comment_key_envelopes e WHERE e.relationship_id = s.id AND e.device_id = d.id
         AND e.object_id = c.object_id AND e.capability_id = c.capability_id AND e.capability_epoch = c.capability_epoch
         AND e.grant_key_epoch = s.key_epoch)) AND ${privateReadGuard(auth)} ORDER BY c.object_id LIMIT 1`) : null;
@@ -137,7 +138,7 @@ export async function rotationAction(request: Request, env: Env): Promise<Respon
   if (list) {
     const rows = await createDb(env.DB).all<RotationJob & { runnableFlag: number }>(sql`SELECT j.id AS jobId,
       j.target_id AS targetId, j.key_epoch AS keyEpoch, j.state, j.progress,
-      CASE WHEN j.key_epoch = b.key_epoch AND ${rotationOrder()} THEN 1 ELSE 0 END AS runnableFlag
+      CASE WHEN j.key_epoch = b.key_epoch AND NOT ${hasExpiredGrants(auth)} AND ${rotationOrder()} THEN 1 ELSE 0 END AS runnableFlag
       FROM crypto_jobs j LEFT JOIN sharing_write_blocks b ON b.target_id = j.target_id
       WHERE j.account_id = ${auth.accountId} AND j.kind = 'key_rotation' AND j.state = 'pending'
         AND j.id > ${cursor ?? ""} AND ${privateReadGuard(auth)} ORDER BY j.id LIMIT 21`);
