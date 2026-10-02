@@ -202,7 +202,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       if (!parent || !key || parent.canCreate === false) throw new Error("private tree unavailable");
       if (current.operation === "create") {
         const payload = await prepareTreeCreate({ vaultId: snapshot.access.vaultId,
-          parentId: current.parentId, parentKey: key, entriesRevision: parent.entriesRevision,
+          parentId: current.parentId, parentKey: key, parentEpoch: parent.keyEpoch ?? 1, entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.map((entry) => entry.name), requestedName: current.requestedName,
           kind: current.kind });
         const created = await createTreeChild(snapshot.access, current.parentId, payload, parent, key, signal);
@@ -223,7 +223,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         const entry = parent.entries.find((item) => item.nodeId === current.nodeId);
         if (!entry) throw new TreeNotFoundError();
         const payload = await prepareTreeRename({ vaultId: snapshot.access.vaultId,
-          parentId: current.parentId, parentKey: key, nodeId: entry.nodeId,
+          parentId: current.parentId, parentKey: key, parentEpoch: parent.keyEpoch ?? 1, nodeId: entry.nodeId,
           entriesRevision: parent.entriesRevision,
           existingNames: parent.entries.filter((item) => item.nodeId !== entry.nodeId).map((item) => item.name),
           requestedName: current.requestedName, order: entry.order });
@@ -306,6 +306,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         <button type="button" onClick={() => setDrawer(false)} className="lg:hidden">Close tree</button></div>
       <Link to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">{snapshot.access.rootKind === "file" ? "Shared File" : "Files"}</Link>
       <nav aria-label="Files">{directoryItems(snapshot.access.rootId)}</nav>
+      {snapshot.access.actorAccountId === snapshot.access.vaultId && <Link to="/account/key-rotations" className="mt-6 block text-sm underline">Secure access updates</Link>}
     </aside>
     <section className="min-w-0 p-4 md:p-6">
       <div className="flex flex-wrap items-center gap-3">

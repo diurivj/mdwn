@@ -157,15 +157,18 @@ function mutationProofStatements(authorization: AuthorizedDevice, now: number): 
 export async function commitPrivateBatch(
   env: Env, authorization: AuthorizedDevice, anchor: (guard: SQL) => SQL,
   statements: (committed: SQL) => readonly SQL[],
+  options: { deferForeignKeys?: boolean } = {},
 ): Promise<boolean> {
   const now = Date.now();
   if (authorization.expiresAt <= now) return false;
   const { committed, consume, recordActivity } = mutationProofStatements(authorization, now);
-  const [changed, consumed] = await atomicSqlBatch(env.DB, [
+  const results = await atomicSqlBatch(env.DB, [
+    ...(options.deferForeignKeys ? [sql`PRAGMA defer_foreign_keys = ON`] : []),
     anchor(privateMutationGuard(authorization, now)), consume,
     ...statements(committed), recordActivity,
   ]);
-  return changed!.meta.changes === 1 && consumed!.meta.changes === 1;
+  const offset = options.deferForeignKeys ? 1 : 0;
+  return results[offset]!.meta.changes === 1 && results[offset + 1]!.meta.changes === 1;
 }
 
 export type DirectoryChange = {

@@ -431,7 +431,7 @@ export const deviceEnrollments = sqliteTable("device_enrollments", {
   check("device_enrollments_epoch_positive", sql`${table.registryEpoch} >= 1`),
 ]);
 
-/** Browser-driven, bounded owned-key provisioning after recovery; never carries a capability. */
+/** Browser-driven work metadata only; keys and content live exclusively in envelopes. */
 export const cryptoJobs = sqliteTable("crypto_jobs", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
@@ -439,12 +439,20 @@ export const cryptoJobs = sqliteTable("crypto_jobs", {
   kind: text("kind").notNull(),
   state: text("state").notNull(),
   cursor: text("cursor"),
+  initiatingAccountId: text("initiating_account_id").references(() => accounts.id, { onDelete: "restrict" }),
+  targetId: text("target_id").references(() => vaultNodes.id, { onDelete: "restrict" }),
+  keyEpoch: integer("key_epoch"),
+  progress: integer("progress").notNull().default(0),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [
   index("crypto_jobs_device_idx").on(table.accountId, table.deviceId, table.state),
-  check("crypto_jobs_kind_valid", sql`${table.kind} IN ('recovery_owned', 'enrollment_owned')`),
-  check("crypto_jobs_state_valid", sql`${table.state} IN ('pending', 'complete')`),
+  index("crypto_jobs_account_kind_idx").on(table.accountId, table.kind, table.state, table.id),
+  uniqueIndex("crypto_jobs_rotation_target_idx").on(table.targetId).where(sql`${table.kind} = 'key_rotation' AND ${table.state} = 'pending'`),
+  check("crypto_jobs_kind_valid", sql`${table.kind} IN ('recovery_owned', 'enrollment_owned', 'key_rotation')`),
+  check("crypto_jobs_state_valid", sql`${table.state} IN ('pending', 'complete', 'cancelled')`),
+  check("crypto_jobs_rotation_metadata", sql`${table.progress} >= 0 AND (${table.kind} != 'key_rotation' OR
+    (${table.targetId} IS NOT NULL AND ${table.keyEpoch} IS NOT NULL AND ${table.keyEpoch} >= 1 AND ${table.initiatingAccountId} IS NOT NULL))`),
 ]);
 
 /** High-entropy authentication recovery codes: only SHA-256 hashes are retained. */
@@ -496,6 +504,8 @@ export const directories = sqliteTable("directories", {
   nodeId: text("node_id").primaryKey().references(() => vaultNodes.id, { onDelete: "restrict" }),
   ownerId: text("owner_id").notNull(),
   entriesRevision: integer("entries_revision").notNull(),
+  /** Installed ciphertext epoch; a rotation seal fences the next capability epoch. */
+  keyEpoch: integer("key_epoch").notNull().default(1),
   /** Device-signed, encrypted commitment to the current entry ciphertexts (migration 0009). */
   listingCiphertext: blob("listing_ciphertext"),
   listingDigest: blob("listing_digest"),
@@ -505,6 +515,7 @@ export const directories = sqliteTable("directories", {
   uniqueIndex("directories_owner_node_idx").on(table.ownerId, table.nodeId),
   index("directories_listing_device_idx").on(table.listingDeviceId),
   check("directories_revision_positive", sql`${table.entriesRevision} >= 1`),
+  check("directories_epoch_positive", sql`${table.keyEpoch} >= 1`),
 ]);
 
 /** One File has exactly one current encrypted representation, not a version history. */
@@ -707,15 +718,62 @@ export const provisioningNeeds = sqliteTable("provisioning_needs", {
   check("provisioning_needs_epoch", sql`${table.grantKeyEpoch} >= 1`),
 ]);
 
-/** Current safety seal, not sharing history. Ticket 19 replaces this fail-closed
- * inter-ticket state with a completed browser-driven key rotation.
- */
+/** Current next-epoch safety fence, not sharing history. Only completed rotation removes it. */
 export const sharingWriteBlocks = sqliteTable("sharing_write_blocks", {
   targetId: text("target_id").primaryKey(),
   ownerId: text("owner_id").notNull(),
   targetKind: text("target_kind").notNull(),
+  keyEpoch: integer("key_epoch").notNull().default(2),
   createdAt: integer("created_at").notNull(),
 }, (table) => [
   foreignKey({ columns: [table.ownerId, table.targetId, table.targetKind],
     foreignColumns: [vaultNodes.ownerId, vaultNodes.id, vaultNodes.kind] }).onDelete("restrict"),
+]);
+
+/** Bounded traversal and ciphertext-only staging, separate from job metadata. */
+export const keyRotationItems = sqliteTable("key_rotation_items", {
+  jobId: text("job_id").notNull().references(() => cryptoJobs.id, { onDelete: "restrict" }),
+  objectId: text("object_id").notNull(),
+  kind: text("kind").notNull(),
+  fileId: text("file_id"),
+  depth: integer("depth").notNull(),
+  state: text("state").notNull().default("ready"),
+  sourceEpoch: integer("source_epoch"),
+  targetEpoch: integer("target_epoch"),
+  capabilityId: text("capability_id"),
+  sourceRevision: integer("source_revision"),
+  sourceRepresentationId: text("source_representation_id"),
+  resumeEnvelope: blob("resume_envelope"),
+  cursor: text("cursor"),
+}, (table) => [
+  primaryKey({ columns: [table.jobId, table.objectId] }),
+  index("key_rotation_items_next_idx").on(table.jobId, table.state, table.depth, table.objectId),
+  check("key_rotation_items_kind", sql`${table.kind} IN ('directory', 'file', 'private_comment', 'public_history')`),
+  check("key_rotation_items_state", sql`${table.state} IN ('ready', 'staging', 'complete')`),
+  check("key_rotation_items_depth", sql`${table.depth} BETWEEN 0 AND 101`),
+  check("key_rotation_items_envelope", sql`${table.resumeEnvelope} IS NULL OR length(${table.resumeEnvelope}) BETWEEN 1 AND 16384`),
+]);
+
+export const keyRotationEntries = sqliteTable("key_rotation_entries", {
+  jobId: text("job_id").notNull(),
+  directoryId: text("directory_id").notNull(),
+  childId: text("child_id").notNull().references(() => vaultNodes.id, { onDelete: "restrict" }),
+  nameCiphertext: blob("name_ciphertext").notNull(),
+  orderCiphertext: blob("order_ciphertext").notNull(),
+  keyEnvelope: blob("key_envelope").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.jobId, table.directoryId, table.childId] }),
+  foreignKey({ columns: [table.jobId, table.directoryId], foreignColumns: [keyRotationItems.jobId, keyRotationItems.objectId] }).onDelete("restrict"),
+  check("key_rotation_entries_bounded", sql`length(${table.nameCiphertext}) BETWEEN 1 AND 4096
+    AND length(${table.orderCiphertext}) BETWEEN 1 AND 4096 AND length(${table.keyEnvelope}) BETWEEN 1 AND 16384`),
+]);
+
+/** Immutable request-byte receipts make lost-response retries observable and harmless. */
+export const keyRotationReceipts = sqliteTable("key_rotation_receipts", {
+  jobId: text("job_id").notNull().references(() => cryptoJobs.id, { onDelete: "restrict" }),
+  operationId: text("operation_id").notNull(),
+  digest: blob("digest").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.jobId, table.operationId] }),
+  check("key_rotation_receipts_digest", sql`length(${table.digest}) = 32`),
 ]);

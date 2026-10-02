@@ -2,10 +2,11 @@ import { createDb, sql } from "~/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { encodeTreeBytes } from "~/tree/wire";
 import { sharingWriteBlocked } from "./access.server";
-import { grantRootMatches, grantRootMatchesForEnvelope } from "./capability-coverage.server";
+import { activeRootCoverage, grantRootMatches, grantRootMatchesForEnvelope } from "./capability-coverage.server";
 import { retireFulfilledNeeds } from "./provisioning-needs.server";
 import { verifyGrantKeySignature, type GrantKeyContext } from "./grant-keys";
 import { readDeviceEnvelopePacket } from "./envelope-packet.server";
+import { rotationDeliveryPermit } from "./rotation-data.server";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
@@ -17,17 +18,19 @@ export async function contextFor(env: Env, auth: AuthorizedDevice, kind: "shares
   return createDb(env.DB).get<ContextRow>(sql`SELECT s.id AS relationshipId, s.owner_id AS ownerId,
     s.recipient_id AS recipientId, s.target_id AS targetId, s.target_kind AS targetKind,
     CASE WHEN s.target_kind = 'directory' THEN s.target_id ELSE f.capability_id END AS capabilityId,
-    CASE WHEN s.target_kind = 'directory' THEN 1 ELSE f.capability_epoch END AS capabilityEpoch,
+    max(CASE WHEN s.target_kind = 'directory' THEN d.key_epoch ELSE f.capability_epoch END, coalesce(b.key_epoch, 0)) AS capabilityEpoch,
     ${kind === "shares" ? sql`1` : sql`s.key_epoch`} AS grantKeyEpoch,
     owner_registry.registry_epoch AS ownerRegistryEpoch, recipient_registry.registry_epoch AS recipientRegistryEpoch
     FROM ${table(kind)} s LEFT JOIN files f ON f.node_id = s.target_id AND f.owner_id = s.owner_id
+    LEFT JOIN directories d ON d.node_id = s.target_id AND d.owner_id = s.owner_id
+    LEFT JOIN sharing_write_blocks b ON b.target_id = s.target_id
     JOIN account_encryption_identities owner_registry ON owner_registry.account_id = s.owner_id
     JOIN account_encryption_identities recipient_registry ON recipient_registry.account_id = s.recipient_id
     WHERE s.id = ${id} AND (s.owner_id = ${auth.accountId} OR
       ${kind === "grants" ? 1 : 0} AND s.recipient_id = ${auth.accountId}) AND ${privateReadGuard(auth)}`);
 }
 
-export async function readGrantKeys(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string, cursor: string | null) {
+export async function readGrantKeys(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string, cursor: string | null, missingOnly = false) {
   const context = await contextFor(env, auth, kind, id);
   if (!context) return failure("not_found", 404);
   if (!context.capabilityId || !context.capabilityEpoch) return failure("shared_content_provisioning_required", 409);
@@ -39,7 +42,8 @@ export async function readGrantKeys(env: Env, auth: AuthorizedDevice, kind: "sha
         AND r.registry_epoch = ${context.recipientRegistryEpoch} AND ${privateReadGuard(auth)}
         AND EXISTS (SELECT 1 FROM ${table(kind)} s WHERE s.id = ${id} AND s.owner_id = ${auth.accountId}
           AND s.recipient_id = d.account_id AND ${grantRootMatches(context.capabilityId, context.capabilityEpoch)}
-          AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${context.grantKeyEpoch}`})
+          AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${context.grantKeyEpoch}`}
+          AND ${missingOnly ? sql`NOT (${activeRootCoverage(sql`d.id`)})` : sql`1`})
       ORDER BY d.id LIMIT 21`);
     return Response.json({ ...context, devices: devices.slice(0, 20).map((device) => ({ deviceId: device.deviceId,
       transportPublicKey: encodeTreeBytes(new Uint8Array(device.transport_public_key)) })),
@@ -64,7 +68,7 @@ export async function readGrantKeys(env: Env, auth: AuthorizedDevice, kind: "sha
     ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)), signature: encodeTreeBytes(new Uint8Array(envelope.signature)) }, { headers });
 }
 
-export async function uploadGrantKeys(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string, value: unknown) {
+export async function uploadGrantKeys(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string, value: unknown, rotationJobId?: string) {
   const input = readDeviceEnvelopePacket(value);
   if (!input) return failure("invalid_sharing_request", 400);
   const context = await contextFor(env, auth, kind, id);
@@ -89,7 +93,8 @@ export async function uploadGrantKeys(env: Env, auth: AuthorizedDevice, kind: "s
       AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${context.grantKeyEpoch}`}
       AND EXISTS (SELECT 1 FROM account_encryption_identities r WHERE r.account_id = s.recipient_id
         AND r.registry_epoch = ${context.recipientRegistryEpoch}) AND ${membership}
-      AND NOT ${sharingWriteBlocked(context.targetId)} AND ${guard}`, (marker) => [
+      AND (NOT ${sharingWriteBlocked(context.targetId)} OR ${rotationJobId
+        ? rotationDeliveryPermit(auth, rotationJobId, id) : sql`0`}) AND ${guard}`, (marker) => [
     sql`DELETE FROM ${envelopes(kind)} WHERE relationship_id = ${id} AND ${marker}
       AND (capability_id != ${context.capabilityId} OR capability_epoch != ${context.capabilityEpoch}
         OR grant_key_epoch != ${context.grantKeyEpoch}
@@ -102,7 +107,8 @@ export async function uploadGrantKeys(env: Env, auth: AuthorizedDevice, kind: "s
       WHERE ${marker} ON CONFLICT (relationship_id, device_id) DO UPDATE SET capability_id = excluded.capability_id,
         capability_epoch = excluded.capability_epoch, grant_key_epoch = excluded.grant_key_epoch,
         owner_registry_epoch = excluded.owner_registry_epoch, recipient_registry_epoch = excluded.recipient_registry_epoch,
-        ciphertext = excluded.ciphertext, signature = excluded.signature, signer_device_id = excluded.signer_device_id`),
+        ciphertext = excluded.ciphertext, signature = excluded.signature, signer_device_id = excluded.signer_device_id
+        WHERE ${rotationJobId ? 0 : 1} = 1`),
     ...(kind === "grants" ? [retireFulfilledNeeds(id, marker)] : []),
   ]);
   return committed ? Response.json({ uploaded: batch.length }, { headers }) : failure("sharing_changed", 409);

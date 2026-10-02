@@ -113,6 +113,20 @@
       "when": 1790897025639,
       "tag": "0015_black_ego",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1790907188888,
+      "tag": "0016_rare_venom",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1790907409868,
+      "tag": "0017_normal_carmella_unuscione",
+      "breakpoints": true
     }
   ]
 }

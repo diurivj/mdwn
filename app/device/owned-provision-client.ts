@@ -10,7 +10,7 @@ type Next = {
   state: "pending" | "complete";
   kind?: "recovery_owned" | "enrollment_owned";
   cursor?: string | null;
-  item: { objectId: string; envelope: string; keyEpoch: number } | null;
+  item: { objectId: string; keyId?: string; envelope: string; keyEpoch: number } | null;
 };
 
 /** Read the private job state without advancing its cursor during route loading. */
@@ -36,7 +36,7 @@ export async function resumeOwnedProvisioning(signal?: AbortSignal, maxSteps = 2
   const bootstrapResponse = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
   if (!bootstrapResponse.ok) throw new Error("Private access unavailable");
   const bootstrap = await bootstrapResponse.json() as {
-    rootDirectoryId: string; rootRecoveryEnvelope: string; enrollmentEnvelope: string;
+    rootDirectoryId: string; rootKeyEpoch?: number; rootRecoveryEnvelope: string; enrollmentEnvelope: string;
   };
   const vaultRootKey = await openDeviceEnrollmentEnvelope(decodeBytes(bootstrap.enrollmentEnvelope),
     device.transportKeyPair, {
@@ -56,27 +56,26 @@ export async function resumeOwnedProvisioning(signal?: AbortSignal, maxSteps = 2
       if (!finished.ok) throw new Error("Owned provisioning job changed");
       return true;
     }
-    // v1 owned recovery sources bind keyId to objectId and epoch/revision to 1.
-    // The proof-guarded current D1 row supplies objectId; never adopt header
-    // metadata as the expected context. Bootstrap also pins the root source.
-    if (next.item.keyEpoch !== 1 ||
+    // Current proof-guarded resource metadata supplies identity/epoch; never
+    // adopt envelope header hints. Bootstrap also pins the installed root source.
+    const keyId = next.item.keyId ?? next.item.objectId, keyEpoch = next.item.keyEpoch;
+    if (typeof keyId !== "string" || !keyId || !Number.isSafeInteger(keyEpoch) || keyEpoch < 1 ||
         (next.item.objectId === bootstrap.rootDirectoryId &&
-          next.item.envelope !== bootstrap.rootRecoveryEnvelope)) throw new Error("Invalid owned envelope");
+          (keyEpoch !== (bootstrap.rootKeyEpoch ?? 1) || next.item.envelope !== bootstrap.rootRecoveryEnvelope)))
+      throw new Error("Invalid owned envelope");
     const source = decodeBytes(next.item.envelope);
     const sourceContext = {
       purpose: "vault-recovery" as const, vaultId: state.accountId,
-      objectId: next.item.objectId, keyId: next.item.objectId,
-      keyEpoch: 1, revision: 1,
+      objectId: next.item.objectId, keyId, keyEpoch, revision: 1,
     };
     const capability = await openVaultRecoveryEnvelope(source, vaultRootKey, sourceContext);
     const context = {
       purpose: "owned-device" as const, vaultId: state.accountId,
-      objectId: next.item.objectId, keyId: next.item.objectId,
-      keyEpoch: 1, revision: 1, recipientId: state.deviceId,
+      objectId: next.item.objectId, keyId, keyEpoch, revision: 1, recipientId: state.deviceId,
     };
     const wrapped = await sealOwnedDeviceEnvelope({
       key: capability, objectId: next.item.objectId,
-      keyId: next.item.objectId, scope: "owned",
+      keyId, scope: "owned",
     }, device.transportKeyPair.publicKey, context);
     const opened = await openOwnedDeviceEnvelope(wrapped, device.transportKeyPair, context);
     if (!opened.every((byte, index) => byte === capability[index])) throw new Error("Owned envelope failed");

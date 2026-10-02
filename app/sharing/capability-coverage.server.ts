@@ -2,16 +2,19 @@ import type { SQL } from "drizzle-orm";
 import { sql } from "~/db/client.server";
 import type { AuthorizedDevice } from "~/device/proof.server";
 
-/** Correlated relationship alias s; Directory epochs remain 1 until ticket19 rotation. */
-export function grantRootMatches(capabilityId: string, capabilityEpoch: number) {
-  return sql`((s.target_kind = 'directory' AND s.target_id = ${capabilityId} AND ${capabilityEpoch} = 1)
-    OR (s.target_kind = 'file' AND EXISTS (SELECT 1 FROM files f WHERE f.node_id = s.target_id
-      AND f.owner_id = s.owner_id AND f.capability_id = ${capabilityId} AND f.capability_epoch = ${capabilityEpoch})))`;
+/** Correlated relationship s. A next-epoch fence immediately makes source
+ * envelopes non-current, even before browser replacement has installed bytes. */
+export function grantRootMatches(capabilityId: string | SQL, capabilityEpoch: number | SQL) {
+  return sql`EXISTS (SELECT 1 FROM vault_nodes n
+    LEFT JOIN directories d ON d.node_id = n.id LEFT JOIN files f ON f.node_id = n.id
+    LEFT JOIN sharing_write_blocks b ON b.target_id = n.id
+    WHERE n.id = s.target_id AND n.owner_id = s.owner_id AND n.kind = s.target_kind
+      AND CASE WHEN n.kind = 'directory' THEN n.id ELSE f.capability_id END = ${capabilityId}
+      AND max(CASE WHEN n.kind = 'directory' THEN d.key_epoch ELSE f.capability_epoch END,
+        coalesce(b.key_epoch, 0)) = ${capabilityEpoch})`;
 }
 export function grantRootMatchesForEnvelope() {
-  return sql`((s.target_kind = 'directory' AND e.capability_id = s.target_id AND e.capability_epoch = 1)
-    OR (s.target_kind = 'file' AND EXISTS (SELECT 1 FROM files f WHERE f.node_id = s.target_id
-      AND f.owner_id = s.owner_id AND f.capability_id = e.capability_id AND f.capability_epoch = e.capability_epoch)))`;
+  return grantRootMatches(sql`e.capability_id`, sql`e.capability_epoch`);
 }
 
 /** Directory descendants inherit their root capability, not per-node Grants.
@@ -56,10 +59,13 @@ export function pendingCommentCoverage() {
 /** Accepted envelopes retain historical registry snapshots for unchanged active
  * devices. Current object and Grant epochs, not registry additions, supersede them.
  */
-export function activeGrantCoverage(deviceId: string | SQL) {
+export function activeRootCoverage(deviceId: string | SQL) {
   return sql`EXISTS (SELECT 1 FROM grant_key_envelopes e
     WHERE e.relationship_id = s.id AND e.device_id = ${deviceId} AND e.grant_key_epoch = s.key_epoch
-      AND ${grantRootMatchesForEnvelope()})
+      AND ${grantRootMatchesForEnvelope()})`;
+}
+export function activeGrantCoverage(deviceId: string | SQL) {
+  return sql`${activeRootCoverage(deviceId)}
     AND NOT EXISTS (SELECT 1 FROM (${requiredGrantComments()}) c WHERE NOT EXISTS (
       SELECT 1 FROM grant_comment_key_envelopes e WHERE e.relationship_id = s.id AND e.device_id = ${deviceId}
         AND e.object_id = c.object_id AND e.capability_id = c.capability_id

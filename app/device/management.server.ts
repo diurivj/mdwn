@@ -160,7 +160,7 @@ export async function removeEncryptionDevice(env: Env, session: ActiveSession,
       sql`DELETE FROM grant_key_envelopes WHERE device_id = ${body.targetDeviceId} AND ${marker}`,
       sql`UPDATE crypto_jobs SET state = 'complete', updated_at = ${now}
         WHERE account_id = ${authorized.accountId} AND device_id = ${body.targetDeviceId}
-          AND state = 'pending' AND ${marker}`,
+          AND kind IN ('recovery_owned', 'enrollment_owned') AND state = 'pending' AND ${marker}`,
       sql`UPDATE encryption_devices SET last_proof_at = ${proofDay}
         WHERE account_id = ${authorized.accountId} AND id = ${authorized.deviceId}
           AND ${marker} AND (last_proof_at IS NULL OR last_proof_at < ${proofDay})`,

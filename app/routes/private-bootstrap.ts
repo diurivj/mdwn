@@ -25,11 +25,11 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   const authorized = await authorizePrivateRequest(request, env, proof);
   if (!authorized) return Response.json({ error: "device_proof_required" }, { status: 403 });
   const rows = await createDb(env.DB).get<{
-    root_directory_id: string; root_envelope: ArrayBuffer; enrollment_envelope: ArrayBuffer;
+    root_directory_id: string; root_key_epoch: number; root_envelope: ArrayBuffer; enrollment_envelope: ArrayBuffer;
     capsule: ArrayBuffer; recovery_salt: ArrayBuffer; verification_public_key: ArrayBuffer;
     profile: ArrayBuffer;
   }>(sql`
-    SELECT i.root_directory_id, root.ciphertext AS root_envelope,
+    SELECT i.root_directory_id, root.key_epoch AS root_key_epoch, root.ciphertext AS root_envelope,
       enrollment.ciphertext AS enrollment_envelope,
       c.ciphertext AS capsule, c.recovery_salt, c.verification_public_key,
       p.ciphertext AS profile
@@ -50,6 +50,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
   if (!rows) return Response.json({ error: "device_proof_required" }, { status: 403 });
   return Response.json({
     rootDirectoryId: rows.root_directory_id,
+    rootKeyEpoch: rows.root_key_epoch,
     rootRecoveryEnvelope: encodeBytes(new Uint8Array(rows.root_envelope)),
     enrollmentEnvelope: encodeBytes(new Uint8Array(rows.enrollment_envelope)),
     capsule: encodeBytes(new Uint8Array(rows.capsule)),
