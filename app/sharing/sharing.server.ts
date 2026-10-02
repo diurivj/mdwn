@@ -9,6 +9,7 @@ import { sharingWriteBlocked } from "./access.server";
 import { listCommentKeys, readCommentKey, uploadCommentKeys } from "./comment-keys.server";
 import { pendingGrantCoverage, pendingCommentCoverage, requiredGrantComments } from "./capability-coverage.server";
 import { readProvisioningNeeds, reconcileGrantNeeds, reconcileProvisioningNeeds } from "./provisioning-needs.server";
+import { planRotation, rotationIdentity, rotationSnapshot, startRotation } from "./rotation.server";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
@@ -128,18 +129,18 @@ async function removeGrant(env: Env, auth: AuthorizedDevice, grantId: string, ro
     SELECT target_id, owner_id, target_kind FROM grants WHERE id = ${grantId}
       AND ${actor} = ${auth.accountId} AND ${privateReadGuard(auth)}`);
   if (!target) return notFound();
+  const rotation = await planRotation(env, auth, target);
+  if (!rotation) return conflict();
   const committed = await commitPrivateBatch(env, auth, (guard) => sql`
     UPDATE grants SET updated_at = updated_at WHERE id = ${grantId} AND ${actor} = ${auth.accountId}
-      AND revision = ${input.expectedRevision} AND ${guard}`, (committed) => [
+      AND revision = ${input.expectedRevision} AND ${rotationSnapshot(target, rotation)} AND ${guard}`, (committed) => [
     sql`DELETE FROM grant_comment_key_envelopes WHERE relationship_id = ${grantId} AND ${committed}`,
     sql`DELETE FROM grant_key_envelopes WHERE relationship_id = ${grantId} AND ${committed}`,
     sql`DELETE FROM provisioning_needs WHERE grant_id = ${grantId} AND ${committed}`,
     sql`DELETE FROM grants WHERE id = ${grantId} AND ${committed}`,
-    sql`INSERT INTO sharing_write_blocks (target_id, owner_id, target_kind, created_at)
-      SELECT ${target.target_id}, ${target.owner_id}, ${target.target_kind}, ${Date.now()} WHERE ${committed}
-      ON CONFLICT (target_id) DO NOTHING`,
+    ...startRotation(auth, target, rotation, committed),
   ]);
-  return committed ? Response.json({ removed: true }, { headers }) : conflict();
+  return committed ? Response.json({ removed: true, rotation: rotationIdentity(rotation) }, { headers }) : conflict();
 }
 
 async function changeGrant(env: Env, auth: AuthorizedDevice, grantId: string, value: unknown) {
@@ -148,17 +149,21 @@ async function changeGrant(env: Env, auth: AuthorizedDevice, grantId: string, va
       !Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 1 ||
       !Number.isSafeInteger((input.expectedRevision as number) + 1) ||
       (input.permission !== "read_only" && input.permission !== "read_write")) return invalid();
-  if (!await createDb(env.DB).get(sql`SELECT 1 FROM grants WHERE id = ${grantId}
-    AND owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}`)) return notFound();
+  const target = await createDb(env.DB).get<{ target_id: string; owner_id: string; target_kind: string }>(sql`
+    SELECT target_id, owner_id, target_kind FROM grants WHERE id = ${grantId}
+      AND owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}`);
+  if (!target) return notFound();
+  const rotation = await planRotation(env, auth, target);
+  if (!rotation) return conflict();
   const committed = await commitPrivateBatch(env, auth, (guard) => sql`
     UPDATE grants SET permission = ${input.permission}, revision = revision + 1, key_epoch = key_epoch + 1, updated_at = ${Date.now()}
-    WHERE id = ${grantId} AND owner_id = ${auth.accountId} AND revision = ${input.expectedRevision} AND ${guard}`,
+    WHERE id = ${grantId} AND owner_id = ${auth.accountId} AND revision = ${input.expectedRevision}
+      AND ${rotationSnapshot(target, rotation)} AND ${guard}`,
     (committed) => [sql`DELETE FROM grant_comment_key_envelopes WHERE relationship_id = ${grantId} AND ${committed}`,
       sql`DELETE FROM grant_key_envelopes WHERE relationship_id = ${grantId} AND ${committed}`,
-      sql`INSERT INTO sharing_write_blocks (target_id, owner_id, target_kind, created_at)
-      SELECT target_id, owner_id, target_kind, ${Date.now()} FROM grants WHERE id = ${grantId} AND ${committed}
-      ON CONFLICT (target_id) DO NOTHING`, ...reconcileGrantNeeds(grantId, committed)]);
-  return committed ? Response.json({ revision: (input.expectedRevision as number) + 1 }, { headers }) : conflict();
+      ...startRotation(auth, target, rotation, committed), ...reconcileGrantNeeds(grantId, committed)]);
+  return committed ? Response.json({ revision: (input.expectedRevision as number) + 1,
+    rotation: rotationIdentity(rotation) }, { headers }) : conflict();
 }
 
 /** Device-proof-bound, exact-address invitations; no Account discovery endpoint. */

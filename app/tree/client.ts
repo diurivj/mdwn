@@ -9,7 +9,8 @@ import { getDevice } from "~/device/store";
 import { canonicalizeSegment, sameComparisonKey } from "~/namespace-v1";
 import { newOpaqueId } from "~/opaque-id";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
-import { createListingHead, openListingHead, type ListingHead, type SealedEntry, type StoredListingHead } from "./listing";
+import { createListingHead, openDirectoryListing, rememberListing, type ListingHead, type SealedEntry, type StoredListingHead } from "./listing";
+export { rememberListing } from "./listing";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
 import { fileCapabilityContext, rememberFile, type FileCapability } from "./file-capability-client";
 import { createFileHead, verifyFileHead, type FileHead } from "./file-head";
@@ -33,7 +34,7 @@ export class DirectoryTooLargeError extends Error {
 
 export type TreeKind = "directory" | "file";
 export type TreeEntry = SealedEntry & { name: string; order: string };
-export type DirectoryListing = { directoryId: string; entriesRevision: number; entries: TreeEntry[]; canCreate?: boolean };
+export type DirectoryListing = { directoryId: string; keyEpoch?: number; entriesRevision: number; entries: TreeEntry[]; canCreate?: boolean };
 export type RootAccess = { vaultId: string; rootId: string; rootKey: Uint8Array<ArrayBuffer>;
   actorAccountId: string; rootKind?: TreeKind; capability?: FileCapability };
 
@@ -43,29 +44,30 @@ function nameAgainstNamespace(name: string, existingNames: readonly string[]): s
   return canonical.display;
 }
 
-function metadataContext(vaultId: string, parentId: string, childId: string) {
+function metadataContext(vaultId: string, parentId: string, childId: string, parentEpoch = 1) {
+  if (!Number.isSafeInteger(parentEpoch) || parentEpoch < 1) throw new Error("invalid directory epoch");
   return { purpose: "directory-metadata" as const, vaultId, objectId: childId,
-    keyId: parentId, keyEpoch: 1, revision: 1 };
+    keyId: parentId, keyEpoch: parentEpoch, revision: 1 };
 }
 
 async function encryptedEntry(parentKey: Uint8Array, vaultId: string, parentId: string,
-  nodeId: string, name: string, order: string) {
+  nodeId: string, name: string, order: string, parentEpoch = 1) {
   const writer = await createSymmetricWriter(parentKey);
-  const context = metadataContext(vaultId, parentId, nodeId);
+  const context = metadataContext(vaultId, parentId, nodeId, parentEpoch);
   return { nameCiphertext: encodeTreeBytes(await writer.seal(encoder.encode(name), context)),
     orderCiphertext: encodeTreeBytes(await writer.seal(encoder.encode(order), context)) };
 }
 
 /** Runs namespace-v1 before creating either a capability or a request. */
 export async function prepareTreeCreate(options: {
-  vaultId: string; parentId: string; parentKey: Uint8Array;
+  vaultId: string; parentId: string; parentKey: Uint8Array; parentEpoch?: number;
   entriesRevision: number; existingNames: readonly string[];
   requestedName: string; kind: TreeKind; markdown?: string;
 }) {
   const name = nameAgainstNamespace(options.requestedName, options.existingNames);
   const nodeId = newOpaqueId();
   const order = newOpaqueId(); // Opaque in the Worker and encrypted before transport.
-  const metadata = await encryptedEntry(options.parentKey, options.vaultId, options.parentId, nodeId, name, order);
+  const metadata = await encryptedEntry(options.parentKey, options.vaultId, options.parentId, nodeId, name, order, options.parentEpoch);
   if (options.kind === "directory") {
     const child = await createChildDirectoryCapability(options.parentKey, {
       vaultId: options.vaultId, parentDirectoryId: options.parentId, childDirectoryId: nodeId,
@@ -90,12 +92,12 @@ export async function prepareTreeCreate(options: {
 
 /** Rename preserves the existing encrypted order; only the local browser sees names. */
 export async function prepareTreeRename(options: {
-  vaultId: string; parentId: string; parentKey: Uint8Array; nodeId: string;
+  vaultId: string; parentId: string; parentKey: Uint8Array; parentEpoch?: number; nodeId: string;
   entriesRevision: number; existingNames: readonly string[]; requestedName: string; order: string;
 }) {
   const name = nameAgainstNamespace(options.requestedName, options.existingNames);
   return { parentId: options.parentId, expectedRevision: options.entriesRevision,
-    ...await encryptedEntry(options.parentKey, options.vaultId, options.parentId, options.nodeId, name, options.order) };
+    ...await encryptedEntry(options.parentKey, options.vaultId, options.parentId, options.nodeId, name, options.order, options.parentEpoch) };
 }
 
 async function jsonResource<T>(path: string, method: "POST" | "PUT" | "PATCH" | "DELETE", body?: object,
@@ -130,37 +132,36 @@ export async function openRoot(signal?: AbortSignal): Promise<RootAccess> {
   const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
   if (!response.ok) throw new Error("private tree unavailable");
   const bootstrap = await response.json() as {
-    rootDirectoryId: string; rootRecoveryEnvelope: string; enrollmentEnvelope: string;
+    rootDirectoryId: string; rootKeyEpoch?: number; rootRecoveryEnvelope: string; enrollmentEnvelope: string;
   };
+  const rootKeyEpoch = bootstrap.rootKeyEpoch ?? 1;
+  if (!Number.isSafeInteger(rootKeyEpoch) || rootKeyEpoch < 1) throw new Error("invalid directory epoch");
   const vaultRoot = await openDeviceEnrollmentEnvelope(decodeTreeBytes(bootstrap.enrollmentEnvelope),
     device.transportKeyPair, { purpose: "device-enrollment", vaultId: accountId,
       objectId: deviceId, keyId: deviceId, keyEpoch: 1, revision: 1, recipientId: deviceId });
   const rootKey = await openVaultRecoveryEnvelope(decodeTreeBytes(bootstrap.rootRecoveryEnvelope), vaultRoot,
     { purpose: "vault-recovery", vaultId: accountId, objectId: bootstrap.rootDirectoryId,
-      keyId: bootstrap.rootDirectoryId, keyEpoch: 1, revision: 1 });
-  return { vaultId: accountId, actorAccountId: accountId, rootKind: "directory", rootId: bootstrap.rootDirectoryId, rootKey };
+      keyId: bootstrap.rootDirectoryId, keyEpoch: rootKeyEpoch, revision: 1 });
+  return { vaultId: accountId, actorAccountId: accountId, rootKind: "directory", rootId: bootstrap.rootDirectoryId, rootKey,
+    capability: { id: bootstrap.rootDirectoryId, epoch: rootKeyEpoch } };
 }
 
 export async function loadDirectory(access: RootAccess, directoryId: string, key: Uint8Array,
   signal?: AbortSignal): Promise<DirectoryListing> {
-  const listing = await jsonResource<{ directoryId: string; entriesRevision: number;
+  const listing = await jsonResource<{ directoryId: string; keyEpoch?: number; entriesRevision: number;
     entries: SealedEntry[]; canCreate?: boolean; listingHead: Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string } | null;
   }>(`/api/private/tree/directories/${directoryId}`, "POST", undefined, signal);
-  if (listing.directoryId !== directoryId || !Number.isSafeInteger(listing.entriesRevision) || listing.entriesRevision < 1) {
+  const keyEpoch = listing.keyEpoch ?? 1;
+  if (listing.directoryId !== directoryId || !Number.isSafeInteger(keyEpoch) || keyEpoch < 1 ||
+      !Number.isSafeInteger(listing.entriesRevision) || listing.entriesRevision < 1) {
     throw new Error("invalid directory listing");
   }
-  if (listing.entriesRevision === 1) {
-    if (listing.listingHead || listing.entries.length) throw new Error("replayed-manifest");
-  } else {
-    if (!listing.listingHead) throw new Error("replayed-manifest");
-    await openListingHead(key, { vaultId: access.vaultId, directoryId,
-      revision: listing.entriesRevision, entries: listing.entries,
-      head: { ...listing.listingHead, signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) },
-    });
-  }
-  rememberListing(access.vaultId, directoryId, listing.entriesRevision, listing.listingHead?.digest ?? "");
+  await openDirectoryListing(key, { vaultId: access.vaultId, directoryId, keyEpoch,
+    revision: listing.entriesRevision, entries: listing.entries,
+    head: listing.listingHead ? { ...listing.listingHead, signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) } : null,
+  });
   const entries = await Promise.all(listing.entries.map(async (entry): Promise<TreeEntry> => {
-    const context = metadataContext(access.vaultId, directoryId, entry.nodeId);
+    const context = metadataContext(access.vaultId, directoryId, entry.nodeId, keyEpoch);
     const name = decoder.decode(await openSymmetric(decodeTreeBytes(entry.nameCiphertext), key, { context }));
     const order = decoder.decode(await openSymmetric(decodeTreeBytes(entry.orderCiphertext), key, { context }));
     if (canonicalizeSegment(name).display !== name || order.length > 256 || !order) {
@@ -174,15 +175,17 @@ export async function loadDirectory(access: RootAccess, directoryId: string, key
     }
   }
   entries.sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : a.nodeId.localeCompare(b.nodeId));
-  return { directoryId, entriesRevision: listing.entriesRevision, entries, canCreate: listing.canCreate ?? true };
+  return { directoryId, ...(listing.keyEpoch === undefined ? {} : { keyEpoch }),
+    entriesRevision: listing.entriesRevision, entries, canCreate: listing.canCreate ?? true };
 }
 
 export async function openChildDirectory(access: RootAccess,
   parentKey: Uint8Array, entry: TreeEntry): Promise<Uint8Array<ArrayBuffer>> {
-  if (entry.kind !== "directory") throw new Error("invalid directory");
+  const keyEpoch = entry.keyEpoch ?? 1;
+  if (entry.kind !== "directory" || !Number.isSafeInteger(keyEpoch) || keyEpoch < 1) throw new Error("invalid directory");
   return openSymmetric(decodeTreeBytes(entry.keyEnvelope), parentKey, { context: {
     purpose: "directory-capability", vaultId: access.vaultId,
-    objectId: entry.nodeId, keyId: entry.nodeId, keyEpoch: 1, revision: 1,
+    objectId: entry.nodeId, keyId: entry.nodeId, keyEpoch, revision: 1,
   } });
 }
 
@@ -239,31 +242,13 @@ export async function loadFile(access: RootAccess, fileId: string, parentKey: Ui
     ...decoded, sourceBytes: fileSourceBytes(decoded.markdown) };
 }
 
-function listingCheckpointKey(vaultId: string, directoryId: string): string {
-  return `mdwn:files-listing:${vaultId}:${directoryId}`;
-}
-
-/** Browser-local high-water mark detects rolled-back/same-revision heads across navigations. */
-export function rememberListing(vaultId: string, directoryId: string, revision: number, digest: string): void {
-  if (typeof window === "undefined") return;
-  const key = listingCheckpointKey(vaultId, directoryId);
-  const previous = localStorage.getItem(key);
-  if (previous) {
-    const parsed: unknown = JSON.parse(previous);
-    if (!Array.isArray(parsed) || parsed.length !== 2 || typeof parsed[0] !== "number" ||
-        typeof parsed[1] !== "string" || revision < parsed[0] ||
-        (revision === parsed[0] && digest !== parsed[1])) throw new Error("replayed-manifest");
-  }
-  localStorage.setItem(key, JSON.stringify([revision, digest]));
-}
-
 export async function signListingChange(access: RootAccess, listing: DirectoryListing, parentKey: Uint8Array,
   updated: SealedEntry[]): Promise<ListingHead> {
   if (!listing.directoryId) throw new Error("invalid directory listing");
   const device = await getDevice(access.actorAccountId);
   if (!device) throw new Error("private tree unavailable");
   return createListingHead(parentKey, device.assertionKeyPair.privateKey, {
-    vaultId: access.vaultId, directoryId: listing.directoryId, deviceId: device.deviceId,
+    vaultId: access.vaultId, directoryId: listing.directoryId, deviceId: device.deviceId, keyEpoch: listing.keyEpoch,
     revision: listing.entriesRevision + 1, entries: updated,
   });
 }
@@ -307,7 +292,7 @@ export async function reorderTreeChild(access: RootAccess, listing: DirectoryLis
   const swaps = [{ child: entry, order: neighbor.order }, { child: neighbor, order: entry.order }];
   const orders = await Promise.all(swaps.map(async ({ child, order }) => ({
     nodeId: child.nodeId, orderCiphertext: encodeTreeBytes(await writer.seal(encoder.encode(order),
-      metadataContext(access.vaultId, listing.directoryId, child.nodeId))),
+      metadataContext(access.vaultId, listing.directoryId, child.nodeId, listing.keyEpoch))),
   })));
   const updated = listing.entries.map((item) => ({ ...item,
     orderCiphertext: orders.find((order) => order.nodeId === item.nodeId)?.orderCiphertext ?? item.orderCiphertext }));
@@ -330,8 +315,12 @@ export async function moveTreeChild(access: RootAccess, source: DirectoryListing
   const entry = source.entries.find((entry) => entry.nodeId === nodeId);
   if (!entry) throw new TreeNotFoundError();
   const name = nameAgainstNamespace(requestedName, destination.entries.map((entry) => entry.name));
-  const context = inspectEnvelope(decodeTreeBytes(entry.keyEnvelope)).context;
-  if (context.vaultId !== access.vaultId || context.objectId !== nodeId ||
+  const context = entry.kind === "directory" ? {
+    purpose: "directory-capability" as const, vaultId: access.vaultId,
+    objectId: nodeId, keyId: nodeId, keyEpoch: entry.keyEpoch ?? 1, revision: 1,
+  } : inspectEnvelope(decodeTreeBytes(entry.keyEnvelope)).context;
+  if (!Number.isSafeInteger(context.keyEpoch) || context.keyEpoch < 1 ||
+      context.vaultId !== access.vaultId || context.objectId !== nodeId ||
       (entry.kind === "directory" ? context.purpose !== "directory-capability" :
         context.purpose !== "file-content-key" && context.purpose !== "file-capability")) {
     throw new Error("invalid child capability");
@@ -339,7 +328,7 @@ export async function moveTreeChild(access: RootAccess, source: DirectoryListing
   const key = await openSymmetric(decodeTreeBytes(entry.keyEnvelope), sourceKey, { context });
   const writer = await createSymmetricWriter(destinationKey);
   const updated = { ...entry, ...await encryptedEntry(destinationKey, access.vaultId, destination.directoryId,
-    nodeId, name, newOpaqueId()), keyEnvelope: encodeTreeBytes(await writer.seal(key, context)) };
+    nodeId, name, newOpaqueId(), destination.keyEpoch), keyEnvelope: encodeTreeBytes(await writer.seal(key, context)) };
   const [sourceHead, destinationHead] = await Promise.all([
     signListingChange(access, source, sourceKey, source.entries.filter((entry) => entry.nodeId !== nodeId)),
     signListingChange(access, destination, destinationKey, [...destination.entries, updated]),

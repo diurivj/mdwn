@@ -6,3 +6,5 @@ export * from "../../app/tree/file-client";
 export * from "../../app/tree/file-capability-client";
 export * from "../../app/sharing/grant-keys";
 export * from "../../app/sharing/comment-keys";
+export * from "../../app/sharing/rotation-client";
+export * from "../../app/device/owned-provision-client";

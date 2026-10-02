@@ -7,10 +7,10 @@ Ticket 16 adds encrypted sibling reordering, same-Owner moves, and irreversible 
 Ticket 17 extends both preflight and **transactional** authorization through the bounded indexed access query; see [Shares, Grants, and server authority](sharing.md).
 
 - A Directory read/write Collaborator may mutate only inside a covering granted subtree, never its shared root or outside that scope. A direct File Grant cannot authorize structural operations.
-- Owner-controlled exits from any shared subtree are explicitly deferred until ticket 19 supplies completed bounded rekeying. Moves between disconnected Collaborator write scopes are denied.
+- Owner-controlled exits from any shared subtree remain explicitly rejected with `key_rotation_required`; [ticket 19](key-rotation.md) does not allow a move to publish future writes beneath an old capability. Moves between disconnected Collaborator write scopes are denied.
 - Revocation/leave/permission changes create current safety seals; future encrypted and structural writes beneath sealed targets fail closed until rotation. Reads and hard deletion remain available.
 - Direct File Grants follow identity without disclosing a parent/path. Converted Files support parent-free fresh-key saves through a stable File capability; legacy conversion requires authorized browser parent-write access. Ordinary converted saves do not advance a Directory revision.
-- Shares, Grants, their pending/active root and Comment device envelopes, provisioning needs, Comment capability requirements and safety seals are explicitly removed during hard deletion. Surviving ancestor Grants keep their root envelopes; deleting their last missing Comment requirement can complete their need. Ticket 27 must extend that list when Publication or Comment body records are introduced.
+- Shares, Grants, their pending/active root and Comment device envelopes, provisioning needs, Comment capability requirements, safety seals, and targeted rotation jobs/staging/receipts are explicitly removed during hard deletion. Surviving staged parents restart against the updated signed listing. Surviving ancestor Grants keep their root envelopes; deleting their last missing Comment requirement can complete their need. Ticket 27 must extend that list when Publication or Comment body records are introduced.
 
 ## Protocol and concurrency
 

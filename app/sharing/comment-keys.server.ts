@@ -8,6 +8,7 @@ import { grantRootMatches, requiredGrantComments } from "./capability-coverage.s
 import type { GrantKeyContext } from "./grant-keys";
 import { retireFulfilledNeeds } from "./provisioning-needs.server";
 import { readDeviceEnvelopePacket } from "./envelope-packet.server";
+import { rotationDeliveryPermit } from "./rotation-data.server";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
@@ -56,7 +57,7 @@ function commentMatches(context: CommentKeyContext) {
 }
 
 export async function readCommentKey(env: Env, auth: AuthorizedDevice, kind: Kind, id: string,
-  objectId: string, cursor: string | null) {
+  objectId: string, cursor: string | null, missingOnly = false) {
   const delivery = await deliveryContext(env, auth, kind, id, objectId);
   if (!delivery) return failure("not_found", 404);
   const { root, comment } = delivery;
@@ -69,6 +70,9 @@ export async function readCommentKey(env: Env, auth: AuthorizedDevice, kind: Kin
         AND r.registry_epoch = ${comment.recipientRegistryEpoch}
         AND ${grantRootMatches(root.capabilityId, root.capabilityEpoch)} AND ${commentMatches(comment)}
         AND ${kind === "shares" ? sql`1 = 1` : sql`s.key_epoch = ${comment.grantKeyEpoch}`}
+        AND ${missingOnly ? sql`NOT EXISTS (SELECT 1 FROM grant_comment_key_envelopes e WHERE e.relationship_id = s.id
+          AND e.device_id = d.id AND e.object_id = ${objectId} AND e.capability_id = ${comment.capabilityId}
+          AND e.capability_epoch = ${comment.capabilityEpoch} AND e.grant_key_epoch = s.key_epoch)` : sql`1`}
         AND ${privateReadGuard(auth)} ORDER BY d.id LIMIT 21`);
     return Response.json({ ...comment, devices: devices.slice(0, 20).map((device) => ({ deviceId: device.deviceId,
       transportPublicKey: encodeTreeBytes(new Uint8Array(device.transport_public_key)) })),
@@ -90,7 +94,7 @@ export async function readCommentKey(env: Env, auth: AuthorizedDevice, kind: Kin
     ciphertext: encodeTreeBytes(new Uint8Array(row.ciphertext)), signature: encodeTreeBytes(new Uint8Array(row.signature)) }, { headers });
 }
 
-export async function uploadCommentKeys(env: Env, auth: AuthorizedDevice, kind: Kind, id: string, objectId: string, value: unknown) {
+export async function uploadCommentKeys(env: Env, auth: AuthorizedDevice, kind: Kind, id: string, objectId: string, value: unknown, rotationJobId?: string) {
   const input = readDeviceEnvelopePacket(value);
   if (!input) return failure("invalid_sharing_request", 400);
   const delivery = await deliveryContext(env, auth, kind, id, objectId);
@@ -116,7 +120,8 @@ export async function uploadCommentKeys(env: Env, auth: AuthorizedDevice, kind: 
       AND ${commentMatches(comment)} AND ${membership}
       AND EXISTS (SELECT 1 FROM account_encryption_identities r WHERE r.account_id = s.recipient_id
         AND r.registry_epoch = ${comment.recipientRegistryEpoch})
-      AND NOT ${sharingWriteBlocked(comment.fileId)} AND ${guard}`, (marker) => [
+      AND (NOT ${sharingWriteBlocked(comment.fileId)} OR ${rotationJobId
+        ? rotationDeliveryPermit(auth, rotationJobId, id) : sql`0`}) AND ${guard}`, (marker) => [
     sql`DELETE FROM ${envelopes(kind)} WHERE relationship_id = ${id} AND object_id = ${objectId} AND ${marker}
       AND (capability_id != ${comment.capabilityId} OR capability_epoch != ${comment.capabilityEpoch}
         OR grant_key_epoch != ${comment.grantKeyEpoch}
@@ -129,7 +134,8 @@ export async function uploadCommentKeys(env: Env, auth: AuthorizedDevice, kind: 
       WHERE ${marker} ON CONFLICT (relationship_id, object_id, device_id) DO UPDATE SET capability_id = excluded.capability_id,
         capability_epoch = excluded.capability_epoch, grant_key_epoch = excluded.grant_key_epoch,
         owner_registry_epoch = excluded.owner_registry_epoch, recipient_registry_epoch = excluded.recipient_registry_epoch,
-        ciphertext = excluded.ciphertext, signature = excluded.signature, signer_device_id = excluded.signer_device_id`),
+        ciphertext = excluded.ciphertext, signature = excluded.signature, signer_device_id = excluded.signer_device_id
+        WHERE ${rotationJobId ? 0 : 1} = 1`),
     ...(kind === "grants" ? [retireFulfilledNeeds(id, marker)] : []),
   ]);
   return committed ? Response.json({ uploaded: batch.length }, { headers }) : failure("sharing_changed", 409);

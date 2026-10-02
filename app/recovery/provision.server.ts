@@ -8,12 +8,12 @@ const denied = () => Response.json({ error: "device_proof_required" }, { status:
 
 type NextRow = {
   id: string; kind: "recovery_owned" | "enrollment_owned"; state: "pending" | "complete"; cursor: string | null;
-  object_id: string | null; ciphertext: ArrayBuffer | null; key_epoch: number | null;
+  object_id: string | null; key_id: string | null; ciphertext: ArrayBuffer | null; key_epoch: number | null;
 };
 
 export async function nextOwnedEnvelope(env: Env, authorized: AuthorizedDevice): Promise<Response> {
   const row = await createDb(env.DB).get<NextRow>(sql`
-    SELECT j.id, j.kind, j.state, j.cursor, k.object_id, k.ciphertext, k.key_epoch
+    SELECT j.id, j.kind, j.state, j.cursor, k.object_id, COALESCE(c.capability_id, k.object_id) AS key_id, k.ciphertext, k.key_epoch
     FROM crypto_jobs j
     LEFT JOIN key_envelopes k ON k.rowid = (
       SELECT source.rowid FROM key_envelopes source
@@ -22,6 +22,7 @@ export async function nextOwnedEnvelope(env: Env, authorized: AuthorizedDevice):
         AND (j.cursor IS NULL OR source.object_id > j.cursor)
       ORDER BY source.object_id LIMIT 1
     )
+    LEFT JOIN sharing_comment_capabilities c ON c.object_id = k.object_id AND c.owner_id = k.account_id
     WHERE j.account_id = ${authorized.accountId} AND j.device_id = ${authorized.deviceId}
       AND j.kind IN ('recovery_owned', 'enrollment_owned') AND ${privateReadGuard(authorized)}
     ORDER BY j.created_at DESC LIMIT 1
@@ -29,7 +30,8 @@ export async function nextOwnedEnvelope(env: Env, authorized: AuthorizedDevice):
   if (!row) return Response.json({ state: "complete", item: null }, { headers: noStore });
   return Response.json({ state: row.state, kind: row.kind, cursor: row.cursor,
     item: row.state === "pending" && row.object_id && row.ciphertext && row.key_epoch
-      ? { objectId: row.object_id, envelope: encodeBytes(new Uint8Array(row.ciphertext)), keyEpoch: row.key_epoch }
+      ? { objectId: row.object_id, envelope: encodeBytes(new Uint8Array(row.ciphertext)), keyEpoch: row.key_epoch,
+          ...(row.key_id === row.object_id ? {} : { keyId: row.key_id }) }
       : null,
   }, { headers: noStore });
 }
