@@ -114,6 +114,14 @@ purpose of a test is storage isolation.
 ## CI output
 
 The `browser` CI job runs a non-fail-fast matrix with one job for each engine.
+Each job uses two Playwright workers sharing that runner's CPU/RAM; this does
+not add runner jobs or shards. `fullyParallel: false` preserves normal per-file
+sequencing, the CI retry limit remains one, and the local worker default stays
+automatic. Each worker owns its Wrangler harness and local binding storage;
+resets affect that harness, not its peer. All application tests and browser
+projects remain enabled. See [the worker-count pilot and rollout record](playwright-workers-benchmark.md)
+for the evidence and the cross-engine validation gate.
+
 The job name and Playwright list reporter identify the failing engine directly.
 Each matrix job uploads `playwright-report/` plus `test-results/`, including
 screenshots, videos, and traces retained for failures. These artifacts can
