@@ -140,7 +140,7 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
       expect(await (await recipient.request.get(`/f/${workspace.fileId}`)).text()).not.toContain("Saved directly");
     } else {
       await expect(recipient.getByRole("textbox", { name: "Markdown source", exact: true })).not.toBeEditable();
-      await expect(recipient.getByRole("status").filter({ hasText: /^Read-only$/ })).toBeVisible();
+      await expect(recipient.getByRole("status").filter({ hasText: /^Read-only — you can comment$/ })).toBeVisible();
       await expect(recipient.getByRole("button", { name: "New folder", exact: true })).toHaveCount(0);
     }
 

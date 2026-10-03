@@ -1,14 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import { FILE_SOURCE_FEEDBACK, FILE_SOURCE_LIMIT, fileSourceBytes } from "~/crypto/file-source";
 
+import { CommentsPanel } from "~/comments/CommentsPanel";
+
 import { MarkdownPreview } from "./MarkdownPreview";
 import type { FilesSnapshot } from "./navigation-client";
 import { useFileDraft } from "./useFileDraft";
 import type { FileDocument } from "./file-client";
 import type { DirectoryListing } from "./client";
 
-export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStructuralReady, structuralBusy, onNavigationStart }: {
-  fileId: string; snapshot: FilesSnapshot; view: "edit" | "preview"; showEdit: () => void;
+function RightPaneToggle({ view, onShowPreview, onShowComments }: {
+  view: "edit" | "preview" | "comments"; onShowPreview: () => void; onShowComments: () => void;
+}) {
+  return <div className="mb-2 hidden items-center gap-2 lg:flex">
+    <button type="button" aria-pressed={view !== "comments"} onClick={onShowPreview}
+      className="rounded border px-2 py-0.5 text-sm">Preview</button>
+    <button type="button" aria-pressed={view === "comments"} onClick={onShowComments}
+      className="rounded border px-2 py-0.5 text-sm">Comments</button>
+  </div>;
+}
+
+export function FileEditor({ fileId, snapshot, view, showEdit, onShowPreview, onShowComments, onCurrent, onStructuralReady, structuralBusy, onNavigationStart }: {
+  fileId: string; snapshot: FilesSnapshot; view: "edit" | "preview" | "comments"; showEdit: () => void;
+  onShowPreview: () => void; onShowComments: () => void;
   onCurrent: (file: FileDocument, listing: DirectoryListing | null) => void;
   onStructuralReady: (ready: boolean) => void; structuralBusy: boolean; onNavigationStart: () => void;
 }) {
@@ -34,7 +48,7 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStru
     setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
   return <><p role="status" aria-label="File save status" className="mt-3">{status}</p>
-    {!canEdit && <p role="status">Read-only</p>}
+    {!canEdit && <p role="status">Read-only — you can comment</p>}
     {canEdit && !lease.editable && <div role="status" className="mt-2">
       {lease.state === "unavailable" ? "Editing unavailable. This browser could not coordinate File editing." :
         lease.state === "checking" ? "Checking editing access…" :
@@ -57,7 +71,7 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStru
       {copyFailed && <p role="alert">Copy failed. Download your local draft instead.</p>}
     </section>}
     <div className="mt-4 grid min-h-[50vh] gap-4 lg:grid-cols-2">
-    <section className={view === "preview" ? "hidden lg:block" : ""} aria-label="Editor">
+    <section className={view === "edit" ? "" : "hidden lg:block"} aria-label="Editor">
       <h2 className="mb-2 font-medium">Markdown source</h2>
       <textarea ref={sourceInput} readOnly={editingBlocked} value={compositionValue ?? draft}
         onChange={(event) => {
@@ -90,10 +104,15 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onCurrent, onStru
       {bytes >= FILE_SOURCE_FEEDBACK && <p role="status">{bytes.toLocaleString("en-US")} / 262,144</p>}
       {(bytes === FILE_SOURCE_LIMIT || rejected) && <p role="status">File limit reached</p>}
     </section>
-    <section className={view === "edit" ? "hidden lg:block" : ""} aria-label="Preview">
+    <section className={view === "comments" ? "hidden" : view === "preview" ? "" : "hidden lg:block"} aria-label="Preview">
+      <RightPaneToggle view={view} onShowPreview={onShowPreview} onShowComments={onShowComments} />
       <h2 className="mb-2 font-medium">Preview</h2>
       <div className="min-h-[50vh] rounded border border-stone-300 bg-white p-3"><MarkdownPreview source={draft} /></div>
     </section>
+    {view === "comments" && <section className="min-h-[50vh]" aria-label="Comment inspector">
+      <RightPaneToggle view={view} onShowPreview={onShowPreview} onShowComments={onShowComments} />
+      <CommentsPanel fileId={fileId} snapshot={snapshot} />
+    </section>}
   </div>
     {lease.transferPrompt && <div role="dialog" aria-modal="true" aria-label="Transfer editing" className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
       <div className="max-w-md rounded bg-white p-5"><p>Another tab requested editing. Save your work or explicitly discard it before transferring.</p>

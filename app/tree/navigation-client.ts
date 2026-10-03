@@ -53,7 +53,7 @@ export async function openReceivedGrantRoot(owned: RootAccess, targetId: string,
               envelope.capabilityEpoch < 1))) throw new Error("invalid Grant scope");
       const rootKey = await openGrantKeyEnvelope({ ...envelope, recipient: device.transportKeyPair });
       return { actorAccountId, vaultId: grant.ownerId, rootId: targetId, rootKind: grant.targetKind, rootKey,
-        capability: { id: envelope.capabilityId, epoch: envelope.capabilityEpoch } };
+        actorVaultRootKey: owned.actorVaultRootKey, capability: { id: envelope.capabilityId, epoch: envelope.capabilityEpoch } };
     }
     cursor = page.nextCursor;
     if (cursor !== null) {

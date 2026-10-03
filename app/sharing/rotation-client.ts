@@ -99,8 +99,35 @@ async function start(browser: RotationBrowser, next: RotationNext) {
     ...(source.kind === "file" ? { sourceRepresentationId: source.representationId } : {}) };
 }
 
+type RotationCommentPage = { records: { recordId: string; kind: "comment" | "attribution"; revision: number;
+  contentKeyEnvelope: string }[]; nextCursor: string | null };
+
+/** Open each current per-record wrapper with the installed thread capability and
+ * reseal the unchanged content key beneath the replacement capability. Body and
+ * pseudonym ciphertext never change, so history and exact retries stay stable. */
+async function stageComments(browser: RotationBrowser, next: RotationNext) {
+  const { item, source, job } = next;
+  if (!item || !source || !item.targetEpoch || !item.capabilityId || item.sourceEpoch === null) throw new Error("Invalid Comment step");
+  const oldKey = await sourceKey(browser, source), key = await replacementKey(browser, job, item);
+  const page = await json<RotationCommentPage>(browser,
+    `/api/private/key-rotations/${job.jobId}/items/${item.objectId}/comment-items${item.cursor ? `?cursor=${item.cursor}` : ""}`);
+  if (page.records.length < 1 || page.records.length > 20) throw new Error("Invalid Comment page");
+  const writer = await createSymmetricWriter(key), records = [];
+  for (const record of page.records) {
+    const context = { purpose: record.kind === "comment" ? "comment-content" as const : "attribution" as const,
+      vaultId: browser.accountId, objectId: record.recordId, keyId: item.capabilityId,
+      keyEpoch: item.sourceEpoch, revision: record.revision };
+    const contentKey = await openSymmetric(decodeTreeBytes(record.contentKeyEnvelope, 16_384), oldKey, { context });
+    if (contentKey.length !== 32) throw new Error("Invalid Comment content key");
+    records.push({ recordId: record.recordId, kind: record.kind, revision: record.revision,
+      contentKeyEnvelope: encodeTreeBytes(await writer.seal(contentKey, { ...context, keyEpoch: item.targetEpoch })) });
+  }
+  return { operation: "stage", operationId: newOpaqueId(), objectId: item.objectId, cursor: item.cursor, records };
+}
+
 async function stage(browser: RotationBrowser, next: RotationNext) {
   const { item, source, job } = next;
+  if (source?.kind === "private_comment") return stageComments(browser, next);
   if (!item || source?.kind !== "directory") throw new Error("Invalid Directory step");
   const oldKey = await sourceKey(browser, source), key = await replacementKey(browser, job, item);
   const page = await json<RotationEntries>(browser, `/api/private/key-rotations/${job.jobId}/items/${item.objectId}/entries${item.cursor ? `?cursor=${item.cursor}` : ""}`);

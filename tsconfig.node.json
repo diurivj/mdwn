@@ -13,6 +13,8 @@
     "app/db/**/*.ts",
     "app/security/**/*.ts",
     "app/crypto/**/*.ts",
+    "app/comments/content.ts",
+    "app/comments/comments-client.ts",
     "app/device/store.ts",
     "app/device/proof.ts",
     "app/device/private-client.ts",

@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { createCookie } from "react-router";
 import { build } from "vite";
 
+import { sealAccountProfile } from "../app/crypto/account-profile";
 import { createSymmetricWriter } from "../app/crypto/enc-v1";
 import { createFileRepresentation, createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/crypto/vault";
 import { encodeTreeBytes } from "../app/tree/wire";
@@ -41,6 +42,8 @@ export const test = appTest.extend<{ workspace: Workspace; initialSource: string
       };
     }, { accountId, deviceId });
     const hierarchy = await createVaultKeyHierarchy({ accountId, rootDirectoryId: rootId });
+    const profile = await sealAccountProfile(hierarchy.vaultRootKey, { publicPseudonym: "Member Test" },
+      { accountId, epoch: 1, revision: 1 });
     const transportKey = await crypto.subtle.importKey("raw", Uint8Array.from(publicKeys.transport),
       { name: "ECDH", namedCurve: "P-256" }, true, []);
     const enrollment = await sealDeviceEnrollmentEnvelope(hierarchy.vaultRootKey, transportKey, {
@@ -56,7 +59,8 @@ export const test = appTest.extend<{ workspace: Workspace; initialSource: string
       db.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'device-enrollment', ?, ?, ?, 1)").bind(accountId, deviceId, deviceId, enrollment),
       // These unrelated bootstrap fields are opaque fixture records, not used by the Files flow.
       db.prepare("INSERT INTO recovery_capsules (account_id, generation, recovery_salt, ciphertext, verification_public_key) VALUES (?, 1, zeroblob(32), X'01', X'01')").bind(accountId),
-      db.prepare("INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at) VALUES (?, X'01', 1, 1, ?, ?)").bind(accountId, now, now),
+      db.prepare("INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(accountId, profile.ciphertext, profile.revision, profile.epoch, now, now),
       db.prepare("INSERT INTO sessions (id, account_id, purpose, authenticated_passkey_id, device_id, created_at, idle_expires_at, absolute_expires_at) VALUES (?, ?, 'normal', ?, ?, ?, ?, ?)").bind(sessionId, accountId, credentialId, deviceId, now, now + 3_600_000, now + 86_400_000),
     ]);
     const cookie = await createCookie("__Host-mdwn_session", { path: "/", secure: true, secrets: [TEST_SESSION_COOKIE_SECRET] }).serialize(sessionId);

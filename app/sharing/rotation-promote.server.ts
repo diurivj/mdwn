@@ -32,7 +32,7 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
     if (!exact(input, [...common, "recoveryEnvelope"])) throw new Error("invalid comment promotion");
     const recovery = treeEnvelope(input.recoveryEnvelope, 16_384, { purpose: "vault-recovery", vaultId: auth.accountId,
       objectId: item.objectId, keyId: item.capabilityId!, keyEpoch: item.targetEpoch!, revision: 1 });
-    return { eligible: rotationSourceSnapshot(item, source), statements: (marker) => [
+    const capabilityStatements = (marker: SQL): SQL[] => [
       sql`UPDATE sharing_comment_capabilities SET capability_epoch = ${item.targetEpoch}
         WHERE object_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
       sql`DELETE FROM share_comment_key_envelopes WHERE object_id = ${item.objectId}
@@ -45,7 +45,32 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
         SELECT ${auth.accountId}, 'vault-recovery', ${item.objectId}, 'vault-root', ${recovery}, ${item.targetEpoch} WHERE ${marker}
         ON CONFLICT (account_id, purpose, object_id, recipient_id) DO UPDATE SET ciphertext = excluded.ciphertext,
           key_epoch = excluded.key_epoch, superseded_at = NULL`,
-    ] };
+    ];
+    if (source.kind === "public_history") return { eligible: rotationSourceSnapshot(item, source), statements: capabilityStatements };
+    // A Private thread promotes only once every current body and pseudonym
+    // wrapper is staged; deletion during staging is allowed and simply drops
+    // the staged row, while a revision that advanced would still block.
+    const staged = (kind: "comment" | "attribution", table: string) => sql`EXISTS (
+      SELECT 1 FROM key_rotation_comment_items staged WHERE staged.job_id = ${job.jobId}
+        AND staged.thread_id = ${item.objectId} AND staged.kind = ${kind} AND staged.record_id = ${sql.raw(table)}.id
+        AND staged.revision = ${sql.raw(table)}.revision)`;
+    const complete = (kind: "comment" | "attribution", table: string) => sql`NOT EXISTS (
+      SELECT 1 FROM ${sql.raw(table)} WHERE ${sql.raw(table)}.thread_id = ${item.objectId} AND NOT (${staged(kind, table)}))`;
+    const rewrap = (marker: SQL, kind: "comment" | "attribution", table: string) => sql`UPDATE ${sql.raw(table)} SET
+      content_key_envelope = (SELECT staged.content_key_envelope FROM key_rotation_comment_items staged
+        WHERE staged.job_id = ${job.jobId} AND staged.thread_id = ${item.objectId} AND staged.kind = ${kind}
+          AND staged.record_id = ${sql.raw(table)}.id),
+      content_key_epoch = ${item.targetEpoch}
+      WHERE thread_id = ${item.objectId} AND ${marker} AND ${staged(kind, table)}`;
+    return { eligible: sql`${rotationSourceSnapshot(item, source)}
+      AND ${complete("comment", "comments")} AND ${complete("attribution", "thread_attributions")}`,
+      statements: (marker) => [
+        rewrap(marker, "comment", "comments"),
+        rewrap(marker, "attribution", "thread_attributions"),
+        sql`UPDATE comment_thread_epochs SET key_epoch = ${item.targetEpoch}
+          WHERE thread_id = ${item.objectId} AND state = 'active' AND ${marker}`,
+        ...capabilityStatements(marker),
+      ] };
   }
   if (!exact(input, [...common, "keyEnvelope", "parent", "recoveryEnvelope", ...(source.kind === "directory"
       ? ["listingHead"] : ["representationId", "representationKeyEnvelope", "fileHead"])])) throw new Error("invalid promotion");

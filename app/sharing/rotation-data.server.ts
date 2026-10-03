@@ -9,6 +9,8 @@ import { hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
 export const ROTATION_PAGE = 20;
 const encoded = (value: ArrayBuffer | null) => value ? encodeTreeBytes(new Uint8Array(value)) : null;
 
+export type RotationCommentRecord = { recordId: string; kind: "comment" | "attribution"; revision: number; contentKeyEnvelope: string };
+
 export async function readRotationJob(env: Env, auth: AuthorizedDevice, jobId: string) {
   return createDb(env.DB).get<RotationJob>(sql`SELECT id AS jobId, target_id AS targetId, key_epoch AS keyEpoch, state, progress
     FROM crypto_jobs WHERE id = ${jobId} AND account_id = ${auth.accountId} AND kind = 'key_rotation' AND ${privateReadGuard(auth)}`);
@@ -120,6 +122,25 @@ export function rotationSourceSnapshot(item: RotationItem, source: RotationSourc
       AND n.parent_node_id = ${source.parentId})`;
   return sql`EXISTS (SELECT 1 FROM sharing_comment_capabilities c WHERE c.object_id = ${item.objectId}
     AND c.file_id = ${source.fileId} AND c.capability_id = ${source.capabilityId} AND c.capability_epoch = ${source.capabilityEpoch})`;
+}
+
+/** One bounded page of a Private thread's current per-record content-key
+ * wrappers. The browser rewraps each beneath the replacement thread capability;
+ * body and pseudonym ciphertext are never opened by the service.
+ */
+export async function rotationCommentItems(env: Env, auth: AuthorizedDevice, job: RotationJob, item: RotationItem,
+  cursor: string | null): Promise<{ records: RotationCommentRecord[]; nextCursor: string | null }> {
+  const rows = await createDb(env.DB).all<{ record_id: string; kind: "comment" | "attribution"; revision: number;
+    content_key_envelope: ArrayBuffer }>(sql`SELECT * FROM (
+      SELECT id AS record_id, 'comment' AS kind, revision, content_key_envelope FROM comments
+        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""}
+      UNION ALL
+      SELECT id AS record_id, 'attribution' AS kind, revision, content_key_envelope FROM thread_attributions
+        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""}
+    ) ORDER BY record_id LIMIT ${ROTATION_PAGE + 1}`);
+  return { records: rows.slice(0, ROTATION_PAGE).map((row) => ({ recordId: row.record_id, kind: row.kind,
+    revision: row.revision, contentKeyEnvelope: encoded(row.content_key_envelope)! })),
+    nextCursor: rows.length > ROTATION_PAGE ? rows[ROTATION_PAGE - 1]!.record_id : null };
 }
 
 export async function rotationEntries(env: Env, auth: AuthorizedDevice, job: RotationJob, item: RotationItem,

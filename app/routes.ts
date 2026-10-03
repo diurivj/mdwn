@@ -25,6 +25,8 @@ export default [
   route("api/private/grants/*", "routes/api/private-grants.ts"),
   route("api/private/key-rotations/*", "routes/api/key-rotations.ts"),
   route("api/private/grant-provisioning/*", "routes/api/grant-provisioning.ts"),
+  route("api/private/comments/*", "routes/api/private-comments.ts"),
+  route("api/private/profile", "routes/api/private-profile.ts"),
   route("api/auth/*", "routes/auth.ts"),
   route("api/signup/*", "routes/signup.ts"),
   route("api/device/state", "routes/device-state.ts"),

@@ -78,4 +78,26 @@ describe("committed Drizzle migrations", () => {
     expect(sql).toContain("`revoked_at` integer");
     expect(sql).not.toMatch(/email|password|pseudonym|handle(?!_lookup_token)/i);
   });
+
+  it("adds one Private Comment thread per File with constrained epochs and ciphertext-only Comments", () => {
+    const sql = readFileSync(join(DRIZZLE_DIR, "0019_outgoing_tony_stark.sql"), "utf8");
+    for (const table of ["comment_threads", "comment_thread_epochs", "comments", "thread_attributions",
+      "key_rotation_comment_items"]) {
+      expect(sql).toContain(`CREATE TABLE \`${table}\``);
+    }
+    // Exactly one Private thread per File and one Public thread per Publication.
+    expect(sql).toContain("CREATE UNIQUE INDEX `comment_threads_private_file_idx`");
+    expect(sql).toContain("WHERE \"comment_threads\".\"purpose\" = 'private'");
+    expect(sql).toContain("CREATE UNIQUE INDEX `comment_threads_public_publication_idx`");
+    // The current Private key epoch is a constrained representation: one active
+    // epoch per thread, and a thread can only point at its own epoch.
+    expect(sql).toContain("CREATE UNIQUE INDEX `comment_thread_epochs_current_idx`");
+    expect(sql).toContain("FOREIGN KEY (`current_epoch_id`,`id`) REFERENCES `comment_thread_epochs`(`id`,`thread_id`)");
+    expect(sql).toContain("FOREIGN KEY (`thread_id`,`epoch_id`) REFERENCES `comment_thread_epochs`(`thread_id`,`id`)");
+    // Bodies, pseudonyms and per-record wrappers are bounded ciphertext only.
+    expect(sql).toContain("comments_body_bounded");
+    expect(sql).toContain("comments_key_envelope_bounded");
+    expect(sql).toContain("thread_attributions_bounded");
+    expect(sql).not.toMatch(/body text|plaintext|body_text|pseudonym text/i);
+  });
 });

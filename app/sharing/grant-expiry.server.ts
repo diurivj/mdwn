@@ -31,6 +31,7 @@ function drainDependents(id: string, marker: SQL): SQL[] {
 function hasRotationDependents(targetId: string | SQL): SQL {
   const jobs = pendingRotationJob(targetId);
   return sql`(EXISTS (SELECT 1 FROM key_rotation_entries WHERE job_id IN (${jobs}))
+    OR EXISTS (SELECT 1 FROM key_rotation_comment_items WHERE job_id IN (${jobs}))
     OR EXISTS (SELECT 1 FROM key_rotation_items WHERE job_id IN (${jobs}))
     OR EXISTS (SELECT 1 FROM key_rotation_receipts WHERE job_id IN (${jobs})))`;
 }
@@ -42,9 +43,13 @@ function drainRotationDependents(targetId: string, marker: SQL): SQL[] {
   return [
     sql`DELETE FROM key_rotation_entries WHERE rowid IN (SELECT rowid FROM key_rotation_entries
       WHERE job_id IN (${jobs}) ORDER BY job_id, directory_id, child_id LIMIT 20) AND ${marker}`,
+    sql`DELETE FROM key_rotation_comment_items WHERE rowid IN (SELECT rowid FROM key_rotation_comment_items
+      WHERE job_id IN (${jobs}) ORDER BY job_id, thread_id, kind, record_id LIMIT 20) AND ${marker}`,
     sql`DELETE FROM key_rotation_items WHERE rowid IN (SELECT i.rowid FROM key_rotation_items i
       WHERE i.job_id IN (${jobs}) AND NOT EXISTS (SELECT 1 FROM key_rotation_entries e
         WHERE e.job_id = i.job_id AND e.directory_id = i.object_id)
+        AND NOT EXISTS (SELECT 1 FROM key_rotation_comment_items c
+          WHERE c.job_id = i.job_id AND c.thread_id = i.object_id)
       ORDER BY i.job_id, i.object_id LIMIT 20) AND ${marker}`,
     sql`DELETE FROM key_rotation_receipts WHERE rowid IN (SELECT rowid FROM key_rotation_receipts
       WHERE job_id IN (${jobs}) ORDER BY job_id, operation_id LIMIT 20) AND ${marker}`,
