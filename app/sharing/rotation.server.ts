@@ -7,7 +7,8 @@ import { isV7 } from "~/tree/wire";
 import { activeGrantCoverage, activeRootCoverage, requiredGrantComments } from "./capability-coverage.server";
 import { readGrantKeys, uploadGrantKeys } from "./grant-keys.server";
 import { readCommentKey, uploadCommentKeys } from "./comment-keys.server";
-import { affectedRotationGrant, liveRotation, readRotationItem, readRotationJob, readRotationSource, rotationDeliveryPermit, rotationEntries, rotationOrder } from "./rotation-data.server";
+import { affectedRotationGrant, liveRotation, readRotationItem, readRotationJob, readRotationSource, rotationCommentItems,
+  rotationDeliveryPermit, rotationEntries, rotationOrder } from "./rotation-data.server";
 import { rotationSourceVersion, type RotationJob } from "./rotation-wire";
 import { stepRotation } from "./rotation-step.server";
 import { hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
@@ -50,6 +51,7 @@ export function pendingRotationJob(targetId: string | SQL) {
 export function startRotation(auth: AuthorizedDevice, target: RotationTarget, plan: RotationPlan, marker: SQL) {
   const now = Date.now(), oldJobs = pendingRotationJob(target.target_id);
   return [
+    sql`DELETE FROM key_rotation_comment_items WHERE job_id IN (${oldJobs}) AND ${marker}`,
     sql`DELETE FROM key_rotation_entries WHERE job_id IN (${oldJobs}) AND ${marker}`,
     sql`DELETE FROM key_rotation_items WHERE job_id IN (${oldJobs}) AND ${marker}`,
     sql`DELETE FROM key_rotation_receipts WHERE job_id IN (${oldJobs}) AND ${marker}`,
@@ -93,8 +95,11 @@ async function nextRotation(env: Env, auth: AuthorizedDevice, job: RotationJob) 
         capabilityId: source.kind === "directory" ? item.objectId : source.kind === "file" ? source.capability?.id ?? null : source.capabilityId },
         source, operation: "start" }, { headers });
     }
-    const page = item.kind === "directory" ? await rotationEntries(env, auth, job, item, item.cursor, false) : null;
-    return Response.json({ job, item, source, operation: page?.entries.length ? "stage" : "promote" }, { headers });
+    const remaining = item.kind === "directory"
+      ? (await rotationEntries(env, auth, job, item, item.cursor, false)).entries.length
+      : item.kind === "private_comment"
+        ? (await rotationCommentItems(env, auth, job, item, item.cursor)).records.length : 0;
+    return Response.json({ job, item, source, operation: remaining ? "stage" : "promote" }, { headers });
   }
   const missing = await createDb(env.DB).get<{ id: string }>(sql`SELECT s.id FROM grants s
     WHERE s.owner_id = ${auth.accountId} AND ${liveGrant()} AND ${affectedRotationGrant(job.jobId)} AND EXISTS (
@@ -120,15 +125,16 @@ export async function rotationAction(request: Request, env: Env): Promise<Respon
   const next = /^\/api\/private\/key-rotations\/([0-9a-f-]+)\/next$/.exec(path);
   const step = /^\/api\/private\/key-rotations\/([0-9a-f-]+)\/step$/.exec(path);
   const entries = /^\/api\/private\/key-rotations\/([0-9a-f-]+)\/items\/([0-9a-f-]+)\/entries$/.exec(path);
+  const commentItems = /^\/api\/private\/key-rotations\/([0-9a-f-]+)\/items\/([0-9a-f-]+)\/comment-items$/.exec(path);
   const sourcePath = /^\/api\/private\/key-rotations\/([0-9a-f-]+)\/comments\/([0-9a-f-]+)$/.exec(path);
   const delivery = /^\/api\/private\/key-rotations\/([0-9a-f-]+)\/grants\/([0-9a-f-]+)\/keys$/.exec(path);
   const commentDelivery = /^\/api\/private\/key-rotations\/([0-9a-f-]+)\/grants\/([0-9a-f-]+)\/comment-keys\/([0-9a-f-]+)$/.exec(path);
-  const match = next || step || entries || sourcePath || delivery || commentDelivery;
+  const match = next || step || entries || commentItems || sourcePath || delivery || commentDelivery;
   const reading = request.method === "POST";
-  if (!(reading && (list || next || entries || sourcePath || delivery || commentDelivery) || request.method === "PATCH" && step ||
+  if (!(reading && (list || next || entries || commentItems || sourcePath || delivery || commentDelivery) || request.method === "PATCH" && step ||
       request.method === "PUT" && (delivery || commentDelivery)) || match && match.slice(1).some((id) => !isV7(id))) return failure("not_found", 404);
   const cursor = url.searchParams.get("cursor"), staged = url.searchParams.get("staged") === "1";
-  if (Array.from(url.searchParams.keys()).some((key) => !(list || entries) || key !== "cursor" && !(entries && key === "staged")) ||
+  if (Array.from(url.searchParams.keys()).some((key) => !(list || entries || commentItems) || key !== "cursor" && !(entries && key === "staged")) ||
       url.searchParams.getAll("cursor").length > 1 || url.searchParams.getAll("staged").length > 1 ||
       url.searchParams.has("staged") && !staged || cursor !== null && !isV7(cursor)) return failure("invalid_rotation_request", 400);
   let proof: unknown, raw = "", value: unknown;
@@ -171,6 +177,11 @@ export async function rotationAction(request: Request, env: Env): Promise<Respon
       fileId: c.file_id, depth: 0, state: "ready", sourceEpoch: null, targetEpoch: null, capabilityId: null,
       sourceRevision: null, sourceRepresentationId: null, resumeEnvelope: null, cursor: null });
     return source ? Response.json(source, { headers }) : failure("not_found", 404);
+  }
+  if (commentItems) {
+    const item = await readRotationItem(env, auth, job, commentItems[2]!);
+    if (!item || item.kind !== "private_comment") return failure("not_found", 404);
+    return Response.json(await rotationCommentItems(env, auth, job, item, cursor), { headers });
   }
   const item = await readRotationItem(env, auth, job, entries![2]!);
   if (!item || item.kind !== "directory") return failure("not_found", 404);

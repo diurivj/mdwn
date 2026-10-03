@@ -507,6 +507,9 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
     const committed = await commitTreeMutation(env, auth, [
       { directoryId: input.parentId, expectedRevision: input.expectedRevision, head },
     ], eligible, (committed) => [
+      sql`DELETE FROM key_rotation_comment_items WHERE (thread_id IN
+        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})
+        OR job_id IN (SELECT id FROM crypto_jobs WHERE target_id IN (${ids}))) AND ${committed}`,
       sql`DELETE FROM key_rotation_entries WHERE (child_id IN (${ids}) OR directory_id IN (${ids})
         OR job_id IN (SELECT id FROM crypto_jobs WHERE target_id IN (${ids}))) AND ${committed}`,
       sql`DELETE FROM key_rotation_items WHERE (object_id IN (${ids}) OR file_id IN (${ids})
@@ -524,6 +527,16 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
       sql`DELETE FROM provisioning_needs WHERE grant_id IN
         (SELECT id FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM comments WHERE thread_id IN
+        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      sql`DELETE FROM thread_attributions WHERE thread_id IN
+        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      sql`DELETE FROM key_envelopes WHERE object_id IN
+        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})
+        AND account_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM comment_thread_epochs WHERE thread_id IN
+        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      sql`DELETE FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
       retireDeletedScopeNeeds(ownerId, nodeId, committed),
       sql`DELETE FROM shares WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
       sql`DELETE FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,

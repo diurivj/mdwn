@@ -36,7 +36,9 @@ export type TreeKind = "directory" | "file";
 export type TreeEntry = SealedEntry & { name: string; order: string };
 export type DirectoryListing = { directoryId: string; keyEpoch?: number; entriesRevision: number; entries: TreeEntry[]; canCreate?: boolean };
 export type RootAccess = { vaultId: string; rootId: string; rootKey: Uint8Array<ArrayBuffer>;
-  actorAccountId: string; rootKind?: TreeKind; capability?: FileCapability };
+  actorAccountId: string; rootKind?: TreeKind; capability?: FileCapability;
+  /** The actor's own Vault root key, kept for Account-owned auxiliary capabilities. */
+  actorVaultRootKey: Uint8Array<ArrayBuffer> };
 
 function nameAgainstNamespace(name: string, existingNames: readonly string[]): string {
   const canonical = canonicalizeSegment(name);
@@ -143,7 +145,7 @@ export async function openRoot(signal?: AbortSignal): Promise<RootAccess> {
     { purpose: "vault-recovery", vaultId: accountId, objectId: bootstrap.rootDirectoryId,
       keyId: bootstrap.rootDirectoryId, keyEpoch: rootKeyEpoch, revision: 1 });
   return { vaultId: accountId, actorAccountId: accountId, rootKind: "directory", rootId: bootstrap.rootDirectoryId, rootKey,
-    capability: { id: bootstrap.rootDirectoryId, epoch: rootKeyEpoch } };
+    actorVaultRootKey: vaultRoot, capability: { id: bootstrap.rootDirectoryId, epoch: rootKeyEpoch } };
 }
 
 export async function loadDirectory(access: RootAccess, directoryId: string, key: Uint8Array,

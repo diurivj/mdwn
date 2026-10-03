@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
+import { ensurePrivateThread } from "~/comments/comments-client";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/SharedProvisioning";
 
@@ -47,7 +48,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [status, setStatus] = useState<FilesPageData["status"]>(initial.status);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [drawer, setDrawer] = useState(false);
-  const [view, setView] = useState<"edit" | "preview">("edit");
+  const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submission = useRef(false);
@@ -66,6 +67,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     setDialog(null);
   }, []);
   const route = useRef(`${kind}/${nodeId}`);
+  const ensuredThread = useRef<string | null>(null);
   const [structuralReady, setStructuralReady] = useState(false);
   const [editorParent, setEditorParent] = useState(initial.snapshot?.file?.parentId);
   const fileReady = structuralReady && editorParent === snapshot?.file?.parentId;
@@ -99,6 +101,15 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       ...initial.snapshot.crumbs.slice(0, -1).map((item) => item.id), initial.snapshot.access.rootId,
     ])));
   }, [initial, nodeId, kind]);
+
+  // Owner-side upkeep: opening any File ensures its one Private thread exists,
+  // so a Collaborator never waits for an Owner to open the Comments inspector.
+  useEffect(() => {
+    if (kind !== "file" || !snapshot || snapshot.access.actorAccountId !== snapshot.access.vaultId) return;
+    if (ensuredThread.current === nodeId) return;
+    ensuredThread.current = nodeId;
+    void ensurePrivateThread(snapshot.access, nodeId).catch(() => { /* The next File open retries. */ });
+  }, [kind, nodeId, snapshot]);
 
   async function toggle(entry: TreeEntry) {
     const signal = lifetime.current?.signal;
@@ -346,8 +357,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       {kind === "file" ? <>
         <div className="mt-6 flex gap-2 lg:hidden"><button type="button" onClick={() => setView("edit")}
           aria-pressed={view === "edit"}>Edit</button><button type="button" onClick={() => setView("preview")}
-          aria-pressed={view === "preview"}>Preview</button></div>
+          aria-pressed={view === "preview"}>Preview</button><button type="button" onClick={() => setView("comments")}
+          aria-pressed={view === "comments"}>Comments</button></div>
         {editorParent === snapshot.file?.parentId ? <FileEditor key={`${nodeId}/${snapshot.file?.parentId}`} fileId={nodeId} snapshot={snapshot} view={view} showEdit={() => setView("edit")}
+          onShowPreview={() => setView("preview")} onShowComments={() => setView("comments")}
           onStructuralReady={setStructuralReady} structuralBusy={busy || dialog !== null} onNavigationStart={onNavigationStart}
           onCurrent={(file, listing) => setSnapshot((previous) => previous && ({ ...previous,
             file, listings: listing ? { ...previous.listings, [listing.directoryId]: listing } : previous.listings }))} /> : <p role="status">Opening moved File…</p>}

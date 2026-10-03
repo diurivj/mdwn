@@ -1,10 +1,13 @@
 import type { SQL } from "drizzle-orm";
+import { attributionKeyContext, commentKeyContext, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES,
+  MAX_COMMENT_KEY_ENVELOPE_BYTES } from "~/comments/content";
 import { createDb, sql } from "~/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { decodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
 import { record } from "~/auth/request.server";
 import { preparePromotion } from "./rotation-promote.server";
-import { currentRotationCoverage, liveRotation, readRotationItem, readRotationSource, rotationEntries, rotationSourceSnapshot } from "./rotation-data.server";
+import { currentRotationCoverage, liveRotation, readRotationItem, readRotationSource, rotationCommentItems,
+  rotationEntries, rotationSourceSnapshot } from "./rotation-data.server";
 import { rotationResumeContext, rotationSourceVersion, type RotationItem, type RotationJob, type RotationSource } from "./rotation-wire";
 
 const headers = { "Cache-Control": "no-store" };
@@ -92,6 +95,48 @@ async function stageEntries(env: Env, auth: AuthorizedDevice, job: RotationJob, 
   return committed ? Response.json({ applied: true }, { headers }) : failure("rotation_changed", 409);
 }
 
+/** A Private thread stages its per-record content-key wrappers before promotion.
+ * The browser opens each current wrapper with the installed thread capability
+ * and reseals the unchanged content key beneath the replacement capability.
+ * A record deleted between the page read and this commit simply stages nothing.
+ */
+async function stageCommentItems(env: Env, auth: AuthorizedDevice, job: RotationJob, item: RotationItem,
+  source: RotationSource, input: Record<string, unknown>, operationId: string, digest: Uint8Array) {
+  if (source.kind !== "private_comment" || item.state !== "staging" || !item.capabilityId || !item.targetEpoch ||
+      !exact(input, [...common, "cursor", "records"]) || input.cursor !== item.cursor ||
+      !Array.isArray(input.records) || input.records.length < 1 || input.records.length > 20)
+    return failure("invalid_rotation_request", 400);
+  const expected = await rotationCommentItems(env, auth, job, item, item.cursor);
+  if (expected.records.length !== input.records.length) return failure("rotation_changed", 409);
+  const records: { recordId: string; kind: "comment" | "attribution"; revision: number; envelope: Uint8Array }[] = [];
+  try {
+    for (let index = 0; index < expected.records.length; index++) {
+      const old = expected.records[index]!, value = record(input.records[index]);
+      if (!value || !exact(value, ["recordId", "kind", "revision", "contentKeyEnvelope"]) ||
+          value.recordId !== old.recordId || value.kind !== old.kind || value.revision !== old.revision) throw new Error();
+      const context = old.kind === "comment"
+        ? commentKeyContext(auth.accountId, old.recordId, item.capabilityId, item.targetEpoch, old.revision)
+        : attributionKeyContext(auth.accountId, old.recordId, item.capabilityId, item.targetEpoch, old.revision);
+      records.push({ recordId: old.recordId, kind: old.kind, revision: old.revision,
+        envelope: treeEnvelope(value.contentKeyEnvelope,
+          old.kind === "comment" ? MAX_COMMENT_KEY_ENVELOPE_BYTES : MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES, context) });
+    }
+  } catch { return failure("invalid_rotation_request", 400); }
+  const committed = await commitStep(env, auth, job, operationId, digest,
+    sql`${rotationSourceSnapshot(item, source)} AND EXISTS (SELECT 1 FROM key_rotation_items WHERE job_id = ${job.jobId}
+      AND object_id = ${item.objectId} AND state = 'staging' AND cursor IS ${item.cursor}
+      AND source_epoch = ${item.sourceEpoch} AND target_epoch = ${item.targetEpoch})`, (marker) => [
+      ...records.map((entry) => sql`INSERT INTO key_rotation_comment_items (job_id, thread_id, kind, record_id, revision, content_key_envelope)
+        SELECT ${job.jobId}, ${item.objectId}, ${entry.kind}, ${entry.recordId}, ${entry.revision}, ${entry.envelope}
+        WHERE ${marker} AND ${entry.kind === "comment"
+          ? sql`EXISTS (SELECT 1 FROM comments WHERE id = ${entry.recordId} AND thread_id = ${item.objectId} AND revision = ${entry.revision})`
+          : sql`EXISTS (SELECT 1 FROM thread_attributions WHERE id = ${entry.recordId} AND thread_id = ${item.objectId} AND revision = ${entry.revision})`}`),
+      sql`UPDATE key_rotation_items SET cursor = ${records.at(-1)!.recordId}
+        WHERE job_id = ${job.jobId} AND object_id = ${item.objectId} AND ${marker}`,
+    ]);
+  return committed ? Response.json({ applied: true }, { headers }) : failure("rotation_changed", 409);
+}
+
 async function finishRotation(env: Env, auth: AuthorizedDevice, job: RotationJob, input: Record<string, unknown>, operationId: string, digest: Uint8Array) {
   if (!exact(input, ["operation", "operationId"])) return failure("invalid_rotation_request", 400);
   const committed = await commitStep(env, auth, job, operationId, digest,
@@ -133,6 +178,7 @@ export async function stepRotation(env: Env, auth: AuthorizedDevice, job: Rotati
   if (input.operation === "restart" && item.state === "staging" && exact(input, common)) {
     const committed = await commitStep(env, auth, job, input.operationId, digest, rotationSourceSnapshot(item, source), (marker) => [
       sql`DELETE FROM key_rotation_entries WHERE job_id = ${job.jobId} AND directory_id = ${item.objectId} AND ${marker}`,
+      sql`DELETE FROM key_rotation_comment_items WHERE job_id = ${job.jobId} AND thread_id = ${item.objectId} AND ${marker}`,
       sql`UPDATE key_rotation_items SET state = 'ready', resume_envelope = NULL, cursor = NULL, source_epoch = NULL,
         target_epoch = NULL, source_revision = NULL, source_representation_id = NULL, capability_id = NULL
         WHERE job_id = ${job.jobId} AND object_id = ${item.objectId} AND ${marker}`,
@@ -141,7 +187,9 @@ export async function stepRotation(env: Env, auth: AuthorizedDevice, job: Rotati
   }
   if (item.state !== "staging" || version.epoch !== item.sourceEpoch || version.revision !== item.sourceRevision ||
       source.kind === "file" && source.representationId !== item.sourceRepresentationId) return failure("rotation_changed", 409);
-  if (input.operation === "stage") return stageEntries(env, auth, job, item, source, input, input.operationId, digest);
+  if (input.operation === "stage") return source.kind === "directory"
+    ? stageEntries(env, auth, job, item, source, input, input.operationId, digest)
+    : stageCommentItems(env, auth, job, item, source, input, input.operationId, digest);
   if (input.operation === "promote") {
     try {
       const promotion = await preparePromotion(env, auth, job, item, source, input);
@@ -151,6 +199,7 @@ export async function stepRotation(env: Env, auth: AuthorizedDevice, job: Rotati
           AND source_revision = ${item.sourceRevision} AND cursor IS ${item.cursor})`, (marker) => [
           ...promotion.statements(marker),
           sql`DELETE FROM key_rotation_entries WHERE job_id = ${job.jobId} AND directory_id = ${item.objectId} AND ${marker}`,
+          sql`DELETE FROM key_rotation_comment_items WHERE job_id = ${job.jobId} AND thread_id = ${item.objectId} AND ${marker}`,
           sql`UPDATE key_rotation_items SET state = 'complete', resume_envelope = NULL WHERE job_id = ${job.jobId} AND object_id = ${item.objectId} AND ${marker}`,
         ], true, source.kind === "file");
       return committed ? Response.json({ applied: true }, { headers }) : failure("rotation_changed", 409);

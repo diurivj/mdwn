@@ -780,3 +780,133 @@ export const keyRotationReceipts = sqliteTable("key_rotation_receipts", {
   primaryKey({ columns: [table.jobId, table.operationId] }),
   check("key_rotation_receipts_digest", sql`length(${table.digest}) = 32`),
 ]);
+
+/** Rewrapped per-record content-key envelopes staged for one Private Comment
+ * thread rotation. Comments and attributions preserve body/history ciphertext;
+ * only the wrapper beneath the replacement thread capability changes.
+ */
+export const keyRotationCommentItems = sqliteTable("key_rotation_comment_items", {
+  jobId: text("job_id").notNull(),
+  threadId: text("thread_id").notNull(),
+  kind: text("kind").notNull(),
+  recordId: text("record_id").notNull(),
+  revision: integer("revision").notNull(),
+  contentKeyEnvelope: blob("content_key_envelope").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.jobId, table.kind, table.recordId] }),
+  index("key_rotation_comment_items_page_idx").on(table.jobId, table.threadId, table.kind, table.recordId),
+  foreignKey({ columns: [table.jobId, table.threadId],
+    foreignColumns: [keyRotationItems.jobId, keyRotationItems.objectId] }).onDelete("restrict"),
+  check("key_rotation_comment_items_kind", sql`${table.kind} IN ('comment', 'attribution')`),
+  check("key_rotation_comment_items_revision_positive", sql`${table.revision} >= 1`),
+  check("key_rotation_comment_items_bounded", sql`length(${table.contentKeyEnvelope}) BETWEEN 1 AND 16384`),
+]);
+
+/** One key epoch per Comment thread. A Private thread keeps exactly one active
+ * row whose `key_epoch` is its current thread capability epoch; Public threads
+ * retain prior audience epochs. The thread's current epoch pointer below is the
+ * constrained representation of that current Private key epoch.
+ */
+export const commentThreadEpochs = sqliteTable("comment_thread_epochs", {
+  id: text("id").primaryKey(),
+  threadId: text("thread_id").notNull().references(() => commentThreads.id, { onDelete: "restrict" }),
+  /** Null for a Private thread; immutable audience for a Public audience epoch. */
+  audience: text("audience"),
+  keyEpoch: integer("key_epoch").notNull(),
+  ordinal: integer("ordinal").notNull(),
+  state: text("state").notNull().default("active"),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("comment_thread_epochs_current_idx").on(table.threadId).where(sql`${table.state} = 'active'`),
+  uniqueIndex("comment_thread_epochs_ordinal_idx").on(table.threadId, table.ordinal),
+  uniqueIndex("comment_thread_epochs_identity_idx").on(table.id, table.threadId),
+  check("comment_thread_epochs_audience_valid",
+    sql`${table.audience} IS NULL OR ${table.audience} IN ('public', 'collaborators_only')`),
+  check("comment_thread_epochs_epoch_positive", sql`${table.keyEpoch} >= 1`),
+  check("comment_thread_epochs_ordinal_positive", sql`${table.ordinal} >= 1`),
+  check("comment_thread_epochs_state_valid", sql`${table.state} IN ('active', 'retained')`),
+]);
+
+/** Exactly one Private thread per File; one Public thread per logical
+ * Publication. No Comment body, pseudonym, or capability is stored here.
+ */
+export const commentThreads = sqliteTable("comment_threads", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  fileId: text("file_id").notNull(),
+  purpose: text("purpose").notNull(),
+  publicationId: text("publication_id"),
+  currentEpochId: text("current_epoch_id").notNull(),
+  nextSequence: integer("next_sequence").notNull().default(1),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("comment_threads_private_file_idx").on(table.fileId).where(sql`${table.purpose} = 'private'`),
+  uniqueIndex("comment_threads_public_publication_idx").on(table.publicationId).where(sql`${table.purpose} = 'public'`),
+  index("comment_threads_owner_idx").on(table.ownerId, table.id),
+  foreignKey({ columns: [table.ownerId, table.fileId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+  // The reciprocal current-epoch constraint is a reviewed migration FK:
+  // (current_epoch_id, id) -> comment_thread_epochs(id, thread_id).
+  check("comment_threads_purpose_context", sql`(${table.purpose} = 'private' AND ${table.publicationId} IS NULL)
+    OR (${table.purpose} = 'public' AND ${table.publicationId} IS NOT NULL)`),
+  check("comment_threads_sequence_positive", sql`${table.nextSequence} >= 1`),
+]);
+
+/** One current displayed-pseudonym declaration per author and thread scope.
+ * The pseudonym is an `attribution` envelope whose per-record content key is
+ * wrapped beneath the thread capability; the matching device access is the
+ * thread capability envelope relationship (share/grant/owned-device rows).
+ */
+export const threadAttributions = sqliteTable("thread_attributions", {
+  id: text("id").primaryKey(),
+  threadId: text("thread_id").notNull(),
+  authorId: text("author_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  epochId: text("epoch_id").notNull(),
+  revision: integer("revision").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  contentKeyEnvelope: blob("content_key_envelope").notNull(),
+  contentKeyEpoch: integer("content_key_epoch").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("thread_attributions_author_idx").on(table.threadId, table.authorId),
+  foreignKey({ columns: [table.threadId, table.epochId],
+    foreignColumns: [commentThreadEpochs.threadId, commentThreadEpochs.id] }).onDelete("restrict"),
+  check("thread_attributions_revision_positive", sql`${table.revision} >= 1`),
+  check("thread_attributions_epoch_positive", sql`${table.contentKeyEpoch} >= 1`),
+  check("thread_attributions_bounded",
+    sql`length(${table.ciphertext}) BETWEEN 1 AND 4096 AND length(${table.contentKeyEnvelope}) BETWEEN 1 AND 16384`),
+]);
+
+/** One flat ordered Comment. Plain text only: the body is a `comment-content`
+ * envelope whose fresh content key is wrapped beneath the thread capability.
+ */
+export const comments = sqliteTable("comments", {
+  id: text("id").primaryKey(),
+  threadId: text("thread_id").notNull().references(() => commentThreads.id, { onDelete: "restrict" }),
+  epochId: text("epoch_id").notNull(),
+  authorId: text("author_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  sequence: integer("sequence").notNull(),
+  revision: integer("revision").notNull(),
+  bodyCiphertext: blob("body_ciphertext").notNull(),
+  bodySize: integer("body_size").notNull(),
+  contentKeyEnvelope: blob("content_key_envelope").notNull(),
+  contentKeyEpoch: integer("content_key_epoch").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("comments_thread_sequence_idx").on(table.threadId, table.sequence),
+  index("comments_author_idx").on(table.authorId, table.threadId),
+  foreignKey({ columns: [table.threadId, table.epochId],
+    foreignColumns: [commentThreadEpochs.threadId, commentThreadEpochs.id] }).onDelete("restrict"),
+  check("comments_sequence_positive", sql`${table.sequence} >= 1`),
+  check("comments_revision_positive", sql`${table.revision} >= 1`),
+  check("comments_epoch_positive", sql`${table.contentKeyEpoch} >= 1`),
+  check("comments_body_bounded",
+    sql`length(${table.bodyCiphertext}) BETWEEN 1 AND 16384 AND ${table.bodySize} = length(${table.bodyCiphertext})`),
+  check("comments_key_envelope_bounded", sql`length(${table.contentKeyEnvelope}) BETWEEN 1 AND 16384`),
+]);
+
+export type CommentThread = typeof commentThreads.$inferSelect;
+export type CommentThreadEpoch = typeof commentThreadEpochs.$inferSelect;
+export type Comment = typeof comments.$inferSelect;
+export type ThreadAttribution = typeof threadAttributions.$inferSelect;

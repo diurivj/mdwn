@@ -808,11 +808,11 @@ describe("private tree", () => {
   it("keeps the signup recovery-confirmation gate ahead of any content-creating request", async () => {
     vi.stubGlobal("window", { localStorage: { getItem: () => "pending" } });
     try {
-      await expect(createTreeChild({ vaultId: id(), actorAccountId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
+      await expect(createTreeChild({ vaultId: id(), actorAccountId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey(), actorVaultRootKey: generateDirectoryCapabilityKey() },
         id(), { nodeId: id(), kind: "file", expectedRevision: 1, nameCiphertext: "", orderCiphertext: "",
           keyEnvelope: "" }, { directoryId: id(), entriesRevision: 1, entries: [] },
         generateDirectoryCapabilityKey())).rejects.toBeInstanceOf(RecoveryConfirmationPendingError);
-      await expect(renameTreeChild({ vaultId: id(), actorAccountId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey() },
+      await expect(renameTreeChild({ vaultId: id(), actorAccountId: id(), rootId: id(), rootKey: generateDirectoryCapabilityKey(), actorVaultRootKey: generateDirectoryCapabilityKey() },
         id(), id(), { expectedRevision: 1, nameCiphertext: "", orderCiphertext: "" },
         { directoryId: id(), entriesRevision: 1, entries: [] }, generateDirectoryCapabilityKey()))
         .rejects.toBeInstanceOf(RecoveryConfirmationPendingError);

@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { createCookie } from "react-router";
 import { build } from "vite";
 
+import { sealAccountProfile } from "../app/crypto/account-profile";
 import { createSymmetricWriter } from "../app/crypto/enc-v1";
 import { createFileRepresentation, createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/crypto/vault";
 import { encodeTreeBytes } from "../app/tree/wire";
@@ -41,6 +42,8 @@ export const test = appTest.extend<{ workspace: Workspace; initialSource: string
       };
     }, { accountId, deviceId });
     const hierarchy = await createVaultKeyHierarchy({ accountId, rootDirectoryId: rootId });
+    const profile = await sealAccountProfile(hierarchy.vaultRootKey, { publicPseudonym: "Member Test" },
+      { accountId, epoch: 1, revision: 1 });
     const transportKey = await crypto.subtle.importKey("raw", Uint8Array.from(publicKeys.transport),
       { name: "ECDH", namedCurve: "P-256" }, true, []);
     const enrollment = await sealDeviceEnrollmentEnvelope(hierarchy.vaultRootKey, transportKey, {
@@ -56,7 +59,8 @@ export const test = appTest.extend<{ workspace: Workspace; initialSource: string
       db.prepare("INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch) VALUES (?, 'device-enrollment', ?, ?, ?, 1)").bind(accountId, deviceId, deviceId, enrollment),
       // These unrelated bootstrap fields are opaque fixture records, not used by the Files flow.
       db.prepare("INSERT INTO recovery_capsules (account_id, generation, recovery_salt, ciphertext, verification_public_key) VALUES (?, 1, zeroblob(32), X'01', X'01')").bind(accountId),
-      db.prepare("INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at) VALUES (?, X'01', 1, 1, ?, ?)").bind(accountId, now, now),
+      db.prepare("INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(accountId, profile.ciphertext, profile.revision, profile.epoch, now, now),
       db.prepare("INSERT INTO sessions (id, account_id, purpose, authenticated_passkey_id, device_id, created_at, idle_expires_at, absolute_expires_at) VALUES (?, ?, 'normal', ?, ?, ?, ?, ?)").bind(sessionId, accountId, credentialId, deviceId, now, now + 3_600_000, now + 86_400_000),
     ]);
     const cookie = await createCookie("__Host-mdwn_session", { path: "/", secure: true, secrets: [TEST_SESSION_COOKIE_SECRET] }).serialize(sessionId);
@@ -67,6 +71,24 @@ export const test = appTest.extend<{ workspace: Workspace; initialSource: string
     await page.goto(`/f/${fileId}`);
     await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
     await waitForSharedProvisioning(page);
+    // Production Owner-open upkeep creates the real Private thread. These
+    // fixtures intentionally model a pre-ticket-21 File for tests that seed
+    // their own comment capabilities, so wait for the pass and reset it.
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (await db.prepare("SELECT 1 AS present FROM comment_threads WHERE file_id = ?").bind(fileId).first()) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const thread = "(SELECT id FROM comment_threads WHERE file_id = ?)";
+    await db.batch([
+      db.prepare("PRAGMA defer_foreign_keys = ON"),
+      db.prepare(`DELETE FROM key_rotation_comment_items WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM comments WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM thread_attributions WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM key_envelopes WHERE purpose = 'vault-recovery' AND object_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM sharing_comment_capabilities WHERE object_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM comment_thread_epochs WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare("DELETE FROM comment_threads WHERE file_id = ?").bind(fileId),
+    ]);
     await use(workspace);
   },
 });
