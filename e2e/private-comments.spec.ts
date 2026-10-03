@@ -24,6 +24,20 @@ test("the Owner creates, edits and hard-deletes Private Comments in the wide ins
   expect(await document.text()).not.toContain("Plain");
 });
 
+test("keeps an unsent Comment draft across a File rename revalidation", async ({ page, workspace }) => {
+  expect(workspace.fileId).toBeTruthy();
+  await page.getByRole("button", { name: "Comments", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Private comments", exact: true });
+  await expect(panel.getByText("No comments yet.")).toBeVisible();
+  await page.getByLabel("Add a private comment").fill("Draft survives rename");
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Rename", exact: true });
+  await dialog.getByLabel("Name").fill("Renamed.md");
+  await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Renamed.md", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Add a private comment")).toHaveValue("Draft survives rename");
+});
+
 test("narrow layouts switch the Comments content view with the composer at the bottom", async ({ page, workspace }) => {
   expect(workspace.fileId).toBeTruthy();
   await page.setViewportSize({ width: 480, height: 900 });

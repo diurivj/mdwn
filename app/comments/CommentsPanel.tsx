@@ -76,10 +76,15 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
   const [message, setMessage] = useState("");
   const lifetime = useRef<AbortController | null>(null);
   const creating = useRef(false);
+  // Revalidation (rename, save, provisioning) produces a new snapshot object
+  // with the same File authority. Keep the latest access in a ref so only a
+  // File change resets the composer, edit or pending state.
+  const accessRef = useRef(snapshot.access);
+  useEffect(() => { accessRef.current = snapshot.access; }, [snapshot.access]);
 
   const reload = useCallback(async (signal: AbortSignal) => {
     try {
-      const next = await loadPrivateComments(snapshot.access, fileId, signal);
+      const next = await loadPrivateComments(accessRef.current, fileId, signal);
       if (!signal.aborted) setPanel(next);
       return next;
     } catch (error) {
@@ -89,7 +94,7 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       else setPanel({ status: "failed", message: "Comments could not be loaded. Try again." });
       return null;
     }
-  }, [fileId, snapshot.access]);
+  }, [fileId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -99,6 +104,7 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
     setEditing(null);
     setDeleting(null);
     setMessage("");
+    setBusy(false);
     creating.current = false;
     void reload(controller.signal);
     return () => controller.abort();
@@ -114,7 +120,7 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
     setBusy(true);
     void (async () => {
       try {
-        await createPrivateThread(snapshot.access, fileId, controller.signal);
+        await createPrivateThread(accessRef.current, fileId, controller.signal);
         await reload(controller.signal);
       } catch {
         if (!controller.signal.aborted) setPanel({ status: "failed", message: "Comments could not be prepared. Try again." });
@@ -122,7 +128,7 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
         if (!controller.signal.aborted) setBusy(false);
       }
     })();
-  }, [panel, fileId, reload, snapshot.access]);
+  }, [panel, fileId, reload]);
 
   async function loadMore() {
     const controller = lifetime.current;
@@ -208,7 +214,7 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       event.preventDefault();
       if (!draft || tooLong) return;
       void mutate(async (_thread, signal) => {
-        await createPrivateComment(snapshot.access, thread, draft, signal);
+        await createPrivateComment(accessRef.current, thread, draft, signal);
         setDraft("");
       });
     }}>
