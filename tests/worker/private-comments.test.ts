@@ -190,6 +190,10 @@ it("lets a read-only Collaborator read, create, edit and delete its own Comments
   expect(shared.response.status).toBe(200);
   expect(shared.body!.thread).toMatchObject({ canComment: true, canDeleteAny: false });
   expect(shared.body!.thread!.envelope).toMatchObject({ mode: "grant", relationshipId: grantRecord.grantId });
+  // The read response carries the complete signed envelope context; the client
+  // opens exactly this object, so an omitted field would break collaborators.
+  const readEnvelope = shared.body!.thread!.envelope as unknown as Parameters<typeof openCommentKeyEnvelope>[0];
+  expect(await openCommentKeyEnvelope({ ...readEnvelope, recipient: collaborator.transport })).toEqual(thread.capability);
   const grantEnvelope = await (await sharingRequest(collaborator,
     `/api/private/grants/${grantRecord.grantId}/comment-keys/${thread.threadId}`)).json() as Parameters<typeof openCommentKeyEnvelope>[0];
   expect(await openCommentKeyEnvelope({ ...grantEnvelope, recipient: collaborator.transport })).toEqual(thread.capability);
@@ -354,6 +358,8 @@ it("rotation rewraps Comment bodies beneath the replacement thread capability an
   expect(after!.content_key_epoch).toBe(2);
   expect(after!.thread_epoch).toBe(2);
   expect(after!.capability_epoch).toBe(2);
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM key_rotation_comment_items WHERE thread_id = ?")
+    .bind(thread.threadId).first()).toEqual({ n: 0 });
   const currentEnvelope = await env.DB.prepare(`SELECT ciphertext, key_epoch FROM key_envelopes
     WHERE object_id = ? AND purpose = 'vault-recovery' AND recipient_id = 'vault-root' AND superseded_at IS NULL`)
     .bind(thread.threadId).first<{ ciphertext: ArrayBuffer; key_epoch: number }>();
@@ -379,6 +385,44 @@ it("rotation rewraps Comment bodies beneath the replacement thread capability an
   const reread = await readThread(owner, fileId);
   expect(reread.body!.thread!.capabilityEpoch).toBe(2);
   expect(reread.body!.comments![0]!.bodyCiphertext).toBe(comment.bodyCiphertext);
+});
+
+it("pages one flat ordered list past the first fifty Comments", async () => {
+  const owner = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file");
+  const thread = await createThread(owner, fileId);
+  const path = `/api/private/comments/files/${fileId}/entries`;
+  for (let index = 1; index <= 51; index++) {
+    const comment = await sealedComment(owner.accountId, thread, `Comment ${index}`);
+    expect((await sharingRequest(owner, path, "POST", commentPayload(thread, comment))).status, `comment ${index}`).toBe(201);
+  }
+  const first = await readThread(owner, fileId);
+  expect(first.body!.comments).toHaveLength(50);
+  expect(first.body!.comments!.map((comment) => comment.sequence)).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+  expect(first.body!.nextCursor).toBe(50);
+  const second = await sharingRequest(owner, `/api/private/comments/files/${fileId}?cursor=50`);
+  expect(second.status).toBe(200);
+  const secondBody = await second.json() as ThreadBody;
+  expect(secondBody.comments!.map((comment) => comment.sequence)).toEqual([51]);
+  expect(secondBody.nextCursor).toBeNull();
+});
+
+it("blocks new Private threads under a rotation seal", async () => {
+  const owner = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file");
+  await env.DB.prepare(`INSERT INTO sharing_write_blocks (target_id, owner_id, target_kind, key_epoch, created_at)
+    VALUES (?, ?, 'file', 2, ?)`).bind(fileId, owner.accountId, Date.now()).run();
+  const vaultRootKey = generateVaultRootKey();
+  const threadId = opaqueId(), epochId = opaqueId(), capabilityId = opaqueId();
+  const recoveryEnvelope = await sealVaultRecoveryEnvelope(vaultRootKey,
+    { scope: "owned", objectId: threadId, keyId: capabilityId, key: new Uint8Array(32).fill(3) },
+    { purpose: "vault-recovery", vaultId: owner.accountId, objectId: threadId, keyId: capabilityId, keyEpoch: 1, revision: 1 });
+  const response = await sharingRequest(owner, `/api/private/comments/files/${fileId}`, "PUT",
+    { threadId, epochId, capabilityId, recoveryEnvelope: encodeTreeBytes(recoveryEnvelope) });
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: "key_rotation_required" });
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM comment_threads WHERE file_id = ?").bind(fileId).first())
+    .toEqual({ n: 0 });
 });
 
 it("treats an exact Comment-create retry as idempotent without duplicating the row", async () => {

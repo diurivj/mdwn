@@ -54,7 +54,9 @@ enforces the 16,384-byte body and wrapper column bounds.
 | `DELETE /api/private/comments/files/:fileId/entries/:commentId` | Author or File-Owner hard deletion |
 | `POST /api/private/profile` | The current encrypted Account profile for local pseudonym resolution |
 
-Reads are bodyless POSTs, `no-store`, and never consume a proof. The Private and
+Reads are bodyless POSTs, `no-store`, and never consume a proof. They return at
+most 50 Comments per page with an explicit sequence cursor; the browser loads up
+to ten bounded pages and continues the flat list on demand. The Private and
 future Public threads use separate endpoints and are never combined.
 
 ## Capability delivery and authorization
@@ -71,7 +73,11 @@ a ciphertext-free `409 secure_access_preparing` (or
 `owned_comment_key_missing` for the Owner), never a fragment fallback.
 
 Every read and create re-derives current File-read access and requires the stored
-thread epoch, capability identity and epoch in the same statement. Edit requires
+thread epoch, capability identity and epoch in the same statement. Each
+ciphertext SELECT (thread envelope, Comments, attributions, rotation staging)
+rechecks that authority itself, so a revocation between statements cannot serve
+material. The read response carries the complete signed envelope context the
+client opens, never a partial object. Edit requires
 the stored author Account; delete allows the author or the File Owner and no one
 else; the Owner can never rewrite another author's body. Revocation removes
 server authorization immediately and hard-deletes the relationship's envelopes;

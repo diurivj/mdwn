@@ -67,6 +67,18 @@ async function fileAccess(env: Env, auth: AuthorizedDevice, fileId: string) {
       AND (n.owner_id = ${auth.accountId} OR ${accessPredicate(auth, fileId, "read")})`);
 }
 
+/** Shared mutation preflight: the stored thread, its current epoch/capability and
+ * live File-read access are all re-derived in one statement. */
+async function threadPreflight(env: Env, auth: AuthorizedDevice, fileId: string, threadId: string,
+  epochId: string, capabilityId: string, capabilityEpoch: number): Promise<{ thread: ThreadRow } | { response: Response }> {
+  const thread = await createDb(env.DB).get<ThreadRow>(sql`SELECT * FROM (${currentThread(fileId, threadId)}) t
+    WHERE ${privateReadGuard(auth)} AND ${accessPredicate(auth, fileId, "read")}`);
+  if (!thread) return { response: notFound() };
+  if (thread.epochId !== epochId || thread.keyEpoch !== capabilityEpoch ||
+      thread.capabilityId !== capabilityId || thread.capabilityEpoch !== capabilityEpoch) return { response: changed() };
+  return { thread };
+}
+
 type EnvelopeRow = { mode: "owned"; keyEpoch: number; ciphertext: ArrayBuffer } |
   { mode: "grant"; grantId: string; ownerId: string; recipientId: string; targetId: string; targetKind: string;
     ownerRegistryEpoch: number; recipientRegistryEpoch: number; grantKeyEpoch: number;
@@ -76,10 +88,15 @@ type EnvelopeRow = { mode: "owned"; keyEpoch: number; ciphertext: ArrayBuffer } 
  * current signed Grant envelope. Missing material is a ciphertext-free 409. */
 async function threadEnvelope(env: Env, auth: AuthorizedDevice, thread: ThreadRow): Promise<EnvelopeRow | null> {
   const db = createDb(env.DB);
+  // Each envelope read re-derives live access in the same statement, so a
+  // revocation between the thread read and this SELECT cannot serve ciphertext.
+  const authority = threadAuthority(auth, thread.fileId, thread.threadId,
+    thread.capabilityId, thread.capabilityEpoch, thread.epochId);
   if (thread.ownerId === auth.accountId) {
     const row = await db.get<{ ciphertext: ArrayBuffer }>(sql`SELECT ciphertext FROM key_envelopes
       WHERE account_id = ${thread.ownerId} AND purpose = 'vault-recovery' AND object_id = ${thread.threadId}
-        AND recipient_id = 'vault-root' AND key_epoch = ${thread.capabilityEpoch} AND superseded_at IS NULL`);
+        AND recipient_id = 'vault-root' AND key_epoch = ${thread.capabilityEpoch} AND superseded_at IS NULL
+        AND ${authority}`);
     return row ? { mode: "owned", keyEpoch: thread.capabilityEpoch, ciphertext: row.ciphertext } : null;
   }
   const row = await db.get<{ grant_id: string; owner_id: string; recipient_id: string; target_id: string;
@@ -95,7 +112,7 @@ async function threadEnvelope(env: Env, auth: AuthorizedDevice, thread: ThreadRo
     WHERE s.recipient_id = ${auth.accountId} AND ${liveGrant()}
       AND e.capability_id = ${thread.capabilityId} AND e.capability_epoch = ${thread.capabilityEpoch}
       AND e.grant_key_epoch = s.key_epoch AND e.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
-      AND ${privateReadGuard(auth)} LIMIT 1`);
+      AND ${authority} LIMIT 1`);
   return row ? { mode: "grant", grantId: row.grant_id, ownerId: row.owner_id, recipientId: row.recipient_id,
     targetId: row.target_id, targetKind: row.target_kind, ownerRegistryEpoch: row.owner_registry_epoch,
     recipientRegistryEpoch: row.recipient_registry_epoch, grantKeyEpoch: row.grant_key_epoch,
@@ -119,14 +136,17 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
   }
   const envelope = await threadEnvelope(env, auth, thread);
   if (!envelope) return failure(thread.ownerId === auth.accountId ? "owned_comment_key_missing" : "secure_access_preparing", 409);
+  const authority = threadAuthority(auth, thread.fileId, thread.threadId,
+    thread.capabilityId, thread.capabilityEpoch, thread.epochId);
   const comments = await db.all<CommentRow>(sql`SELECT id, author_id, sequence, revision, body_ciphertext, body_size,
       content_key_envelope, content_key_epoch, created_at, updated_at FROM comments
-    WHERE thread_id = ${thread.threadId} AND sequence > ${cursor}
+    WHERE thread_id = ${thread.threadId} AND sequence > ${cursor} AND ${authority}
     ORDER BY sequence LIMIT ${MAX_COMMENTS_PAGE + 1}`);
   const authors = [...new Set([auth.accountId, ...comments.map((comment) => comment.author_id)])];
   const attributions = await db.all<AttributionRow>(sql`SELECT id, author_id, revision, ciphertext,
       content_key_envelope, content_key_epoch FROM thread_attributions
     WHERE thread_id = ${thread.threadId} AND author_id IN (${sql.join(authors.map((author) => sql`${author}`), sql`, `)})
+      AND ${authority}
     ORDER BY id LIMIT ${MAX_ATTRIBUTIONS_PAGE + 1}`);
   return Response.json({
     thread: { threadId: thread.threadId, fileId: thread.fileId, ownerId: thread.ownerId, epochId: thread.epochId,
@@ -134,6 +154,8 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
       canComment: true, canDeleteAny: thread.ownerId === auth.accountId, actorAccountId: auth.accountId,
       envelope: envelope.mode === "owned" ? { mode: "owned", keyEpoch: envelope.keyEpoch,
         ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)) } : { mode: "grant",
+        purpose: "private-comment-thread", fileId: thread.fileId, threadId: thread.threadId,
+        objectId: thread.threadId, publicationId: null,
         relationshipId: envelope.grantId, ownerId: envelope.ownerId, recipientId: envelope.recipientId,
         targetId: envelope.targetId, targetKind: envelope.targetKind,
         capabilityId: thread.capabilityId, capabilityEpoch: thread.capabilityEpoch,
@@ -156,8 +178,6 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
   }, { headers });
 }
 
-/** Owner-only, create-once Private thread. A retry after a lost response is
- * harmless; an already-existing thread wins and the caller re-reads it. */
 async function existingThread(env: Env, auth: AuthorizedDevice, fileId: string) {
   return createDb(env.DB).get<{ thread_id: string }>(sql`SELECT t.id AS thread_id FROM comment_threads t
     JOIN vault_nodes n ON n.id = t.file_id AND n.owner_id = t.owner_id
@@ -177,6 +197,8 @@ async function createThread(env: Env, auth: AuthorizedDevice, fileId: string, va
     AND n.owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}`)) return notFound();
   const existing = await existingThread(env, auth, fileId);
   if (existing) return Response.json({ threadId: existing.thread_id, created: false }, { headers });
+  // A new encrypted thread beneath a rotation seal must wait for safe completion.
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return failure("key_rotation_required", 409);
   let recoveryEnvelope: Uint8Array;
   try {
     recoveryEnvelope = treeEnvelope(input.recoveryEnvelope, MAX_COMMENT_KEY_ENVELOPE_BYTES, {
@@ -188,7 +210,8 @@ async function createThread(env: Env, auth: AuthorizedDevice, fileId: string, va
   const committed = await commitPrivateBatch(env, auth, (guard) => sql`
     UPDATE vault_nodes SET updated_at = updated_at
     WHERE id = ${fileId} AND owner_id = ${auth.accountId} AND kind = 'file'
-      AND NOT EXISTS (SELECT 1 FROM comment_threads WHERE file_id = ${fileId} AND purpose = 'private') AND ${guard}`,
+      AND NOT EXISTS (SELECT 1 FROM comment_threads WHERE file_id = ${fileId} AND purpose = 'private')
+      AND NOT ${sharingWriteBlocked(fileId)} AND ${guard}`,
   (marker) => [
     sql`INSERT INTO comment_thread_epochs (id, thread_id, audience, key_epoch, ordinal, state, created_at)
       SELECT ${input.epochId}, ${input.threadId}, NULL, 1, 1, 'active', ${now} WHERE ${marker}`,
@@ -228,11 +251,9 @@ async function createComment(env: Env, auth: AuthorizedDevice, fileId: string, v
       !positiveEpoch(input.capabilityEpoch)) return invalid();
   const commentId = input.commentId, threadId = input.threadId, capabilityId = input.capabilityId;
   const capabilityEpoch = input.capabilityEpoch, epochId = input.epochId;
-  const thread = await createDb(env.DB).get<ThreadRow>(sql`SELECT * FROM (${currentThread(fileId, threadId)}) t
-    WHERE ${privateReadGuard(auth)} AND ${accessPredicate(auth, fileId, "read")}`);
-  if (!thread) return notFound();
-  if (thread.epochId !== epochId || thread.keyEpoch !== capabilityEpoch ||
-      thread.capabilityId !== capabilityId || thread.capabilityEpoch !== capabilityEpoch) return changed();
+  const preflight = await threadPreflight(env, auth, fileId, threadId, epochId, capabilityId, capabilityEpoch);
+  if ("response" in preflight) return preflight.response;
+  const { thread } = preflight;
   // The same seal is rechecked in the committing CAS; this only reports it clearly.
   if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return failure("key_rotation_required", 409);
   let bodyCiphertext: Uint8Array, contentKeyEnvelope: Uint8Array;
@@ -287,11 +308,9 @@ async function editComment(env: Env, auth: AuthorizedDevice, fileId: string, com
       !positiveEpoch(input.capabilityEpoch) || !positiveRevision(input.expectedRevision)) return invalid();
   const threadId = input.threadId, capabilityId = input.capabilityId;
   const capabilityEpoch = input.capabilityEpoch, epochId = input.epochId, expectedRevision = input.expectedRevision;
-  const thread = await createDb(env.DB).get<ThreadRow>(sql`SELECT * FROM (${currentThread(fileId, threadId)}) t
-    WHERE ${privateReadGuard(auth)} AND ${accessPredicate(auth, fileId, "read")}`);
-  if (!thread) return notFound();
-  if (thread.epochId !== epochId || thread.keyEpoch !== capabilityEpoch ||
-      thread.capabilityId !== capabilityId || thread.capabilityEpoch !== capabilityEpoch) return changed();
+  const preflight = await threadPreflight(env, auth, fileId, threadId, epochId, capabilityId, capabilityEpoch);
+  if ("response" in preflight) return preflight.response;
+  const { thread } = preflight;
   if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return failure("key_rotation_required", 409);
   const revision = expectedRevision + 1;
   let bodyCiphertext: Uint8Array, contentKeyEnvelope: Uint8Array;
@@ -323,18 +342,18 @@ async function deleteComment(env: Env, auth: AuthorizedDevice, fileId: string, c
       !positiveEpoch(input.capabilityEpoch) || !positiveRevision(input.expectedRevision)) return invalid();
   const threadId = input.threadId, capabilityId = input.capabilityId;
   const capabilityEpoch = input.capabilityEpoch, epochId = input.epochId, expectedRevision = input.expectedRevision;
-  const thread = await createDb(env.DB).get<ThreadRow>(sql`SELECT * FROM (${currentThread(fileId, threadId)}) t
-    WHERE ${privateReadGuard(auth)} AND ${accessPredicate(auth, fileId, "read")}`);
-  if (!thread) return notFound();
-  if (thread.epochId !== epochId || thread.keyEpoch !== capabilityEpoch ||
-      thread.capabilityId !== capabilityId || thread.capabilityEpoch !== capabilityEpoch) return changed();
-  // Hard deletion stays available while a rotation seal blocks new writes.
-  const committed = await commitPrivateMutation(env, auth, (guard) => sql`
+  const preflight = await threadPreflight(env, auth, fileId, threadId, epochId, capabilityId, capabilityEpoch);
+  if ("response" in preflight) return preflight.response;
+  // Hard deletion stays available while a rotation seal blocks new writes; the
+  // same transaction drops any wrapper staged for this Comment.
+  const committed = await commitPrivateBatch(env, auth, (guard) => sql`
     DELETE FROM comments WHERE id = ${commentId} AND thread_id = ${threadId} AND revision = ${expectedRevision}
       AND (author_id = ${auth.accountId} OR EXISTS (SELECT 1 FROM vault_nodes n
         WHERE n.id = ${fileId} AND n.owner_id = ${auth.accountId}))
       AND ${threadAuthority(auth, fileId, threadId, capabilityId, capabilityEpoch, epochId)}
-      AND ${guard}`);
+      AND ${guard}`,
+  (marker) => [sql`DELETE FROM key_rotation_comment_items
+    WHERE kind = 'comment' AND record_id = ${commentId} AND ${marker}`]);
   if (committed) return Response.json({ deleted: true }, { headers });
   const row = await createDb(env.DB).get<{ author_id: string; owner_id: string }>(sql`SELECT c.author_id, t.owner_id
     FROM comments c JOIN comment_threads t ON t.id = c.thread_id

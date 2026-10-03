@@ -1,17 +1,11 @@
 import {
-  attributionKeyContext,
-  attributionContext,
-  commentKeyContext,
-  commentBodyContext,
-  MAX_ATTRIBUTION_BYTES,
-  MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES,
-  MAX_COMMENT_BODY_BYTES,
   MAX_COMMENT_KEY_ENVELOPE_BYTES,
+  openAttribution,
+  openCommentBody,
   sealAttribution,
   sealCommentBody,
 } from "~/comments/content";
 import { openAccountProfile } from "~/crypto/account-profile";
-import { openSymmetric } from "~/crypto/enc-v1";
 import { openVaultRecoveryEnvelope, sealVaultRecoveryEnvelope } from "~/crypto/vault";
 import { privateRequest } from "~/device/private-client";
 import { getDevice } from "~/device/store";
@@ -21,6 +15,7 @@ import type { RootAccess } from "~/tree/client";
 import { decodeTreeBytes, encodeTreeBytes } from "~/tree/wire";
 
 const PROFILE_CIPHERTEXT_BYTES = 4_096;
+const COMMENT_PAGE_BATCH = 10;
 
 export class CommentsChangedError extends Error {
   constructor() { super("comment_changed"); }
@@ -51,23 +46,19 @@ export type CommentsState =
   | { status: "preparing" }
   | { status: "ready"; thread: PrivateComments };
 
-type ThreadResponse = {
-  thread: null | {
-    threadId: string; fileId: string; ownerId: string; epochId: string; capabilityId: string;
-    capabilityEpoch: number; canComment: boolean; canDeleteAny: boolean; actorAccountId: string;
-    envelope: { mode: "owned"; keyEpoch: number; ciphertext: string } |
-      ({ mode: "grant" } & CommentKeyContext & { deviceId: string; signerDeviceId: string;
-        signerPublicKey: string; ciphertext: string; signature: string });
-  };
-  canCreateThread?: boolean;
+type ThreadMeta = { fileId: string; threadId: string; ownerId: string; epochId: string; capabilityId: string;
+  capabilityEpoch: number; canComment: boolean; canDeleteAny: boolean; actorAccountId: string;
+  envelope: { mode: "owned"; keyEpoch: number; ciphertext: string } |
+    ({ mode: "grant" } & CommentKeyContext & { deviceId: string; signerDeviceId: string;
+      signerPublicKey: string; ciphertext: string; signature: string }) };
+type ThreadResponse = { thread: ThreadMeta | null; canCreateThread?: boolean;
   comments?: { id: string; authorId: string; sequence: number; revision: number; bodyCiphertext: string;
     contentKeyEnvelope: string; contentKeyEpoch: number; createdAt: number; updatedAt: number }[];
   attributions?: { id: string; authorId: string; revision: number; ciphertext: string;
     contentKeyEnvelope: string; contentKeyEpoch: number }[];
-  nextCursor?: number | null;
-};
+  nextCursor?: number | null };
 
-async function openThreadCapability(access: RootAccess, thread: NonNullable<ThreadResponse["thread"]>) {
+async function openThreadCapability(access: RootAccess, thread: ThreadMeta) {
   if (thread.envelope.mode === "owned") {
     return openVaultRecoveryEnvelope(decodeTreeBytes(thread.envelope.ciphertext, MAX_COMMENT_KEY_ENVELOPE_BYTES),
       access.actorVaultRootKey, { purpose: "vault-recovery", vaultId: thread.ownerId, objectId: thread.threadId,
@@ -75,8 +66,39 @@ async function openThreadCapability(access: RootAccess, thread: NonNullable<Thre
   }
   const device = await getDevice(access.actorAccountId);
   if (!device) throw new Error("private tree unavailable");
-  const envelope = thread.envelope;
-  return openCommentKeyEnvelope({ ...envelope, recipient: device.transportKeyPair });
+  return openCommentKeyEnvelope({ ...thread.envelope, recipient: device.transportKeyPair });
+}
+
+async function fetchPage(fileId: string, cursor: number | null, signal?: AbortSignal): Promise<Response> {
+  return privateRequest(`/api/private/comments/files/${fileId}${cursor === null ? "" : `?cursor=${cursor}`}`,
+    { method: "POST", signal });
+}
+
+/** Decrypt one page locally. An unreadable record stays visible without text. */
+async function decryptPage(thread: ThreadMeta, capability: Uint8Array, data: ThreadResponse) {
+  const pseudonyms = new Map<string, string>();
+  for (const attribution of data.attributions ?? []) {
+    try {
+      pseudonyms.set(attribution.authorId, await openAttribution(capability, { vaultId: thread.ownerId,
+        attributionId: attribution.id, revision: attribution.revision, capabilityId: thread.capabilityId,
+        keyEpoch: thread.capabilityEpoch, ciphertext: attribution.ciphertext,
+        contentKeyEnvelope: attribution.contentKeyEnvelope }));
+    } catch { /* An unreadable pseudonym must not block the rest of the thread. */ }
+  }
+  const comments: CommentView[] = [];
+  for (const comment of data.comments ?? []) {
+    let text: string | null = null;
+    try {
+      text = await openCommentBody(capability, { vaultId: thread.ownerId, commentId: comment.id,
+        revision: comment.revision, capabilityId: thread.capabilityId, keyEpoch: thread.capabilityEpoch,
+        bodyCiphertext: comment.bodyCiphertext, contentKeyEnvelope: comment.contentKeyEnvelope });
+    } catch { /* Keep the record visible with an explicit display failure. */ }
+    comments.push({ id: comment.id, authorId: comment.authorId, sequence: comment.sequence,
+      revision: comment.revision, text, createdAt: comment.createdAt, updatedAt: comment.updatedAt,
+      canEdit: comment.authorId === thread.actorAccountId,
+      canDelete: comment.authorId === thread.actorAccountId || thread.canDeleteAny });
+  }
+  return { comments, pseudonyms };
 }
 
 async function readPseudonym(access: RootAccess, signal?: AbortSignal): Promise<string> {
@@ -88,9 +110,10 @@ async function readPseudonym(access: RootAccess, signal?: AbortSignal): Promise<
   return opened.publicPseudonym;
 }
 
-/** Read the Private thread and decrypt it locally. Plaintext never leaves the browser. */
+/** Read the Private thread and decrypt it locally. Plaintext never leaves the
+ * browser. Up to ten bounded pages load per pass; the rest continue on demand. */
 export async function loadPrivateComments(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<CommentsState> {
-  const response = await privateRequest(`/api/private/comments/files/${fileId}`, { method: "POST", signal });
+  const response = await fetchPage(fileId, null, signal);
   if (response.status === 404) throw new CommentsNotFoundError();
   if (response.status === 409) {
     const body = await response.json() as { error?: string };
@@ -101,45 +124,48 @@ export async function loadPrivateComments(access: RootAccess, fileId: string, si
   const data = await response.json() as ThreadResponse;
   if (!data.thread) return { status: "absent", canCreate: Boolean(data.canCreateThread) };
   const capability = await openThreadCapability(access, data.thread);
-  const pseudonyms = new Map<string, string>();
-  for (const attribution of data.attributions ?? []) {
-    try {
-      pseudonyms.set(attribution.authorId, await openAttributionForDisplay(capability, data.thread, attribution));
-    } catch { /* An unreadable pseudonym must not block the rest of the thread. */ }
-  }
   const comments: CommentView[] = [];
-  for (const comment of data.comments ?? []) {
-    let text: string | null = null;
-    try {
-      const contentKey = await openSymmetric(decodeTreeBytes(comment.contentKeyEnvelope, MAX_COMMENT_KEY_ENVELOPE_BYTES),
-        capability, { context: commentKeyContext(data.thread.ownerId, comment.id, data.thread.capabilityId,
-          data.thread.capabilityEpoch, comment.revision) });
-      const plaintext = await openSymmetric(decodeTreeBytes(comment.bodyCiphertext, MAX_COMMENT_BODY_BYTES), contentKey,
-        { context: commentBodyContext(data.thread.ownerId, comment.id, comment.revision) });
-      text = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
-    } catch { /* Keep the record visible with an explicit display failure. */ }
-    comments.push({ id: comment.id, authorId: comment.authorId, sequence: comment.sequence,
-      revision: comment.revision, text, createdAt: comment.createdAt, updatedAt: comment.updatedAt,
-      canEdit: comment.authorId === access.actorAccountId,
-      canDelete: comment.authorId === access.actorAccountId || data.thread.canDeleteAny });
+  const pseudonyms = new Map<string, string>();
+  let page = data, cursor = data.nextCursor ?? null;
+  for (let index = 0; index < COMMENT_PAGE_BATCH; index++) {
+    const decrypted = await decryptPage(data.thread, capability, page);
+    comments.push(...decrypted.comments);
+    for (const [authorId, pseudonym] of decrypted.pseudonyms) pseudonyms.set(authorId, pseudonym);
+    if (cursor === null) break;
+    const next = await fetchPage(fileId, cursor, signal);
+    if (!next.ok) break;
+    page = await next.json() as ThreadResponse;
+    cursor = page.nextCursor ?? null;
   }
   return { status: "ready", thread: {
     fileId, threadId: data.thread.threadId, ownerId: data.thread.ownerId, epochId: data.thread.epochId,
     capabilityId: data.thread.capabilityId, capabilityEpoch: data.thread.capabilityEpoch, capability,
     actorAccountId: access.actorAccountId, canDeleteAny: data.thread.canDeleteAny,
     canComment: data.thread.canComment, hasAttribution: pseudonyms.has(access.actorAccountId),
-    pseudonyms, comments, nextCursor: data.nextCursor ?? null,
+    pseudonyms, comments, nextCursor: cursor,
   } };
 }
 
-async function openAttributionForDisplay(threadKey: Uint8Array, thread: NonNullable<ThreadResponse["thread"]>,
-  attribution: NonNullable<ThreadResponse["attributions"]>[number]) {
-  const contentKey = await openSymmetric(decodeTreeBytes(attribution.contentKeyEnvelope, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES),
-    threadKey, { context: attributionKeyContext(thread.ownerId, attribution.id, thread.capabilityId,
-      thread.capabilityEpoch, attribution.revision) });
-  const plaintext = await openSymmetric(decodeTreeBytes(attribution.ciphertext, MAX_ATTRIBUTION_BYTES), contentKey,
-    { context: attributionContext(thread.ownerId, attribution.id, attribution.revision) });
-  return new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
+/** Continue the same flat ordered list with the already-opened capability. */
+export async function loadMorePrivateComments(thread: PrivateComments, signal?: AbortSignal): Promise<{
+  comments: CommentView[]; pseudonyms: Map<string, string>; nextCursor: number | null }> {
+  const comments: CommentView[] = [];
+  const pseudonyms = new Map(thread.pseudonyms);
+  let cursor = thread.nextCursor;
+  const meta: ThreadMeta = { fileId: thread.fileId, threadId: thread.threadId, ownerId: thread.ownerId,
+    epochId: thread.epochId, capabilityId: thread.capabilityId, capabilityEpoch: thread.capabilityEpoch,
+    canComment: thread.canComment, canDeleteAny: thread.canDeleteAny, actorAccountId: thread.actorAccountId,
+    envelope: { mode: "owned", keyEpoch: thread.capabilityEpoch, ciphertext: "" } };
+  for (let index = 0; index < COMMENT_PAGE_BATCH && cursor !== null; index++) {
+    const response = await fetchPage(thread.fileId, cursor, signal);
+    if (!response.ok) throw new CommentsChangedError();
+    const page = await response.json() as ThreadResponse;
+    const decrypted = await decryptPage(meta, thread.capability, page);
+    comments.push(...decrypted.comments);
+    for (const [authorId, pseudonym] of decrypted.pseudonyms) pseudonyms.set(authorId, pseudonym);
+    cursor = page.nextCursor ?? null;
+  }
+  return { comments, pseudonyms, nextCursor: cursor };
 }
 
 /** Owner-only create-once thread; a second call adopts the existing thread. */

@@ -133,10 +133,10 @@ export async function rotationCommentItems(env: Env, auth: AuthorizedDevice, job
   const rows = await createDb(env.DB).all<{ record_id: string; kind: "comment" | "attribution"; revision: number;
     content_key_envelope: ArrayBuffer }>(sql`SELECT * FROM (
       SELECT id AS record_id, 'comment' AS kind, revision, content_key_envelope FROM comments
-        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""}
+        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)}
       UNION ALL
       SELECT id AS record_id, 'attribution' AS kind, revision, content_key_envelope FROM thread_attributions
-        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""}
+        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)}
     ) ORDER BY record_id LIMIT ${ROTATION_PAGE + 1}`);
   return { records: rows.slice(0, ROTATION_PAGE).map((row) => ({ recordId: row.record_id, kind: row.kind,
     revision: row.revision, contentKeyEnvelope: encoded(row.content_key_envelope)! })),

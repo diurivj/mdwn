@@ -8,6 +8,7 @@ import {
   createPrivateThread,
   deletePrivateComment,
   editPrivateComment,
+  loadMorePrivateComments,
   loadPrivateComments,
   type CommentView,
   type CommentsState,
@@ -123,6 +124,23 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
     })();
   }, [panel, fileId, reload, snapshot.access]);
 
+  async function loadMore() {
+    const controller = lifetime.current;
+    if (!controller || panel.status !== "ready" || busy || controller.signal.aborted || panel.thread.nextCursor === null) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await loadMorePrivateComments(panel.thread, controller.signal);
+      if (controller.signal.aborted) return;
+      setPanel({ status: "ready", thread: { ...panel.thread, comments: [...panel.thread.comments, ...next.comments],
+        pseudonyms: next.pseudonyms, nextCursor: next.nextCursor } });
+    } catch {
+      if (!controller.signal.aborted) setMessage("More comments could not be loaded. Try again.");
+    } finally {
+      if (!controller.signal.aborted) setBusy(false);
+    }
+  }
+
   async function mutate(action: (thread: PrivateComments, signal: AbortSignal) => Promise<void>) {
     const controller = lifetime.current;
     if (!controller || panel.status !== "ready" || busy || controller.signal.aborted) return;
@@ -184,6 +202,8 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
         })} />)}
       {!thread.comments.length && <li className="text-stone-500">No comments yet.</li>}
     </ol>
+    {thread.nextCursor !== null && <button type="button" disabled={busy} onClick={() => void loadMore()}
+      className="mt-3 self-start rounded border px-3 py-1 text-sm">Load more comments</button>}
     <form className="mt-4 border-t border-stone-200 pt-3" onSubmit={(event) => {
       event.preventDefault();
       if (!draft || tooLong) return;
