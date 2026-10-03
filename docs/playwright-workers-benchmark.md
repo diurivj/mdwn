@@ -48,3 +48,26 @@ flakes, and runtime regressions; a green workflow alone can hide retries.
 Keep the PR draft until that run is assessed. If stability or runtime regresses,
 restore the CI worker count to one instead of weakening tests or retry limits.
 No automatic merge or background watcher is part of this trial.
+
+## Outcome: rolled back to one worker
+
+The trial regressed Firefox stability, so CI is back to one worker per
+browser job, following the rule above.
+
+- The [trial PR run](https://github.com/diurivj/mdwn/actions/runs/37089788657)
+  was green only through a retry: Firefox's over-cap Directory deletion test
+  failed once, and its `shared-file.spec.ts` recipient tests took 27–31.5s
+  against the 30s test timeout.
+- The [post-merge `main` run](https://github.com/diurivj/mdwn/actions/runs/37090627340)
+  and the [next PR run](https://github.com/diurivj/mdwn/actions/runs/37097307023)
+  failed the same three Firefox tests on both attempts. The two file-recipient
+  `shared-file.spec.ts` tests exceeded the 30s timeout in their final steps,
+  and the over-cap test's 500-child folder did not render within the 5s
+  assertion timeout after reload. Traces show no hang or wrong state.
+- With one worker the same Firefox tests took 15–17s and 27s. With two
+  workers sharing two vCPUs, the two browsers and Wrangler harnesses roughly
+  doubled the CPU-bound crypto tests. WebKit also needed a retry for the
+  over-cap test.
+
+The Firefox job saved about two minutes (17m32s with two workers against
+19m32s with one), which does not justify the flakes.
