@@ -7,6 +7,7 @@ import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "~/t
 import { verifyFileHead, type FileHead } from "~/tree/file-head";
 import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
 import { readRotationSource, rotationSourceSnapshot } from "./rotation-data.server";
+import { liveGrant } from "./grant-lifetime.server";
 import type { RotationDirectory, RotationItem, RotationJob, RotationSource } from "./rotation-wire";
 
 const exact = (input: Record<string, unknown>, fields: string[]) => Object.keys(input).length === fields.length && fields.every((field) => Object.hasOwn(input, field));
@@ -89,7 +90,7 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
     sql`UPDATE grants SET key_epoch = key_epoch + 1 WHERE target_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
     sql`INSERT INTO provisioning_needs (grant_id, device_id, grant_key_epoch) SELECT s.id, d.id, s.key_epoch
       FROM grants s JOIN encryption_devices d ON d.account_id = s.recipient_id AND d.state = 'active'
-      WHERE s.target_id = ${item.objectId} AND s.owner_id = ${auth.accountId} AND ${marker}`,
+      WHERE s.target_id = ${item.objectId} AND s.owner_id = ${auth.accountId} AND ${liveGrant()} AND ${marker}`,
   ];
   if (source.kind === "directory") {
     const head = await rotationHead(input.listingHead, auth, item.objectId, item.targetEpoch!, source.entriesRevision + 1);

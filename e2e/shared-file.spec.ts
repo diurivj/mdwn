@@ -187,6 +187,41 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
     }
     const needs = await workspace.db.prepare("SELECT device_id, grant_key_epoch FROM provisioning_needs WHERE grant_id = ?").bind(grantId).all();
     expect(needs.results).toEqual([{ device_id: replacementId, grant_key_epoch: 1 }]);
+
+    const shell = await (await page.request.get("/account/shared-access")).text();
+    expect(shell).not.toContain(grantId);
+    expect(shell).not.toContain("Draft.md");
+    const automaticDelivery = page.waitForResponse((response) => response.request().method() === "PUT" &&
+      new URL(response.url()).pathname === `/api/private/grants/${grantId}/keys`);
+    await page.getByRole("complementary", { name: "Files tree", exact: true }).getByRole("link", { name: "Files", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+    expect((await automaticDelivery).status()).toBe(200);
+    await page.getByRole("region", { name: "Shared access provisioning", exact: true }).getByRole("link", { name: "Shared access", exact: true }).click();
+    await expect(page).toHaveURL(new URL("/account/shared-access", baseURL!).href);
+    await page.getByRole("button", { name: "Provision shared content", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Shared access pass complete" })).toBeVisible();
+    await pendingDevice.reload();
+    await expect(pendingDevice.getByRole("textbox", { name: "Markdown source", exact: true }))
+      .toHaveValue(permission === "read_write" ? "# Saved directly" : "# Shared secret\n\nOnly the target File.");
+    // Root delivery does not silently claim that missing Comment history is complete.
+    await pendingDevice.addScriptTag({ url: new URL("/__test__/workspace.js", pendingDevice.url()).href });
+    expect(await pendingDevice.evaluate(async ({ grantId, objectId }) =>
+      (await window.workspaceFixture.privateRequest(`/api/private/grants/${grantId}/comment-keys/${objectId}`, { method: "POST" })).status,
+      { grantId, objectId: commentIds[0]! })).toBe(409);
+
+    await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
+    expect(await page.evaluate(async (grantId) => (await window.workspaceFixture.privateRequest(`/api/private/grants/${grantId}`,
+      { method: "PATCH", body: JSON.stringify({ expectedRevision: 1, expiresAt: Date.now() + 60_000 }) })).status, grantId)).toBe(200);
+    // Move only the persisted deadline across the external time boundary, not browser proof clocks.
+    await workspace.db.prepare("UPDATE grants SET expires_at = 1 WHERE id = ?").bind(grantId).run();
+    await pendingDevice.reload();
+    await expect(pendingDevice.getByRole("heading", { name: "Not found", exact: true })).toBeVisible();
+    await expect(pendingDevice.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveCount(0);
+    await page.reload();
+    await page.getByRole("button", { name: "Provision shared content", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Shared access pass complete" })).toBeVisible();
+    await page.goto(new URL("/account/key-rotations", baseURL!).href);
+    await expect(page.getByRole("button", { name: "Resume update", exact: true })).toBeVisible();
   } finally { await Promise.all([recipientContext.close(), pendingContext.close()]); }
 });
 }

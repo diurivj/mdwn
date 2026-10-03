@@ -8,3 +8,7 @@ export * from "../../app/sharing/grant-keys";
 export * from "../../app/sharing/comment-keys";
 export * from "../../app/sharing/rotation-client";
 export * from "../../app/device/owned-provision-client";
+export * from "../../app/sharing/provisioning-client";
+export { openDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
+export { createSymmetricWriter } from "../../app/crypto/enc-v1";
+export { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";

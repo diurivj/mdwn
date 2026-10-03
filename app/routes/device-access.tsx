@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { privateRequest, PrivateAccessError, type PrivateAccessState } from "~/device/private-client";
 import { ownedProvisioningKind } from "~/device/owned-provision-client";
 import { useOwnedProvisioning } from "~/device/owned-provision-hook";
+import { SharedProvisioning } from "~/sharing/SharedProvisioning";
 
 import type { Route } from "./+types/device-access";
 
@@ -49,6 +50,7 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
         <>
           <h1 className="mt-8 text-2xl font-semibold">Private access ready</h1>
           <p className="mt-4">This browser has an active Encryption device.</p>
+          <SharedProvisioning />
           {loaderData.rootId && <Link to={`/d/${loaderData.rootId}`} className="mt-4 block underline">Open Files</Link>}
           <Link to="/enroll-device/approve" className="mt-4 inline-block underline">Approve another device</Link>
           {restoring && <p role="status" className="mt-4">{loaderData.provisioning === "recovery"

@@ -30,7 +30,8 @@ async function transcript(context: AddressedContext, ciphertext: Uint8Array) {
     context.recipientRegistryEpoch, context.deviceId, context.signerDeviceId, digest]));
 }
 
-/** Structural HPKE context and independent Owner signature are both required. */
+/** Structural HPKE context and an independent source-device signature are both
+ * required. The endpoint establishes Owner or current recipient-holder authority. */
 export async function verifyGrantKeySignature(record: SignedEnvelope, signerPublicKey: string): Promise<boolean> {
   try {
     const ciphertext = decodeTreeBytes(record.ciphertext, 16_384), signature = decodeTreeBytes(record.signature, 64);

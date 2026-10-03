@@ -79,7 +79,9 @@ test("selected File order survives reload", async ({ page, workspace }) => {
   await expect(page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link")).toHaveText(["Draft.md", "Second.md"]);
   await page.reload();
   await expect(page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link")).toHaveText(["Draft.md", "Second.md"]);
-  await page.goto(`/d/${workspace.rootId}`);
+  // Stay in-app: document navigation can cancel the provisioning route's lazy import.
+  await page.getByRole("complementary", { name: "Files tree", exact: true }).getByRole("link", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
   await expect(page.getByRole("button", { name: "Move up", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
 });

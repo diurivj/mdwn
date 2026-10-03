@@ -1,6 +1,6 @@
 # Shares, Grants, and server authority
 
-Ticket 17 introduces server-authoritative account-to-account sharing, parent-free File editing and basic current-device Grant capability delivery. [ADR-0008](adr/0008-parent-free-file-capabilities.md) records the approved hierarchy and ticket split. Ticket 18 adds Comment/Public-history delivery and persistent opaque provisioning needs; automatic enrollment/replacement-device fulfillment remains in ticket 20, and ticket 19 adds [browser-driven resumable key rotation](key-rotation.md). Comment/Publication/Import/Export endpoints retain their own operational enforcement and tests. No ciphertext or Grant possession substitutes for a current device-bound Session and Device proof.
+Ticket 17 introduces server-authoritative account-to-account sharing, parent-free File editing and basic current-device Grant capability delivery. [ADR-0008](adr/0008-parent-free-file-capabilities.md) records the approved hierarchy and ticket split. Ticket 18 adds Comment/Public-history delivery and persistent opaque provisioning needs; ticket 20 adds [browser-driven enrollment/replacement-device fulfillment](shared-provisioning.md), and ticket 19 adds [browser-driven resumable key rotation](key-rotation.md). Comment/Publication/Import/Export endpoints retain their own operational enforcement and tests. No ciphertext or Grant possession substitutes for a current device-bound Session and Device proof.
 
 ## Interfaces
 
@@ -15,21 +15,23 @@ Resource routes are thin React Router actions under `app/routes/api/`. All reque
 | `POST /api/private/shares/:id/decline` | Recipient hard-deletes the pending Share |
 | `DELETE /api/private/shares/:id` | Owner cancels the pending Share |
 | `POST /api/private/grants[?cursor=<opaque-id>]` | Received/owned active Grants |
-| `PATCH /api/private/grants/:id` | Owner changes permission with `expectedRevision` |
+| `PATCH /api/private/grants/:id` | Owner changes permission and/or a future `expiresAt` deadline (`null` clears it), with `expectedRevision` |
 | `DELETE /api/private/grants/:id` | Owner revokes with `expectedRevision` |
 | `POST /api/private/grants/:id/leave` | Recipient leaves with `expectedRevision` |
 | `POST /api/private/{shares,grants}/:id/keys[?cursor=<device-id>]` | Owner's scoped current device targets; active recipient's own envelope only |
-| `PUT /api/private/{shares,grants}/:id/keys` | Owner submits up to 20 signed device envelopes under pinned registry/root epochs |
+| `PUT /api/private/{shares,grants}/:id/keys` | Owner submits up to 20 signed device envelopes; an active Grant's current recipient holder may forward to its own Account's devices |
 | `POST /api/private/{shares,grants}/:id/comment-keys[?cursor=<object-id>]` | Required Private/retained Public-history capabilities, 20 per page |
 | `POST /api/private/{shares,grants}/:id/comment-keys/:objectId[?cursor=<device-id>]` | Owner's current device targets; active recipient's own envelope only |
-| `PUT /api/private/{shares,grants}/:id/comment-keys/:objectId` | Up to 20 signed Comment capability envelopes, pinned to current scope/epochs |
+| `PUT /api/private/{shares,grants}/:id/comment-keys/:objectId` | Up to 20 signed Comment envelopes, pinned to current scope/epochs; current recipient holders may forward within their Account |
 | `POST /api/private/grants/:id/needs[?cursor=<device-id>]` | Owner's opaque device needs, 20 per page; recipient sees only its own |
 | `PUT /api/private/grants/:id/needs` | Proof-gated, idempotent current-coverage reconciliation with an empty object body |
+| `POST /api/private/grant-provisioning/next` | One current missing capability/device item this source can provision, plus expiry-cleanup status |
+| `PATCH /api/private/grant-provisioning/expire` | Empty-object, proof-gated Owner expiry cleanup/rotation-handoff pass |
 | `PUT /api/private/tree/files/:id/capability` | Authorized browser atomically converts a legacy File under its parent write authority |
 
 An invitation has `{ targetId, recipient: { shareId } | { handle }, permission }`. Handles are optional, 3–32 ASCII letters/digits/underscores/hyphens, with exact case-insensitive equality. No trimming, prefixes, wildcards, fuzzy matching, Account directory, or standalone lookup endpoint exists. Only a domain-separated SHA-256 lookup token is stored; this is share addressing, not authentication. Handle assignment/profile editing is not introduced here.
 
-Lists have a combined 100-relationship page and an explicit `nextCursor`. They return opaque identities and target kind/permission only, never tree edges or encrypted Directory names. Every retained Share is pending and every retained Grant is active; unique relationship indexes and same-Owner/type target foreign keys enforce their storage contracts. No sharing audit log or inactive relationship rows are kept.
+Lists have a combined 100-relationship page and an explicit `nextCursor`. They return opaque identities and target kind/permission only, never tree edges or encrypted Directory names. Every retained Share is pending. Grant authority excludes expired deadlines at statement time; an expired Grant temporarily remains only as a write seal until bounded cleanup hands off to rotation. Unique relationship indexes and same-Owner/type target foreign keys enforce their storage contracts. No sharing audit log or inactive relationship rows are kept.
 
 ## Effective authority and the permission matrix
 
@@ -57,7 +59,7 @@ A browser with parent write authority converts a legacy File in one conditional 
 
 For acceptance the Owner stages HPKE `grant` envelopes for every current recipient device, in 20-device pages/packets. Each envelope has independent Owner-device intent signing bound to relationship, target/root identities, both registry snapshots, Grant key epoch, exact recipient/signer and ciphertext digest. The acceptance CAS requires complete current coverage, live Owner signer/registry, recipient registry and current root. The Share ID becomes the Grant ID; pending material is copied then deleted atomically. No partial authority or proof is consumed on a losing race. Only the recipient's currently authorized device can fetch its own current Grant envelope. Registry additions do not invalidate historical accepted envelopes for unchanged active devices; revoked-device rows are removed during device removal/recovery. Grant capabilities never enter Vault-root, recovery or routine enrollment envelopes.
 
-Browser deep links can open a received Grant root without traversing the Owner's hidden root. A direct File view contains no parent listing; read-only controls remain read-only according to current server authority. An absent device envelope shows **Shared content is being securely provisioned**, with no decrypted names or fragment fallback. A sharing-management panel and automatic new/replacement-device fulfillment are not implemented by this slice; ticket 20 consumes the delivery/needs protocol below.
+Browser deep links can open a received Grant root without traversing the Owner's hidden root. A direct File view contains no parent listing; read-only controls remain read-only according to current server authority. An absent device envelope shows **Shared content is being securely provisioned**, with no decrypted names or fragment fallback. A sharing-management panel is not implemented by this slice. Ticket 20 consumes the delivery/needs protocol below for automatic new/replacement-device fulfillment.
 
 Revocation, leave, and permission changes immediately remove/change server authority in a short proof-gated transaction. That same transaction records a current `sharing_write_blocks` safety seal/next-key fence and an Owner-resumable rotation job on the affected target; permission changes also advance the Grant epoch. The seal contains no former recipient, Grant identity, or historical audit record. Future encrypted/structural writes beneath it fail closed. Reads and hard deletion remain available, and explicit hard deletion removes all dependent Shares, Grants, and seals. Never expire or clear a seal merely to restore writes under an old key; [rotation](key-rotation.md) must replace affected capabilities and cover current retained Grant/Comment requirements before unsealing.
 
@@ -75,7 +77,7 @@ Acceptance's first CAS checks complete current-device coverage of the root **and
 
 `provisioning_needs` contains exactly `(grant_id, device_id, grant_key_epoch)`, no names, ciphertext, keys, capabilities or free-form progress. Active device insertion records needs inside routine/recovery cutover; new/rotated Comment requirements record needs for currently covering Grants. Reconciliation removes completed/inactive/stale work and records missing current coverage without opening keys. Each successful active delivery retires only needs with complete root plus retained Comment coverage, in the same invocation-token-gated transaction. Exact ciphertext retries with fresh proofs are harmless; a lost/invalid proof cannot unlock dependents. Permission changes replace work with the new Grant epoch but do not clear rotation seals. Revoke, leave, device removal, recovery and hard deletion explicitly cancel affected work/envelopes. No Grant material enters `key_envelopes`, Vault recovery or routine enrollment.
 
-A missing root keeps the Files page at **Shared content is being securely provisioned**, with no names, plaintext or fragment fallback. Missing Comment-only material returns ciphertext-free `409 secure_access_preparing`; later Comment consumers may show **secure access is being prepared** without withholding a separately provisioned File. Owner devices can process the paginated needs and delivery endpoints now; ticket 20 owns automatic fulfillment and any additional authorized source-browser role.
+A missing root keeps the Files page at **Shared content is being securely provisioned**, with no names, plaintext or fragment fallback. Missing Comment-only material returns ciphertext-free `409 secure_access_preparing`; later Comment consumers may show **secure access is being prepared** without withholding a separately provisioned File. Owner devices can process the paginated needs and delivery endpoints. [Ticket 20 fulfillment](shared-provisioning.md) also lets a recipient device with a current envelope forward that capability to another active device of the same Account/Grant; this does not permit resharing.
 
 ## Reviewed effective-access query plan
 

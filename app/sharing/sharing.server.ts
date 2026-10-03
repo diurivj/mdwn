@@ -4,6 +4,7 @@ import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, pri
 import { newOpaqueId } from "~/opaque-id";
 import { isV7 } from "~/tree/wire";
 import { shareHandleLookupToken } from "./address";
+import { liveGrant } from "./grant-lifetime.server";
 import { readGrantKeys, uploadGrantKeys } from "./grant-keys.server";
 import { sharingWriteBlocked } from "./access.server";
 import { listCommentKeys, readCommentKey, uploadCommentKeys } from "./comment-keys.server";
@@ -25,11 +26,12 @@ function exact(value: Record<string, unknown>, keys: readonly string[]) {
 async function listRelationships(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", cursor: string | null) {
   const table = kind === "shares" ? sql`shares` : sql`grants`;
   const rows = await createDb(env.DB).all<{ id: string; owner_id: string; recipient_id: string;
-    target_id: string; target_kind: string; permission: string; revision?: number; key_epoch?: number }>(sql`
+    target_id: string; target_kind: string; permission: string; revision?: number; key_epoch?: number; expires_at?: number | null }>(sql`
     SELECT * FROM ${table} WHERE (owner_id = ${auth.accountId} OR recipient_id = ${auth.accountId})
+      AND ${kind === "shares" ? sql`1` : liveGrant(sql`expires_at`)}
       AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} ORDER BY id LIMIT 101`);
   const relationships = rows.slice(0, 100).map((row) => ({
-    ...(kind === "shares" ? { shareId: row.id } : { grantId: row.id, revision: row.revision, keyEpoch: row.key_epoch }),
+    ...(kind === "shares" ? { shareId: row.id } : { grantId: row.id, revision: row.revision, keyEpoch: row.key_epoch, expiresAt: row.expires_at }),
     ownerId: row.owner_id, recipientId: row.recipient_id, targetId: row.target_id,
     targetKind: row.target_kind, permission: row.permission,
   }));
@@ -145,20 +147,32 @@ async function removeGrant(env: Env, auth: AuthorizedDevice, grantId: string, ro
 
 async function changeGrant(env: Env, auth: AuthorizedDevice, grantId: string, value: unknown) {
   const input = record(value);
-  if (!input || !exact(input, ["expectedRevision", "permission"]) ||
+  if (!input || !Object.hasOwn(input, "expectedRevision") ||
+      !Object.keys(input).every((key) => ["expectedRevision", "permission", "expiresAt"].includes(key)) ||
+      !(Object.hasOwn(input, "permission") || Object.hasOwn(input, "expiresAt")) ||
       !Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 1 ||
       !Number.isSafeInteger((input.expectedRevision as number) + 1) ||
-      (input.permission !== "read_only" && input.permission !== "read_write")) return invalid();
+      Object.hasOwn(input, "permission") && input.permission !== "read_only" && input.permission !== "read_write" ||
+      Object.hasOwn(input, "expiresAt") && input.expiresAt !== null &&
+        (!Number.isSafeInteger(input.expiresAt) || (input.expiresAt as number) <= Date.now())) return invalid();
+  const deadline = Object.hasOwn(input, "expiresAt") ? sql`${input.expiresAt}` : sql`expires_at`;
   const target = await createDb(env.DB).get<{ target_id: string; owner_id: string; target_kind: string }>(sql`
     SELECT target_id, owner_id, target_kind FROM grants WHERE id = ${grantId}
-      AND owner_id = ${auth.accountId} AND ${privateReadGuard(auth)}`);
+      AND owner_id = ${auth.accountId} AND ${liveGrant(sql`expires_at`)} AND ${privateReadGuard(auth)}`);
   if (!target) return notFound();
+  if (!Object.hasOwn(input, "permission")) {
+    const committed = await commitPrivateBatch(env, auth, (guard) => sql`UPDATE grants
+      SET expires_at = ${deadline}, revision = revision + 1, updated_at = ${Date.now()}
+      WHERE id = ${grantId} AND owner_id = ${auth.accountId} AND revision = ${input.expectedRevision}
+        AND ${liveGrant(sql`expires_at`)} AND ${liveGrant(deadline)} AND ${guard}`, () => []);
+    return committed ? Response.json({ revision: (input.expectedRevision as number) + 1 }, { headers }) : conflict();
+  }
   const rotation = await planRotation(env, auth, target);
   if (!rotation) return conflict();
   const committed = await commitPrivateBatch(env, auth, (guard) => sql`
-    UPDATE grants SET permission = ${input.permission}, revision = revision + 1, key_epoch = key_epoch + 1, updated_at = ${Date.now()}
+    UPDATE grants SET permission = ${input.permission}, expires_at = ${deadline}, revision = revision + 1, key_epoch = key_epoch + 1, updated_at = ${Date.now()}
     WHERE id = ${grantId} AND owner_id = ${auth.accountId} AND revision = ${input.expectedRevision}
-      AND ${rotationSnapshot(target, rotation)} AND ${guard}`,
+      AND ${liveGrant(sql`expires_at`)} AND ${liveGrant(deadline)} AND ${rotationSnapshot(target, rotation)} AND ${guard}`,
     (committed) => [sql`DELETE FROM grant_comment_key_envelopes WHERE relationship_id = ${grantId} AND ${committed}`,
       sql`DELETE FROM grant_key_envelopes WHERE relationship_id = ${grantId} AND ${committed}`,
       ...startRotation(auth, target, rotation, committed), ...reconcileGrantNeeds(grantId, committed)]);

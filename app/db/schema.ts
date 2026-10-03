@@ -606,7 +606,7 @@ export const shares = sqliteTable("shares", {
   check("shares_no_self", sql`${table.ownerId} != ${table.recipientId}`),
 ]);
 
-/** Every retained Grant is active. Independent targets never replace one another. */
+/** Expired Grants retain a write seal until bounded cleanup hands off to rotation. */
 export const grants = sqliteTable("grants", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
@@ -616,11 +616,14 @@ export const grants = sqliteTable("grants", {
   permission: text("permission").notNull(),
   revision: integer("revision").notNull(),
   keyEpoch: integer("key_epoch").notNull(),
+  expiresAt: integer("expires_at"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [
   uniqueIndex("grants_relationship_idx").on(table.ownerId, table.recipientId, table.targetId),
-  index("grants_recipient_target_idx").on(table.recipientId, table.targetId, table.ownerId, table.targetKind, table.permission),
+  index("grants_recipient_target_idx").on(table.recipientId, table.targetId, table.ownerId, table.targetKind, table.permission, table.expiresAt),
+  index("grants_expiry_idx").on(table.expiresAt, table.id),
+  index("grants_owner_expiry_idx").on(table.ownerId, table.expiresAt, table.id),
   index("grants_recipient_idx").on(table.recipientId, table.id),
   index("grants_owner_idx").on(table.ownerId, table.id),
   index("grants_target_idx").on(table.targetId),
