@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c376ecfe-fe79-49f1-9a3a-eb108f3a3411",
+  "id": "5802fd4b-9aa9-4e09-b1d8-1431673869ea",
   "prevId": "d990dd34-f672-469d-86c6-38f5932c0744",
   "tables": {
     "account_encryption_identities": {
@@ -3066,21 +3066,6 @@
           ],
           "onDelete": "restrict",
           "onUpdate": "no action"
-        },
-        "public_representations_link_id_publication_id_publication_links_id_publication_id_fk": {
-          "name": "public_representations_link_id_publication_id_publication_links_id_publication_id_fk",
-          "tableFrom": "public_representations",
-          "tableTo": "publication_links",
-          "columnsFrom": [
-            "link_id",
-            "publication_id"
-          ],
-          "columnsTo": [
-            "id",
-            "publication_id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3204,21 +3189,6 @@
           ],
           "columnsTo": [
             "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "publication_authors_link_id_publication_id_publication_links_id_publication_id_fk": {
-          "name": "publication_authors_link_id_publication_id_publication_links_id_publication_id_fk",
-          "tableFrom": "publication_authors",
-          "tableTo": "publication_links",
-          "columnsFrom": [
-            "link_id",
-            "publication_id"
-          ],
-          "columnsTo": [
-            "id",
-            "publication_id"
           ],
           "onDelete": "restrict",
           "onUpdate": "no action"

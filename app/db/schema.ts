@@ -965,6 +965,7 @@ export const publicationLinks = sqliteTable("publication_links", {
 export const publicRepresentations = sqliteTable("public_representations", {
   id: text("id").primaryKey(),
   publicationId: text("publication_id").notNull().references(() => publications.id, { onDelete: "restrict" }),
+  /** The link whose public key this ciphertext was encrypted to. */
   linkId: text("link_id").notNull(),
   /** Publication-scoped presentation revision; never the File's revision count. */
   revision: integer("revision").notNull(),
@@ -975,9 +976,9 @@ export const publicRepresentations = sqliteTable("public_representations", {
   createdAt: integer("created_at").notNull(),
 }, (table) => [
   uniqueIndex("public_representations_revision_idx").on(table.publicationId, table.revision),
+  // Target of the Publication's current-pointer FK: the current representation
+  // is always one encrypted for the current link. Superseded rows are removed.
   uniqueIndex("public_representations_pointer_idx").on(table.id, table.publicationId, table.linkId),
-  foreignKey({ columns: [table.linkId, table.publicationId],
-    foreignColumns: [publicationLinks.id, publicationLinks.publicationId] }).onDelete("restrict"),
   check("public_representations_revision_positive", sql`${table.revision} >= 1 AND ${table.fileRevision} >= 1`),
   check("public_representations_ciphertext_bounded", sql`length(${table.ciphertext}) <= 524288 AND ${table.ciphertextSize} = length(${table.ciphertext})`),
 ]);
@@ -1006,6 +1007,7 @@ export const publicationAuthors = sqliteTable("publication_authors", {
   publicationId: text("publication_id").notNull().references(() => publications.id, { onDelete: "restrict" }),
   authorId: text("author_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
   ordinal: integer("ordinal").notNull(),
+  /** The link the declaration is encrypted to; only the current link's are served. */
   linkId: text("link_id"),
   revision: integer("revision").notNull(),
   ciphertext: blob("ciphertext"),
@@ -1014,8 +1016,6 @@ export const publicationAuthors = sqliteTable("publication_authors", {
 }, (table) => [
   uniqueIndex("publication_authors_author_idx").on(table.publicationId, table.authorId),
   uniqueIndex("publication_authors_ordinal_idx").on(table.publicationId, table.ordinal),
-  foreignKey({ columns: [table.linkId, table.publicationId],
-    foreignColumns: [publicationLinks.id, publicationLinks.publicationId] }).onDelete("restrict"),
   check("publication_authors_id_opaque", opaquePublicationIdentifier(table.id)),
   check("publication_authors_ordinal_positive", sql`${table.ordinal} >= 1`),
   check("publication_authors_declaration", sql`(${table.ciphertext} IS NULL AND ${table.linkId} IS NULL AND ${table.revision} >= 0)

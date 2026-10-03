@@ -8,7 +8,6 @@ CREATE TABLE `public_representations` (
 	`ciphertext_size` integer NOT NULL,
 	`created_at` integer NOT NULL,
 	FOREIGN KEY (`publication_id`) REFERENCES `publications`(`id`) ON UPDATE no action ON DELETE restrict,
-	FOREIGN KEY (`link_id`,`publication_id`) REFERENCES `publication_links`(`id`,`publication_id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "public_representations_revision_positive" CHECK("public_representations"."revision" >= 1 AND "public_representations"."file_revision" >= 1),
 	CONSTRAINT "public_representations_ciphertext_bounded" CHECK(length("public_representations"."ciphertext") <= 524288 AND "public_representations"."ciphertext_size" = length("public_representations"."ciphertext"))
 );
@@ -27,7 +26,6 @@ CREATE TABLE `publication_authors` (
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`publication_id`) REFERENCES `publications`(`id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`author_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict,
-	FOREIGN KEY (`link_id`,`publication_id`) REFERENCES `publication_links`(`id`,`publication_id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "publication_authors_id_opaque" CHECK(length("publication_authors"."id") = 43 AND "publication_authors"."id" NOT GLOB '*[^A-Za-z0-9_-]*'),
 	CONSTRAINT "publication_authors_ordinal_positive" CHECK("publication_authors"."ordinal" >= 1),
 	CONSTRAINT "publication_authors_declaration" CHECK(("publication_authors"."ciphertext" IS NULL AND "publication_authors"."link_id" IS NULL AND "publication_authors"."revision" >= 0)
@@ -74,8 +72,8 @@ CREATE TABLE `publications` (
 	FOREIGN KEY (`owner_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`owner_id`,`file_id`) REFERENCES `files`(`owner_id`,`node_id`) ON UPDATE no action ON DELETE restrict,
 	-- Reciprocal current pointers: an active Publication names exactly one of its
-	-- own links and one of its own Public representations under that link. Both
-	-- rows are created or swapped in the same transaction as the pointer.
+	-- own links and one of its own Public representations encrypted to that link.
+	-- Both rows are created or swapped in the same transaction as the pointer.
 	FOREIGN KEY (`current_link_id`,`id`) REFERENCES `publication_links`(`id`,`publication_id`)
 	  ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
 	FOREIGN KEY (`current_representation_id`,`id`,`current_link_id`)

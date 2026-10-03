@@ -14,7 +14,8 @@
  *   blocking external/injected styles exceeds the marginal risk.
  * - 'self' first-party resources only: no CDNs, no third-party scripts. mdwn
  *   pages never load third-party code (spec §3.6).
- * - X-Robots-Tag keeps every page non-indexed by default (spec §2.1).
+ * - X-Robots-Tag keeps every page, including Public pages, non-indexed and
+ *   unarchived by default (spec §2.1, §6.5).
  */
 
 /** Nonce charset: CSP-nonce is base64-ish; we generate base64url. */
@@ -88,7 +89,7 @@ export function buildSecurityHeaders(input: SecurityHeadersInput): Record<string
     "Permissions-Policy": "camera=(self), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
-    // Anonymous public pages are non-indexed by default (spec §2.1).
-    "X-Robots-Tag": "noindex, nofollow",
+    // Anonymous public pages are non-indexed and unarchived by default (spec §2.1, §6.5).
+    "X-Robots-Tag": "noindex, nofollow, noarchive",
   };
 }
