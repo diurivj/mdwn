@@ -100,4 +100,25 @@ describe("committed Drizzle migrations", () => {
     expect(sql).toContain("thread_attributions_bounded");
     expect(sql).not.toMatch(/body text|plaintext|body_text|pseudonym text/i);
   });
+
+  it("adds Publications with one active-or-deleting row per File and no fragment capability", () => {
+    const name = migrations.find((migration) => migration.startsWith("0020_"));
+    expect(name).toBeDefined();
+    const sql = readFileSync(join(DRIZZLE_DIR, name!), "utf8");
+    for (const table of ["publications", "publication_links", "public_representations", "publication_requests",
+      "publication_authors"]) {
+      expect(sql).toContain(`CREATE TABLE \`${table}\``);
+    }
+    // At most one active-or-deleting Publication per File.
+    expect(sql).toContain("CREATE UNIQUE INDEX `publications_file_idx` ON `publications` (`file_id`) WHERE \"publications\".\"state\" IN ('active', 'deleting')");
+    // The Public representation has the same decoded BLOB bound as a private one.
+    expect(sql).toContain("CHECK(length(\"public_representations\".\"ciphertext\") <= 524288");
+    // Current pointers are reciprocal and deferred; a sealed Publication never reactivates.
+    expect(sql).toContain("REFERENCES `publication_links`(`id`,`publication_id`)\n\t  ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED");
+    expect(sql).toContain("CREATE TRIGGER publication_seal_irreversible");
+    expect(sql).toContain("CREATE TRIGGER publication_created_active");
+    // Only the public key is stored; the read capability has no column.
+    expect(sql).toContain("`public_key` blob NOT NULL");
+    expect(sql).not.toMatch(/fragment|capability_key|private_key|secret|plaintext|title|markdown/i);
+  });
 });
