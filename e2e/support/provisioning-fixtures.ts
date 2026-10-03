@@ -1,6 +1,7 @@
 import type { Browser, Page } from "@playwright/test";
 import { expect, installWorkspaceScript, objectId, type Workspace } from "../workspace-fixture";
 import { completeRecoveryPresentation } from "../signup-recovery";
+import { waitForSharedProvisioning } from "./navigation";
 import type { GrantKeyContext } from "../../app/sharing/grant-keys";
 import type { CommentKeyContext } from "../../app/sharing/comment-keys";
 
@@ -201,6 +202,9 @@ export async function expectCommentKeys(page: Page, grantId: string, comments: s
 export async function expectPending(page: Page, origin: string, fileId: string, fragment: string) {
   const sent: string[] = [];
   page.on("request", (request) => sent.push(request.url() + (request.postData() ?? "")));
+  // Keep the real fragment-bearing document navigation, after device-access's
+  // background route import settles (even when provisioning itself is blocked).
+  await waitForSharedProvisioning(page);
   await page.goto(`${origin}/f/${fileId}#${fragment}`);
   await expect(page.getByText("Shared content is being securely provisioned", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveCount(0);
@@ -210,7 +214,9 @@ export async function expectPending(page: Page, origin: string, fileId: string, 
   await loadFixture(page);
 }
 export async function manualPass(page: Page, origin: string) {
-  await page.goto(`${origin}/account/shared-access`);
+  await page.getByRole("region", { name: "Shared access provisioning", exact: true })
+    .getByRole("link", { name: "Shared access", exact: true }).click();
+  await expect(page).toHaveURL(`${origin}/account/shared-access`);
   await page.getByRole("button", { name: "Provision shared content", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Shared access pass complete" })).toBeVisible();
 }

@@ -90,6 +90,17 @@ protocol. No production test route or persisted draft store is introduced.
 The File save API invariants run through `SELF.fetch` in
 `tests/worker/private-tree.test.ts`, with supplemental real-D1 rollback checks.
 
+Use existing UI links for in-app navigation. When a test intentionally replaces
+an already-ready Files/device-access document (for example, opening a shared
+File link with a fragment), first use `waitForSharedProvisioning` from
+`e2e/support/navigation.ts`. A ready heading can precede the background fetcher's
+lazy route import; cancelling that import in WebKit can make React Router reload
+the old URL. The region stays busy from its initial render through its first
+result, so initial idle cannot be mistaken for completion. The workspace fixture
+includes this readiness check before yielding.
+Keep explicit reload, deep-link, and fragment-privacy assertions; do not hide
+navigation errors with retries, fixed sleeps, or a global `networkidle` wait.
+
 - `window.isSecureContext` and AES-GCM WebCrypto;
 - a non-extractable `CryptoKey` structured-cloned into IndexedDB and recovered
   after closing and relaunching a persistent browser profile; and

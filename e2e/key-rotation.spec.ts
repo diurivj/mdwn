@@ -110,7 +110,7 @@ test("an interrupted root rotation resumes from the progress UI without putting 
     if (await api.resumeKeyRotation(rotation.jobId, { maxSteps: 3 })) throw new Error("Expected an interrupted bounded pass");
     return rotation.jobId;
   }, grantId);
-  await page.goto("/account/key-rotations");
+  await page.getByRole("link", { name: "Secure access updates", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Secure access updates", exact: true })).toBeVisible();
   await expect(page.getByText("1 capability updated", { exact: true })).toBeVisible();
   await expect(page.getByText("This cannot recall previously downloaded plaintext, ciphertext, or keys.", { exact: true })).toBeVisible();
@@ -134,13 +134,15 @@ test("an interrupted root rotation resumes from the progress UI without putting 
   await expect(page.getByRole("status", { name: "File save status" })).toHaveText("Saved");
   await page.reload();
   await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue("# Safe future write");
-  await page.goto(`/d/${workspace.rootId}`);
+  await page.getByRole("complementary", { name: "Files tree", exact: true }).getByRole("link", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
   await page.getByRole("button", { name: "New folder", exact: true }).click();
   const create = page.getByRole("dialog", { name: "Create a name" });
   await create.getByRole("textbox", { name: "Name", exact: true }).fill("After rotation");
   await create.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("heading", { name: "After rotation", exact: true })).toBeVisible();
-  await page.goto(`/f/${workspace.fileId}`);
+  await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
   await page.getByRole("button", { name: "Move", exact: true }).click();
   const move = page.getByRole("dialog", { name: "Move", exact: true });
   await move.getByRole("textbox", { name: "Name", exact: true }).fill("moved.md");

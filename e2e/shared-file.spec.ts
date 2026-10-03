@@ -193,9 +193,11 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
     expect(shell).not.toContain("Draft.md");
     const automaticDelivery = page.waitForResponse((response) => response.request().method() === "PUT" &&
       new URL(response.url()).pathname === `/api/private/grants/${grantId}/keys`);
-    await page.goto(new URL(`/d/${workspace.rootId}`, baseURL!).href);
+    await page.getByRole("complementary", { name: "Files tree", exact: true }).getByRole("link", { name: "Files", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
     expect((await automaticDelivery).status()).toBe(200);
-    await page.goto(new URL("/account/shared-access", baseURL!).href);
+    await page.getByRole("region", { name: "Shared access provisioning", exact: true }).getByRole("link", { name: "Shared access", exact: true }).click();
+    await expect(page).toHaveURL(new URL("/account/shared-access", baseURL!).href);
     await page.getByRole("button", { name: "Provision shared content", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Shared access pass complete" })).toBeVisible();
     await pendingDevice.reload();

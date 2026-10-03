@@ -6,6 +6,7 @@ import { createSymmetricWriter } from "../app/crypto/enc-v1";
 import { createFileRepresentation, createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/crypto/vault";
 import { encodeTreeBytes } from "../app/tree/wire";
 import { test as appTest, expect, TEST_SESSION_COOKIE_SECRET } from "./fixtures";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 export type Workspace = { fileId: string; rootId: string; accountId: string; rootKey: Uint8Array; db: D1Database };
 declare global { interface Window { workspaceFixture: typeof import("./support/workspace-entry"); } }
@@ -65,6 +66,7 @@ export const test = appTest.extend<{ workspace: Workspace; initialSource: string
     await seedWorkspaceContent(workspace, page, initialSource, legacySource);
     await page.goto(`/f/${fileId}`);
     await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
+    await waitForSharedProvisioning(page);
     await use(workspace);
   },
 });

@@ -24,7 +24,8 @@ export function SharedProvisioning() {
       defaultShouldRevalidate: false }); }, 250);
     return () => clearTimeout(timer);
   }, [state, data, submit]);
-  return <div className="mt-4 text-sm" role="region" aria-label="Shared access provisioning" aria-busy={state !== "idle"}>
+  // The initial idle render precedes the first load; it is not a completed check.
+  return <div className="mt-4 text-sm" role="region" aria-label="Shared access provisioning" aria-busy={state !== "idle" || data === undefined}>
     {data?.pending && <p role="status">Shared content is being securely provisioned</p>}
     {data && "state" in data && data.state === "failed" && <p>Shared provisioning paused safely.</p>}
     <Link to="/account/shared-access" className="underline">Shared access</Link>
