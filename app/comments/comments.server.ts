@@ -5,7 +5,6 @@ import {
   attributionKeyContext,
   commentBodyContext,
   commentKeyContext,
-  MAX_ATTRIBUTIONS_PAGE,
   MAX_ATTRIBUTION_BYTES,
   MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES,
   MAX_COMMENT_BODY_BYTES,
@@ -125,7 +124,7 @@ type CommentRow = { id: string; author_id: string; sequence: number; revision: n
 type AttributionRow = { id: string; author_id: string; revision: number; ciphertext: ArrayBuffer;
   content_key_envelope: ArrayBuffer; content_key_epoch: number };
 
-async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cursor: number): Promise<Response> {
+async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cursor: number, probe = false): Promise<Response> {
   const db = createDb(env.DB);
   const thread = await db.get<ThreadRow>(sql`SELECT * FROM (${currentThread(fileId)}) t
     WHERE ${accessPredicate(auth, fileId, "read")}`);
@@ -134,6 +133,9 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
     if (!access) return notFound();
     return Response.json({ thread: null, canCreateThread: Boolean(access.is_owner) }, { headers });
   }
+  // A presence probe lets an Owner device ensure the thread on File open
+  // without fetching or opening any thread ciphertext.
+  if (probe) return Response.json({ thread: { threadId: thread.threadId } }, { headers });
   const envelope = await threadEnvelope(env, auth, thread);
   if (!envelope) return failure(thread.ownerId === auth.accountId ? "owned_comment_key_missing" : "secure_access_preparing", 409);
   const authority = threadAuthority(auth, thread.fileId, thread.threadId,
@@ -143,11 +145,13 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
     WHERE thread_id = ${thread.threadId} AND sequence > ${cursor} AND ${authority}
     ORDER BY sequence LIMIT ${MAX_COMMENTS_PAGE + 1}`);
   const authors = [...new Set([auth.accountId, ...comments.map((comment) => comment.author_id)])];
+  // Every displayed Comment author plus the actor is bounded by the page size,
+  // so the pseudonym query returns exactly that set and never truncates one.
   const attributions = await db.all<AttributionRow>(sql`SELECT id, author_id, revision, ciphertext,
       content_key_envelope, content_key_epoch FROM thread_attributions
     WHERE thread_id = ${thread.threadId} AND author_id IN (${sql.join(authors.map((author) => sql`${author}`), sql`, `)})
       AND ${authority}
-    ORDER BY id LIMIT ${MAX_ATTRIBUTIONS_PAGE + 1}`);
+    ORDER BY id LIMIT ${MAX_COMMENTS_PAGE + 1}`);
   return Response.json({
     thread: { threadId: thread.threadId, fileId: thread.fileId, ownerId: thread.ownerId, epochId: thread.epochId,
       capabilityId: thread.capabilityId, capabilityEpoch: thread.capabilityEpoch,
@@ -170,7 +174,7 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
       contentKeyEnvelope: encodeTreeBytes(new Uint8Array(comment.content_key_envelope)),
       contentKeyEpoch: comment.content_key_epoch, createdAt: comment.created_at, updatedAt: comment.updated_at })),
     nextCursor: comments.length > MAX_COMMENTS_PAGE ? comments[MAX_COMMENTS_PAGE - 1]!.sequence : null,
-    attributions: attributions.slice(0, MAX_ATTRIBUTIONS_PAGE).map((attribution) => ({ id: attribution.id,
+    attributions: attributions.map((attribution) => ({ id: attribution.id,
       authorId: attribution.author_id, revision: attribution.revision,
       ciphertext: encodeTreeBytes(new Uint8Array(attribution.ciphertext)),
       contentKeyEnvelope: encodeTreeBytes(new Uint8Array(attribution.content_key_envelope)),
@@ -374,16 +378,20 @@ export async function commentsAction(request: Request, env: Env): Promise<Respon
   if (!allowed) return notFound();
   const fileId = (collection ?? entries ?? entry)![1]!;
   if (!isV7(fileId) || entry && !isV7(entry[2]!)) return notFound();
-  let raw = "", value: unknown = null, cursor = 0;
+  let raw = "", value: unknown = null, cursor = 0, probe = false;
   try {
     if (request.method === "POST" && collection) {
       if (!await hasEmptyBody(request)) return denied();
-      const parsed = new URL(request.url).searchParams.get("cursor");
+      const params = new URL(request.url).searchParams;
+      const parsed = params.get("cursor");
       if (parsed !== null) {
         if (!/^\d+$/.test(parsed)) return invalid();
         cursor = Number(parsed);
         if (!cursorValue(cursor)) return invalid();
       }
+      const probeParam = params.get("probe");
+      if (probeParam !== null && probeParam !== "1") return invalid();
+      probe = probeParam === "1";
     } else {
       const parsed = await readAuthJsonText(request, 512 * 1024);
       raw = parsed.raw; value = parsed.value;
@@ -394,7 +402,8 @@ export async function commentsAction(request: Request, env: Env): Promise<Respon
   catch { return denied(); }
   const auth = await authorizePrivateRequest(request, env, proof, raw);
   if (!auth) return denied();
-  if (collection) return request.method === "PUT" ? createThread(env, auth, fileId, value) : readComments(env, auth, fileId, cursor);
+  if (collection) return request.method === "PUT" ? createThread(env, auth, fileId, value)
+    : readComments(env, auth, fileId, cursor, probe);
   if (entries) return createComment(env, auth, fileId, value);
   return request.method === "PATCH" ? editComment(env, auth, fileId, entry![2]!, value)
     : deleteComment(env, auth, fileId, entry![2]!, value);

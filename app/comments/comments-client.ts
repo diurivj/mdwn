@@ -131,7 +131,9 @@ export async function loadPrivateComments(access: RootAccess, fileId: string, si
     const decrypted = await decryptPage(data.thread, capability, page);
     comments.push(...decrypted.comments);
     for (const [authorId, pseudonym] of decrypted.pseudonyms) pseudonyms.set(authorId, pseudonym);
-    if (cursor === null) break;
+    // Stop before fetching a page this pass will not consume, so the returned
+    // cursor always names the last displayed Comment.
+    if (cursor === null || index === COMMENT_PAGE_BATCH - 1) break;
     const next = await fetchPage(fileId, cursor, signal);
     if (!next.ok) break;
     page = await next.json() as ThreadResponse;
@@ -144,6 +146,18 @@ export async function loadPrivateComments(access: RootAccess, fileId: string, si
     canComment: data.thread.canComment, hasAttribution: pseudonyms.has(access.actorAccountId),
     pseudonyms, comments, nextCursor: cursor,
   } };
+}
+
+/** Owner-side upkeep: a File the Owner opens always has its one Private
+ * thread, so a Collaborator never waits for the Comments inspector. */
+export async function ensurePrivateThread(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<boolean> {
+  if (access.actorAccountId !== access.vaultId) return false;
+  const response = await privateRequest(`/api/private/comments/files/${fileId}?probe=1`, { method: "POST", signal });
+  if (!response.ok) return false;
+  const probe = await response.json() as { thread: { threadId: string } | null; canCreateThread?: boolean };
+  if (probe.thread || !probe.canCreateThread) return false;
+  await createPrivateThread(access, fileId, signal);
+  return true;
 }
 
 /** Continue the same flat ordered list with the already-opened capability. */

@@ -71,6 +71,24 @@ export const test = appTest.extend<{ workspace: Workspace; initialSource: string
     await page.goto(`/f/${fileId}`);
     await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
     await waitForSharedProvisioning(page);
+    // Production Owner-open upkeep creates the real Private thread. These
+    // fixtures intentionally model a pre-ticket-21 File for tests that seed
+    // their own comment capabilities, so wait for the pass and reset it.
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (await db.prepare("SELECT 1 AS present FROM comment_threads WHERE file_id = ?").bind(fileId).first()) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const thread = "(SELECT id FROM comment_threads WHERE file_id = ?)";
+    await db.batch([
+      db.prepare("PRAGMA defer_foreign_keys = ON"),
+      db.prepare(`DELETE FROM key_rotation_comment_items WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM comments WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM thread_attributions WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM key_envelopes WHERE purpose = 'vault-recovery' AND object_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM sharing_comment_capabilities WHERE object_id IN ${thread}`).bind(fileId),
+      db.prepare(`DELETE FROM comment_thread_epochs WHERE thread_id IN ${thread}`).bind(fileId),
+      db.prepare("DELETE FROM comment_threads WHERE file_id = ?").bind(fileId),
+    ]);
     await use(workspace);
   },
 });

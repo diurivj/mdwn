@@ -98,6 +98,7 @@ async function stageEntries(env: Env, auth: AuthorizedDevice, job: RotationJob, 
 /** A Private thread stages its per-record content-key wrappers before promotion.
  * The browser opens each current wrapper with the installed thread capability
  * and reseals the unchanged content key beneath the replacement capability.
+ * A record deleted between the page read and this commit simply stages nothing.
  */
 async function stageCommentItems(env: Env, auth: AuthorizedDevice, job: RotationJob, item: RotationItem,
   source: RotationSource, input: Record<string, unknown>, operationId: string, digest: Uint8Array) {
@@ -126,7 +127,10 @@ async function stageCommentItems(env: Env, auth: AuthorizedDevice, job: Rotation
       AND object_id = ${item.objectId} AND state = 'staging' AND cursor IS ${item.cursor}
       AND source_epoch = ${item.sourceEpoch} AND target_epoch = ${item.targetEpoch})`, (marker) => [
       ...records.map((entry) => sql`INSERT INTO key_rotation_comment_items (job_id, thread_id, kind, record_id, revision, content_key_envelope)
-        SELECT ${job.jobId}, ${item.objectId}, ${entry.kind}, ${entry.recordId}, ${entry.revision}, ${entry.envelope} WHERE ${marker}`),
+        SELECT ${job.jobId}, ${item.objectId}, ${entry.kind}, ${entry.recordId}, ${entry.revision}, ${entry.envelope}
+        WHERE ${marker} AND ${entry.kind === "comment"
+          ? sql`EXISTS (SELECT 1 FROM comments WHERE id = ${entry.recordId} AND thread_id = ${item.objectId} AND revision = ${entry.revision})`
+          : sql`EXISTS (SELECT 1 FROM thread_attributions WHERE id = ${entry.recordId} AND thread_id = ${item.objectId} AND revision = ${entry.revision})`}`),
       sql`UPDATE key_rotation_items SET cursor = ${records.at(-1)!.recordId}
         WHERE job_id = ${job.jobId} AND object_id = ${item.objectId} AND ${marker}`,
     ]);

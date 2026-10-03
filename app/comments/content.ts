@@ -20,7 +20,6 @@ export const MAX_COMMENT_KEY_ENVELOPE_BYTES = 16_384;
 export const MAX_ATTRIBUTION_BYTES = 4_096;
 export const MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES = 16_384;
 export const MAX_COMMENTS_PAGE = 50;
-export const MAX_ATTRIBUTIONS_PAGE = 50;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });

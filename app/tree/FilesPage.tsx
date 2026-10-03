@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
+import { ensurePrivateThread } from "~/comments/comments-client";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/SharedProvisioning";
 
@@ -66,6 +67,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     setDialog(null);
   }, []);
   const route = useRef(`${kind}/${nodeId}`);
+  const ensuredThread = useRef<string | null>(null);
   const [structuralReady, setStructuralReady] = useState(false);
   const [editorParent, setEditorParent] = useState(initial.snapshot?.file?.parentId);
   const fileReady = structuralReady && editorParent === snapshot?.file?.parentId;
@@ -99,6 +101,15 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       ...initial.snapshot.crumbs.slice(0, -1).map((item) => item.id), initial.snapshot.access.rootId,
     ])));
   }, [initial, nodeId, kind]);
+
+  // Owner-side upkeep: opening any File ensures its one Private thread exists,
+  // so a Collaborator never waits for an Owner to open the Comments inspector.
+  useEffect(() => {
+    if (kind !== "file" || !snapshot || snapshot.access.actorAccountId !== snapshot.access.vaultId) return;
+    if (ensuredThread.current === nodeId) return;
+    ensuredThread.current = nodeId;
+    void ensurePrivateThread(snapshot.access, nodeId).catch(() => { /* The next File open retries. */ });
+  }, [kind, nodeId, snapshot]);
 
   async function toggle(entry: TreeEntry) {
     const signal = lifetime.current?.signal;

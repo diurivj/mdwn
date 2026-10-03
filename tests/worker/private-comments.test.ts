@@ -387,6 +387,18 @@ it("rotation rewraps Comment bodies beneath the replacement thread capability an
   expect(reread.body!.comments![0]!.bodyCiphertext).toBe(comment.bodyCiphertext);
 });
 
+it("probes Private thread presence without serving any ciphertext", async () => {
+  const owner = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file");
+  const absent = await sharingRequest(owner, `/api/private/comments/files/${fileId}?probe=1`);
+  expect(await absent.json()).toEqual({ thread: null, canCreateThread: true });
+  const thread = await createThread(owner, fileId);
+  const present = await sharingRequest(owner, `/api/private/comments/files/${fileId}?probe=1`);
+  const presentText = await present.text();
+  expect(JSON.parse(presentText)).toEqual({ thread: { threadId: thread.threadId } });
+  expect(presentText).not.toContain("ciphertext");
+});
+
 it("pages one flat ordered list past the first fifty Comments", async () => {
   const owner = await sharingAccount();
   const fileId = await treeChild(owner, owner.rootId, "file");

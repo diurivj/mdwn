@@ -64,7 +64,10 @@ future Public threads use separate endpoints and are never combined.
 The Owner's creating browser seals the random thread capability under the Vault
 root key as the thread's `vault-recovery` envelope; every active Owner device can
 open it with the same Vault root key, so no per-device Owner envelope is needed.
-Registering the requirement fires the existing `sharing_new_comment_need` trigger,
+An Owner device ensures the thread whenever it opens the File: a ciphertext-free
+`?probe=1` read reports presence, and an idempotent create runs only when the
+thread is absent, so a Collaborator never waits for the Owner to open the
+Comments inspector. Registering the requirement fires the existing `sharing_new_comment_need` trigger,
 which records opaque `(grant_id, device_id, grant_key_epoch)` needs for covering
 Grants. Ticket 18/20 delivery then provisions signed `share_comment_key_envelopes`
 before acceptance and `grant_comment_key_envelopes` for active Grants; a

@@ -130,13 +130,17 @@ export function rotationSourceSnapshot(item: RotationItem, source: RotationSourc
  */
 export async function rotationCommentItems(env: Env, auth: AuthorizedDevice, job: RotationJob, item: RotationItem,
   cursor: string | null): Promise<{ records: RotationCommentRecord[]; nextCursor: string | null }> {
+  // Pin the Owner and the installed capability epoch in the same statement as
+  // the ciphertext, so a concurrent promotion cannot stage old-epoch wrappers.
+  const installed = sql`EXISTS (SELECT 1 FROM sharing_comment_capabilities c WHERE c.object_id = ${item.objectId}
+    AND c.owner_id = ${auth.accountId} AND c.file_id = ${item.fileId} AND c.capability_epoch = ${item.sourceEpoch})`;
   const rows = await createDb(env.DB).all<{ record_id: string; kind: "comment" | "attribution"; revision: number;
     content_key_envelope: ArrayBuffer }>(sql`SELECT * FROM (
       SELECT id AS record_id, 'comment' AS kind, revision, content_key_envelope FROM comments
-        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)}
+        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} AND ${installed}
       UNION ALL
       SELECT id AS record_id, 'attribution' AS kind, revision, content_key_envelope FROM thread_attributions
-        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)}
+        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} AND ${installed}
     ) ORDER BY record_id LIMIT ${ROTATION_PAGE + 1}`);
   return { records: rows.slice(0, ROTATION_PAGE).map((row) => ({ recordId: row.record_id, kind: row.kind,
     revision: row.revision, contentKeyEnvelope: encoded(row.content_key_envelope)! })),
