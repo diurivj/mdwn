@@ -132,11 +132,28 @@ describe("committed Drizzle migrations", () => {
     // One report per reporter and Comment, retained no longer than 30 days.
     expect(sql).toContain("CREATE UNIQUE INDEX `public_comment_reports_reporter_comment_idx`");
     expect(sql).toContain('CHECK("public_comment_reports"."category" IN (\'spam\', \'abuse\', \'other\'))');
+    // Superseded by 0025: the Comment FK is RESTRICT with explicit reports deletion.
     expect(sql).toContain("ON DELETE cascade");
     // A suspension is exactly Account, strike, fixed reason, start and expiry.
     expect(sql).toContain("`strike_count` integer NOT NULL");
     expect(sql).toContain("public_participation_suspensions_reason_valid");
     expect(sql).toContain("public_participation_suspensions_bounded");
     expect(sql).not.toMatch(/plaintext|body_ciphertext|capability|fragment|raw_ip|user_agent|full_url|cookie|session_token/i);
+  });
+
+  it("hardens Public Comment reports onto an explicit RESTRICT delete with no database cascade", () => {
+    const name = migrations.find((migration) => migration.startsWith("0025_"));
+    expect(name).toBeDefined();
+    const sql = readFileSync(join(DRIZZLE_DIR, name!), "utf8");
+    // The rebuilt table preserves every row, index and constraint; only the
+    // Comment FK changes, so each deletion step must remove reports explicitly.
+    expect(sql).toContain("CREATE TABLE `__new_public_comment_reports`");
+    expect(sql).toContain("FOREIGN KEY (`comment_id`) REFERENCES `comments`(`id`) ON UPDATE no action ON DELETE restrict");
+    expect(sql).not.toContain("ON DELETE cascade");
+    expect(sql).toContain("INSERT INTO `__new_public_comment_reports`");
+    expect(sql).toContain("DROP TABLE `public_comment_reports`");
+    expect(sql).toContain("CREATE UNIQUE INDEX `public_comment_reports_reporter_comment_idx`");
+    expect(sql).toContain("CREATE INDEX `public_comment_reports_expiry_idx`");
+    expect(sql).toContain("CREATE INDEX `public_comment_reports_comment_idx`");
   });
 });

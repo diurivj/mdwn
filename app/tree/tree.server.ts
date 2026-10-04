@@ -548,6 +548,14 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
       sql`DELETE FROM provisioning_needs WHERE grant_id IN
         (SELECT id FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      // Public Comment reports and staged pseudonym declarations are explicit
+      // dependents; neither relies on a database cascade.
+      sql`DELETE FROM public_comment_reports WHERE comment_id IN
+        (SELECT id FROM comments WHERE thread_id IN
+          (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})) AND ${committed}`,
+      sql`DELETE FROM pseudonym_update_items WHERE kind = 'thread' AND record_id IN
+        (SELECT id FROM thread_attributions WHERE thread_id IN
+          (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})) AND ${committed}`,
       sql`DELETE FROM comments WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM thread_attributions WHERE thread_id IN

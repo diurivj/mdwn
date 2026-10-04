@@ -536,8 +536,13 @@ export async function deletePublicComment(env: Env, auth: AuthorizedDevice, targ
       AND (author_id = ${auth.accountId} OR ${comment.owner_id} = ${auth.accountId})
       AND ${mutationAuthority(auth, target, threadId, epochId, capabilityId, capabilityEpoch)}
       AND ${guard}`,
-  (marker) => [sql`DELETE FROM key_rotation_comment_items
-    WHERE kind = 'comment' AND record_id = ${commentId} AND ${marker}`]);
+  (marker) => [
+    // The Comment's category-only reports follow it in the same transaction;
+    // the Comment FK is RESTRICT, so the batch defers constraint checks to commit.
+    sql`DELETE FROM public_comment_reports WHERE comment_id = ${commentId} AND ${marker}`,
+    sql`DELETE FROM key_rotation_comment_items
+      WHERE kind = 'comment' AND record_id = ${commentId} AND ${marker}`,
+  ], { deferForeignKeys: true });
   if (committed) return Response.json({ deleted: true }, { headers });
   const row = await commentContext(env, auth, target, threadId, commentId);
   if (!row) return Response.json({ deleted: true, alreadyDeleted: true }, { headers });

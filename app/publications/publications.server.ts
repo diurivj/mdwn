@@ -667,12 +667,20 @@ function teardownStatements(publicationId: string, fileId: string, ownerId: stri
         (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
       sql`DELETE FROM sharing_comment_capabilities WHERE thread_id = ${threadId} AND ${marker}`,
       sql`DELETE FROM public_comment_epoch_links WHERE publication_id = ${publicationId} AND ${marker}`,
+      // Reports and staged pseudonym items are explicit dependents; the
+      // Comment FK is RESTRICT, never a database cascade.
+      sql`DELETE FROM public_comment_reports WHERE comment_id IN
+        (SELECT id FROM comments WHERE thread_id = ${threadId}) AND ${marker}`,
+      sql`DELETE FROM pseudonym_update_items WHERE kind = 'thread' AND record_id IN
+        (SELECT id FROM thread_attributions WHERE thread_id = ${threadId}) AND ${marker}`,
       sql`DELETE FROM comments WHERE thread_id = ${threadId} AND ${marker}`,
       sql`DELETE FROM thread_attributions WHERE thread_id = ${threadId} AND ${marker}`,
       sql`DELETE FROM comment_thread_epochs WHERE thread_id = ${threadId} AND ${marker}`,
       sql`DELETE FROM comment_threads WHERE id = ${threadId} AND ${marker}`,
     ]),
     sql`DELETE FROM public_representations WHERE publication_id = ${publicationId} AND ${marker}`,
+    sql`DELETE FROM pseudonym_update_items WHERE kind = 'publication' AND record_id IN
+      (SELECT id FROM publication_authors WHERE publication_id = ${publicationId}) AND ${marker}`,
     sql`DELETE FROM publication_authors WHERE publication_id = ${publicationId} AND ${marker}`,
     sql`DELETE FROM publication_requests WHERE file_id = ${fileId} AND owner_id = ${ownerId} AND ${marker}`,
     sql`DELETE FROM publication_teardowns WHERE publication_id = ${publicationId} AND ${marker}`,
@@ -718,6 +726,10 @@ async function teardownPublication(env: Env, auth: AuthorizedDevice, fileId: str
       WHERE id = ${publication.id} AND file_id = ${fileId} AND state = 'deleting'
         AND owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
     (marker) => publication.comments_remaining > 0 ? [
+      // Reports go before their Comment; the FK stays RESTRICT, never cascade.
+      sql`DELETE FROM public_comment_reports WHERE comment_id IN (SELECT c.id FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+        WHERE t.publication_id = ${publication.id} AND t.purpose = 'public'
+        ORDER BY c.sequence LIMIT ${TEARDOWN_COMMENT_BATCH}) AND ${marker}`,
       sql`DELETE FROM comments WHERE id IN (SELECT c.id FROM comments c JOIN comment_threads t ON t.id = c.thread_id
         WHERE t.publication_id = ${publication.id} AND t.purpose = 'public'
         ORDER BY c.sequence LIMIT ${TEARDOWN_COMMENT_BATCH}) AND ${marker}`,
@@ -909,6 +921,9 @@ export function deletedFilePublications(ownerId: string, ids: SQL, committed: SQ
   return [
     sql`DELETE FROM public_comment_epoch_links WHERE publication_id IN (${owned}) AND ${committed}`,
     sql`DELETE FROM publication_teardowns WHERE publication_id IN (${owned}) AND ${committed}`,
+    // Staged pseudonym declarations for deleted authors go with their author row.
+    sql`DELETE FROM pseudonym_update_items WHERE kind = 'publication' AND record_id IN
+      (SELECT id FROM publication_authors WHERE publication_id IN (${owned})) AND ${committed}`,
     sql`DELETE FROM publication_authors WHERE publication_id IN (${owned}) AND ${committed}`,
     sql`DELETE FROM publication_requests WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
     sql`DELETE FROM public_representations WHERE publication_id IN (${owned}) AND ${committed}`,
