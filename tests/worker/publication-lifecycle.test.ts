@@ -340,7 +340,7 @@ describe("unpublish seal", () => {
     const owner = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const publication = await publish(owner, fileId);
-    await comment(owner, fileId, publication, "One");
+    const first = await comment(owner, fileId, publication, "One");
     await comment(owner, fileId, publication, "Two");
     expect((await panelState(owner, fileId)).commentCount).toBe(2);
 
@@ -371,6 +371,17 @@ describe("unpublish seal", () => {
     // The authenticated thread read settles without ciphertext or a thread.
     const thread = await sharingRequest(owner, `/api/private/comments/files/${fileId}/public`);
     expect(await thread.json()).toMatchObject({ thread: null, canCreateThread: false, publication: null });
+
+    // The authenticated File route denies author edit and Owner delete too:
+    // a retained thread capability cannot mutate a sealed Publication.
+    const epoch = publication.epochs[0]!;
+    expect((await sharingRequest(owner, `/api/private/comments/files/${fileId}/public/entries/${first}`, "PATCH", {
+      threadId: epoch.threadId, capabilityId: epoch.capabilityId, capabilityEpoch: 1, epochId: epoch.epochId,
+      expectedRevision: 1, bodyCiphertext: "AA", contentKeyEnvelope: "AA" })).status).toBe(404);
+    expect((await sharingRequest(owner, `/api/private/comments/files/${fileId}/public/entries/${first}`, "DELETE", {
+      threadId: epoch.threadId, capabilityId: epoch.capabilityId, capabilityEpoch: 1, epochId: epoch.epochId,
+      expectedRevision: 1 })).status).toBe(404);
+    expect(await count("comments", "id = ?", first)).toBe(1);
 
     // The seal is irreversible even by direct storage write.
     await expect(env.DB.prepare(`UPDATE publications SET state = 'active', current_link_id = ?,
