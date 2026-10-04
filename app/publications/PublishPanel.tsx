@@ -47,16 +47,22 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
   const [teardownAttempt, setTeardownAttempt] = useState(0);
   const [teardownFailed, setTeardownFailed] = useState(false);
   const lifetime = useRef<AbortController | null>(null);
+  const reloadGeneration = useRef(0);
   const accessRef = useRef(snapshot.access);
   useEffect(() => { accessRef.current = snapshot.access; }, [snapshot.access]);
   const parentId = snapshot.file?.parentId ?? null;
   const parentKey = parentId ? snapshot.keys[parentId] : snapshot.access.rootKey;
 
   const reload = useCallback(async (signal: AbortSignal) => {
+    // Last-issued read wins: an overlapping refresh can never replace a newer
+    // state (for example the post-unpublish read) with a stale active panel.
+    const generation = ++reloadGeneration.current;
     try {
       const state = await loadPublicationState(fileId, signal);
-      if (!signal.aborted) setPanel({ status: "ready", state });
-    } catch { if (!signal.aborted) setPanel({ status: "failed" }); }
+      if (!signal.aborted && generation === reloadGeneration.current) setPanel({ status: "ready", state });
+    } catch {
+      if (!signal.aborted && generation === reloadGeneration.current) setPanel({ status: "failed" });
+    }
   }, [fileId]);
 
   // A failed or superseded attempt must never be shown as the active link. The
@@ -243,12 +249,9 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
         </div> : <>
           <p className="text-sm text-stone-600">Unpublishing is permanent: it seals the link immediately and deletes the Public
             representation and every Public Comment.</p>
-          <button type="button" disabled={busy} onClick={() => {
-            setConfirming(true);
-            // Refresh the current opaque count so the confirmation is honest.
-            const controller = lifetime.current;
-            if (controller && !controller.signal.aborted) void reload(controller.signal);
-          }} className="mt-2 rounded border px-3 py-1 text-sm">Unpublish…</button>
+          <button type="button" disabled={busy}
+            onClick={() => void run(async () => { setConfirming(true); })}
+            className="mt-2 rounded border px-3 py-1 text-sm">Unpublish…</button>
         </>}
       </div>
     </> : <>

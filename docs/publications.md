@@ -173,7 +173,9 @@ It generates a fresh path ID and key pair, re-encrypts the current Public
 representation to the new public key from the current saved source, and rewraps
 every public Comment epoch's symmetric link wrapper to the new Publication
 capability. The epoch capabilities themselves and every device envelope are
-unchanged. One D1 transaction replaces the link identity in place, moves the
+unchanged. Each submitted wrapper is bounded at 4 KiB, so a maximal 100-epoch
+rotation fits the shared authenticated-JSON body cap alongside the Public
+representation. One D1 transaction replaces the link identity in place, moves the
 Publication pointer, replaces the Public representation at the same
 presentation revision and rewrites the wrappers; `publication_links` refuses any
 other update. The retired identifier stops routing immediately and is never kept

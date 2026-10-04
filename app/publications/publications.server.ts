@@ -7,7 +7,7 @@ import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, typ
 import { newOpaqueId } from "~/opaque-id";
 import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
 import { epochInput, epochStatements, readPublicCommentPage, type EpochInput } from "~/comments/public.server";
-import { isCommentEpochLink, MAX_PUBLIC_EPOCH_LINK_BYTES } from "~/comments/public-content";
+import { isCommentEpochLink } from "~/comments/public-content";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { shareHandleLookupToken } from "~/sharing/address";
 import { accessPredicate, accountAccessQuery, effectiveAccess, permits, sharingWriteBlocked } from "~/sharing/access.server";
@@ -45,8 +45,12 @@ const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
 const positive = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && Number.isSafeInteger(value + 1);
 
-/** Bounds for link rotation and teardown batches. */
+/** Bounds for link rotation and teardown batches. A rewrapped epoch link
+ * envelope is a few hundred bytes; 4 KiB each keeps a maximal 100-epoch
+ * rotation inside the authenticated-JSON body cap alongside the 512 KiB
+ * representation. */
 const MAX_PUBLIC_AUDIENCE_EPOCHS = 100;
+const MAX_ROTATION_WRAPPER_BYTES = 4_096;
 const TEARDOWN_COMMENT_BATCH = 200;
 
 /** The one active-or-deleting Publication of a File. The identical `IN` term
@@ -479,7 +483,7 @@ async function rotationInput(value: unknown): Promise<Rotation | null> {
         !isV7(epoch.capabilityId) || !positive(epoch.keyEpoch) || seen.has(epoch.epochId)) return null;
     seen.add(epoch.epochId);
     try {
-      const wrapper = decodeTreeBytes(epoch.wrapper, MAX_PUBLIC_EPOCH_LINK_BYTES);
+      const wrapper = decodeTreeBytes(epoch.wrapper, MAX_ROTATION_WRAPPER_BYTES);
       if (!isCommentEpochLink(wrapper, { publicationId: input.publicationId, linkId: input.linkId,
           epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.keyEpoch })) return null;
       epochs.push({ epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.keyEpoch, wrapper });
