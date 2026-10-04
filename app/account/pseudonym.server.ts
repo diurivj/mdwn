@@ -182,7 +182,7 @@ async function startJob(env: Env, auth: AuthorizedDevice, value: unknown): Promi
     WHERE account_id = ${auth.accountId} AND ${privateReadGuard(auth)}`);
   if (!current) return notFound();
   const existing = await db.get<{ id: string }>(sql`SELECT id FROM crypto_jobs WHERE account_id = ${auth.accountId}
-    AND kind = 'pseudonym_update' AND state = 'pending'`);
+    AND kind = 'pseudonym_update' AND state = 'pending' AND ${privateReadGuard(auth)}`);
   if (existing) return existing.id === input.jobId
     ? Response.json({ jobId: input.jobId, created: false }, { headers }) : pending();
   const now = Date.now(), nextChangeAt = nextPseudonymChangeAt(current.pseudonym_changed_at);
@@ -211,7 +211,7 @@ async function startJob(env: Env, auth: AuthorizedDevice, value: unknown): Promi
   ]);
   if (committed) return Response.json({ jobId: input.jobId, created: true }, { status: 201, headers });
   const raced = await db.get<{ id: string }>(sql`SELECT id FROM crypto_jobs WHERE account_id = ${auth.accountId}
-    AND kind = 'pseudonym_update' AND state = 'pending'`);
+    AND kind = 'pseudonym_update' AND state = 'pending' AND ${privateReadGuard(auth)}`);
   if (raced?.id === input.jobId) return Response.json({ jobId: input.jobId, created: false }, { headers });
   if (raced) return pending();
   const latest = await db.get<{ pseudonym_changed_at: number | null }>(sql`SELECT pseudonym_changed_at
@@ -231,7 +231,7 @@ async function nextJob(env: Env, auth: AuthorizedDevice, jobId: string): Promise
   if (job.state === "complete") return Response.json({ job: jobWire(job), operation: "complete" }, { headers });
   if (job.state !== "pending") return Response.json({ job: jobWire(job), operation: "cancelled" }, { headers });
   const profile = await db.get<ProfileRow>(sql`SELECT ciphertext, epoch, revision
-    FROM pseudonym_update_profiles WHERE job_id = ${jobId}`);
+    FROM pseudonym_update_profiles WHERE job_id = ${jobId} AND ${privateReadGuard(auth)}`);
   if (!profile) return changed();
   const counts = await db.get<{ total: number; missing: number }>(sql`
     SELECT (SELECT count(*) FROM (${threadContexts(auth)}) ctx)
@@ -384,7 +384,7 @@ async function stepJob(env: Env, auth: AuthorizedDevice, jobId: string, value: u
   if (job.state === "complete") return Response.json({ committed: true, alreadyCommitted: true }, { headers });
   if (job.state !== "pending") return changed();
   const staged = await db.get<{ count: number }>(sql`SELECT count(*) AS count FROM pseudonym_update_items
-    WHERE job_id = ${jobId}`);
+    WHERE job_id = ${jobId} AND ${privateReadGuard(auth)}`);
   // The anchor changes the current profile only when every required context is
   // staged at its current revision, so no dependent row can switch alone.
   const committed = await commitPrivateBatch(env, auth, (guard) => sql`
