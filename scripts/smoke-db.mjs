@@ -209,7 +209,7 @@ const EXPECTED_FOREIGN_KEYS = [
   "publication_teardowns:publication_id:publications:id:RESTRICT",
   "publication_teardowns:owner_id:accounts:id:RESTRICT",
   "public_comment_reports:reporter_id:accounts:id:RESTRICT",
-  "public_comment_reports:comment_id:comments:id:CASCADE",
+  "public_comment_reports:comment_id:comments:id:RESTRICT",
   "public_participation_suspensions:account_id:accounts:id:RESTRICT",
 ];
 const EXPECTED_TRIGGERS = ["sharing_new_device_need", "sharing_new_comment_need",

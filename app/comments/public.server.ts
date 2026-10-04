@@ -519,6 +519,13 @@ export async function editPublicComment(request: Request, env: Env, auth: Author
   return row && row.author_id !== auth.accountId ? failure("not_comment_author", 403) : changed();
 }
 
+/** The category-only reports of any set of Comments. The Comment foreign key
+ * is RESTRICT, so every Comment-removal path deletes reports explicitly in the
+ * same transaction; this helper is the one place that delete shape lives. */
+export function deletedCommentReports(comments: SQL, marker: SQL): SQL {
+  return sql`DELETE FROM public_comment_reports WHERE comment_id IN (${comments}) AND ${marker}`;
+}
+
 export async function deletePublicComment(env: Env, auth: AuthorizedDevice, target: CommentTarget, commentId: string,
   value: unknown): Promise<Response> {
   const input = record(value);
@@ -536,8 +543,13 @@ export async function deletePublicComment(env: Env, auth: AuthorizedDevice, targ
       AND (author_id = ${auth.accountId} OR ${comment.owner_id} = ${auth.accountId})
       AND ${mutationAuthority(auth, target, threadId, epochId, capabilityId, capabilityEpoch)}
       AND ${guard}`,
-  (marker) => [sql`DELETE FROM key_rotation_comment_items
-    WHERE kind = 'comment' AND record_id = ${commentId} AND ${marker}`]);
+  (marker) => [
+    // Reports follow the Comment in the same transaction; the Comment FK is
+    // RESTRICT, so the batch defers constraint checks to commit.
+    deletedCommentReports(sql`SELECT ${commentId}`, marker),
+    sql`DELETE FROM key_rotation_comment_items
+      WHERE kind = 'comment' AND record_id = ${commentId} AND ${marker}`,
+  ], { deferForeignKeys: true });
   if (committed) return Response.json({ deleted: true }, { headers });
   const row = await commentContext(env, auth, target, threadId, commentId);
   if (!row) return Response.json({ deleted: true, alreadyDeleted: true }, { headers });

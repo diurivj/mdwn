@@ -115,8 +115,10 @@ an overlapping live Grant keeps its independent authority. A device whose proof
 or registry membership fails receives no thread material.
 
 Hard deletion stays available while a rotation seal blocks new writes. A File or
-Directory hard deletion explicitly removes Comments, attributions, epochs,
-threads, owned Comment recovery envelopes and rotation staging before the node.
+Directory hard deletion explicitly removes both Comment threads with their
+Comments, attributions and Public Comment reports, plus staged pseudonym
+declarations, epochs, threads, owned Comment recovery envelopes and rotation
+staging before the node, with no database cascade to fall back on.
 
 ## Public audience epochs
 
@@ -195,9 +197,10 @@ created_at, expires_at)`. The proof-guarded request consumes the
 `public_comment.report` limit (3 per Account per 24 hours) before any lookup,
 so an unknown Comment ID cannot be probed for free; an idempotent repeat stores
 no second row but still counts against the window. Reports expire
-after 30 days and are purged by the same 15-minute Cron; deleting the Comment
-deletes its reports with it, so Owner or teardown hard deletion removes the
-signal too.
+after 30 days and are purged by the same 15-minute Cron. A Comment deletion
+removes its reports in the same explicit transaction — the Comment foreign key
+is `RESTRICT`, never a cascade — so the author's hard delete, File or Directory
+hard deletion, and unpublish/teardown all remove the signal too.
 
 Reports are operator-only pattern metadata, never evidence the service can
 read. File Owner hard deletion remains the primary unwanted-Comment control and

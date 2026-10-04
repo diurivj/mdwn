@@ -317,7 +317,8 @@ export type SecurityEvent = typeof securityEvents.$inferSelect;
  * reporter Account, the opaque Public Comment ID and one fixed category; it
  * carries no content, capability, request identifier, network data or
  * plaintext of any kind. Reports are bounded operator metadata and expire
- * after 30 days; deleting the Comment removes its reports with it.
+ * after 30 days; every Comment-removal path deletes a Comment's reports in
+ * the same explicit step, so this table declares no database cascade.
  */
 export const publicCommentReports = sqliteTable(
   "public_comment_reports",
@@ -328,7 +329,7 @@ export const publicCommentReports = sqliteTable(
       .references(() => accounts.id, { onDelete: "restrict" }),
     commentId: text("comment_id")
       .notNull()
-      .references(() => comments.id, { onDelete: "cascade" }),
+      .references(() => comments.id, { onDelete: "restrict" }),
     category: text("category").notNull(),
     createdAt: integer("created_at").notNull(),
     expiresAt: integer("expires_at").notNull(),
