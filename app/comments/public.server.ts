@@ -84,14 +84,12 @@ function fileEpochAuthority(auth: AuthorizedDevice, input: {
 }
 
 /** The link route's epoch authority. The supplied epoch is always public.
- * `currentEpoch` is required for creation (the new Comment joins the thread's
- * current epoch). `requireCurrentPublicAudience` is required for author
- * mutations of an existing Comment: a retained public epoch stays editable
- * while the thread is public, but a Collaborators-only mode can never be
- * mutated through a link. */
+ * `create` requires it to be the thread's current epoch; `authorMutation`
+ * allows a retained public epoch only while the thread's current audience is
+ * still public, so a Collaborators-only mode can never be mutated via a link. */
 function linkEpochAuthority(input: {
   linkId: string; threadId: string; epochId: string; capabilityId: string; capabilityEpoch: number;
-  currentEpoch: boolean; requireCurrentPublicAudience: boolean;
+  mode: "create" | "authorMutation";
 }): SQL {
   return sql`EXISTS (SELECT 1 FROM comment_threads t
     JOIN publications p ON p.id = t.publication_id AND p.state = 'active' AND p.current_link_id = ${input.linkId}
@@ -100,9 +98,8 @@ function linkEpochAuthority(input: {
       AND c.purpose = 'public-comment-audience-epoch' AND c.capability_id = ${input.capabilityId}
       AND c.capability_epoch = ${input.capabilityEpoch}
     WHERE t.id = ${input.threadId} AND t.purpose = 'public'
-      ${input.currentEpoch ? sql`AND t.current_epoch_id = e.id` : sql``}
-      ${input.requireCurrentPublicAudience ? sql`AND EXISTS (SELECT 1 FROM comment_thread_epochs current
-        WHERE current.id = t.current_epoch_id AND current.thread_id = t.id AND current.audience = 'public')` : sql``})`;
+      ${input.mode === "create" ? sql`AND t.current_epoch_id = e.id` : sql`AND EXISTS (SELECT 1 FROM comment_thread_epochs current
+        WHERE current.id = t.current_epoch_id AND current.thread_id = t.id AND current.audience = 'public')`})`;
 }
 
 type EpochRow = { epochId: string; ordinal: number; audience: "public" | "collaborators_only";
@@ -423,7 +420,7 @@ export async function createPublicComment(request: Request, env: Env, auth: Auth
   const authority = target.kind === "file"
     ? fileEpochAuthority(auth, { fileId: target.fileId, threadId, epochId, capabilityId, capabilityEpoch, currentOnly: true })
     : linkEpochAuthority({ linkId: target.linkId, threadId, epochId, capabilityId, capabilityEpoch,
-      currentEpoch: true, requireCurrentPublicAudience: false });
+      mode: "create" });
   const now = Date.now();
   let committed: boolean;
   try {
@@ -471,7 +468,7 @@ function mutationAuthority(auth: AuthorizedDevice, target: CommentTarget, thread
   return target.kind === "file"
     ? fileEpochAuthority(auth, { fileId: target.fileId, threadId, epochId, capabilityId, capabilityEpoch, currentOnly: false })
     : linkEpochAuthority({ linkId: target.linkId, threadId, epochId, capabilityId, capabilityEpoch,
-      currentEpoch: false, requireCurrentPublicAudience: true });
+      mode: "authorMutation" });
 }
 
 export async function editPublicComment(request: Request, env: Env, auth: AuthorizedDevice, target: CommentTarget,

@@ -46,7 +46,7 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
         ON CONFLICT (account_id, purpose, object_id, recipient_id) DO UPDATE SET ciphertext = excluded.ciphertext,
           key_epoch = excluded.key_epoch, superseded_at = NULL`,
     ];
-    // A retained public history epoch keeps its key: only the current
+    // A retained Public Comment audience epoch keeps its key: only the current
     // Collaborators-only epoch advances in place, because a revoked device may
     // still hold that key. A revoked device never receives the replacement.
     if (source.kind === "public_history" && !item.rotate) {

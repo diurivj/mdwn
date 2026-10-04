@@ -87,9 +87,10 @@ async function replacementKey(browser: RotationBrowser, job: RotationJob, item: 
 async function start(browser: RotationBrowser, next: RotationNext) {
   const { item, source, job } = next;
   if (!item || !source || !item.targetEpoch) throw new Error("Invalid rotation step");
-  // A retained public history epoch is not a future audience key: only its
-  // device envelopes change. A current Collaborators-only epoch (item.rotate)
-  // advances in place so a revoked device's key cannot read what follows.
+  // A retained Public Comment audience epoch is not a future audience key:
+  // only its device envelopes change. A current Collaborators-only epoch
+  // (item.rotate) advances in place so a revoked device's key cannot read
+  // what follows.
   const currentComment = item.kind === "public_history" || item.kind === "private_comment" ? await sourceKey(browser, source) : null;
   if (currentComment && currentComment.length !== 32) throw new Error("Invalid current Comment key");
   const key = item.kind === "public_history" && !item.rotate ? currentComment! : crypto.getRandomValues(new Uint8Array(32));
