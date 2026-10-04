@@ -175,6 +175,34 @@ export async function loadMorePrivateComments(thread: PrivateComments, signal?: 
   return { comments, pseudonyms, nextCursor: cursor };
 }
 
+/**
+ * Load every page of a File's Private thread after the first read. Returns
+ * `complete: false` when the thread is still provisioning, so a caller such
+ * as export can report that Comment history was not fully readable instead of
+ * silently dropping it.
+ */
+export async function loadAllPrivateComments(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<{
+  comments: CommentView[]; pseudonyms: Map<string, string>; complete: boolean;
+}> {
+  const state = await loadPrivateComments(access, fileId, signal);
+  if (state.status === "absent") return { comments: [], pseudonyms: new Map(), complete: true };
+  if (state.status === "preparing") return { comments: [], pseudonyms: new Map(), complete: false };
+  const thread = state.thread;
+  let comments = thread.comments.slice();
+  let pseudonyms = new Map(thread.pseudonyms);
+  let cursor = thread.nextCursor;
+  const seen = new Set<number>();
+  while (cursor !== null) {
+    if (seen.has(cursor)) throw new CommentsChangedError();
+    seen.add(cursor);
+    const page = await loadMorePrivateComments({ ...thread, comments, pseudonyms, nextCursor: cursor }, signal);
+    comments = comments.concat(page.comments);
+    pseudonyms = page.pseudonyms;
+    cursor = page.nextCursor;
+  }
+  return { comments, pseudonyms, complete: true };
+}
+
 /** Owner-only create-once thread; a second call adopts the existing thread. */
 export async function createPrivateThread(access: RootAccess, fileId: string, signal?: AbortSignal) {
   if (access.actorAccountId !== access.vaultId) throw new Error("Owner device required");

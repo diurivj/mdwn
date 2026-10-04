@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/comments/comments-client";
+import { ExportControl } from "~/export/ExportControl";
 import { declarePublicationAuthor, type PreparedPublicLink } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/PublishPanel";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
@@ -365,6 +366,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           onClick={() => setPublishOpen((open) => !open)} className="rounded border px-2 py-1">
           {snapshot.access.actorAccountId === snapshot.access.vaultId ? "Publish" : "Request publication"}</button>}
       </div>
+      <div className="mt-3"><ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} /></div>
       {kind === "file" && snapshot.file && publishOpen && <PublishPanel fileId={nodeId} snapshot={snapshot}
         fileReady={fileReady && !busy} links={publicLinks}
         onPrepared={(link) => setPublicLinks((previous) => {
