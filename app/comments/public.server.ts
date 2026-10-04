@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 import { record } from "~/auth/request.server";
 import { MAX_ATTRIBUTION_BYTES, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES, MAX_COMMENT_BODY_BYTES,
   MAX_COMMENT_KEY_ENVELOPE_BYTES, MAX_COMMENTS_PAGE } from "~/comments/content";
-import { commentEnvelopeWire, readCommentEnvelope, type CommentEnvelope } from "~/comments/envelopes.server";
+import { commentEnvelopeWire, readCommentEnvelopes } from "~/comments/envelopes.server";
 import { isCommentEpochLink, MAX_PUBLIC_EPOCH_LINK_BYTES, publicAttributionContext, publicAttributionKeyContext,
   publicCommentBodyContext, publicCommentEnvelope, publicCommentKeyContext } from "~/comments/public-content";
 import { createDb, sql } from "~/db/client.server";
@@ -107,11 +107,6 @@ function linkEpochAuthority(input: {
 
 type EpochRow = { epochId: string; ordinal: number; audience: "public" | "collaborators_only";
   state: "active" | "retained"; capabilityId: string; capabilityEpoch: number; wrapper: ArrayBuffer | null };
-
-function epochAuthority(auth: AuthorizedDevice, fileId: string, threadId: string, epoch: EpochRow): SQL {
-  return fileEpochAuthority(auth, { fileId, threadId, epochId: epoch.epochId,
-    capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch, currentOnly: false });
-}
 
 /** All public epochs with the link wrapper for this exact link. */
 function publicEpochs(linkId: string, threadId: string): SQL {
@@ -230,13 +225,16 @@ export async function readFilePublicComments(env: Env, auth: AuthorizedDevice, f
     WHERE e.thread_id = ${thread.threadId} AND ${accessPredicate(auth, fileId, "read")}
     ORDER BY e.ordinal LIMIT 100`);
   if (!epochs.length) return changed();
-  const envelopes: CommentEnvelope[] = [];
+  // One batched envelope read keeps the whole authorized history inside D1's
+  // per-invocation query budget no matter how many audience changes there were.
+  const envelopes = await readCommentEnvelopes(env, auth, { ownerId: thread.ownerId, threadId: thread.threadId,
+    publicationId: thread.publicationId, epochs,
+    authority: sql`EXISTS (SELECT 1 FROM comment_threads t WHERE t.id = ${thread.threadId}
+      AND t.file_id = ${fileId} AND t.purpose = 'public' AND ${accessPredicate(auth, fileId, "read")})` });
   for (const epoch of epochs) {
-    const envelope = await readCommentEnvelope(env, auth, { ownerId: thread.ownerId, objectId: epoch.epochId,
-      capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch,
-      authority: epochAuthority(auth, fileId, thread.threadId, epoch) });
-    if (!envelope) return failure(thread.ownerId === auth.accountId ? "owned_comment_key_missing" : "secure_access_preparing", 409);
-    envelopes.push(envelope);
+    if (!envelopes.has(epoch.epochId)) {
+      return failure(thread.ownerId === auth.accountId ? "owned_comment_key_missing" : "secure_access_preparing", 409);
+    }
   }
   const epochIds = epochs.map((epoch) => epoch.epochId);
   const inEpochs = sql`${sql.join(epochIds.map((epochId) => sql`${epochId}`), sql`, `)}`;
@@ -248,10 +246,10 @@ export async function readFilePublicComments(env: Env, auth: AuthorizedDevice, f
     thread: { threadId: thread.threadId, ownerId: thread.ownerId, fileId: thread.fileId,
       publicationId: thread.publicationId, currentEpochId: thread.currentEpochId, audience: thread.audience,
       actorAccountId: auth.accountId, canComment: true, canDeleteAny: thread.ownerId === auth.accountId,
-      epochs: epochs.map((epoch, index) => ({ epochId: epoch.epochId, ordinal: epoch.ordinal,
+      epochs: epochs.map((epoch) => ({ epochId: epoch.epochId, ordinal: epoch.ordinal,
         audience: epoch.audience, state: epoch.state, capabilityId: epoch.capabilityId,
         capabilityEpoch: epoch.capabilityEpoch,
-        envelope: commentEnvelopeWire(envelopes[index]!, { purpose: "public-comment-audience-epoch", fileId: thread.fileId,
+        envelope: commentEnvelopeWire(envelopes.get(epoch.epochId)!, { purpose: "public-comment-audience-epoch", fileId: thread.fileId,
           threadId: thread.threadId, objectId: epoch.epochId, publicationId: thread.publicationId,
           capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch, deviceId: auth.deviceId }) })) },
     comments: page.map(commentWire), attributions: attributions.map(attributionWire),
