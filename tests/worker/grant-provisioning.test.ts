@@ -1,3 +1,4 @@
+import { newPublicationIdentifier } from "../../app/publications/capability";
 import { applyD1Migrations, env, SELF } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
@@ -54,7 +55,7 @@ it("a current Comment holder fulfills retained private and public history withou
     await env.DB.prepare(`INSERT INTO sharing_comment_capabilities
       (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`).bind(objectId, owner.accountId, targetId, objectId, purpose,
-        purpose === "private-comment-thread" ? null : opaqueId(), capabilityId).run();
+        purpose === "private-comment-thread" ? null : newPublicationIdentifier(), capabilityId).run();
     const path = `/api/private/grants/${grantId}/comment-keys/${objectId}`;
     const context = await (await sharingRequest(owner, path)).json() as CommentKeyContext;
     const envelope = await createCommentKeyEnvelope(new Uint8Array(32).fill(81), recipient.transport.publicKey,

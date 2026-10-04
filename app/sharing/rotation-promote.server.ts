@@ -46,29 +46,40 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
         ON CONFLICT (account_id, purpose, object_id, recipient_id) DO UPDATE SET ciphertext = excluded.ciphertext,
           key_epoch = excluded.key_epoch, superseded_at = NULL`,
     ];
-    if (source.kind === "public_history") return { eligible: rotationSourceSnapshot(item, source), statements: capabilityStatements };
-    // A Private thread promotes only once every current body and pseudonym
-    // wrapper is staged; deletion during staging is allowed and simply drops
-    // the staged row, while a revision that advanced would still block.
+    // A retained Public Comment audience epoch keeps its key: only the current
+    // Collaborators-only epoch advances in place, because a revoked device may
+    // still hold that key. A revoked device never receives the replacement.
+    if (source.kind === "public_history" && !item.rotate) {
+      return { eligible: rotationSourceSnapshot(item, source), statements: capabilityStatements };
+    }
+    // A Private thread or a rotating Public epoch promotes only once every
+    // current body and pseudonym wrapper is staged; deletion during staging is
+    // allowed and simply drops the staged row, while an advanced revision blocks.
+    const scope = (table: string) => source.kind === "public_history"
+      ? sql`${sql.raw(table)}.epoch_id = ${item.objectId}`
+      : sql`${sql.raw(table)}.thread_id = ${item.objectId}`;
     const staged = (kind: "comment" | "attribution", table: string) => sql`EXISTS (
       SELECT 1 FROM key_rotation_comment_items staged WHERE staged.job_id = ${job.jobId}
         AND staged.thread_id = ${item.objectId} AND staged.kind = ${kind} AND staged.record_id = ${sql.raw(table)}.id
         AND staged.revision = ${sql.raw(table)}.revision)`;
     const complete = (kind: "comment" | "attribution", table: string) => sql`NOT EXISTS (
-      SELECT 1 FROM ${sql.raw(table)} WHERE ${sql.raw(table)}.thread_id = ${item.objectId} AND NOT (${staged(kind, table)}))`;
+      SELECT 1 FROM ${sql.raw(table)} WHERE ${scope(table)} AND NOT (${staged(kind, table)}))`;
     const rewrap = (marker: SQL, kind: "comment" | "attribution", table: string) => sql`UPDATE ${sql.raw(table)} SET
       content_key_envelope = (SELECT staged.content_key_envelope FROM key_rotation_comment_items staged
         WHERE staged.job_id = ${job.jobId} AND staged.thread_id = ${item.objectId} AND staged.kind = ${kind}
           AND staged.record_id = ${sql.raw(table)}.id),
       content_key_epoch = ${item.targetEpoch}
-      WHERE thread_id = ${item.objectId} AND ${marker} AND ${staged(kind, table)}`;
+      WHERE ${scope(table)} AND ${marker} AND ${staged(kind, table)}`;
+    const epochScope = source.kind === "public_history"
+      ? sql`id = ${item.objectId} AND state = 'active'`
+      : sql`thread_id = ${item.objectId} AND state = 'active'`;
     return { eligible: sql`${rotationSourceSnapshot(item, source)}
       AND ${complete("comment", "comments")} AND ${complete("attribution", "thread_attributions")}`,
       statements: (marker) => [
         rewrap(marker, "comment", "comments"),
         rewrap(marker, "attribution", "thread_attributions"),
         sql`UPDATE comment_thread_epochs SET key_epoch = ${item.targetEpoch}
-          WHERE thread_id = ${item.objectId} AND state = 'active' AND ${marker}`,
+          WHERE ${epochScope} AND ${marker}`,
         ...capabilityStatements(marker),
       ] };
   }

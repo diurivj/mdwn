@@ -2,6 +2,7 @@ import { createCookie } from "react-router";
 import { createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/crypto/vault";
 import { test, expect, installWorkspaceScript, objectId } from "./workspace-fixture";
 import { TEST_SESSION_COOKIE_SECRET } from "./fixtures";
+import { newPublicationIdentifier } from "../app/publications/capability";
 import type { GrantKeyContext } from "../app/sharing/grant-keys";
 import type { CommentKeyContext } from "../app/sharing/comment-keys";
 
@@ -45,11 +46,13 @@ test(`a ${permission} ${targetKind} recipient opens its scope, and a new device 
     const cookie = await createCookie("__Host-mdwn_session", { path: "/", secure: true, secrets: [TEST_SESSION_COOKIE_SECRET] }).serialize(sessionId);
     await recipientContext.addCookies([{ name: "__Host-mdwn_session", value: cookie.split(";", 1)[0]!.slice("__Host-mdwn_session=".length),
       url: new URL(baseURL!).origin, httpOnly: true, secure: true, sameSite: "Lax" }]);
+    const epochPublicationId = newPublicationIdentifier();
     for (const [index, objectId] of commentIds.entries()) await workspace.db.prepare(`INSERT INTO sharing_comment_capabilities
       (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`)
       .bind(objectId, workspace.accountId, workspace.fileId, objectId,
-        index === 0 ? "private-comment-thread" : "public-comment-audience-epoch", index === 0 ? null : objectId, objectId).run();
+        index === 0 ? "private-comment-thread" : "public-comment-audience-epoch",
+        index === 0 ? null : epochPublicationId, objectId).run();
     await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
     const grantId = await page.evaluate(async ({ fileId, shareId, targetKind, permission }) => {
       const api = window.workspaceFixture, access = await api.openRoot();

@@ -3,6 +3,7 @@ import { createCommentKeyEnvelope, openCommentKeyEnvelope, verifyCommentKeySigna
   type CommentKeyContext } from "../app/sharing/comment-keys";
 import { encodeTreeBytes } from "../app/tree/wire";
 import { createSymmetricWriter, sealToRecipient, type EnvelopeContext } from "../app/crypto/enc-v1";
+import { newPublicationIdentifier } from "../app/publications/capability";
 
 async function signedPacket(ciphertext: Uint8Array, expected = context) {
   const digest = encodeTreeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(ciphertext))));
@@ -24,7 +25,7 @@ const context: CommentKeyContext & { deviceId: string; signerDeviceId: string } 
   purpose: "private-comment-thread", fileId: id(8), threadId: id(9), objectId: id(9), publicationId: null,
 };
 const publicContext: typeof context = { ...context, purpose: "public-comment-audience-epoch",
-  publicationId: id(10), objectId: id(11) };
+  publicationId: newPublicationIdentifier(), objectId: id(11) };
 const literalKey = Uint8Array.from([
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
   16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,

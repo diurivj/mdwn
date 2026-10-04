@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
+import { newPublicationIdentifier } from "../../app/publications/capability";
 import { addSharingDevice, deletePayload, invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild, type SharingAccount } from "./sharing-fixtures";
 
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
@@ -30,7 +31,7 @@ async function deliverComment(owner: SharingAccount, recipient: SharingAccount, 
   return { path, context, packet };
 }
 
-async function publicEpoch(owner: SharingAccount, fileId: string, threadId = opaqueId(), publicationId = opaqueId()) {
+async function publicEpoch(owner: SharingAccount, fileId: string, threadId = opaqueId(), publicationId = newPublicationIdentifier()) {
   const objectId = opaqueId(), capabilityId = opaqueId();
   await env.DB.prepare(`INSERT INTO sharing_comment_capabilities
     (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
@@ -105,7 +106,7 @@ it("Comment packets reject cross-object, cross-purpose, stale-epoch, future-epoc
   const wrongThreadId = opaqueId();
   for (const changed of [{ fileId: owner.rootId }, { threadId: wrongThreadId, objectId: wrongThreadId },
     { capabilityEpoch: 2 }, { grantKeyEpoch: 2 }, { ownerRegistryEpoch: 2 }, { recipientRegistryEpoch: 2 },
-    { recipientId: stranger.accountId }, { purpose: "public-comment-audience-epoch" as const, publicationId: opaqueId() }]) {
+    { recipientId: stranger.accountId }, { purpose: "public-comment-audience-epoch" as const, publicationId: newPublicationIdentifier() }]) {
     const envelope = await createCommentKeyEnvelope(commentKey, recipient.transport.publicKey, owner.assertion.privateKey,
       { ...delivered.context, ...changed, deviceId: recipient.deviceId, signerDeviceId: owner.deviceId });
     expect((await sharingRequest(owner, delivered.path, "PUT", { ...delivered.packet, envelopes: [envelope] })).status).toBe(400);

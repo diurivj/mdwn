@@ -29,6 +29,7 @@ describe("encrypted Account profiles", () => {
       "device-label",
       "file-capability",
       "publication-attribution",
+      "public-comment-epoch-link",
     ]);
     expect(accountProfileContext(expected)).toEqual({
       purpose: "account-profile",

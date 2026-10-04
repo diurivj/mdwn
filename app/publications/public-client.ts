@@ -1,3 +1,4 @@
+import { loadLinkPublicComments, publicCommentsWire, type PublicLinkComments } from "~/comments/public-client";
 import { decodeTreeBytes } from "~/tree/wire";
 import { decodePublicationPublicKey, importPublicationKeyPair, isPublicationIdentifier, parsePublicationFragment } from "./capability";
 import {
@@ -6,13 +7,15 @@ import {
 } from "./content";
 
 export type PublicPage =
-  | { status: "ready"; title: string | null; markdown: string; authors: string[] }
+  | { status: "ready"; title: string | null; markdown: string; authors: string[];
+    comments: PublicLinkComments | null }
   | { status: "missing-key" | "not-found" | "unreadable" | "unavailable" };
 
 type PublicResponse = {
   publicationId: string; linkId: string; publicKey: string;
   representation: { revision: number; ciphertext: string };
   authors: { declarationId: string; revision: number; ciphertext: string }[];
+  comments?: unknown;
 };
 
 const revision = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
@@ -54,7 +57,12 @@ export async function loadPublicPage(linkId: string, hash: string, signal?: Abor
           { ...binding, declarationId: author.declarationId, revision: author.revision }));
       } catch { /* An unreadable attribution never blocks the document. */ }
     }
-    return { status: "ready", title: presentation.title, markdown: presentation.markdown, authors };
+    // Public Comment epochs are supplementary: a malformed page never hides the
+    // document, and an unreadable epoch only hides its own ciphertext.
+    const commentWire = publicCommentsWire(body.comments);
+    const comments = commentWire ? await loadLinkPublicComments({ publicationId: body.publicationId, linkId,
+      privateKey, publicKey, comments: commentWire }).catch(() => null) : null;
+    return { status: "ready", title: presentation.title, markdown: presentation.markdown, authors, comments };
   } catch (error) {
     if (signal?.aborted) throw error;
     return { status: "unreadable" };

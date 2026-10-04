@@ -14,60 +14,18 @@ import {
   type CommentsState,
   type PrivateComments,
 } from "./comments-client";
+import { CommentItem } from "./CommentItem";
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
+import { PublicThreadPanel } from "./PublicThreadPanel";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 
 type PanelState = { status: "loading" } | { status: "failed"; message: string } | CommentsState;
-
-const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-const stamp = (value: number) => timeFormat.format(new Date(value));
-
-function CommentItem({ comment, thread, editing, deleting, busy, onEdit, onEditText, onSubmitEdit, onCancelEdit,
-  onDelete, onConfirmDelete, onCancelDelete }: {
-  comment: CommentView; thread: PrivateComments; editing: { id: string; text: string } | null;
-  deleting: string | null; busy: boolean;
-  onEdit: (comment: CommentView) => void; onEditText: (text: string) => void; onSubmitEdit: () => void; onCancelEdit: () => void;
-  onDelete: (comment: CommentView) => void; onConfirmDelete: (comment: CommentView) => void; onCancelDelete: () => void;
-}) {
-  const edit = editing && editing.id === comment.id ? editing : null;
-  return <li className="rounded border border-stone-200 p-3">
-    <p className="text-sm text-stone-600"><span className="font-medium text-stone-900">
-      {thread.pseudonyms.get(comment.authorId) ?? (comment.authorId === thread.actorAccountId ? "You" : "Unknown author")}</span>
-      {" · "}<time dateTime={new Date(comment.createdAt).toISOString()}>{stamp(comment.createdAt)}</time>
-      {comment.updatedAt !== comment.createdAt && " · edited"}</p>
-    {edit ? <form className="mt-2" onSubmit={(event) => {
-      event.preventDefault();
-      if (commentCharacters(edit.text) > MAX_COMMENT_CHARS) return;
-      onSubmitEdit();
-    }}>
-      <label className="block text-sm">Edit comment
-        <textarea autoFocus value={edit.text} disabled={busy} rows={4}
-          onChange={(event) => onEditText(event.target.value)}
-          className="mt-1 w-full rounded border p-2" />
-      </label>
-      <p className="text-sm">{commentCharacters(edit.text)} / 2,000</p>
-      <div className="mt-1 flex gap-2">
-        <button type="submit" disabled={busy || commentCharacters(edit.text) > MAX_COMMENT_CHARS}
-          className="rounded bg-stone-900 px-3 py-1 text-white">Save comment</button>
-        <button type="button" disabled={busy} onClick={onCancelEdit}>Cancel</button>
-      </div>
-    </form> : <p className="mt-2 whitespace-pre-wrap break-words">
-      {comment.text ?? <span className="text-rose-700">This comment couldn’t be decrypted on this device.</span>}</p>}
-    {(comment.canEdit || comment.canDelete) && !edit && <div className="mt-2 flex gap-2 text-sm">
-      {comment.canEdit && comment.text !== null && <button type="button" disabled={busy} onClick={() => onEdit(comment)}>Edit</button>}
-      {comment.canDelete && (deleting === comment.id ? <>
-        <button type="button" disabled={busy} className="text-rose-700" onClick={() => onConfirmDelete(comment)}>Confirm delete</button>
-        <button type="button" disabled={busy} onClick={onCancelDelete}>Cancel</button>
-      </> : <button type="button" disabled={busy} className="text-rose-700" onClick={() => onDelete(comment)}>Delete</button>)}
-    </div>}
-  </li>;
-}
 
 /**
  * The Private Comment inspector. Thread ciphertext is fetched through the
  * proof-guarded Comment endpoint and decrypted only in this browser.
  */
-export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: FilesSnapshot }) {
+function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: FilesSnapshot }) {
   const [panel, setPanel] = useState<PanelState>({ status: "loading" });
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
@@ -180,13 +138,10 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
   const thread = panel.thread;
   const tooLong = commentCharacters(draft) > MAX_COMMENT_CHARS;
   return <section aria-label="Private comments" className="mt-4 flex min-h-0 flex-col lg:mt-0">
-    <div className="flex items-center gap-3">
-      <h2 className="font-medium">Comments</h2>
-      <span aria-label="Selected thread" className="rounded border border-stone-300 px-2 py-0.5 text-sm">Private</span>
-    </div>
     {message && <p role="alert" className="mt-2 text-rose-700">{message}</p>}
     <ol aria-label="Private comments" className="mt-3 flex-1 space-y-3 overflow-y-auto pr-1">
-      {thread.comments.map((comment) => <CommentItem key={comment.id} comment={comment} thread={thread}
+      {thread.comments.map((comment) => <CommentItem key={comment.id} comment={comment}
+        pseudonym={thread.pseudonyms.get(comment.authorId)} viewerAccountId={thread.actorAccountId}
         editing={editing} deleting={deleting} busy={busy}
         onEdit={(selected) => { setDeleting(null); setEditing({ id: selected.id, text: selected.text ?? "" }); }}
         onEditText={(text) => { if (editing) setEditing({ id: editing.id, text }); }}
@@ -204,7 +159,9 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
         onDelete={(selected) => { setEditing(null); setDeleting(selected.id); }}
         onCancelDelete={() => setDeleting(null)}
         onConfirmDelete={(selected) => void mutate(async (_thread, signal) => {
-          await deletePrivateComment(thread, selected, signal); setDeleting(null);
+          const full = thread.comments.find((item) => item.id === selected.id);
+          if (!full) return;
+          await deletePrivateComment(thread, full, signal); setDeleting(null);
         })} />)}
       {!thread.comments.length && <li className="text-stone-500">No comments yet.</li>}
     </ol>
@@ -230,4 +187,27 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       </div>
     </form>
   </section>;
+}
+
+/**
+ * The authenticated thread selector. Private is the default thread; the Public
+ * thread loads through its own endpoint and is never combined with it.
+ */
+export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: FilesSnapshot }) {
+  const [selected, setSelected] = useState<"private" | "public">("private");
+  const tab = (kind: "private" | "public", label: string) => <button type="button" role="tab"
+    aria-selected={selected === kind} id={`${kind}-thread-tab`} aria-controls={`${kind}-thread-panel`}
+    onClick={() => setSelected(kind)}
+    className={selected === kind ? "rounded border border-stone-900 bg-stone-900 px-3 py-0.5 text-sm text-white"
+      : "rounded border border-stone-300 px-3 py-0.5 text-sm"}>{label}</button>;
+  return <div className="flex min-h-0 flex-col">
+    <div role="tablist" aria-label="Comment thread" className="flex items-center gap-2">
+      {tab("private", "Private")}
+      {tab("public", "Public")}
+    </div>
+    <div role="tabpanel" id={`${selected}-thread-panel`} aria-labelledby={`${selected}-thread-tab`}>
+      {selected === "public" ? <PublicThreadPanel fileId={fileId} snapshot={snapshot} />
+        : <PrivateCommentsPanel fileId={fileId} snapshot={snapshot} />}
+    </div>
+  </div>;
 }

@@ -4,6 +4,7 @@ import type { TestHarness } from "wrangler";
 import { seedAccount, signInAccount } from "./seeded-account";
 import { primeSyncedPasskey } from "./passkey";
 import { waitForSharedProvisioning } from "./navigation";
+import { newPublicationIdentifier } from "../../app/publications/capability";
 import type { GrantKeyContext } from "../../app/sharing/grant-keys";
 import type { CommentKeyContext } from "../../app/sharing/comment-keys";
 
@@ -75,7 +76,7 @@ export async function shareWithComments(owner: Page, recipient: Awaited<ReturnTy
   const address = await workspace.db.prepare("SELECT share_id FROM accounts WHERE id = ?")
     .bind(recipient.accountId).first<{ share_id: string }>();
   const comments = [objectId(), objectId(), objectId()];
-  const publicationId = objectId(), threadId = objectId();
+  const publicationId = newPublicationIdentifier(), threadId = objectId();
   for (const [index, id] of comments.entries()) await workspace.db.prepare(`INSERT INTO sharing_comment_capabilities
     (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`).bind(id, workspace.accountId, workspace.fileId,

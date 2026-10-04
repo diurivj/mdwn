@@ -1,3 +1,4 @@
+import { newPublicationIdentifier } from "../../app/publications/capability";
 import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 import { addSharingDevice, deletePayload, grant, invite, opaqueId, prepareGrantKeys, savePayload, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
@@ -187,7 +188,7 @@ it("rotation cannot unseal root-only delivery and rewraps current Private and re
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO sharing_comment_capabilities (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
         VALUES (?, ?, ?, ?, ?, ?, ?, 1)`).bind(item.objectId, owner.accountId, fileId, item.objectId, item.purpose,
-          item.purpose === "private-comment-thread" ? null : item.objectId, item.capabilityId),
+          item.purpose === "private-comment-thread" ? null : newPublicationIdentifier(), item.capabilityId),
       env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
         VALUES (?, 'vault-recovery', ?, 'vault-root', ?, 1)`).bind(owner.accountId, item.objectId, recovery),
     ]);

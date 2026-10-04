@@ -6,6 +6,7 @@ import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, type AuthorizedDevice } from "~/device/proof.server";
 import { newOpaqueId } from "~/opaque-id";
 import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
+import { epochInput, epochStatements, readPublicCommentPage, type EpochInput } from "~/comments/public.server";
 import { shareHandleLookupToken } from "~/sharing/address";
 import { accessPredicate, accountAccessQuery, effectiveAccess, permits } from "~/sharing/access.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
@@ -96,11 +97,17 @@ async function readPublication(env: Env, auth: AuthorizedDevice, fileId: string)
     WHERE r.file_id = ${fileId} AND (${owner ? sql`r.owner_id = ${auth.accountId}` : sql`r.requester_id = ${auth.accountId}`})
       AND ${accessPredicate(auth, fileId, "read")}
     ORDER BY r.id LIMIT 100`);
+  // Public Comment audience state: the Owner sees it to configure the thread.
+  const comments = publication ? await db.get<{ threadId: string; epochId: string; audience: string }>(sql`
+    SELECT t.id AS threadId, t.current_epoch_id AS epochId, e.audience FROM comment_threads t
+    JOIN comment_thread_epochs e ON e.id = t.current_epoch_id AND e.thread_id = t.id
+    WHERE t.publication_id = ${publication.id} AND t.purpose = 'public' AND ${accessPredicate(auth, fileId, "read")}`) : null;
   return Response.json({
     fileId, isOwner: owner, canEdit: permits(access, "edit_markdown"),
     publication: publication ? { publicationId: publication.id, state: publication.state, createdAt: publication.created_at,
       authors: authors.map((author) => ({ declarationId: author.id, ordinal: author.ordinal,
         self: author.author_id === auth.accountId, declared: Boolean(author.declared) })) } : null,
+    comments: comments ? { threadId: comments.threadId, epochId: comments.epochId, audience: comments.audience } : null,
     requests: requests.map((request) => ({ requestId: request.id, own: request.requester_id === auth.accountId,
       createdAt: request.created_at })),
   }, { headers });
@@ -110,18 +117,25 @@ type Creation = {
   publicationId: string; linkId: string; publicKey: Uint8Array<ArrayBuffer>;
   expectedRevision: number; expectedRepresentationId: string; ciphertext: Uint8Array<ArrayBuffer>;
   author: { declarationId: string; ciphertext: Uint8Array<ArrayBuffer> } | null;
+  comments: EpochInput;
 };
 
-async function creationInput(value: unknown): Promise<Creation | null> {
+async function creationInput(value: unknown, ownerId: string): Promise<Creation | null> {
   const input = record(value), representation = record(input?.representation);
   if (!input || !representation || !exact(input, ["publicationId", "linkId", "publicKey", "expectedRevision",
-      "expectedRepresentationId", "representation", "author"]) || !exact(representation, ["ciphertext"]) ||
+      "expectedRepresentationId", "representation", "author", "comments"]) || !exact(representation, ["ciphertext"]) ||
       !isPublicationIdentifier(input.publicationId) || !isPublicationIdentifier(input.linkId) ||
       input.publicationId === input.linkId || !positive(input.expectedRevision) || !isV7(input.expectedRepresentationId)) return null;
   const author = input.author === null ? null : record(input.author);
   if (input.author !== null && (!author || !exact(author, ["declarationId", "ciphertext"]) ||
       !isPublicationIdentifier(author.declarationId) ||
       author.declarationId === input.publicationId || author.declarationId === input.linkId)) return null;
+  // Every new Publication owns a Public Comment thread: the first audience
+  // epoch is part of creation, defaulting to public, so no Publication can be
+  // observed without it. A pre-ticket-23 Publication gets one through the
+  // Owner-only audience endpoint instead.
+  const comments = epochInput(input.comments, ownerId, input.publicationId, input.linkId);
+  if (!comments) return null;
   try {
     const publicKey = await validPublicKey(input.publicKey);
     const binding = { publicationId: input.publicationId, linkId: input.linkId, publicKey };
@@ -131,7 +145,8 @@ async function creationInput(value: unknown): Promise<Creation | null> {
         publicRepresentationContext({ ...binding, revision: 1 })),
       author: author ? { declarationId: author.declarationId as string, ciphertext: publicEnvelope(author.ciphertext,
         MAX_AUTHOR_DECLARATION_BYTES, authorDeclarationContext({ ...binding,
-          declarationId: author.declarationId as string, revision: 1 })) } : null };
+          declarationId: author.declarationId as string, revision: 1 })) } : null,
+      comments };
   } catch { return null; }
 }
 
@@ -163,7 +178,7 @@ async function createPublication(request: Request, env: Env, auth: AuthorizedDev
       AND ${accessPredicate(auth, fileId, "owner")}`);
   // A Collaborator sees the same 404 as an inaccessible File.
   if (!file) return notFound();
-  const input = await creationInput(value);
+  const input = await creationInput(value, auth.accountId);
   if (!input) return invalid();
   if (file.published) return failure("publication_exists", 409);
   if (!file.converted) return failure("file_capability_required", 409);
@@ -192,15 +207,25 @@ async function createPublication(request: Request, env: Env, auth: AuthorizedDev
           ciphertext, created_at, updated_at)
         SELECT ${input.author.declarationId}, ${input.publicationId}, ${auth.accountId}, 1, ${input.linkId}, 1,
           ${input.author.ciphertext}, ${now}, ${now} WHERE ${marker}`] : []),
+      // A new Publication defaults to public Comments: the Public thread and its
+      // first audience epoch are installed atomically with the Publication, so a
+      // reader can never observe a Publication without its thread.
+      sql`INSERT INTO comment_thread_epochs (id, thread_id, audience, key_epoch, ordinal, state, created_at)
+        SELECT ${input.comments.epochId}, ${input.comments.threadId}, ${input.comments.audience}, 1, 1, 'active', ${now} WHERE ${marker}`,
+      sql`INSERT INTO comment_threads (id, owner_id, file_id, purpose, publication_id, current_epoch_id, next_sequence, created_at)
+        SELECT ${input.comments.threadId}, ${auth.accountId}, ${fileId}, 'public', ${input.publicationId},
+          ${input.comments.epochId}, 1, ${now} WHERE ${marker}`,
+      ...epochStatements(marker, input.comments, input.publicationId, input.linkId, now),
       // Approval is publishing: every pending request for this File is satisfied.
       sql`DELETE FROM publication_requests WHERE file_id = ${fileId} AND owner_id = ${auth.accountId} AND ${marker}`,
-    ]);
+    ], { deferForeignKeys: true });
   } catch {
     // A colliding random identifier rolls back the whole batch; nothing is public.
     return publicationChanged();
   }
-  if (committed) return Response.json({ publicationId: input.publicationId, linkId: input.linkId, revision: 1 },
-    { status: 201, headers });
+  if (committed) return Response.json({ publicationId: input.publicationId, linkId: input.linkId, revision: 1,
+    comments: { threadId: input.comments.threadId, epochId: input.comments.epochId,
+      audience: input.comments.audience } }, { status: 201, headers });
   if (await proofSpent(env, auth)) return denied();
   const latest = await db.get<{ current_revision: number; current_representation_id: string; published: number }>(sql`
     SELECT f.current_revision, f.current_representation_id,
@@ -476,7 +501,24 @@ export async function readPublicPublication(env: Env, linkId: string): Promise<R
     publicKey: encodeTreeBytes(new Uint8Array(row.public_key)),
     representation: { revision: row.revision, ciphertext: encodeTreeBytes(new Uint8Array(row.ciphertext)) },
     authors,
+    // Public Comment epochs: only explicitly public epochs are ever served, and
+    // never a Comment body, wrapper or attribution from a Collaborators-only one.
+    comments: await readPublicCommentPage(env, linkId, 0),
   }, { headers });
+}
+
+/** Anonymous Public Comment pagination for one active link; the same encrypted
+ * epoch capabilities are used locally, so no fragment ever reaches the route. */
+export async function readPublicCommentPageForLink(env: Env, linkId: string, cursorParam: string | null): Promise<Response> {
+  if (!isPublicationIdentifier(linkId)) return publicNotFound();
+  const cursor = cursorParam === null ? 0 : /^\d+$/.test(cursorParam) ? Number(cursorParam) : NaN;
+  if (!Number.isSafeInteger(cursor) || cursor < 0) return publicNotFound();
+  const row = await createDb(env.DB).get<{ publication_id: string }>(sql`SELECT p.id AS publication_id FROM publication_links l
+    JOIN publications p ON p.id = l.publication_id AND p.current_link_id = l.id AND p.state = 'active'
+    WHERE l.id = ${linkId}`);
+  if (!row) return publicNotFound();
+  return Response.json({ publicationId: row.publication_id, linkId,
+    comments: await readPublicCommentPage(env, linkId, cursor) }, { headers });
 }
 
 // ---------------------------------------------------------------------------
@@ -538,6 +580,7 @@ export function publicationSaveStatements(save: PublicationSave | null, fileRevi
 export function deletedFilePublications(ownerId: string, ids: SQL, committed: SQL): SQL[] {
   const owned = sql`SELECT id FROM publications WHERE file_id IN (${ids}) AND owner_id = ${ownerId}`;
   return [
+    sql`DELETE FROM public_comment_epoch_links WHERE publication_id IN (${owned}) AND ${committed}`,
     sql`DELETE FROM publication_authors WHERE publication_id IN (${owned}) AND ${committed}`,
     sql`DELETE FROM publication_requests WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
     sql`DELETE FROM public_representations WHERE publication_id IN (${owned}) AND ${committed}`,

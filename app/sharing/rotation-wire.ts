@@ -6,7 +6,13 @@ export type RotationJob = { jobId: string; targetId: string; keyEpoch: number; s
 export type RotationItem = { objectId: string; kind: "directory" | "file" | "private_comment" | "public_history";
   fileId: string | null; depth: number; state: "ready" | "staging" | "complete";
   sourceEpoch: number | null; targetEpoch: number | null; capabilityId: string | null;
-  sourceRevision: number | null; sourceRepresentationId: string | null; resumeEnvelope: string | null; cursor: string | null };
+  sourceRevision: number | null; sourceRepresentationId: string | null; resumeEnvelope: string | null; cursor: string | null;
+  /** A current Collaborators-only Public Comment audience epoch: its
+   * capability advances in place because a revoked device may still hold the
+   * old epoch key. A retained (or public) epoch keeps its key and only renews
+   * envelopes. The persisted `public_history` kind names any Public Comment
+   * audience epoch item from the ticket 18/20 registry. */
+  rotate: boolean };
 export type RotationListingHead = ListingHead & { signerDeviceId: string; signerPublicKey: string };
 export type RotationDirectory = { kind: "directory"; objectId: string; parentId: string | null; keyEpoch: number;
   entriesRevision: number; listingHead: RotationListingHead | null };

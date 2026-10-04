@@ -877,6 +877,25 @@ export const threadAttributions = sqliteTable("thread_attributions", {
     sql`length(${table.ciphertext}) BETWEEN 1 AND 4096 AND length(${table.contentKeyEnvelope}) BETWEEN 1 AND 16384`),
 ]);
 
+/** The one symmetric wrapper that lets a reader holding the Publication
+ * fragment decrypt a `public` audience epoch. A Collaborators-only epoch has
+ * no row here. The wrapper is bound to its link, epoch and capability identity;
+ * ticket 25 replaces it in place when the Publication link rotates.
+ */
+export const publicCommentEpochLinks = sqliteTable("public_comment_epoch_links", {
+  epochId: text("epoch_id").primaryKey().references(() => commentThreadEpochs.id, { onDelete: "restrict" }),
+  publicationId: text("publication_id").notNull().references(() => publications.id, { onDelete: "restrict" }),
+  linkId: text("link_id").notNull().references(() => publicationLinks.id, { onDelete: "restrict" }),
+  keyEpoch: integer("key_epoch").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("public_comment_epoch_links_link_idx").on(table.linkId, table.epochId),
+  index("public_comment_epoch_links_publication_idx").on(table.publicationId),
+  check("public_comment_epoch_links_epoch_positive", sql`${table.keyEpoch} >= 1`),
+  check("public_comment_epoch_links_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 16384`),
+]);
+
 /** One flat ordered Comment. Plain text only: the body is a `comment-content`
  * envelope whose fresh content key is wrapped beneath the thread capability.
  */
@@ -908,6 +927,7 @@ export const comments = sqliteTable("comments", {
 
 export type CommentThread = typeof commentThreads.$inferSelect;
 export type CommentThreadEpoch = typeof commentThreadEpochs.$inferSelect;
+export type PublicCommentEpochLink = typeof publicCommentEpochLinks.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type ThreadAttribution = typeof threadAttributions.$inferSelect;
 

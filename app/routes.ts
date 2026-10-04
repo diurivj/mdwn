@@ -30,6 +30,7 @@ export default [
   route("api/private/profile", "routes/api/private-profile.ts"),
   route("api/private/publications/*", "routes/api/private-publications.ts"),
   route("api/public/publications/:linkId", "routes/api/public-publications.ts"),
+  route("api/public/publications/:linkId/comments", "routes/api/public-comments.ts"),
   route("api/auth/*", "routes/auth.ts"),
   route("api/signup/*", "routes/signup.ts"),
   route("api/device/state", "routes/device-state.ts"),

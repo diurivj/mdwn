@@ -552,9 +552,18 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM thread_attributions WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
+      // Public audience epochs carry an Owner recovery envelope per epoch and,
+      // for public epochs, one Publication-capability link wrapper.
       sql`DELETE FROM key_envelopes WHERE object_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})
         AND account_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM key_envelopes WHERE object_id IN
+        (SELECT e.id FROM comment_thread_epochs e JOIN comment_threads t ON t.id = e.thread_id
+          WHERE t.file_id IN (${ids}) AND t.owner_id = ${ownerId})
+        AND account_id = ${ownerId} AND ${committed}`,
+      sql`DELETE FROM public_comment_epoch_links WHERE epoch_id IN
+        (SELECT e.id FROM comment_thread_epochs e JOIN comment_threads t ON t.id = e.thread_id
+          WHERE t.file_id IN (${ids}) AND t.owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM comment_thread_epochs WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,

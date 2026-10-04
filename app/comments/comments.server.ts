@@ -11,11 +11,12 @@ import {
   MAX_COMMENT_KEY_ENVELOPE_BYTES,
   MAX_COMMENTS_PAGE,
 } from "~/comments/content";
+import { commentEnvelopeWire, readCommentEnvelope, type CommentEnvelope } from "~/comments/envelopes.server";
+import { changePublicAudience, createPublicComment, deletePublicComment, editPublicComment, readFilePublicComments } from "~/comments/public.server";
+import { isPublicationIdentifier } from "~/publications/capability";
 import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { accessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
-import { requiredGrantComments } from "~/sharing/capability-coverage.server";
-import { liveGrant } from "~/sharing/grant-lifetime.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
 
 const headers = { "Cache-Control": "no-store" };
@@ -78,45 +79,13 @@ async function threadPreflight(env: Env, auth: AuthorizedDevice, fileId: string,
   return { thread };
 }
 
-type EnvelopeRow = { mode: "owned"; keyEpoch: number; ciphertext: ArrayBuffer } |
-  { mode: "grant"; grantId: string; ownerId: string; recipientId: string; targetId: string; targetKind: string;
-    ownerRegistryEpoch: number; recipientRegistryEpoch: number; grantKeyEpoch: number;
-    signerDeviceId: string; signerPublicKey: ArrayBuffer; ciphertext: ArrayBuffer; signature: ArrayBuffer };
-
 /** The Owner opens its owned recovery envelope; an eligible device receives its
  * current signed Grant envelope. Missing material is a ciphertext-free 409. */
-async function threadEnvelope(env: Env, auth: AuthorizedDevice, thread: ThreadRow): Promise<EnvelopeRow | null> {
-  const db = createDb(env.DB);
-  // Each envelope read re-derives live access in the same statement, so a
-  // revocation between the thread read and this SELECT cannot serve ciphertext.
-  const authority = threadAuthority(auth, thread.fileId, thread.threadId,
-    thread.capabilityId, thread.capabilityEpoch, thread.epochId);
-  if (thread.ownerId === auth.accountId) {
-    const row = await db.get<{ ciphertext: ArrayBuffer }>(sql`SELECT ciphertext FROM key_envelopes
-      WHERE account_id = ${thread.ownerId} AND purpose = 'vault-recovery' AND object_id = ${thread.threadId}
-        AND recipient_id = 'vault-root' AND key_epoch = ${thread.capabilityEpoch} AND superseded_at IS NULL
-        AND ${authority}`);
-    return row ? { mode: "owned", keyEpoch: thread.capabilityEpoch, ciphertext: row.ciphertext } : null;
-  }
-  const row = await db.get<{ grant_id: string; owner_id: string; recipient_id: string; target_id: string;
-    target_kind: string; owner_registry_epoch: number; recipient_registry_epoch: number;
-    grant_key_epoch: number; signer_device_id: string; signer_public_key: ArrayBuffer;
-    ciphertext: ArrayBuffer; signature: ArrayBuffer }>(sql`
-    SELECT s.id AS grant_id, s.owner_id, s.recipient_id, s.target_id, s.target_kind,
-      e.owner_registry_epoch, e.recipient_registry_epoch, e.grant_key_epoch,
-      e.signer_device_id, signer.assertion_public_key AS signer_public_key, e.ciphertext, e.signature
-    FROM grants s JOIN grant_comment_key_envelopes e ON e.relationship_id = s.id
-      AND e.object_id = ${thread.threadId} AND e.device_id = ${auth.deviceId}
-    JOIN encryption_devices signer ON signer.id = e.signer_device_id
-    WHERE s.recipient_id = ${auth.accountId} AND ${liveGrant()}
-      AND e.capability_id = ${thread.capabilityId} AND e.capability_epoch = ${thread.capabilityEpoch}
-      AND e.grant_key_epoch = s.key_epoch AND e.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
-      AND ${authority} LIMIT 1`);
-  return row ? { mode: "grant", grantId: row.grant_id, ownerId: row.owner_id, recipientId: row.recipient_id,
-    targetId: row.target_id, targetKind: row.target_kind, ownerRegistryEpoch: row.owner_registry_epoch,
-    recipientRegistryEpoch: row.recipient_registry_epoch, grantKeyEpoch: row.grant_key_epoch,
-    signerDeviceId: row.signer_device_id, signerPublicKey: row.signer_public_key,
-    ciphertext: row.ciphertext, signature: row.signature } : null;
+async function threadEnvelope(env: Env, auth: AuthorizedDevice, thread: ThreadRow): Promise<CommentEnvelope | null> {
+  return readCommentEnvelope(env, auth, { ownerId: thread.ownerId, objectId: thread.threadId,
+    capabilityId: thread.capabilityId, capabilityEpoch: thread.capabilityEpoch,
+    authority: threadAuthority(auth, thread.fileId, thread.threadId,
+      thread.capabilityId, thread.capabilityEpoch, thread.epochId) });
 }
 
 type CommentRow = { id: string; author_id: string; sequence: number; revision: number; body_ciphertext: ArrayBuffer;
@@ -156,18 +125,9 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
     thread: { threadId: thread.threadId, fileId: thread.fileId, ownerId: thread.ownerId, epochId: thread.epochId,
       capabilityId: thread.capabilityId, capabilityEpoch: thread.capabilityEpoch,
       canComment: true, canDeleteAny: thread.ownerId === auth.accountId, actorAccountId: auth.accountId,
-      envelope: envelope.mode === "owned" ? { mode: "owned", keyEpoch: envelope.keyEpoch,
-        ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)) } : { mode: "grant",
-        purpose: "private-comment-thread", fileId: thread.fileId, threadId: thread.threadId,
-        objectId: thread.threadId, publicationId: null,
-        relationshipId: envelope.grantId, ownerId: envelope.ownerId, recipientId: envelope.recipientId,
-        targetId: envelope.targetId, targetKind: envelope.targetKind,
-        capabilityId: thread.capabilityId, capabilityEpoch: thread.capabilityEpoch,
-        ownerRegistryEpoch: envelope.ownerRegistryEpoch, recipientRegistryEpoch: envelope.recipientRegistryEpoch,
-        grantKeyEpoch: envelope.grantKeyEpoch, deviceId: auth.deviceId, signerDeviceId: envelope.signerDeviceId,
-        signerPublicKey: encodeTreeBytes(new Uint8Array(envelope.signerPublicKey)),
-        ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)),
-        signature: encodeTreeBytes(new Uint8Array(envelope.signature)) } },
+      envelope: commentEnvelopeWire(envelope, { purpose: "private-comment-thread", fileId: thread.fileId,
+        threadId: thread.threadId, objectId: thread.threadId, publicationId: null,
+        capabilityId: thread.capabilityId, capabilityEpoch: thread.capabilityEpoch, deviceId: auth.deviceId }) },
     comments: comments.slice(0, MAX_COMMENTS_PAGE).map((comment) => ({ id: comment.id, authorId: comment.author_id,
       sequence: comment.sequence, revision: comment.revision,
       bodyCiphertext: encodeTreeBytes(new Uint8Array(comment.body_ciphertext)), bodySize: comment.body_size,
@@ -368,29 +328,45 @@ async function deleteComment(env: Env, auth: AuthorizedDevice, fileId: string, c
 
 /** Resource-only Comment API. Every private read is a proof-guarded, bodyless POST. */
 export async function commentsAction(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const collection = /^\/api\/private\/comments\/files\/([0-9a-f-]+)$/.exec(url.pathname);
-  const entries = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/entries$/.exec(url.pathname);
-  const entry = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/entries\/([0-9a-f-]+)$/.exec(url.pathname);
+  const url = new URL(request.url), path = url.pathname;
+  const collection = /^\/api\/private\/comments\/files\/([0-9a-f-]+)$/.exec(path);
+  const entries = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/entries$/.exec(path);
+  const entry = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/entries\/([0-9a-f-]+)$/.exec(path);
+  const publicThread = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/public$/.exec(path);
+  const publicEntries = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/public\/entries$/.exec(path);
+  const publicEntry = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/public\/entries\/([0-9a-f-]+)$/.exec(path);
+  const linkEntries = /^\/api\/private\/comments\/links\/([A-Za-z0-9_-]{43})\/entries$/.exec(path);
+  const linkEntry = /^\/api\/private\/comments\/links\/([A-Za-z0-9_-]{43})\/entries\/([0-9a-f-]+)$/.exec(path);
   const allowed = (collection && (request.method === "POST" || request.method === "PUT")) ||
     (entries && request.method === "POST") ||
-    (entry && (request.method === "PATCH" || request.method === "DELETE"));
+    (entry && (request.method === "PATCH" || request.method === "DELETE")) ||
+    (publicThread && (request.method === "POST" || request.method === "PUT")) ||
+    (publicEntries && request.method === "POST") ||
+    (publicEntry && (request.method === "PATCH" || request.method === "DELETE")) ||
+    (linkEntries && request.method === "POST") ||
+    (linkEntry && (request.method === "PATCH" || request.method === "DELETE"));
   if (!allowed) return notFound();
-  const fileId = (collection ?? entries ?? entry)![1]!;
-  if (!isV7(fileId) || entry && !isV7(entry[2]!)) return notFound();
+  const fileMatch = collection ?? entries ?? entry ?? publicThread ?? publicEntries ?? publicEntry;
+  const fileId = fileMatch?.[1] ?? null;
+  const commentId = (entry ?? publicEntry ?? linkEntry)?.[2] ?? null;
+  if (fileId !== null && !isV7(fileId) || commentId !== null && !isV7(commentId)) return notFound();
+  const linkId = (linkEntries ?? linkEntry)?.[1] ?? null;
+  if (linkId !== null && !isPublicationIdentifier(linkId)) return notFound();
+  const reading = request.method === "POST" && (collection || publicThread);
+  const cursorSupported = collection !== null || publicThread !== null;
   let raw = "", value: unknown = null, cursor = 0, probe = false;
   try {
-    if (request.method === "POST" && collection) {
+    if (reading) {
       if (!await hasEmptyBody(request)) return denied();
-      const params = new URL(request.url).searchParams;
+      const params = url.searchParams;
       const parsed = params.get("cursor");
       if (parsed !== null) {
-        if (!/^\d+$/.test(parsed)) return invalid();
+        if (!cursorSupported || !/^\d+$/.test(parsed)) return invalid();
         cursor = Number(parsed);
         if (!cursorValue(cursor)) return invalid();
       }
       const probeParam = params.get("probe");
-      if (probeParam !== null && probeParam !== "1") return invalid();
+      if (probeParam !== null && (!collection || probeParam !== "1")) return invalid();
       probe = probeParam === "1";
     } else {
       const parsed = await readAuthJsonText(request, 512 * 1024);
@@ -402,9 +378,19 @@ export async function commentsAction(request: Request, env: Env): Promise<Respon
   catch { return denied(); }
   const auth = await authorizePrivateRequest(request, env, proof, raw);
   if (!auth) return denied();
-  if (collection) return request.method === "PUT" ? createThread(env, auth, fileId, value)
-    : readComments(env, auth, fileId, cursor, probe);
-  if (entries) return createComment(env, auth, fileId, value);
-  return request.method === "PATCH" ? editComment(env, auth, fileId, entry![2]!, value)
-    : deleteComment(env, auth, fileId, entry![2]!, value);
+  if (collection) return request.method === "PUT" ? createThread(env, auth, fileId!, value)
+    : readComments(env, auth, fileId!, cursor, probe);
+  if (entries) return createComment(env, auth, fileId!, value);
+  if (entry) return request.method === "PATCH" ? editComment(env, auth, fileId!, commentId!, value)
+    : deleteComment(env, auth, fileId!, commentId!, value);
+  if (publicThread) return request.method === "PUT" ? changePublicAudience(env, auth, fileId!, value)
+    : readFilePublicComments(env, auth, fileId!, cursor);
+  if (publicEntries) return createPublicComment(request, env, auth, { kind: "file", fileId: fileId! }, value);
+  if (publicEntry) return request.method === "PATCH"
+    ? editPublicComment(request, env, auth, { kind: "file", fileId: fileId! }, commentId!, value)
+    : deletePublicComment(env, auth, { kind: "file", fileId: fileId! }, commentId!, value);
+  if (linkEntries) return createPublicComment(request, env, auth, { kind: "link", linkId: linkId! }, value);
+  return request.method === "PATCH"
+    ? editPublicComment(request, env, auth, { kind: "link", linkId: linkId! }, commentId!, value)
+    : deletePublicComment(env, auth, { kind: "link", linkId: linkId! }, commentId!, value);
 }

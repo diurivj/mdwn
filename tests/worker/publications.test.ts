@@ -2,6 +2,7 @@ import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test"
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { sealAttribution, sealCommentBody } from "../../app/comments/content";
+import { sealCommentEpochLink } from "../../app/comments/public-content";
 import { createSymmetricWriter } from "../../app/crypto/enc-v1";
 import { createFileRepresentation, generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
 import {
@@ -33,11 +34,27 @@ async function fileView(actor: SharingAccount, fileId: string): Promise<FileView
 }
 
 type Published = { publicationId: string; linkId: string; keys: Awaited<ReturnType<typeof createPublicationKeyPair>>;
-  fragment: string; declarationId: string };
+  fragment: string; declarationId: string; comments: { threadId: string; epochId: string; capabilityId: string;
+    capability: Uint8Array<ArrayBuffer>; audience: "public" | "collaborators_only" } | null };
+
+/** A real first audience epoch, including the symmetric link wrapper when public. */
+async function firstEpoch(owner: SharingAccount, publicationId: string, linkId: string,
+  keys: Awaited<ReturnType<typeof createPublicationKeyPair>>, audience: "public" | "collaborators_only") {
+  const threadId = opaqueId(), epochId = opaqueId(), capabilityId = opaqueId();
+  const capability = crypto.getRandomValues(new Uint8Array(32));
+  const recoveryEnvelope = encodeTreeBytes(await sealVaultRecoveryEnvelope(generateVaultRootKey(),
+    { scope: "owned", objectId: epochId, keyId: capabilityId, key: capability },
+    { purpose: "vault-recovery", vaultId: owner.accountId, objectId: epochId, keyId: capabilityId, keyEpoch: 1, revision: 1 }));
+  const linkWrapper = audience === "public" ? encodeTreeBytes(await sealCommentEpochLink(keys.privateKey, keys.publicKey,
+    { publicationId, linkId, epochId, capabilityId, keyEpoch: 1, capability })) : null;
+  return { threadId, epochId, capabilityId, capability, audience,
+    body: { threadId, epochId, capabilityId, audience, recoveryEnvelope, linkWrapper } };
+}
 
 /** The Owner's browser half of publishing: every secret stays in this object. */
 async function publishBody(owner: SharingAccount, fileId: string, options: {
   markdown?: string; pseudonym?: string; revision?: number; representationId?: string;
+  audience?: "public" | "collaborators_only";
 } = {}) {
   const current = await fileView(owner, fileId);
   const keys = await createPublicationKeyPair();
@@ -47,11 +64,15 @@ async function publishBody(owner: SharingAccount, fileId: string, options: {
     publicPresentation(options.markdown ?? "---\ntitle: Diet plan\nprivate: never public\n---\n# private"));
   const author = options.pseudonym ? { declarationId, ciphertext: encodeTreeBytes(await sealAuthorDeclaration(
     { ...binding, declarationId, revision: 1 }, options.pseudonym)) } : null;
+  const audience = options.audience ?? "public";
+  const epoch = await firstEpoch(owner, publicationId, linkId, keys, audience);
   const body = { publicationId, linkId, publicKey: encodeTreeBytes(keys.publicKey),
     expectedRevision: options.revision ?? current.revision,
     expectedRepresentationId: options.representationId ?? current.representationId,
-    representation: { ciphertext: encodeTreeBytes(ciphertext) }, author };
-  const published: Published = { publicationId, linkId, keys, fragment: formatPublicationFragment(keys.privateKey), declarationId };
+    representation: { ciphertext: encodeTreeBytes(ciphertext) }, author, comments: epoch.body };
+  const published: Published = { publicationId, linkId, keys, fragment: formatPublicationFragment(keys.privateKey),
+    declarationId, comments: { threadId: epoch.threadId, epochId: epoch.epochId,
+      capabilityId: epoch.capabilityId, capability: epoch.capability, audience: epoch.audience } };
   return { body, published };
 }
 
@@ -157,7 +178,9 @@ describe("creating a Publication", () => {
     const response = await sharingRequest(owner, `/api/private/publications/files/${fileId}`, "PUT", body);
     expect(response.status).toBe(201);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual({ publicationId: published.publicationId, linkId: published.linkId, revision: 1 });
+    expect(await response.json()).toEqual({ publicationId: published.publicationId, linkId: published.linkId, revision: 1,
+      comments: published.comments ? { threadId: published.comments.threadId, epochId: published.comments.epochId,
+        audience: published.comments.audience } : null });
     const rows = (await publicationRows(fileId)).results;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: published.publicationId, state: "active", current_link_id: published.linkId,
@@ -292,6 +315,9 @@ describe("the anonymous Public route", () => {
     const replacement = newPublicationIdentifier(), representation = opaqueId(), now = Date.now();
     await env.DB.batch([
       env.DB.prepare("PRAGMA defer_foreign_keys = ON"),
+      // Ticket 25 rotation replaces link wrappers too; this simulation clears them
+      // with the retired links so the storage constraints stay honest.
+      env.DB.prepare("DELETE FROM public_comment_epoch_links WHERE publication_id = ?").bind(rotated.publicationId),
       env.DB.prepare("DELETE FROM public_representations WHERE publication_id = ?").bind(rotated.publicationId),
       env.DB.prepare("DELETE FROM publication_links WHERE publication_id = ?").bind(rotated.publicationId),
       env.DB.prepare("INSERT INTO publication_links (id, publication_id, public_key, created_at) VALUES (?, ?, ?, ?)")
@@ -302,6 +328,7 @@ describe("the anonymous Public route", () => {
         .bind(replacement, representation, rotated.publicationId),
       env.DB.prepare("UPDATE publications SET state = 'deleting', current_link_id = NULL, current_representation_id = NULL WHERE id = ?")
         .bind(sealed.publicationId),
+      env.DB.prepare("DELETE FROM public_comment_epoch_links WHERE publication_id = ?").bind(sealed.publicationId),
       env.DB.prepare("DELETE FROM publication_links WHERE publication_id = ?").bind(sealed.publicationId),
     ]);
     const paths = [newPublicationIdentifier(), "not-a-path", rotated.linkId, sealed.linkId];
@@ -338,20 +365,23 @@ describe("the anonymous Public route", () => {
     const text = await anonymous.text();
     expect(await signedIn.text()).toBe(text);
     const body = JSON.parse(text) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["authors", "linkId", "publicKey", "publicationId", "representation"]);
+    expect(Object.keys(body).sort()).toEqual(["authors", "comments", "linkId", "publicKey", "publicationId", "representation"]);
     const privateRow = await env.DB.prepare(`SELECT r.ciphertext, r.key_envelope, e.key_envelope AS edge
       FROM file_representations r JOIN files f ON f.current_representation_id = r.id
       JOIN directory_entries e ON e.child_node_id = f.node_id WHERE f.node_id = ?`).bind(fileId)
       .first<{ ciphertext: ArrayBuffer; key_envelope: ArrayBuffer; edge: ArrayBuffer }>();
     // Neither private nor Collaborators-only material: no representation, wrapper,
     // edge, Comment thread, Comment body, attribution or Comment capability.
-    const capabilities = (await env.DB.prepare("SELECT object_id, capability_id FROM sharing_comment_capabilities WHERE file_id = ?")
-      .bind(fileId).all<{ object_id: string; capability_id: string }>()).results;
-    expect(capabilities.length).toBeGreaterThan(0);
+    const capabilities = (await env.DB.prepare("SELECT object_id, capability_id, purpose FROM sharing_comment_capabilities WHERE file_id = ?")
+      .bind(fileId).all<{ object_id: string; capability_id: string; purpose: string }>()).results;
+    expect(capabilities.some((row) => row.purpose === "private-comment-thread")).toBe(true);
+    // A public audience epoch's opaque identity and link wrapper are the one
+    // deliberately served Comment capability; its plaintext key never appears.
     for (const forbidden of [owner.accountId, fileId, owner.rootId, encodeTreeBytes(new Uint8Array(privateRow!.ciphertext)),
       encodeTreeBytes(new Uint8Array(privateRow!.key_envelope)), encodeTreeBytes(new Uint8Array(privateRow!.edge)),
       comment.threadId, comment.commentId, comment.bodyCiphertext, comment.attribution, comment.recoveryEnvelope,
-      ...capabilities.flatMap((row) => [row.object_id, row.capability_id])]) {
+      ...capabilities.filter((row) => row.purpose !== "public-comment-audience-epoch")
+        .flatMap((row) => [row.object_id, row.capability_id])]) {
       expect(text).not.toContain(forbidden);
     }
     expect((await openPublic(published)).presentation).toEqual({ title: null, markdown: "# Shared plan" });
