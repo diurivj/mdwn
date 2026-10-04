@@ -96,8 +96,12 @@ export function FileEditor({ fileId, snapshot, view, showEdit, onShowPreview, on
           const text = event.clipboardData.getData("text/plain");
           if (!text) return; // Non-text clipboard contents must not delete the selection.
           const start = textarea.selectionStart;
-          if (edit(draft.slice(0, start) + text + draft.slice(textarea.selectionEnd))) {
-            requestAnimationFrame(() => textarea.setSelectionRange(start + text.length, start + text.length));
+          const next = draft.slice(0, start) + text + draft.slice(textarea.selectionEnd);
+          if (edit(next)) {
+            // Commit the accepted value before its caret. React's matching value
+            // update preserves it, with no delayed work to override newer editing.
+            textarea.value = next;
+            textarea.setSelectionRange(start + text.length, start + text.length);
           }
         }} aria-label="Markdown source"
         className="h-[50vh] w-full resize-none rounded border border-stone-300 bg-white p-3 font-mono text-sm" />
