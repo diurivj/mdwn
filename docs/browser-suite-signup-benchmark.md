@@ -3,7 +3,7 @@
 ## Scope and counts
 
 Starting commit: `9d939d389c1ca413d2d12ff05744644999f72e53`.
-The current checkout contains 112 browser tests per engine, not the 100 in the
+The starting checkout contained 112 browser tests per engine, not the 100 in the
 original ticket. Removing seven server-only cases leaves **105 per engine**
 (315 across Chromium, Firefox and WebKit). No engine selection changed.
 
@@ -19,24 +19,28 @@ sign-in. Six server-only signup rejection cases moved to Workers, together with
 the security-shell HTML case. The Worker helper's successful unaltered signup
 is an additional validity control, not additional browser coverage.
 
-## CI before
+## CI before and after
 
 [Exact starting-commit run 37169504199](https://github.com/diurivj/mdwn/actions/runs/37169504199)
 ran **112 tests per engine**, using one worker, with no failures, flakes, or
 retries. These are the Playwright-reported suite times (exclude install/build),
-rather than job times:
+rather than job times. [After run 37171407154](https://github.com/diurivj/mdwn/actions/runs/37171407154)
+at implementation commit `84ef022043065f09140acd0cd8ac6a337fc0a6de` passed all
+**105 tests per engine**, also with one worker and no failures, flakes, skips,
+or retries. All four CI jobs succeeded, including typecheck, tests, build,
+migration smoke and bundle-secret checks.
 
-| Engine | Before | After |
-| --- | --- | --- |
-| Chromium | 10.5 min | Pending PR CI |
-| Firefox | 18.5 min | Pending PR CI |
-| WebKit | 17.2 min | Pending PR CI |
+| Engine | Before | After | Reduction |
+| --- | --- | --- | --- |
+| Chromium | 10.5 min | 6.2 min | 4.3 min (41%) |
+| Firefox | 18.5 min | 9.8 min | 8.7 min (47%) |
+| WebKit | 17.2 min | 11.8 min | 5.4 min (31%) |
 
 The ticket's older [baseline run 37086738861](https://github.com/diurivj/mdwn/actions/runs/37086738861)
 had only 97 tests per engine and reported 9.1/18.3/17.1 minutes respectively;
 use the exact starting-commit run above for this change's comparison.
-CI configuration, worker count and retry policy are unchanged; only an after-run
-needing no retries qualifies. A single before/after pair is not a performance
+CI configuration, worker count and retry policy are unchanged. Both runs qualify
+without retries; reductions above use the rounded Playwright-reported times. A single before/after pair is not a performance
 or variance guarantee: runner differences and randomized proof of work remain.
 
 ## Assertion adjustments
