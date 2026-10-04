@@ -124,7 +124,10 @@ threads, owned Comment recovery envelopes and rotation staging before the node.
   `vault-recovery` envelope under the Vault root key, and every Account with
   current effective File-read access receives a signed HPKE
   `public-comment-audience-epoch` (11) device envelope through the ticket 18/20
-  machinery. The fragment is never needed in the authenticated workspace.
+  requirement registry. Creating an epoch fires the delivery need immediately;
+  an already authorized browser fulfills it in bounded packets, and until it
+  does the authenticated UI reports that secure access is being prepared. The
+  fragment is never needed in the authenticated workspace.
 - A **collaborators_only** epoch has only those device envelopes and no link
   wrapper. The anonymous route returns no thread ciphertext while the current
   audience is collaborators-only, including retained public history.
@@ -138,10 +141,14 @@ threads, owned Comment recovery envelopes and rotation staging before the node.
   current Collaborators-only epoch in place for remaining devices; a create in
   the sealed window is a ciphertext-free `409 key_rotation_required`.
 - Every create edits only the thread's current epoch; edit and delete operate on
-  the Comment's own retained epoch with that epoch's capability. Author identity,
-  Owner hard-delete, the 2,000-character plain-text bound and the 50-Comment
-  page apply to both threads. Public create and edit consume the
-  `public_comment.mutate` counters before acceptance (reports are ticket 26).
+  the Comment's own retained epoch with that epoch's capability. Through the
+  File route an eligible Account may still author those retained epochs; through
+  the link route, edit and delete are additionally refused while the current
+  audience is Collaborators-only, so a closed audience cannot be mutated
+  anonymously even by a past author. Author identity, Owner hard-delete, the
+  2,000-character plain-text bound and the 50-Comment page apply to both
+  threads. Public create and edit consume the `public_comment.mutate` counters
+  before acceptance (reports are ticket 26).
 - The Public reader page renders only public epochs under the document, with no
   Private/Public selector. In Collaborators-only mode an unauthenticated reader
   receives **Sign in to see or add comments if you have access to this file** and

@@ -50,7 +50,7 @@ export type PublicComment = { id: string; epochId: string; authorId: string; seq
   text: string | null; createdAt: number; updatedAt: number; canEdit: boolean; canDelete: boolean };
 
 export type PublicThreadView = {
-  threadId: string; publicationId: string; ownerId: string; fileId: string; linkId: string | null; currentEpochId: string;
+  threadId: string; publicationId: string; ownerId: string | null; fileId: string | null; linkId: string | null; currentEpochId: string;
   audience: "public" | "collaborators_only";
   viewerAccountId: string | null; postingState: "signed-out" | "unprovisioned" | "ready"; canDeleteAny: boolean;
   epochs: PublicEpoch[]; comments: PublicComment[]; pseudonyms: Map<string, string>; nextCursor: number | null;
@@ -65,7 +65,7 @@ type EnvelopeWire = { mode: "owned"; keyEpoch: number; ciphertext: string } |
     ciphertext: string; signature: string });
 
 export type PublicEpochWire = { epochId: string; ordinal: number; state: string;
-  audience?: "public" | "collaborators_only";
+  audience: "public" | "collaborators_only";
   capabilityId: string; capabilityEpoch: number; wrapper?: string; envelope?: EnvelopeWire };
 
 export type PublicCommentsWire = {
@@ -173,7 +173,7 @@ export async function loadLinkPublicComments(input: {
     capabilities, input.publicationId);
   const viewer = await postingViewer();
   return { status: "ready", thread: withViewer({
-    threadId: comments.threadId, publicationId: input.publicationId, ownerId: "", fileId: "",
+    threadId: comments.threadId, publicationId: input.publicationId, ownerId: null, fileId: null,
     linkId: input.linkId,
     currentEpochId: epochs.find((epoch) => epoch.state === "active")?.epochId ?? epochs.at(-1)?.epochId ?? "",
     audience: "public", viewerAccountId: viewer.accountId, postingState: viewer.state, canDeleteAny: false,
@@ -318,7 +318,7 @@ export async function loadFilePublicComments(access: RootAccess, fileId: string,
   const epochs: PublicEpoch[] = [];
   for (const epoch of data.thread.epochs) {
     const capability = await openWireEnvelope(access, data.thread.ownerId, epoch);
-    epochs.push({ epochId: epoch.epochId, ordinal: epoch.ordinal, audience: epoch.audience ?? "public", state: epoch.state,
+    epochs.push({ epochId: epoch.epochId, ordinal: epoch.ordinal, audience: epoch.audience, state: epoch.state,
       capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch, capability });
   }
   const comments = data.comments ?? [], attributions = data.attributions ?? [];

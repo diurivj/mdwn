@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { FilesSnapshot } from "~/tree/navigation-client";
+import { CommentItem } from "./CommentItem";
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
 import {
   createFilePublicComment,
@@ -20,51 +21,6 @@ import {
 } from "./public-client";
 
 type PanelState = { status: "loading" } | { status: "preparing" } | { status: "failed"; message: string } | FilePublicComments;
-
-const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-const stamp = (value: number) => timeFormat.format(new Date(value));
-
-function CommentItem({ comment, thread, editing, deleting, busy, onEdit, onEditText, onSubmitEdit, onCancelEdit,
-  onDelete, onConfirmDelete, onCancelDelete }: {
-  comment: PublicComment; thread: PublicThreadView; editing: { id: string; text: string } | null;
-  deleting: string | null; busy: boolean;
-  onEdit: (comment: PublicComment) => void; onEditText: (text: string) => void; onSubmitEdit: () => void; onCancelEdit: () => void;
-  onDelete: (comment: PublicComment) => void; onConfirmDelete: (comment: PublicComment) => void; onCancelDelete: () => void;
-}) {
-  const edit = editing && editing.id === comment.id ? editing : null;
-  return <li className="rounded border border-stone-200 p-3">
-    <p className="text-sm text-stone-600"><span className="font-medium text-stone-900">
-      {thread.pseudonyms.get(comment.authorId) ?? (comment.authorId === thread.viewerAccountId ? "You" : "Unknown author")}</span>
-      {" · "}<time dateTime={new Date(comment.createdAt).toISOString()}>{stamp(comment.createdAt)}</time>
-      {comment.updatedAt !== comment.createdAt && " · edited"}
-      {comment.epochId !== thread.currentEpochId && " · earlier audience"}</p>
-    {edit ? <form className="mt-2" onSubmit={(event) => {
-      event.preventDefault();
-      if (commentCharacters(edit.text) > MAX_COMMENT_CHARS) return;
-      onSubmitEdit();
-    }}>
-      <label className="block text-sm">Edit comment
-        <textarea autoFocus value={edit.text} disabled={busy} rows={4}
-          onChange={(event) => onEditText(event.target.value)}
-          className="mt-1 w-full rounded border p-2" />
-      </label>
-      <p className="text-sm">{commentCharacters(edit.text)} / 2,000</p>
-      <div className="mt-1 flex gap-2">
-        <button type="submit" disabled={busy || commentCharacters(edit.text) > MAX_COMMENT_CHARS}
-          className="rounded bg-stone-900 px-3 py-1 text-white">Save comment</button>
-        <button type="button" disabled={busy} onClick={onCancelEdit}>Cancel</button>
-      </div>
-    </form> : <p className="mt-2 whitespace-pre-wrap break-words">
-      {comment.text ?? <span className="text-rose-700">This comment couldn’t be decrypted on this device.</span>}</p>}
-    {(comment.canEdit || comment.canDelete) && !edit && <div className="mt-2 flex gap-2 text-sm">
-      {comment.canEdit && comment.text !== null && <button type="button" disabled={busy} onClick={() => onEdit(comment)}>Edit</button>}
-      {comment.canDelete && (deleting === comment.id ? <>
-        <button type="button" disabled={busy} className="text-rose-700" onClick={() => onConfirmDelete(comment)}>Confirm delete</button>
-        <button type="button" disabled={busy} onClick={onCancelDelete}>Cancel</button>
-      </> : <button type="button" disabled={busy} className="text-rose-700" onClick={() => onDelete(comment)}>Delete</button>)}
-    </div>}
-  </li>;
-}
 
 /**
  * The authenticated workspace's Public Comment inspector. History is read
@@ -159,7 +115,9 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
     <p role="status" className="text-sm text-stone-600">Audience: <span className="font-medium text-stone-900">{audience}</span></p>
     {message && <p role="alert" className="mt-2 text-rose-700">{message}</p>}
     <ol aria-label="Public comments" className="mt-3 flex-1 space-y-3 overflow-y-auto pr-1">
-      {thread.comments.map((comment) => <CommentItem key={comment.id} comment={comment} thread={thread}
+      {thread.comments.map((comment) => <CommentItem key={comment.id} comment={comment}
+        pseudonym={thread.pseudonyms.get(comment.authorId)} viewerAccountId={thread.viewerAccountId}
+        note={comment.epochId !== thread.currentEpochId ? "earlier audience" : undefined}
         editing={editing} deleting={deleting} busy={busy}
         onEdit={(selected) => { setDeleting(null); setEditing({ id: selected.id, text: selected.text ?? "" }); }}
         onEditText={(text) => { if (editing) setEditing({ id: editing.id, text }); }}
@@ -177,7 +135,9 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
         onDelete={(selected) => { setEditing(null); setDeleting(selected.id); }}
         onCancelDelete={() => setDeleting(null)}
         onConfirmDelete={(selected) => void mutate(async (_thread, signal) => {
-          await deleteFilePublicComment(thread, selected, signal); setDeleting(null);
+          const full = thread.comments.find((item) => item.id === selected.id);
+          if (!full) return;
+          await deleteFilePublicComment(thread, full, signal); setDeleting(null);
         })} />)}
       {!thread.comments.length && <li className="text-stone-500">No public comments yet.</li>}
     </ol>

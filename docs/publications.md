@@ -138,8 +138,9 @@ Public representation is exactly the latest saved one; a newer save returns
 its first audience epoch: the payload's `comments` carries the epoch identity,
 audience, Owner recovery envelope and — for the default `public` audience — the
 symmetric link wrapper the creating browser sealed with the fragment it still
-holds. A legacy caller may send `comments: null` and configure the thread later
-from the Publish panel. It applies the Publication create limit (5 per Account
+holds. Creation without that first epoch is rejected, so no active Publication
+can exist without a Public thread; a pre-ticket-23 Publication gets one through
+the Owner-only audience endpoint. It applies the Publication create limit (5 per Account
 per 24 hours) before its transaction. Public-participation suspensions (ticket
 26) will add their check at the same point. Approval is publishing: a
 Collaborator's request never creates a Publication, link, representation or

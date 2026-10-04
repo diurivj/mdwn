@@ -14,7 +14,7 @@ export type PublicationState = {
   fileId: string; isOwner: boolean; canEdit: boolean;
   publication: null | { publicationId: string; state: "active" | "deleting"; createdAt: number;
     authors: { declarationId: string; ordinal: number; self: boolean; declared: boolean }[] };
-  comments: null | { threadId: string; epochId: string; audience: "public" | "collaborators_only" };
+  comments: { threadId: string; epochId: string; audience: "public" | "collaborators_only" } | null;
   requests: { requestId: string; own: boolean; createdAt: number }[];
 };
 

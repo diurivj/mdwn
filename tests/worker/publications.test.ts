@@ -54,7 +54,7 @@ async function firstEpoch(owner: SharingAccount, publicationId: string, linkId: 
 /** The Owner's browser half of publishing: every secret stays in this object. */
 async function publishBody(owner: SharingAccount, fileId: string, options: {
   markdown?: string; pseudonym?: string; revision?: number; representationId?: string;
-  audience?: "public" | "collaborators_only" | null;
+  audience?: "public" | "collaborators_only";
 } = {}) {
   const current = await fileView(owner, fileId);
   const keys = await createPublicationKeyPair();
@@ -64,15 +64,15 @@ async function publishBody(owner: SharingAccount, fileId: string, options: {
     publicPresentation(options.markdown ?? "---\ntitle: Diet plan\nprivate: never public\n---\n# private"));
   const author = options.pseudonym ? { declarationId, ciphertext: encodeTreeBytes(await sealAuthorDeclaration(
     { ...binding, declarationId, revision: 1 }, options.pseudonym)) } : null;
-  const audience = options.audience === undefined ? "public" : options.audience;
-  const epoch = audience === null ? null : await firstEpoch(owner, publicationId, linkId, keys, audience);
+  const audience = options.audience ?? "public";
+  const epoch = await firstEpoch(owner, publicationId, linkId, keys, audience);
   const body = { publicationId, linkId, publicKey: encodeTreeBytes(keys.publicKey),
     expectedRevision: options.revision ?? current.revision,
     expectedRepresentationId: options.representationId ?? current.representationId,
-    representation: { ciphertext: encodeTreeBytes(ciphertext) }, author, comments: epoch?.body ?? null };
+    representation: { ciphertext: encodeTreeBytes(ciphertext) }, author, comments: epoch.body };
   const published: Published = { publicationId, linkId, keys, fragment: formatPublicationFragment(keys.privateKey),
-    declarationId, comments: epoch ? { threadId: epoch.threadId, epochId: epoch.epochId,
-      capabilityId: epoch.capabilityId, capability: epoch.capability, audience: epoch.audience } : null };
+    declarationId, comments: { threadId: epoch.threadId, epochId: epoch.epochId,
+      capabilityId: epoch.capabilityId, capability: epoch.capability, audience: epoch.audience } };
   return { body, published };
 }
 

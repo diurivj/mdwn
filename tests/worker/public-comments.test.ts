@@ -5,6 +5,7 @@ import { openPublicCommentBody, openCommentEpochLink, sealCommentEpochLink, seal
 import { sealAttribution as sealPrivateAttribution, sealCommentBody as sealPrivateCommentBody } from "../../app/comments/content";
 import { sealVaultRecoveryEnvelope, generateVaultRootKey } from "../../app/crypto/vault";
 import { createPublicationKeyPair, newPublicationIdentifier } from "../../app/publications/capability";
+import { publicPresentation, sealPublicRepresentation } from "../../app/publications/content";
 import { createRecoveryMaterial, sealDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
 import { resumeRotation, type RotationBrowser } from "../../app/sharing/rotation-client";
 import { openCommentKeyEnvelope, createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
@@ -39,8 +40,8 @@ async function publish(owner: SharingAccount, fileId: string, audience: "public"
   const linkKey = await createPublicationKeyPair();
   const publicationId = newPublicationIdentifier(), linkId = newPublicationIdentifier();
   const built = await firstEpoch(owner, publicationId, linkId, linkKey, audience, recovery);
-  const representation = await import("../../app/publications/content").then(({ publicPresentation, sealPublicRepresentation }) =>
-    sealPublicRepresentation({ publicationId, linkId, publicKey: linkKey.publicKey, revision: 1 }, publicPresentation("# Public body")));
+  const representation = await sealPublicRepresentation({ publicationId, linkId, publicKey: linkKey.publicKey, revision: 1 },
+    publicPresentation("# Public body"));
   const response = await sharingRequest(owner, `/api/private/publications/files/${fileId}`, "PUT", {
     publicationId, linkId, publicKey: encodeTreeBytes(linkKey.publicKey),
     expectedRevision: current.revision, expectedRepresentationId: current.representationId,
@@ -428,4 +429,78 @@ it("rotates the current Collaborators-only epoch on revocation before remaining 
   // The revoked device and anonymous readers still receive no ciphertext.
   expect((await readThread(removed, fileId)).response.status).toBe(404);
   expect((await anonymous(publication.linkId)).comments).toEqual([]);
+});
+
+it("rejects a Publication creation that omits its first audience epoch", async () => {
+  const owner = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+  const current = await fileView(owner, fileId);
+  const linkKey = await createPublicationKeyPair();
+  const publicationId = newPublicationIdentifier(), linkId = newPublicationIdentifier();
+  const representation = await sealPublicRepresentation({ publicationId, linkId, publicKey: linkKey.publicKey, revision: 1 },
+    publicPresentation("# No comments"));
+  const response = await sharingRequest(owner, `/api/private/publications/files/${fileId}`, "PUT", {
+    publicationId, linkId, publicKey: encodeTreeBytes(linkKey.publicKey),
+    expectedRevision: current.revision, expectedRepresentationId: current.representationId,
+    representation: { ciphertext: encodeTreeBytes(representation) }, author: null, comments: null });
+  expect(response.status).toBe(400);
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM publications WHERE file_id = ?").bind(fileId).first()).toEqual({ n: 0 });
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM comment_threads WHERE file_id = ?").bind(fileId).first()).toEqual({ n: 0 });
+});
+
+it("refuses link-route edits and deletes while the Public audience is closed", async () => {
+  const owner = await sharingAccount(), visitor = await sharingAccount();
+  const vaultRootKey = generateVaultRootKey();
+  const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+  const publication = await publish(owner, fileId, "public", vaultRootKey);
+  const comment = await sealedComment(publication, "Visitor owned");
+  expect((await sharingRequest(visitor, `/api/private/comments/links/${publication.linkId}/entries`, "POST",
+    payload(publication, comment, await sealedAttribution(publication, "Member Visitor")))).status).toBe(201);
+  // The Owner closes the audience.
+  const nextEpoch = await firstEpoch(owner, publication.publicationId, publication.linkId, publication.linkKey,
+    "collaborators_only", vaultRootKey, publication.epoch.threadId);
+  expect((await sharingRequest(owner, `/api/private/comments/files/${fileId}/public`, "PUT", {
+    publicationId: publication.publicationId, expectedEpochId: publication.epoch.epochId,
+    epoch: { threadId: nextEpoch.threadId, epochId: nextEpoch.epochId, capabilityId: nextEpoch.capabilityId,
+      audience: "collaborators_only", recoveryEnvelope: encodeTreeBytes(nextEpoch.recoveryEnvelope), linkWrapper: null },
+  })).status).toBe(200);
+  const edit = await sealPublicCommentBody(publication.epoch.capability, { publicationId: publication.publicationId,
+    commentId: comment.commentId, capabilityId: publication.epoch.capabilityId, keyEpoch: 1, revision: 2, text: "Should not land" });
+  expect((await sharingRequest(visitor, `/api/private/comments/links/${publication.linkId}/entries/${comment.commentId}`,
+    "PATCH", { threadId: publication.epoch.threadId, capabilityId: publication.epoch.capabilityId, capabilityEpoch: 1,
+      epochId: publication.epoch.epochId, expectedRevision: 1, bodyCiphertext: edit.bodyCiphertext,
+      contentKeyEnvelope: edit.contentKeyEnvelope })).status).toBe(409);
+  expect((await sharingRequest(visitor, `/api/private/comments/links/${publication.linkId}/entries/${comment.commentId}`,
+    "DELETE", { threadId: publication.epoch.threadId, capabilityId: publication.epoch.capabilityId, capabilityEpoch: 1,
+      epochId: publication.epoch.epochId, expectedRevision: 1 })).status).toBe(409);
+  const row = await env.DB.prepare("SELECT revision FROM comments WHERE id = ?").bind(comment.commentId).first();
+  expect(row).toEqual({ revision: 1 });
+});
+
+it("reports secure access as preparing until a new epoch's device envelope arrives", async () => {
+  const owner = await sharingAccount(), collaborator = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const fileId = await treeChild(owner, directoryId, "file", owner.accountId, true);
+  const vaultRootKey = generateVaultRootKey();
+  const publication = await publish(owner, fileId, "public", vaultRootKey);
+  const grantRecord = await grantWithEpoch(owner, collaborator, directoryId, publication);
+  const nextEpoch = await firstEpoch(owner, publication.publicationId, publication.linkId, publication.linkKey,
+    "collaborators_only", vaultRootKey, publication.epoch.threadId);
+  expect((await sharingRequest(owner, `/api/private/comments/files/${fileId}/public`, "PUT", {
+    publicationId: publication.publicationId, expectedEpochId: publication.epoch.epochId,
+    epoch: { threadId: nextEpoch.threadId, epochId: nextEpoch.epochId, capabilityId: nextEpoch.capabilityId,
+      audience: "collaborators_only", recoveryEnvelope: encodeTreeBytes(nextEpoch.recoveryEnvelope), linkWrapper: null },
+  })).status).toBe(200);
+  // Creating the epoch registers the requirement and fires the delivery need
+  // before any browser produces the device envelope.
+  const need = await env.DB.prepare("SELECT count(*) AS n FROM provisioning_needs WHERE grant_id = ?")
+    .bind(grantRecord.grantId).first<{ n: number }>();
+  expect(need!.n).toBeGreaterThan(0);
+  const pending = await readThread(collaborator, fileId);
+  expect(pending.response.status).toBe(409);
+  expect(await pending.response.json()).toEqual({ error: "secure_access_preparing" });
+  await deliverEpoch(owner, grantRecord.grantId, nextEpoch);
+  const ready = await readThread(collaborator, fileId);
+  expect(ready.response.status).toBe(200);
+  expect(ready.body!.thread!.audience).toBe("collaborators_only");
 });

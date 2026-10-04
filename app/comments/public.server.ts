@@ -83,12 +83,15 @@ function fileEpochAuthority(auth: AuthorizedDevice, input: {
       AND ${accessPredicate(auth, input.fileId, "read")})`;
 }
 
-/** The link route's epoch authority: the active link and an explicit audience.
- * `currentAndPublic` is required for creation; a retained public epoch is
- * enough for author mutations of a Comment already in it. */
+/** The link route's epoch authority. The supplied epoch is always public.
+ * `currentEpoch` is required for creation (the new Comment joins the thread's
+ * current epoch). `requireCurrentPublicAudience` is required for author
+ * mutations of an existing Comment: a retained public epoch stays editable
+ * while the thread is public, but a Collaborators-only mode can never be
+ * mutated through a link. */
 function linkEpochAuthority(input: {
   linkId: string; threadId: string; epochId: string; capabilityId: string; capabilityEpoch: number;
-  currentAndPublic: boolean;
+  currentEpoch: boolean; requireCurrentPublicAudience: boolean;
 }): SQL {
   return sql`EXISTS (SELECT 1 FROM comment_threads t
     JOIN publications p ON p.id = t.publication_id AND p.state = 'active' AND p.current_link_id = ${input.linkId}
@@ -97,7 +100,9 @@ function linkEpochAuthority(input: {
       AND c.purpose = 'public-comment-audience-epoch' AND c.capability_id = ${input.capabilityId}
       AND c.capability_epoch = ${input.capabilityEpoch}
     WHERE t.id = ${input.threadId} AND t.purpose = 'public'
-      ${input.currentAndPublic ? sql`AND t.current_epoch_id = e.id` : sql``})`;
+      ${input.currentEpoch ? sql`AND t.current_epoch_id = e.id` : sql``}
+      ${input.requireCurrentPublicAudience ? sql`AND EXISTS (SELECT 1 FROM comment_thread_epochs current
+        WHERE current.id = t.current_epoch_id AND current.thread_id = t.id AND current.audience = 'public')` : sql``})`;
 }
 
 type EpochRow = { epochId: string; ordinal: number; audience: "public" | "collaborators_only";
@@ -188,8 +193,9 @@ export async function readPublicCommentPage(env: Env, linkId: string, cursor: nu
     : [];
   return {
     audience: "public", threadId: thread.threadId,
-    epochs: epochs.map((epoch) => ({ epochId: epoch.epochId, ordinal: epoch.ordinal, state: epoch.state,
-      capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch, wrapper: encodeBytes(epoch.wrapper!) })),
+    epochs: epochs.map((epoch) => ({ epochId: epoch.epochId, ordinal: epoch.ordinal, audience: epoch.audience,
+      state: epoch.state, capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch,
+      wrapper: encodeBytes(epoch.wrapper!) })),
     comments: page.map(commentWire), attributions: attributions.map(attributionWire),
     nextCursor: comments.length > MAX_COMMENTS_PAGE ? page[MAX_COMMENTS_PAGE - 1]!.sequence : null,
   };
@@ -382,12 +388,12 @@ function attributionInput(value: unknown, publicationId: string, capabilityId: s
   } catch { return null; }
 }
 
-type CreateTarget = { kind: "file"; fileId: string } | { kind: "link"; linkId: string };
+type CommentTarget = { kind: "file"; fileId: string } | { kind: "link"; linkId: string };
 
 /** Shared create: the File route requires live File-read access, while the link
  * route requires an active public link and a private-capable Session. */
 export async function createPublicComment(request: Request, env: Env, auth: AuthorizedDevice,
-  target: CreateTarget, value: unknown): Promise<Response> {
+  target: CommentTarget, value: unknown): Promise<Response> {
   const input = record(value);
   if (!input || !exact(input, ["commentId", "threadId", "epochId", "capabilityId", "capabilityEpoch",
       "bodyCiphertext", "contentKeyEnvelope", "attribution"]) ||
@@ -418,7 +424,8 @@ export async function createPublicComment(request: Request, env: Env, auth: Auth
   } catch { return invalid(); }
   const authority = target.kind === "file"
     ? fileEpochAuthority(auth, { fileId: target.fileId, threadId, epochId, capabilityId, capabilityEpoch, currentOnly: true })
-    : linkEpochAuthority({ linkId: target.linkId, threadId, epochId, capabilityId, capabilityEpoch, currentAndPublic: true });
+    : linkEpochAuthority({ linkId: target.linkId, threadId, epochId, capabilityId, capabilityEpoch,
+      currentEpoch: true, requireCurrentPublicAudience: false });
   const now = Date.now();
   let committed: boolean;
   try {
@@ -447,8 +454,6 @@ export async function createPublicComment(request: Request, env: Env, auth: Auth
   return committed ? Response.json({ commentId, created: true }, { status: 201, headers }) : changed();
 }
 
-type CommentTarget = { kind: "file"; fileId: string } | { kind: "link"; linkId: string };
-
 /** Resolve a Comment and its thread, re-deriving live access in the same statement. */
 async function commentContext(env: Env, auth: AuthorizedDevice, target: CommentTarget, threadId: string, commentId: string) {
   return createDb(env.DB).get<{ author_id: string; epoch_id: string; revision: number; owner_id: string;
@@ -467,7 +472,8 @@ function mutationAuthority(auth: AuthorizedDevice, target: CommentTarget, thread
   capabilityId: string, capabilityEpoch: number): SQL {
   return target.kind === "file"
     ? fileEpochAuthority(auth, { fileId: target.fileId, threadId, epochId, capabilityId, capabilityEpoch, currentOnly: false })
-    : linkEpochAuthority({ linkId: target.linkId, threadId, epochId, capabilityId, capabilityEpoch, currentAndPublic: false });
+    : linkEpochAuthority({ linkId: target.linkId, threadId, epochId, capabilityId, capabilityEpoch,
+      currentEpoch: false, requireCurrentPublicAudience: true });
 }
 
 export async function editPublicComment(request: Request, env: Env, auth: AuthorizedDevice, target: CommentTarget,
