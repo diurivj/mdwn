@@ -20,6 +20,18 @@ type AccessRow = { node_id: string; owner_id: string; kind: "directory" | "file"
  * Keep this query inside the ciphertext SELECT or mutation's first CAS.
  */
 export function effectiveAccessQuery(auth: AuthorizedDevice, nodeId: string | SQL): SQL {
+  return accessQuery(auth.accountId, nodeId, privateReadGuard(auth));
+}
+
+/** Another Account's current authority, for Owner-side policy such as choosing
+ * a Publication author. It is never the acting device's own authorization:
+ * callers still place the actor's Device-proof guard in the same statement.
+ */
+export function accountAccessQuery(accountId: string, nodeId: string | SQL): SQL {
+  return accessQuery(accountId, nodeId, sql`1`);
+}
+
+function accessQuery(accountId: string, nodeId: string | SQL, guard: SQL): SQL {
   return sql`WITH RECURSIVE lineage(id, parent_node_id, owner_id, kind, depth) AS (
     SELECT id, parent_node_id, owner_id, kind, 0 FROM vault_nodes WHERE id = ${nodeId}
     UNION ALL
@@ -29,21 +41,21 @@ export function effectiveAccessQuery(auth: AuthorizedDevice, nodeId: string | SQ
   ), matching AS MATERIALIZED (
     SELECT g.target_id, g.target_kind, g.permission, a.depth
     FROM lineage a CROSS JOIN grants g INDEXED BY grants_recipient_target_idx
-    WHERE g.recipient_id = ${auth.accountId} AND g.target_id = a.id AND g.owner_id = a.owner_id
+    WHERE g.recipient_id = ${accountId} AND g.target_id = a.id AND g.owner_id = a.owner_id
       AND ${liveGrant(sql`g.expires_at`)}
       AND ((a.kind = 'directory' AND g.target_kind = 'directory')
         OR (a.depth = 0 AND a.kind = 'file' AND g.target_kind = 'file'))
   ), authority AS (
     SELECT n.id AS node_id, n.owner_id, n.kind,
-      CASE WHEN n.owner_id = ${auth.accountId} THEN 3
+      CASE WHEN n.owner_id = ${accountId} THEN 3
         ELSE COALESCE((SELECT max(CASE permission WHEN 'read_write' THEN 2 ELSE 1 END) FROM matching), 0) END AS permission_rank,
       (SELECT json_group_array(target_id) FROM matching WHERE target_kind = 'directory' AND permission = 'read_write') AS directory_write_roots,
       (SELECT json_group_array(target_id) FROM matching WHERE target_kind = 'directory') AS directory_read_roots,
-      n.parent_node_id IS NOT NULL AND (n.owner_id = ${auth.accountId} OR EXISTS (SELECT 1 FROM matching
+      n.parent_node_id IS NOT NULL AND (n.owner_id = ${accountId} OR EXISTS (SELECT 1 FROM matching
         WHERE target_kind = 'directory' AND permission = 'read_write' AND depth > 0)) AS can_change_structure
     FROM vault_nodes n WHERE n.id = ${nodeId}
-      AND (n.owner_id = ${auth.accountId} OR EXISTS (SELECT 1 FROM lineage WHERE parent_node_id IS NULL))
-      AND ${privateReadGuard(auth)}
+      AND (n.owner_id = ${accountId} OR EXISTS (SELECT 1 FROM lineage WHERE parent_node_id IS NULL))
+      AND ${guard}
   ) SELECT *, kind = 'file' AND permission_rank > 0 AS can_read_private_comments,
     kind = 'file' AND permission_rank > 0 AS can_read_collaborators_public_comments
     FROM authority WHERE permission_rank > 0`;

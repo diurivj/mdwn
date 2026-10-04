@@ -16,6 +16,7 @@ export const PURPOSES = [
   "owned-device",
   "device-label",
   "file-capability",
+  "publication-attribution",
 ] as const;
 
 export const MANIFEST_PURPOSES: readonly EnvelopePurpose[] = ["archive-manifest", "import-staging-manifest"];
@@ -104,7 +105,8 @@ export function encodeContext(context: EnvelopeContext): Uint8Array<ArrayBuffer>
 /** Purpose-specific required bindings, checked before any encryption or decryption. */
 export function assertContextBindings(suite: EnvelopeSuite, context: EnvelopeContext): void {
   if (((context.purpose === "grant" || context.purpose === "device-enrollment") && !context.recipientId) ||
-      ((context.purpose === "public-representation" || context.purpose === "public-comment-audience-epoch") && !context.publicationId) ||
+      ((context.purpose === "public-representation" || context.purpose === "public-comment-audience-epoch" ||
+        context.purpose === "publication-attribution") && !context.publicationId) ||
       (suite === HPKE_SUITE && !context.recipientId)) {
     throw new EnvelopeError("malformed");
   }

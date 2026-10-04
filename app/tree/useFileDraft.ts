@@ -90,6 +90,20 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
           prepared = { ...prepared, ...await withFileListing(snapshot.access, fileId, parentKey, prepared.payload, listing.current) };
           continue;
         }
+        if (result.state === "refresh") {
+          // Publishing or conversion changed how this revision is saved, not its
+          // content. Adopt the current File only if this draft is still based on it.
+          const latest = await current();
+          if (!mounted.current) return false;
+          if (latest.document.revision !== document.current.revision ||
+              latest.document.representationId !== document.current.representationId) {
+            conflictRef.current = true; setConflict(true); break;
+          }
+          document.current = latest.document; listing.current = latest.listing;
+          onCurrent(document.current, listing.current);
+          prepared = await prepareFileSave(snapshot.access, fileId, parentKey, document.current, source, listing.current);
+          continue;
+        }
         if (result.state !== "saved") break;
         // Advance only the saved snapshot: edits typed while it was in flight stay local.
         document.current = prepared.document;

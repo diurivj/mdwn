@@ -18,6 +18,7 @@ const test = appTest.extend<{}, { envelopeScript: string }>({
   envelopeScript: [async ({}, use) => {
     const result = await build({
       configFile: false, publicDir: false, logLevel: "error",
+      resolve: { alias: { "~": new URL("../app", import.meta.url).pathname } },
       build: {
         write: false, minify: false,
         lib: { entry: "tests/support/enc-v1-contract.ts", name: "mdwnEncV1", formats: ["iife"] },

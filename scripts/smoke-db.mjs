@@ -70,6 +70,11 @@ const EXPECTED_COLUMNS = {
   provisioning_needs: { grant_id: "TEXT", device_id: "TEXT", grant_key_epoch: "INTEGER" },
   rate_limit_counters: { purpose: "TEXT", scope_type: "TEXT", scope_id: "TEXT", window_ms: "INTEGER", time_epoch: "INTEGER", count: "INTEGER", expires_at: "INTEGER" },
   security_events: { id: "TEXT", created_at: "INTEGER", expires_at: "INTEGER", action_class: "TEXT", outcome: "TEXT", reason: "TEXT", account_id: "TEXT", publication_id: "TEXT", size_class: "TEXT", proof_state: "TEXT", counter_state: "TEXT", retry_at: "INTEGER", network_bucket: "TEXT", network_bucket_expires_at: "INTEGER" },
+  publications: { id: "TEXT", file_id: "TEXT", owner_id: "TEXT", state: "TEXT", current_link_id: "TEXT", current_representation_id: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
+  publication_links: { id: "TEXT", publication_id: "TEXT", public_key: "BLOB", created_at: "INTEGER" },
+  public_representations: { id: "TEXT", publication_id: "TEXT", link_id: "TEXT", revision: "INTEGER", file_revision: "INTEGER", ciphertext: "BLOB", ciphertext_size: "INTEGER", created_at: "INTEGER" },
+  publication_requests: { id: "TEXT", file_id: "TEXT", owner_id: "TEXT", requester_id: "TEXT", created_at: "INTEGER" },
+  publication_authors: { id: "TEXT", publication_id: "TEXT", author_id: "TEXT", ordinal: "INTEGER", link_id: "TEXT", revision: "INTEGER", ciphertext: "BLOB", created_at: "INTEGER", updated_at: "INTEGER" },
 };
 const EXPECTED_INDEXES = [
   ["accounts", "accounts_share_id_unique", 1],
@@ -118,6 +123,14 @@ const EXPECTED_INDEXES = [
   ["files", "files_owner_node_idx", 1],
   ["file_representations", "file_representations_owner_pointer_idx", 1],
   ["file_representations", "file_representations_file_revision_idx", 1],
+  ["publications", "publications_file_idx", 1],
+  ["publication_links", "publication_links_publication_idx", 1],
+  ["publication_links", "publication_links_identity_idx", 1],
+  ["public_representations", "public_representations_revision_idx", 1],
+  ["public_representations", "public_representations_pointer_idx", 1],
+  ["publication_requests", "publication_requests_requester_idx", 1],
+  ["publication_authors", "publication_authors_author_idx", 1],
+  ["publication_authors", "publication_authors_ordinal_idx", 1],
 ];
 const EXPECTED_FOREIGN_KEYS = [
   "account_profiles:account_id:accounts:id:RESTRICT",
@@ -172,9 +185,27 @@ const EXPECTED_FOREIGN_KEYS = [
   "grant_comment_key_envelopes:object_id:sharing_comment_capabilities:object_id:RESTRICT",
   "provisioning_needs:grant_id:grants:id:RESTRICT",
   "provisioning_needs:device_id:encryption_devices:id:RESTRICT",
+  "publications:owner_id:accounts:id:RESTRICT",
+  "publications:owner_id:files:owner_id:RESTRICT",
+  "publications:file_id:files:node_id:RESTRICT",
+  "publications:current_link_id:publication_links:id:RESTRICT",
+  "publications:id:publication_links:publication_id:RESTRICT",
+  "publications:current_representation_id:public_representations:id:RESTRICT",
+  "publications:id:public_representations:publication_id:RESTRICT",
+  "publications:current_link_id:public_representations:link_id:RESTRICT",
+  "publication_links:publication_id:publications:id:RESTRICT",
+  "public_representations:publication_id:publications:id:RESTRICT",
+  "publication_requests:requester_id:accounts:id:RESTRICT",
+  "publication_requests:owner_id:files:owner_id:RESTRICT",
+  "publication_requests:file_id:files:node_id:RESTRICT",
+  "publication_authors:publication_id:publications:id:RESTRICT",
+  "publication_authors:author_id:accounts:id:RESTRICT",
 ];
 const EXPECTED_TRIGGERS = ["sharing_new_device_need", "sharing_new_comment_need",
-  "sharing_comment_context_immutable", "sharing_rotated_comment_need"];
+  "sharing_comment_context_immutable", "sharing_rotated_comment_need",
+  "publication_created_active", "publication_identity_immutable", "publication_seal_irreversible",
+  "publication_link_immutable", "public_representation_immutable", "publication_author_identity_immutable",
+  "publication_request_immutable"];
 
 /**
  * Run a wrangler command; on failure print its output and exit non-zero.

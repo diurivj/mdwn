@@ -11,6 +11,12 @@ import {
   recoveryPhraseToSecret,
   RecoveryError,
 } from "../../app/crypto/vault";
+import {
+  createPublicationKeyPair, formatPublicationFragment, importPublicationKeyPair, parsePublicationFragment,
+} from "../../app/publications/capability";
+import {
+  openAuthorDeclaration, openPublicRepresentation, publicPresentation, sealPublicRepresentation,
+} from "../../app/publications/content";
 import vector from "../fixtures/enc-v1.json" with { type: "json" };
 import rfc from "../fixtures/rfc9180-p256-aes256.json" with { type: "json" };
 
@@ -74,7 +80,7 @@ async function vectorKeyPair(publicHex = rfc.pkRm, privateHex = rfc.skRm): Promi
 const HPKE_SUITE_ID = concatBytes(utf8("HPKE"), u16(0x0010), u16(0x0001), u16(0x0002));
 const KEM_SUITE_ID = concatBytes(utf8("KEM"), u16(0x0010));
 const PURPOSE_IDS: Record<string, number> = {
-  "file-content": 3, grant: 5, "device-enrollment": 6,
+  "file-content": 3, grant: 5, "device-enrollment": 6, "public-representation": 9, "publication-attribution": 21,
 };
 
 function utf8(value: string): Uint8Array<ArrayBuffer> { return new Uint8Array(new TextEncoder().encode(value)); }
@@ -223,7 +229,7 @@ async function labeledExpand(suiteId: Uint8Array<ArrayBuffer>, prk: Uint8Array<A
   return hkdfExpand(prk, concatBytes(u16(length), utf8("HPKE-v1"), suiteId, utf8(label), info), length);
 }
 
-/** Independently seals `plaintext` to `recipientPublicKey` using the documented mdwn/enc-v1 layout. */
+/** Independently seals `plaintext` to a fresh recipient using the documented mdwn/enc-v1 layout. */
 async function independentHpkeSeal(plaintext: Uint8Array<ArrayBuffer>, context: EnvelopeContext): Promise<CryptoKeyPair & { envelope: Uint8Array<ArrayBuffer> }> {
   const recipient = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
   // Keep the private handle non-extractable, as production requires.
@@ -231,13 +237,19 @@ async function independentHpkeSeal(plaintext: Uint8Array<ArrayBuffer>, context: 
     privateKey: await crypto.subtle.importKey("jwk", await crypto.subtle.exportKey("jwk", recipient.privateKey), { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]),
     publicKey: await crypto.subtle.importKey("raw", await crypto.subtle.exportKey("raw", recipient.publicKey), { name: "ECDH", namedCurve: "P-256" }, true, []),
   };
+  return { ...recipientKeyPair, envelope: await independentHpkeSealTo(plaintext, context, recipientKeyPair.publicKey) };
+}
+
+/** Sender-only: any holder of a public key (a Publication editor) can do this. */
+async function independentHpkeSealTo(plaintext: Uint8Array<ArrayBuffer>, context: EnvelopeContext,
+  recipientPublicKey: CryptoKey): Promise<Uint8Array<ArrayBuffer>> {
   const ephemeral = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
   const enc = new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey));
-  const pkRm = new Uint8Array(await crypto.subtle.exportKey("raw", recipientKeyPair.publicKey));
+  const pkRm = new Uint8Array(await crypto.subtle.exportKey("raw", recipientPublicKey));
   const info = concatBytes(utf8("mdwn/enc-v1\u0000"), Uint8Array.of(2), encodeContextLayout(context));
   const aad = concatBytes(info, enc, u32(plaintext.length + 16));
 
-  const dh = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: ephemeral.publicKey }, recipientKeyPair.privateKey, 256));
+  const dh = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: recipientPublicKey }, ephemeral.privateKey, 256));
   const eaePrk = await labeledExtract(KEM_SUITE_ID, new Uint8Array(0), "eae_prk", dh);
   const sharedSecret = await labeledExpand(KEM_SUITE_ID, eaePrk, "shared_secret", concatBytes(enc, pkRm), 32);
   const pskIdHash = await labeledExtract(HPKE_SUITE_ID, new Uint8Array(0), "psk_id_hash", new Uint8Array(0));
@@ -247,10 +259,67 @@ async function independentHpkeSeal(plaintext: Uint8Array<ArrayBuffer>, context: 
   const key = await crypto.subtle.importKey("raw", await labeledExpand(HPKE_SUITE_ID, secret, "key", keyScheduleContext, 32), "AES-GCM", false, ["encrypt"]);
   const baseNonce = await labeledExpand(HPKE_SUITE_ID, secret, "base_nonce", keyScheduleContext, 12);
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: baseNonce, additionalData: aad, tagLength: 128 }, key, plaintext));
-  return { ...recipientKeyPair, envelope: concatBytes(aad, ciphertext) };
+  return concatBytes(aad, ciphertext);
+}
+
+function base64url(value: Uint8Array): string {
+  return btoa(String.fromCharCode(...value)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+/** Hand-built from docs/publications.md: presentation and author plaintext framing. */
+function independentPresentation(title: string, markdown: string): Uint8Array<ArrayBuffer> {
+  const titleBytes = utf8(title), markdownBytes = utf8(markdown);
+  return concatBytes(utf8("mdwn/public-presentation/v1\u0000"), u32(titleBytes.length), titleBytes, u32(markdownBytes.length), markdownBytes);
+}
+function independentAuthor(pseudonym: string): Uint8Array<ArrayBuffer> {
+  const body = utf8(pseudonym);
+  return concatBytes(utf8("mdwn/publication-author/v1\u0000"), u16(body.length), body);
 }
 
 export const cases = [
+  {
+    name: "reads an independently sealed Public representation and author declaration from a fixed link fragment",
+    async run() {
+      // The CFRG recipient pair stands in for a link key; its scalar is the fragment capability.
+      const publicKey = bytes(rfc.pkRm), fragment = `v1.${base64url(bytes(rfc.skRm))}`;
+      const publicationId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index));
+      const linkId = base64url(Uint8Array.from({ length: 32 }, (_, index) => 255 - index));
+      const declarationId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index * 3));
+      const recipientId = base64url(publicKey);
+      const recipient = await crypto.subtle.importKey("raw", publicKey, { name: "ECDH", namedCurve: "P-256" }, true, []);
+      const shared = { vaultId: publicationId, keyId: linkId, keyEpoch: 1, recipientId, publicationId };
+      const representation = await independentHpkeSealTo(independentPresentation("Plan ☕", "# Week\n\n**Bold**"),
+        { ...shared, purpose: "public-representation", objectId: publicationId, revision: 4 }, recipient);
+      const declaration = await independentHpkeSealTo(independentAuthor("Member Vector"),
+        { ...shared, purpose: "publication-attribution", objectId: declarationId, revision: 2 }, recipient);
+      const scalar = parsePublicationFragment(`#${fragment}`);
+      if (!scalar) throw new Error("Contract mismatch: fragment rejected");
+      const pair = await importPublicationKeyPair(scalar, publicKey);
+      assertEqual(pair.privateKey.extractable, false);
+      const binding = { publicationId, linkId, publicKey };
+      const opened = await openPublicRepresentation(representation, pair, { ...binding, revision: 4 });
+      assertEqual(opened.title, "Plan ☕");
+      assertEqual(opened.markdown, "# Week\n\n**Bold**");
+      assertEqual(await openAuthorDeclaration(declaration, pair, { ...binding, declarationId, revision: 2 }), "Member Vector");
+      await rejects(openPublicRepresentation(representation, pair, { ...binding, linkId: publicationId, revision: 4 }), "context-mismatch");
+      await rejects(openPublicRepresentation(declaration, pair, { ...binding, revision: 2 }), "context-mismatch");
+    },
+  },
+  {
+    name: "opens a fresh Publication link key only through its own fragment",
+    async run() {
+      const keys = await createPublicationKeyPair();
+      const publicationId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index + 1));
+      const linkId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index + 2));
+      const binding = { publicationId, linkId, publicKey: keys.publicKey, revision: 1 };
+      const envelope = await sealPublicRepresentation(binding, publicPresentation("---\ntitle: Fresh\nsecret: no\n---\nBody"));
+      const scalar = parsePublicationFragment(formatPublicationFragment(keys.privateKey));
+      if (!scalar) throw new Error("Contract mismatch: fragment rejected");
+      const opened = await openPublicRepresentation(envelope, await importPublicationKeyPair(scalar, keys.publicKey), binding);
+      assertEqual(opened.title, "Fresh");
+      assertEqual(opened.markdown, "Body");
+    },
+  },
   {
     name: "opens an envelope produced by an independent RFC 9180 WebCrypto implementation",
     async run() {

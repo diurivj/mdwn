@@ -15,6 +15,7 @@ Primitive rules:
 - Server-side code that touches D1 goes through `app/db/client.server.ts` (Drizzle, D1/SQLite driver, marked `.server.ts` so RR refuses to pull it into the client bundle). Nothing it returns is encrypted content.
 - Signup renders only a public shell; WebCrypto, IndexedDB keys, phrase, and one-time codes stay in browser memory. `/api/private/bootstrap` is a proof-guarded, read-only **resource action**, not a document loader, so even its opaque envelopes cannot enter SSR or hydration data. It consumes no proof ID and does not write D1.
 - Private Files tree/editor routes render only their public `HydrateFallback` server-side and load encrypted material through browser `clientLoader` flows. The File editor encrypts and signs its draft locally before submitting ciphertext with a React Router fetcher to its browser `clientAction`, which sends the proof-guarded File resource mutation. Save results advance only the captured revision; automatic save revalidation is disabled so a newer tab-local draft cannot be replaced. Reload/discard and lease-acquisition reads are explicit browser events, not effect-driven initial route loading. Draft plaintext and keys never enter a route submission or persistent browser storage; Web Locks coordinate lease ownership and BroadcastChannel messages contain only opaque transfer identifiers. If a private route needs server data it must remain non-sensitive by construction and be reviewed against this list.
+- The anonymous Public page `/p/:linkId` server-renders only a public `HydrateFallback`. Its server loader returns no data and answers every inactive path with the same `404`; a hydrating `clientLoader` reads the read capability from `location.hash`, fetches only the opaque path's ciphertext from `/api/public/publications/:linkId` without cookies or referrer, and decrypts in the browser. No Public ciphertext, key or plaintext enters the document. See [publications](publications.md).
 - A violation of this boundary is a security bug, not a performance choice. The cross-engine suite described in [`testing.md`](testing.md) enforces the route and browser-runtime boundary.
 
 ## 2. Response headers on every response
@@ -37,7 +38,7 @@ header.
 | `Permissions-Policy` | `camera=(self), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=()` |
 | `Cross-Origin-Opener-Policy` | `same-origin` |
 | `Cross-Origin-Resource-Policy` | `same-origin` |
-| `X-Robots-Tag` | `noindex, nofollow` (anonymous public pages are non-indexed by default) |
+| `X-Robots-Tag` | `noindex, nofollow, noarchive` (anonymous Public pages are non-indexed and unarchived by default) |
 | `Cache-Control` | `no-store` when not already set |
 
 The CSP is single-value, nonce-based, and allows first-party resources only (`script-src 'self' 'nonce-…'`, no `unsafe-inline`/`unsafe-eval` in production; `default-src 'none'`; `frame-ancestors 'none'`; `upgrade-insecure-requests`). The per-request nonce is generated in `workers/app.ts`, seeded into the load context (`app/security/nonce.ts`) for `entry.server.tsx` (which stamps the React Router inline scripts) and reused by the response wrapper to build the header. Under the local dev server the CSP is relaxed for Vite HMR only (`ws:`, `unsafe-eval`); nothing relaxed is ever applied in preview or production.

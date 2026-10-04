@@ -8,6 +8,10 @@ import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./l
 import { verifyFileHead, type FileHead, type FileHeadIdentity } from "./file-head";
 import { accessPredicate, effectiveAccessQuery, exitsSharedScope, moveAccessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
 import { retireDeletedScopeNeeds } from "~/sharing/provisioning-needs.server";
+import {
+  deletedFilePublications, filePublicationColumns, filePublicationJoins, filePublicationView,
+  publicationSave, publicationSaveCondition, publicationSaveStatements, type ActivePublication,
+} from "~/publications/publications.server";
 
 const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
@@ -93,7 +97,16 @@ type FileRow = {
   representation_key_envelope: ArrayBuffer | null; head_digest: ArrayBuffer | null; head_signature: ArrayBuffer | null;
   head_device_id: string | null; head_public_key: ArrayBuffer | null;
   name_ciphertext: ArrayBuffer; order_ciphertext: ArrayBuffer; key_envelope: ArrayBuffer;
+  publication_id: string | null; publication_link_id: string | null; publication_public_key: ArrayBuffer | null;
+  publication_revision: number | null; declaration_id: string | null; declaration_revision: number | null;
+  declaration_current: number | null;
 };
+
+function activePublication(row: FileRow): ActivePublication | null {
+  return row.publication_id && row.publication_link_id && row.publication_public_key && row.publication_revision !== null
+    ? { id: row.publication_id, linkId: row.publication_link_id, publicKey: new Uint8Array(row.publication_public_key),
+      revision: row.publication_revision } : null;
+}
 
 async function currentFile(env: Env, auth: AuthorizedDevice, fileId: string) {
   return createDb(env.DB).get<FileRow>(sql`
@@ -104,13 +117,14 @@ async function currentFile(env: Env, auth: AuthorizedDevice, fileId: string) {
       r.ciphertext, r.key_epoch, r.content_key_id, f.capability_id, f.capability_epoch,
       r.key_envelope AS representation_key_envelope, r.head_digest, r.head_signature, r.head_device_id,
       signer.assertion_public_key AS head_public_key,
-      e.name_ciphertext, e.order_ciphertext, e.key_envelope
+      e.name_ciphertext, e.order_ciphertext, e.key_envelope, ${filePublicationColumns}
     FROM (${effectiveAccessQuery(auth, fileId)}) a
     JOIN vault_nodes n ON n.id = a.node_id JOIN files f ON f.node_id = n.id AND f.owner_id = n.owner_id
     JOIN file_representations r ON r.id = f.current_representation_id
       AND r.file_node_id = f.node_id AND r.owner_id = f.owner_id AND r.revision = f.current_revision
     JOIN directory_entries e ON e.child_node_id = n.id AND e.parent_node_id = n.parent_node_id
     LEFT JOIN encryption_devices signer ON signer.id = r.head_device_id
+    ${filePublicationJoins(auth, sql`n.id`)}
     WHERE n.id = ${fileId}`);
 }
 
@@ -131,7 +145,14 @@ async function readFile(env: Env, auth: AuthorizedDevice, fileId: string): Promi
       nameCiphertext: encodeTreeBytes(new Uint8Array(row.name_ciphertext)),
       orderCiphertext: encodeTreeBytes(new Uint8Array(row.order_ciphertext)),
       keyEnvelope: encodeTreeBytes(new Uint8Array(row.key_envelope)) } : {}),
+    ...publicationView(row),
   }, { headers });
+}
+
+/** Present only for an active Publication the actor edits or is credited on. */
+function publicationView(row: FileRow) {
+  const publication = filePublicationView(row, Boolean(row.can_edit));
+  return publication ? { publication } : {};
 }
 
 type Create = { nodeId: string; expectedRevision: number; kind: "directory" | "file";
@@ -537,6 +558,8 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
       sql`DELETE FROM comment_thread_epochs WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
+      // Deleting a File revokes and deletes its Publication without a separate unpublish.
+      ...deletedFilePublications(ownerId, ids, committed),
       retireDeletedScopeNeeds(ownerId, nodeId, committed),
       sql`DELETE FROM shares WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
       sql`DELETE FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
@@ -624,13 +647,22 @@ async function convertFileCapability(env: Env, auth: AuthorizedDevice, fileId: s
   } catch { return badRequest(); }
 }
 
+const publicationChanged = () => Response.json({ error: "publication_changed" }, { status: 409, headers });
+
 /** The stable capability replaces the parent namespace as the wrapping scope.
  * Live authority, the root epoch and exact previous pointer are checked in the
  * first File CAS; only its fresh invocation marker can install/remove rows.
+ * With an active Publication the same CAS pins the Publication, link and Public
+ * revision the browser encrypted for, so both pointers move together or not at all.
  */
 async function saveConvertedFile(env: Env, auth: AuthorizedDevice, fileId: string, value: unknown, current: FileRow): Promise<Response> {
   const input = record(value), repr = record(input?.representation);
-  if (!input || !repr || !exact(input, ["expectedRevision", "expectedRepresentationId", "capability", "representation"]) ||
+  // A parent-listing payload means this tab still holds the pre-conversion File.
+  if (input && Object.hasOwn(input, "listingHead") && !Object.hasOwn(input, "capability")) {
+    return Response.json({ error: "file_converted" }, { status: 409, headers });
+  }
+  if (!input || !repr || !exact(input, ["expectedRevision", "expectedRepresentationId", "capability", "representation",
+        ...(Object.hasOwn(input, "publication") ? ["publication"] : [])]) ||
       !exact(repr, ["id", "contentKeyId", "keyEpoch", "revision", "ciphertext", "keyEnvelope", "fileHead"]) ||
       !validRevision(input.expectedRevision) || !isV7(input.expectedRepresentationId) || !isV7(repr.id) || !isV7(repr.contentKeyId) ||
       !validRevision(current.key_epoch) || repr.revision !== input.expectedRevision + 1) return badRequest();
@@ -639,6 +671,8 @@ async function saveConvertedFile(env: Env, auth: AuthorizedDevice, fileId: strin
   if (capability.id !== current.capability_id || capability.epoch !== current.capability_epoch) return capabilityChanged();
   if (input.expectedRevision !== current.revision || input.expectedRepresentationId !== current.representation_id) return fileChanged();
   if (repr.id === current.representation_id || repr.contentKeyId === current.content_key_id || repr.keyEpoch !== current.key_epoch + 1) return badRequest();
+  const paired = publicationSave(input.publication, activePublication(current));
+  if ("error" in paired) return paired.error === "changed" ? publicationChanged() : badRequest();
   const ownerId = current.owner_id, revision = input.expectedRevision + 1;
   const keyEpoch = repr.keyEpoch as number, representationId = repr.id, contentKeyId = repr.contentKeyId;
   const blocked = sharingWriteBlocked(fileId);
@@ -656,22 +690,26 @@ async function saveConvertedFile(env: Env, auth: AuthorizedDevice, fileId: strin
         AND capability_epoch = ${capability.epoch} AND ${accessPredicate(auth, fileId, "edit")} AND NOT ${blocked} AND ${guard}
         AND EXISTS (SELECT 1 FROM file_representations r WHERE r.id = files.current_representation_id
           AND r.file_node_id = files.node_id AND r.owner_id = files.owner_id AND r.revision = files.current_revision
-          AND r.content_key_id = ${current.content_key_id} AND r.key_epoch = ${current.key_epoch})`, (marker) => [
+          AND r.content_key_id = ${current.content_key_id} AND r.key_epoch = ${current.key_epoch})
+        AND ${publicationSaveCondition(fileId, ownerId, paired.save)}`, (marker) => [
       sql`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id, key_epoch,
         ciphertext, ciphertext_size, created_at, key_envelope, head_digest, head_signature, head_device_id)
         SELECT ${representationId}, ${fileId}, ${ownerId}, ${revision}, ${contentKeyId}, ${keyEpoch},
           ${ciphertext}, ${ciphertext.length}, ${Date.now()}, ${keyEnvelope}, ${head.digest}, ${head.signature}, ${auth.deviceId} WHERE ${marker}`,
       sql`DELETE FROM file_representations WHERE id = ${current.representation_id} AND file_node_id = ${fileId}
         AND owner_id = ${ownerId} AND ${marker} AND NOT EXISTS (SELECT 1 FROM files WHERE current_representation_id = ${current.representation_id})`,
+      ...publicationSaveStatements(paired.save, revision, marker),
     ]);
-    if (committed) return Response.json({ revision, representationId, capability }, { headers });
+    if (committed) return Response.json({ revision, representationId, capability,
+      ...(paired.save ? { publicRevision: paired.save.revision } : {}) }, { headers });
     if (auth.expiresAt <= Date.now() || await createDb(env.DB).get(sql`SELECT 1 FROM device_proof_uses
       WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`)) return denied();
     const latest = await currentFile(env, auth, fileId);
     if (!latest || !latest.can_edit) return notFound();
     if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
     if (latest.capability_id !== capability.id || latest.capability_epoch !== capability.epoch) return capabilityChanged();
-    return latest.revision !== input.expectedRevision || latest.representation_id !== input.expectedRepresentationId ? fileChanged() : denied();
+    if (latest.revision !== input.expectedRevision || latest.representation_id !== input.expectedRepresentationId) return fileChanged();
+    return "error" in publicationSave(input.publication, activePublication(latest)) ? publicationChanged() : denied();
   } catch { return badRequest(); }
 }
 
@@ -725,6 +763,7 @@ async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value:
   try {
     const committed = await commitDirectoryMutation(env, auth, current.parent_node_id, expectedParentRevision, head,
       sql`${accessPredicate(auth, fileId, "edit")} AND ${accessPredicate(auth, current.parent_node_id, "create")} AND NOT ${blocked}
+        AND ${publicationSaveCondition(fileId, accountId, null)}
         AND EXISTS (SELECT 1 FROM files f JOIN file_representations r ON r.id = f.current_representation_id
         JOIN vault_nodes n ON n.id = f.node_id AND n.owner_id = f.owner_id
         JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id

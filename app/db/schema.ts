@@ -910,3 +910,119 @@ export type CommentThread = typeof commentThreads.$inferSelect;
 export type CommentThreadEpoch = typeof commentThreadEpochs.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type ThreadAttribution = typeof threadAttributions.$inferSelect;
+
+/** Opaque 256-bit base64url identifier: no timestamp, Owner, File, or name. */
+function opaquePublicationIdentifier(column: AnySQLiteColumn) {
+  return sql`length(${column}) = 43 AND ${column} NOT GLOB '*[^A-Za-z0-9_-]*'`;
+}
+
+/** One logical Publication per File while active or sealed for teardown. While
+ * active it points at exactly one current link and Public representation; the
+ * reciprocal deferred pointer FKs, insert/state triggers and the File-capability
+ * requirement are in the reviewed 0020 migration (Drizzle cannot express them).
+ */
+export const publications = sqliteTable("publications", {
+  /** The logical Publication; it survives link rotation and is never routable. */
+  id: text("id").primaryKey(),
+  fileId: text("file_id").notNull(),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  state: text("state").notNull(),
+  currentLinkId: text("current_link_id"),
+  currentRepresentationId: text("current_representation_id"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("publications_file_idx").on(table.fileId).where(sql`${table.state} IN ('active', 'deleting')`),
+  foreignKey({ columns: [table.ownerId, table.fileId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+  check("publications_id_opaque", opaquePublicationIdentifier(table.id)),
+  check("publications_state_valid", sql`${table.state} IN ('active', 'deleting')`),
+  check("publications_state_pointers", sql`(${table.state} = 'active' AND ${table.currentLinkId} IS NOT NULL
+      AND ${table.currentRepresentationId} IS NOT NULL)
+    OR (${table.state} = 'deleting' AND ${table.currentLinkId} IS NULL AND ${table.currentRepresentationId} IS NULL)`),
+]);
+
+/** The active opaque path ID and the link's public encryption key. The read
+ * capability stays in the URL fragment and has no column anywhere.
+ */
+export const publicationLinks = sqliteTable("publication_links", {
+  /** Path ID: an independent 256-bit random value, unique among live links. */
+  id: text("id").primaryKey(),
+  publicationId: text("publication_id").notNull().references(() => publications.id, { onDelete: "restrict" }),
+  /** Raw SEC1 uncompressed P-256 point. */
+  publicKey: blob("public_key").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("publication_links_publication_idx").on(table.publicationId),
+  uniqueIndex("publication_links_identity_idx").on(table.id, table.publicationId),
+  check("publication_links_id_opaque", opaquePublicationIdentifier(table.id)),
+  check("publication_links_public_key", sql`typeof(${table.publicKey}) = 'blob' AND length(${table.publicKey}) = 65
+    AND substr(${table.publicKey}, 1, 1) = X'04'`),
+]);
+
+/** One current encrypted presentation payload, separate from the private
+ * representation and bounded by the same 524,288-byte BLOB constraint.
+ */
+export const publicRepresentations = sqliteTable("public_representations", {
+  id: text("id").primaryKey(),
+  publicationId: text("publication_id").notNull().references(() => publications.id, { onDelete: "restrict" }),
+  /** The link whose public key this ciphertext was encrypted to. */
+  linkId: text("link_id").notNull(),
+  /** Publication-scoped presentation revision; never the File's revision count. */
+  revision: integer("revision").notNull(),
+  /** Server-only pairing: the File revision whose saved source this presents. */
+  fileRevision: integer("file_revision").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  ciphertextSize: integer("ciphertext_size").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("public_representations_revision_idx").on(table.publicationId, table.revision),
+  // Target of the Publication's current-pointer FK: the current representation
+  // is always one encrypted for the current link. Superseded rows are removed.
+  uniqueIndex("public_representations_pointer_idx").on(table.id, table.publicationId, table.linkId),
+  check("public_representations_revision_positive", sql`${table.revision} >= 1 AND ${table.fileRevision} >= 1`),
+  check("public_representations_ciphertext_bounded", sql`length(${table.ciphertext}) <= 524288 AND ${table.ciphertextSize} = length(${table.ciphertext})`),
+]);
+
+/** A Collaborator's pending request; it grants no public access. Approval
+ * (the Owner publishing), denial and cancellation remove it.
+ */
+export const publicationRequests = sqliteTable("publication_requests", {
+  id: text("id").primaryKey(),
+  fileId: text("file_id").notNull(),
+  ownerId: text("owner_id").notNull(),
+  requesterId: text("requester_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("publication_requests_requester_idx").on(table.fileId, table.requesterId),
+  foreignKey({ columns: [table.ownerId, table.fileId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
+  check("publication_requests_not_owner", sql`${table.requesterId} != ${table.ownerId}`),
+]);
+
+/** Owner-selected pseudonymous authors. Each encrypted declaration is written by
+ * the author's own device to the current link key; a pending row has none.
+ */
+export const publicationAuthors = sqliteTable("publication_authors", {
+  /** Declaration ID: random and bound in the envelope a Public reader sees. */
+  id: text("id").primaryKey(),
+  publicationId: text("publication_id").notNull().references(() => publications.id, { onDelete: "restrict" }),
+  authorId: text("author_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  ordinal: integer("ordinal").notNull(),
+  /** The link the declaration is encrypted to; only the current link's are served. */
+  linkId: text("link_id"),
+  revision: integer("revision").notNull(),
+  ciphertext: blob("ciphertext"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("publication_authors_author_idx").on(table.publicationId, table.authorId),
+  uniqueIndex("publication_authors_ordinal_idx").on(table.publicationId, table.ordinal),
+  check("publication_authors_id_opaque", opaquePublicationIdentifier(table.id)),
+  check("publication_authors_ordinal_positive", sql`${table.ordinal} >= 1`),
+  check("publication_authors_declaration", sql`(${table.ciphertext} IS NULL AND ${table.linkId} IS NULL AND ${table.revision} >= 0)
+    OR (${table.ciphertext} IS NOT NULL AND ${table.linkId} IS NOT NULL AND ${table.revision} >= 1
+      AND length(${table.ciphertext}) BETWEEN 1 AND 4096)`),
+]);
+
+export type Publication = typeof publications.$inferSelect;
+export type PublicationLink = typeof publicationLinks.$inferSelect;
+export type PublicRepresentation = typeof publicRepresentations.$inferSelect;
