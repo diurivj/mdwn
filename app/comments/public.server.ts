@@ -548,8 +548,9 @@ export async function deletePublicComment(env: Env, auth: AuthorizedDevice, targ
  * Report one Public Comment by opaque ID with a fixed category (ticket 26).
  * The report carries no plaintext and grants no content access: it records the
  * reporter Account, the Comment ID, the category and bounded timestamps only.
- * A signed-in Account may report the same Comment once; every accepted
- * request — including an idempotent repeat — consumes the 3/24-hour window.
+ * A signed-in Account may report the same Comment once; every well-formed
+ * request — including an idempotent repeat or an unknown Comment ID — consumes
+ * the 3/24-hour window before any lookup, so IDs cannot be probed for free.
  */
 export async function reportPublicComment(request: Request, env: Env, auth: AuthorizedDevice,
   value: unknown): Promise<Response> {
@@ -558,11 +559,6 @@ export async function reportPublicComment(request: Request, env: Env, auth: Auth
       !isReportCategory(input.category)) return invalid();
   const commentId = input.commentId, category = input.category;
   const db = createDb(env.DB);
-  // A report never requires the reporter to hold a capability, but it must
-  // name a Comment that exists in a Public thread.
-  const comment = await db.get(sql`SELECT 1 FROM comments c
-    JOIN comment_threads t ON t.id = c.thread_id AND t.purpose = 'public' WHERE c.id = ${commentId}`);
-  if (!comment) return notFound();
   let limit;
   try {
     limit = await enforceRateLimit({ db: env.DB, request, action: "public_comment.report",
@@ -572,6 +568,11 @@ export async function reportPublicComment(request: Request, env: Env, auth: Auth
     throw error;
   }
   if (!limit.allowed) return rateLimitResponse(limit);
+  // A report never requires the reporter to hold a capability, but it must
+  // name a Comment that exists in a Public thread.
+  const comment = await db.get(sql`SELECT 1 FROM comments c
+    JOIN comment_threads t ON t.id = c.thread_id AND t.purpose = 'public' WHERE c.id = ${commentId}`);
+  if (!comment) return notFound();
   const now = Date.now();
   const committed = await commitPrivateMutation(env, auth, (guard) => sql`
     INSERT INTO public_comment_reports (id, reporter_id, comment_id, category, created_at, expires_at)

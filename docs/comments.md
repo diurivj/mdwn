@@ -192,9 +192,9 @@ category — `spam`, `abuse`, or `other` — through
 no content access: the reporter needs no fragment, capability, or thread read,
 and the stored row is only `(reporter Account, Comment ID, category,
 created_at, expires_at)`. The proof-guarded request consumes the
-`public_comment.report` limit (3 per Account per 24 hours). It is idempotent
-per reporter and Comment — a lost-response retry stores no second row — but
-every accepted request still counts against the window. Reports expire
+`public_comment.report` limit (3 per Account per 24 hours) before any lookup,
+so an unknown Comment ID cannot be probed for free; an idempotent repeat stores
+no second row but still counts against the window. Reports expire
 after 30 days and are purged by the same 15-minute Cron; deleting the Comment
 deletes its reports with it, so Owner or teardown hard deletion removes the
 signal too.

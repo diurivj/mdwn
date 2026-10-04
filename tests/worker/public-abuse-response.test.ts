@@ -97,6 +97,10 @@ describe("Public Comment reports", () => {
     expect((await report(reporter, opaqueId(), "spam")).status).toBe(404);
     expect((await report(reporter, "not-a-comment-id", "spam")).status).toBe(400);
     expect(await count("public_comment_reports")).toBe(0);
+    // A well-formed unknown ID consumes the window before the lookup, so
+    // Comment IDs cannot be probed for free.
+    expect(await count("rate_limit_counters",
+      "purpose = 'public_comment.report' AND scope_type = 'account'")).toBe(1);
   });
 
   it("allows three reports per Account in 24 hours and answers the fourth generically", async () => {
@@ -106,8 +110,8 @@ describe("Public Comment reports", () => {
     const posted = await postComment(owner, fileId, publication, "Limited reports");
     const { commentId } = await posted.json() as { commentId: string };
 
-    // Every accepted request consumes the 3/24-hour Account window, including
-    // an idempotent repeat of the same report.
+    // Every well-formed request consumes the 3/24-hour Account window,
+    // including an idempotent repeat of the same report.
     expect((await report(reporter, commentId, "other")).status).toBe(201);
     expect((await report(reporter, commentId, "other")).status).toBe(200);
     expect((await report(reporter, commentId, "other")).status).toBe(200);
