@@ -27,6 +27,7 @@ npm run dev          # local Workers runtime + D1 simulation + Tailwind
 | `npm test` | Node unit tests + Workers-runtime tests |
 | `npm run test:all` | unit/Worker tests, production build, and Chromium/Firefox/WebKit browser tests |
 | `npm run test:e2e` | browser tests against the built Worker (all three engines) |
+| `npm run verify` | local merge gate: every CI check, then all three browser engines (see AGENTS.md) |
 | `npm run build` | production build into `build/` |
 | `npm run db:generate` | generate a migration from `app/db/schema.ts` into `drizzle/` |
 | `npm run db:migrate[:preview\|:production]` | apply migrations via Wrangler |
