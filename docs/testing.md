@@ -6,6 +6,7 @@ fast layers:
 ```sh
 npm test             # Node unit tests, then Workers-runtime tests
 npm run test:all     # npm test, a production Worker build, and all browser engines
+npm run verify       # the local merge gate: every CI check, then all browser engines
 ```
 
 ## Workers runtime
@@ -136,6 +137,10 @@ multi-device tests. Do not use the shared default Playwright context when the
 purpose of a test is storage isolation.
 
 ## CI output
+
+The `ci` workflow is paused while GitHub Actions minutes are exhausted;
+`npm run verify` is the merge gate meanwhile (see AGENTS.md). This section
+describes CI when it runs.
 
 The `browser` CI job runs a non-fail-fast matrix with one job for each engine.
 Each job uses one Playwright worker; the local worker default stays automatic.

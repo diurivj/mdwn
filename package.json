@@ -12,6 +12,7 @@
     "test:watch": "vitest --config vitest.config.ts",
     "test:e2e": "npm run build && playwright test",
     "test:all": "npm test && npm run test:e2e",
+    "verify": "node scripts/verify-local.mjs",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:migrate": "node scripts/apply-migrations.mjs local",
     "db:migrate:preview": "node scripts/apply-migrations.mjs preview",
