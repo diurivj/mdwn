@@ -3,8 +3,8 @@ import { sql } from "~/db/client.server";
 
 /**
  * Staged Pseudonym-update items whose attribution context is being removed.
- * This module owns the `pseudonym_update_items` record shape so the Comment
- * and Publication deletion paths never inline its `kind` values.
+ * This module owns the `pseudonym_update_items` delete shape so the Comment
+ * and Publication deletion paths share it instead of inlining the table name.
  *
  * A staged item names one `thread_attributions` row (`thread`) or one
  * `publication_authors` row (`publication`) with its opaque record ID. The

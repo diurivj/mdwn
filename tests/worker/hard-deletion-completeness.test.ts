@@ -231,7 +231,7 @@ describe("hard-deletion completeness", () => {
     expect(await count("share_key_envelopes", `relationship_id IN (?, ?)`, scope.grantId, directoryGrant.grantId)).toBe(0);
     expect(await count("grant_key_envelopes", `relationship_id IN (?, ?)`, scope.grantId, directoryGrant.grantId)).toBe(0);
     expect(await count("provisioning_needs", `grant_id IN (?, ?)`, scope.grantId, directoryGrant.grantId)).toBe(0);
-    expect(await count("sharing_comment_capabilities", `file_id = ?`, fileId)).toBe(0);
+    expect(await count("sharing_comment_capabilities", `file_id = ? OR object_id IN (${idPlaceholders})`, fileId, ...ids)).toBe(0);
     expect(await count("share_comment_key_envelopes", `object_id IN (${idPlaceholders})`, ...ids)).toBe(0);
     expect(await count("grant_comment_key_envelopes", `object_id IN (${idPlaceholders})`, ...ids)).toBe(0);
     expect(await count("sharing_write_blocks", `target_id IN (?, ?)`, ...subtree)).toBe(0);
@@ -249,8 +249,8 @@ describe("hard-deletion completeness", () => {
     expect(await count("publication_requests", `file_id = ?`, fileId)).toBe(0);
     expect(await count("pseudonym_update_items", `record_id IN (?, ?, ?)`,
       scope.privateAttributionId, scope.publicAttributionId, scope.authorDeclarationId)).toBe(0);
-    expect(await count("key_envelopes", `object_id IN (?, ?, ?, ?)`,
-      fileId, scope.privateThread.threadId, ...epochIds)).toBe(0);
+    expect(await count("key_envelopes", `object_id IN (?, ?, ?, ?, ?)`,
+      fileId, ...threadIds, ...epochIds)).toBe(0);
     expect((await sharingRequest(collaborator, `/api/private/tree/files/${fileId}`)).status).toBe(404);
   });
 
