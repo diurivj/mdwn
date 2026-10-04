@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { Browser } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { completeRecoveryPresentation } from "./signup-recovery";
+import { seedAccount, signInAccount } from "./support/seeded-account";
 
 test.setTimeout(180_000);
 
@@ -27,29 +27,19 @@ test("a used code adds a replacement Passkey, revokes other Sessions and leaves 
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
   const env = await worker.getEnv();
-  const original = await newAuthenticator(browser, origin);
+  const original = await seedAccount(browser, server, origin);
   let replacement: Awaited<ReturnType<typeof newAuthenticator>> | undefined;
   try {
-    let identifier = "";
-    let code = "";
-    let unusedCode = "";
-    await original.page.getByRole("button", { name: "Create account", exact: true }).click();
-    await completeRecoveryPresentation(original.page, {
-      beforeConfirm: async () => {
-        const text = await original.page.getByText("Save this non-secret recovery identifier", { exact: false }).textContent();
-        identifier = text?.match(/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/)?.[0] ?? "";
-        code = (await original.page.locator("section ol li").first().textContent())?.replace(/^\d+\.\s*/, "").trim() ?? "";
-        unusedCode = (await original.page.locator("section ol li").nth(1).textContent())?.replace(/^\d+\.\s*/, "").trim() ?? "";
-      },
-    });
+    const identifier = original.accountId;
+    const [code, unusedCode] = original.recoveryCodes;
     expect(identifier).toMatch(/-7[0-9a-f]{3}-/);
     expect(code).toHaveLength(32);
-    await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    await signInAccount(original);
 
     replacement = await newAuthenticator(browser, origin);
     await replacement.page.goto(`${origin}/recover`, { waitUntil: "commit" });
     await replacement.page.getByLabel("Recovery identifier").fill(identifier);
-    await replacement.page.getByLabel("Unused recovery code").fill(code);
+    await replacement.page.getByLabel("Unused recovery code").fill(code!);
     await replacement.page.getByRole("button", { name: "Use recovery code" }).click();
     await expect(replacement.page.getByRole("status")).toContainText("Your passkey is ready and you are signed in", { timeout: 120_000 });
 
@@ -95,7 +85,7 @@ test("a used code adds a replacement Passkey, revokes other Sessions and leaves 
         body: JSON.stringify({ identifier, code }),
       });
       return response.status;
-    }, { identifier, code: unusedCode });
+    }, { identifier, code: unusedCode! });
     expect(obsolete).toBe(401);
   } finally {
     await replacement?.context.close();

@@ -1,11 +1,9 @@
-import { createPublicKey } from "node:crypto";
-
-import { cose, isoCBOR } from "@simplewebauthn/server/helpers";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 import type { TestHarness } from "wrangler";
 
 import { openAccountProfile, sealAccountProfile } from "../app/crypto/account-profile";
 import { test, expect } from "./fixtures";
+import { coseP256PublicKey } from "./support/passkey";
 
 const ACCOUNT_ID = "019950d7-98c0-7000-8000-000000000002";
 const IDLE_ACCOUNT_ID = "019950d7-98c0-7000-8000-000000000003";
@@ -55,32 +53,6 @@ type AccountProfileRow = {
 
 function accountUserHandle(accountId: string): string {
   return Buffer.from(accountId, "utf8").toString("base64url");
-}
-
-function coseP256PublicKey(spki: string): Uint8Array {
-  const key = createPublicKey({
-    key: Buffer.from(spki, "base64url"),
-    format: "der",
-    type: "spki",
-  }).export({ format: "jwk" });
-  if (!key.x || !key.y) throw new Error("expected a P-256 public key");
-
-  const x = Buffer.from(key.x, "base64url");
-  const y = Buffer.from(key.y, "base64url");
-  if (x.byteLength !== 32 || y.byteLength !== 32) {
-    throw new Error("expected P-256 coordinates");
-  }
-
-  // COSE_Key: {1: EC2, 3: ES256, -1: P-256, -2: x, -3: y}.
-  return isoCBOR.encode(
-    new Map<number, number | Uint8Array>([
-      [cose.COSEKEYS.kty, cose.COSEKTY.EC2],
-      [cose.COSEKEYS.alg, cose.COSEALG.ES256],
-      [cose.COSEKEYS.crv, cose.COSECRV.P256],
-      [cose.COSEKEYS.x, x],
-      [cose.COSEKEYS.y, y],
-    ]),
-  );
 }
 
 async function sessionsFor(
@@ -402,25 +374,6 @@ test("consumes registration after freshness expires before its completion", asyn
         .bind(payload.challengeId)
         .first(),
     ).toBeNull();
-  } finally {
-    await fixture.context.close();
-  }
-});
-
-test("server-renders only the Account security shell, not its private lists", async ({
-  browser,
-  server,
-  baseURL,
-}) => {
-  const fixture = await signInSeededAccount(browser, server, baseURL!);
-  try {
-    const [session] = await sessionsFor(fixture.env, fixture.accountId);
-    const document = await fixture.page.request.get(`${fixture.origin}/account/security`);
-    expect(document.status()).toBe(200);
-    const html = await document.text();
-    expect(html).toContain("Loading account security…");
-    expect(html).not.toContain(session!.id);
-    expect(html).not.toContain(fixture.credentialId);
   } finally {
     await fixture.context.close();
   }

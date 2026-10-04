@@ -1,6 +1,8 @@
 import type { Browser, Page } from "@playwright/test";
 import { expect, installWorkspaceScript, objectId, type Workspace } from "../workspace-fixture";
-import { completeRecoveryPresentation } from "../signup-recovery";
+import type { TestHarness } from "wrangler";
+import { seedAccount, signInAccount } from "./seeded-account";
+import { primeSyncedPasskey } from "./passkey";
 import { waitForSharedProvisioning } from "./navigation";
 import type { GrantKeyContext } from "../../app/sharing/grant-keys";
 import type { CommentKeyContext } from "../../app/sharing/comment-keys";
@@ -23,24 +25,21 @@ export async function authenticator(browser: Browser, origin: string,
   const page = await context.newPage();
   // Keep automatic visits from silently completing the explicit pass under test.
   await page.route(provisioningNext, (route) => route.abort());
+  if (passkey) {
+    await page.goto(`${origin}/sign-in`);
+    await primeSyncedPasskey(page, passkey.id);
+  }
   return { context, page };
 }
-export async function signup(browser: Browser, origin: string, script: string) {
-  const actor = await authenticator(browser, origin);
+export async function seededAccount(browser: Browser, server: TestHarness, origin: string, script: string) {
+  const actor = await seedAccount(browser, server, origin);
+  await actor.page.route(provisioningNext, (route) => route.abort());
   await installWorkspaceScript(actor.page, script, origin);
-  await actor.page.goto(`${origin}/sign-up`);
-  await actor.page.getByRole("button", { name: "Create account", exact: true }).click();
-  let accountId = "", code = "";
-  const saved = await completeRecoveryPresentation(actor.page, { beforeConfirm: async () => {
-    const text = await actor.page.getByText("Save this non-secret recovery identifier", { exact: false }).textContent();
-    accountId = text?.match(/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/)?.[0] ?? "";
-    code = (await actor.page.locator("section ol li").first().textContent())!.replace(/^\d+\.\s*/, "").trim();
-  } });
-  await expect(actor.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+  await signInAccount(actor);
   await loadFixture(actor.page);
-  return { ...actor, accountId, code, phrase: saved.phrase.map((word) => word.replace(/^\d+\.\s*/, "").trim()).join(" ") };
+  return { ...actor, code: actor.recoveryCodes[0]! };
 }
-export async function enroll(browser: Browser, original: Awaited<ReturnType<typeof signup>>, origin: string, script: string) {
+export async function enroll(browser: Browser, original: Awaited<ReturnType<typeof seededAccount>>, origin: string, script: string) {
   const candidate = await authenticator(browser, origin, (await original.context.credentials.get())[0]!);
   await installWorkspaceScript(candidate.page, script, origin);
   await candidate.page.goto(`${origin}/sign-in`);
@@ -71,7 +70,7 @@ export async function enroll(browser: Browser, original: Awaited<ReturnType<type
 
 /** No Comment producer exists yet: seed its ciphertext at the DB boundary,
  * while invitation, signatures, acceptance and reads use the real APIs. */
-export async function shareWithComments(owner: Page, recipient: Awaited<ReturnType<typeof signup>>, workspace: Workspace,
+export async function shareWithComments(owner: Page, recipient: Awaited<ReturnType<typeof seededAccount>>, workspace: Workspace,
   options: { ownerRecovery?: boolean } = {}) {
   const address = await workspace.db.prepare("SELECT share_id FROM accounts WHERE id = ?")
     .bind(recipient.accountId).first<{ share_id: string }>();
@@ -140,7 +139,7 @@ export async function shareWithComments(owner: Page, recipient: Awaited<ReturnTy
     `/api/private/shares/${id}/accept`, { method: "POST", body: "{}" })).status, result.grantId)).toBe(201);
   return { grantId: result.grantId, fragment: result.fragment, comments };
 }
-export async function recover(browser: Browser, original: Awaited<ReturnType<typeof signup>>, origin: string, script: string) {
+export async function recover(browser: Browser, original: Awaited<ReturnType<typeof seededAccount>>, origin: string, script: string) {
   const replacement = await authenticator(browser, origin);
   await installWorkspaceScript(replacement.page, script, origin);
   await replacement.page.goto(`${origin}/recover`);

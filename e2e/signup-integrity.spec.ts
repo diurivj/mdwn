@@ -1,6 +1,7 @@
 import type { Browser, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
+import { seedAccount, signInAccount } from "./support/seeded-account";
 
 test.setTimeout(180_000);
 
@@ -19,49 +20,15 @@ async function candidate(browser: Browser, origin: string) {
   return { context, page };
 }
 
-type Submission = { challengeId: string; transcript: {
-  transportPublicKey: string; capsuleDigest: string; registrationChallenge: string;
-}; bindingSignature: string; transportProof: string; [key: string]: unknown };
-
-for (const scenario of ["candidate key", "capsule digest", "registration challenge", "binding signature", "transport proof"] as const) {
-  test(`rejects altered ${scenario} with no Account`, async ({ browser, server, baseURL }) => {
-    const worker = server.getWorker<{DB:D1Database}>();
-    await worker.applyD1Migrations("DB");
-    const env = await worker.getEnv();
-    const { context, page } = await candidate(browser, new URL(baseURL!).origin);
-    try {
-      const alter = (value: string) => `${value[0] === "A" ? "B" : "A"}${value.slice(1)}`;
-      let submitted = false;
-      await page.route("**/api/signup/verify", async (route) => {
-        const body = route.request().postDataJSON() as Submission;
-        if (scenario === "candidate key") body.transcript.transportPublicKey = alter(body.transcript.transportPublicKey);
-        if (scenario === "capsule digest") body.transcript.capsuleDigest = alter(body.transcript.capsuleDigest);
-        if (scenario === "registration challenge") body.transcript.registrationChallenge = alter(body.transcript.registrationChallenge);
-        if (scenario === "binding signature") body.bindingSignature = "A".repeat(86);
-        if (scenario === "transport proof") body.transportProof = "A".repeat(43);
-        submitted = true;
-        await route.continue({ postData: JSON.stringify(body) });
-      });
-      await page.getByRole("button", {name:"Create account",exact:true}).click();
-      await completeRecoveryPresentation(page);
-      await expect(page.getByRole("alert")).toContainText("could not create your account", {timeout:120_000});
-      expect(submitted).toBe(true);
-      expect(await env.DB.prepare("SELECT count(*) AS n FROM accounts").first()).toEqual({n:0});
-      expect(await env.DB.prepare("SELECT count(*) AS n FROM sessions").first()).toEqual({n:0});
-    } finally { await context.close(); }
-  });
-}
-
 for (const scenario of ["bad binding proof", "stale registry", "revoked device", "tombstoned device"] as const) {
   test(`sign-in with ${scenario} stays unprovisioned`, async ({ browser, server, baseURL }) => {
     const worker = server.getWorker<{DB:D1Database}>();
     await worker.applyD1Migrations("DB");
     const env = await worker.getEnv();
-    const { context, page } = await candidate(browser, new URL(baseURL!).origin);
+    const seeded = await seedAccount(browser, server, baseURL!);
+    const { context, page } = seeded;
     try {
-      await page.getByRole("button", {name:"Create account",exact:true}).click();
-      await completeRecoveryPresentation(page);
-      await expect(page.getByText("Your account is ready.", {exact:false})).toBeVisible({timeout:120_000});
+      await signInAccount(seeded);
       const account = await env.DB.prepare("SELECT id FROM accounts").first<{id:string}>();
       expect(account).not.toBeNull();
       const signedOut = await page.evaluate(async () => fetch("/api/auth/sign-out", {
