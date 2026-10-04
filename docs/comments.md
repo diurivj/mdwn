@@ -147,7 +147,9 @@ threads, owned Comment recovery envelopes and rotation staging before the node.
   receives **Sign in to see or add comments if you have access to this file** and
   no thread ciphertext. A signed-in visitor posts through a private-capable,
   device-bound Session plus the fragment capability held locally; an
-  unprovisioned Session cannot post.
+  unprovisioned Session cannot post. The public data request stays cookie-free;
+  the page makes one cookie-carrying `/api/device/state` check only when the
+  current audience is public, to decide whether to offer the composer.
 
 ## Rotation
 
