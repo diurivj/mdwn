@@ -1,8 +1,7 @@
 import { publicAttributionKeyContext, publicCommentKeyContext } from "~/comments/public-content";
 import { createSymmetricWriter, openSymmetric } from "~/crypto/enc-v1";
-import { openDeviceEnrollmentEnvelope } from "~/crypto/vault";
+import { loadPrivateBrowser } from "~/device/private-browser";
 import { privateRequest } from "~/device/private-client";
-import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { createListingHead, openDirectoryListing, openListingMembers, assertListingMember, rememberListing, type SealedEntry } from "~/tree/listing";
 import { createFileHead, verifyFileHead } from "~/tree/file-head";
@@ -290,18 +289,8 @@ export async function resumeRotation(jobId: string, browser: RotationBrowser, op
 
 /** Production adapter: device handles and Vault keys are loaded only in the browser. */
 export async function resumeKeyRotation(jobId: string, options: Options = {}) {
-  const stateResponse = await fetch("/api/device/state", { cache: "no-store", signal: options.signal });
-  if (!stateResponse.ok) throw new Error("Device state unavailable");
-  const state = await stateResponse.json() as { accountId: string; deviceId: string };
-  const device = await getDevice(state.accountId);
-  if (!device || device.deviceId !== state.deviceId) throw new Error("An enrolled device is required");
-  const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal: options.signal });
-  if (!response.ok) throw new Error("Private access unavailable");
-  const boot = await response.json() as { enrollmentEnvelope: string };
-  const vaultRootKey = await openDeviceEnrollmentEnvelope(decodeTreeBytes(boot.enrollmentEnvelope), device.transportKeyPair, {
-    purpose: "device-enrollment", vaultId: state.accountId, objectId: state.deviceId, keyId: state.deviceId,
-    keyEpoch: 1, revision: 1, recipientId: state.deviceId,
-  });
-  return resumeRotation(jobId, { accountId: state.accountId, deviceId: state.deviceId, vaultRootKey, assertionKey: device.assertionKeyPair.privateKey,
-    request: (path, method = "POST", body) => privateRequest(path, { method, signal: options.signal, ...(body ? { body: JSON.stringify(body) } : {}) }) }, options);
+  const browser = await loadPrivateBrowser(options.signal);
+  return resumeRotation(jobId, { ...browser,
+    request: (path, method = "POST", body) => privateRequest(path,
+      { method, signal: options.signal, ...(body ? { body: JSON.stringify(body) } : {}) }) }, options);
 }

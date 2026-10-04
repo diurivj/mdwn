@@ -1,9 +1,9 @@
 import { MAX_COMMENT_KEY_ENVELOPE_BYTES, sealAttribution } from "~/comments/content";
 import { sealPublicAttribution } from "~/comments/public-content";
-import { openAccountProfile, sealAccountProfile } from "~/crypto/account-profile";
-import { openDeviceEnrollmentEnvelope, openVaultRecoveryEnvelope } from "~/crypto/vault";
+import { MAX_ACCOUNT_PROFILE_BYTES, openAccountProfile, sealAccountProfile } from "~/crypto/account-profile";
+import { openVaultRecoveryEnvelope } from "~/crypto/vault";
+import { loadPrivateBrowser, type PrivateBrowser } from "~/device/private-browser";
 import { privateRequest } from "~/device/private-client";
-import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { sealAuthorDeclaration } from "~/publications/content";
 import { openCommentKeyEnvelope, type CommentKeyContext } from "~/sharing/comment-keys";
@@ -18,14 +18,10 @@ import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
  * new pseudonym and resume an interrupted pass. No plaintext is persisted.
  */
 
-const MAX_PROFILE_BYTES = 4_096;
-
 export type PseudonymJob = { jobId: string; state: string; progress: number; createdAt: number };
 
 /** Browser-held crypto and a proof-bound external API transport. */
-export type PseudonymBrowser = {
-  accountId: string; deviceId: string; vaultRootKey: Uint8Array<ArrayBuffer>;
-  transportKeyPair: CryptoKeyPair;
+export type PseudonymBrowser = PrivateBrowser & {
   request(path: string, method?: "POST" | "PUT" | "PATCH", body?: object): Promise<Response>;
 };
 type Options = { maxSteps?: number; signal?: AbortSignal; onProgress?: (job: PseudonymJob) => void };
@@ -141,7 +137,7 @@ export async function runPseudonymUpdate(jobId: string, browser: PseudonymBrowse
     }
     // The staged profile ciphertext lets any enrolled device continue the same job.
     if (!packet.profile) throw new Error("Invalid pseudonym update state");
-    pseudonym = (await openAccountProfile(decodeTreeBytes(packet.profile.ciphertext, MAX_PROFILE_BYTES),
+    pseudonym = (await openAccountProfile(decodeTreeBytes(packet.profile.ciphertext, MAX_ACCOUNT_PROFILE_BYTES),
       browser.vaultRootKey, { accountId: browser.accountId, epoch: packet.profile.epoch,
         revision: packet.profile.revision })).publicPseudonym;
     const contexts = packet.contexts ?? [];
@@ -179,11 +175,10 @@ export async function changePseudonym(browser: PseudonymBrowser, options: Option
 /** The current pseudonym, its cooldown and any pending update for the UI. */
 export async function readPseudonymState(browser: PseudonymBrowser): Promise<PseudonymState> {
   const profile = await json<ProfileWire>(browser, "/api/private/profile");
-  const opened = await openAccountProfile(decodeTreeBytes(profile.ciphertext, MAX_PROFILE_BYTES), browser.vaultRootKey,
+  const opened = await openAccountProfile(decodeTreeBytes(profile.ciphertext, MAX_ACCOUNT_PROFILE_BYTES), browser.vaultRootKey,
     { accountId: browser.accountId, epoch: profile.epoch, revision: profile.revision });
-  const list = await json<{ job: PseudonymJob | null; nextChangeAt: number | null }>(browser,
-    "/api/private/pseudonym-updates");
-  return { publicPseudonym: opened.publicPseudonym, nextChangeAt: list.nextChangeAt, job: list.job };
+  const list = await json<{ job: PseudonymJob | null }>(browser, "/api/private/pseudonym-updates");
+  return { publicPseudonym: opened.publicPseudonym, nextChangeAt: profile.nextChangeAt, job: list.job };
 }
 
 export async function cancelPseudonymUpdate(browser: PseudonymBrowser, jobId: string): Promise<void> {
@@ -192,19 +187,8 @@ export async function cancelPseudonymUpdate(browser: PseudonymBrowser, jobId: st
 
 /** Production adapter: device handles and Vault keys are loaded only in the browser. */
 async function productionBrowser(signal?: AbortSignal): Promise<PseudonymBrowser> {
-  const stateResponse = await fetch("/api/device/state", { cache: "no-store", signal });
-  if (!stateResponse.ok) throw new Error("Device state unavailable");
-  const state = await stateResponse.json() as { accountId: string; deviceId: string };
-  const device = await getDevice(state.accountId);
-  if (!device || device.deviceId !== state.deviceId) throw new Error("An enrolled device is required");
-  const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
-  if (!response.ok) throw new Error("Private access unavailable");
-  const boot = await response.json() as { enrollmentEnvelope: string };
-  const vaultRootKey = await openDeviceEnrollmentEnvelope(decodeTreeBytes(boot.enrollmentEnvelope, MAX_COMMENT_KEY_ENVELOPE_BYTES),
-    device.transportKeyPair, { purpose: "device-enrollment", vaultId: state.accountId, objectId: state.deviceId,
-      keyId: state.deviceId, keyEpoch: 1, revision: 1, recipientId: state.deviceId });
-  return { accountId: state.accountId, deviceId: state.deviceId, vaultRootKey,
-    transportKeyPair: device.transportKeyPair,
+  const browser = await loadPrivateBrowser(signal);
+  return { ...browser,
     request: (path, method = "POST", body) => privateRequest(path,
       { method, signal, ...(body ? { body: JSON.stringify(body) } : {}) }) };
 }

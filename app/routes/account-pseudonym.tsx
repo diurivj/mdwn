@@ -112,6 +112,7 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
       </fetcher.Form>
       <p className="mt-3 text-sm">The change updates every encrypted attribution this Account can currently rewrite in one exclusive operation: all its Comment attributions across every thread, and its Publication declarations on active links. Existing views keep the old pseudonym until the whole update commits.</p>
       <p className="mt-3 text-sm">Cached copies and screenshots cannot be changed.</p>
+      <p className="mt-3 text-sm">Threads or Publications you can no longer open keep the label their readers already have, because this Account no longer holds a key for them.</p>
     </section>}
 
     {!busy && fetcher.data?.state === "complete" && <p role="status" className="mt-6">Your Public pseudonym was updated everywhere it can be changed.</p>}

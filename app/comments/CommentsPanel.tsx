@@ -4,6 +4,7 @@ import {
   CommentsChangedError,
   CommentsNotFoundError,
   CommentsSealedError,
+  PseudonymUpdatePendingError,
   createPrivateComment,
   createPrivateThread,
   deletePrivateComment,
@@ -117,6 +118,7 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       if (controller.signal.aborted) return;
       if (error instanceof CommentsChangedError) setMessage("Comments changed on another device. Reopen this File.");
       else if (error instanceof CommentsSealedError) setMessage("Secure access must finish updating before comments can change.");
+      else if (error instanceof PseudonymUpdatePendingError) setMessage("Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before adding a comment.");
       else if (error instanceof CommentsNotFoundError) setMessage("This comment is no longer available.");
       else setMessage("The change could not be confirmed. Try again.");
     } finally {

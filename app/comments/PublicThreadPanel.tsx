@@ -13,6 +13,7 @@ import {
   PublicCommentsLimitedError,
   PublicCommentsNotFoundError,
   PublicCommentsPreparingError,
+  PublicCommentsPseudonymPendingError,
   PublicCommentsSealedError,
   PublicCommentsSignInError,
   type FilePublicComments,
@@ -87,6 +88,7 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
       if (controller.signal.aborted) return;
       if (error instanceof PublicCommentsChangedError) setMessage("Comments changed on another device. Reopen this File.");
       else if (error instanceof PublicCommentsSealedError) setMessage("Secure access must finish updating before comments can change.");
+      else if (error instanceof PublicCommentsPseudonymPendingError) setMessage("Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before adding a comment.");
       else if (error instanceof PublicCommentsNotFoundError) setMessage("This comment is no longer available.");
       else if (error instanceof PublicCommentsLimitedError) setMessage("You’ve reached the comment limit for now. Try again later.");
       else if (error instanceof PublicCommentsSignInError) setMessage("This browser can’t post comments right now.");

@@ -118,11 +118,13 @@ change after signup is immediate because signup leaves `pseudonym_changed_at`
 While a job is pending, every mutation that would mint a new attribution context
 is refused with `409 pseudonym_update_pending` before any counter or proof is
 consumed: creating a Private or Public Comment and writing a Publication
-declaration (including self-selection by the Owner). Comment edits and hard
-deletions, key rotation, hard deletion, export, and session operations stay
-available. The block is per Account: a Collaborator's Comments on a shared File
-are unaffected. The UI keeps the workspace path visible but its own new
-Comments wait for the job to commit or be cancelled.
+declaration (including self-selection by the Owner). The workspace composer
+names the pending update and points at the Public pseudonym page instead of a
+generic conflict. Comment edits and hard deletions, key rotation, hard
+deletion, export, and session operations stay available. The block is per
+Account: a Collaborator's Comments on a shared File are unaffected. The UI keeps
+the workspace path visible but its own new Comments wait for the job to commit
+or be cancelled.
 
 ## Trust limits
 
@@ -139,7 +141,8 @@ browser driver against migrated D1: an Owner's Private thread attribution, a
 Public epoch attribution read back through the anonymous link wrapper, and an
 owner-authored Publication declaration move from all-old to all-new together; a
 Collaborator's update resumes through its signed Grant envelope and leaves the
-Owner's rows untouched; staged pages persist across an interruption; malformed
+Owner's rows untouched; staged pages persist across an interruption and a
+second enrolled device, with its own Grant envelope, finishes the job; malformed
 or stale staging is rejected; cancel consumes no cooldown; idempotent start
 retries do not create a second job; and the pending job blocks only the changing
 Account's new attribution contexts. `e2e/pseudonym-update.spec.ts` authors a

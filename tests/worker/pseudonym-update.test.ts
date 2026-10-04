@@ -26,8 +26,10 @@ import {
 import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import {
+  addSharingDevice,
   grant, invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild, type SharingAccount,
 } from "./sharing-fixtures";
+import { seedNormalSession } from "./auth-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
@@ -108,8 +110,21 @@ async function seedProfile(account: SharingAccount, pseudonym: string,
 
 function pseudonymBrowser(account: SharingAccount, vaultRootKey: Uint8Array<ArrayBuffer>): PseudonymBrowser {
   return { accountId: account.accountId, deviceId: account.deviceId, vaultRootKey,
+    assertionKey: account.assertion.privateKey,
     transportKeyPair: account.transport,
     request: (path, method = "POST", body) => sharingRequest(account, path, method, body) };
+}
+
+/** A second enrolled device of the same Account, with its own bound Session. */
+async function secondDevice(account: SharingAccount): Promise<SharingAccount> {
+  const extra = await addSharingDevice(account);
+  const credential = await env.DB.prepare("SELECT credential_id FROM passkeys WHERE account_id = ? LIMIT 1")
+    .bind(account.accountId).first<{ credential_id: string }>();
+  if (!credential) throw new Error("passkey missing");
+  const session = await seedNormalSession({ accountId: account.accountId, credentialIds: [credential.credential_id] });
+  await env.DB.prepare("UPDATE sessions SET device_id = ? WHERE id = ?").bind(extra.deviceId, session.id).run();
+  return { ...account, deviceId: extra.deviceId, transport: extra.transport, assertion: extra.assertion,
+    session, registryEpoch: account.registryEpoch };
 }
 
 async function attributionState(authorId: string, thread: ThreadFixture): Promise<{ pseudonym: string; revision: number }> {
@@ -313,6 +328,33 @@ it("resumes a collaborator's interrupted update and re-seals through the grant e
   // The Owner's own attribution is untouched by another Account's update.
   expect((await env.DB.prepare("SELECT count(*) AS n FROM thread_attributions WHERE thread_id = ? AND author_id = ?")
     .bind(thread.threadId, owner.accountId).first())).toEqual({ n: 0 });
+});
+
+it("resumes an interrupted update from a second enrolled device", async () => {
+  const owner = await sharingAccount(), collaborator = await sharingAccount();
+  // The second device enrols before the Grant so both devices receive envelopes.
+  const second = await secondDevice(collaborator);
+  await seedProfile(owner, "Member Owner");
+  const collaboratorKey = await seedProfile(collaborator, "Member Interrupted");
+  const fileId = await treeChild(owner, owner.rootId, "file");
+  const thread = await createThread(owner, fileId, generateVaultRootKey());
+  await grantWithThread(owner, collaborator, fileId, thread);
+  const attribution = await sealedAttribution(owner.accountId, thread, "Member Interrupted");
+  const comment = await sealedComment(owner.accountId, thread, "Note");
+  expect((await sharingRequest(collaborator, `/api/private/comments/files/${fileId}/entries`, "POST",
+    commentPayload(thread, comment, attribution))).status).toBe(201);
+  // The first device starts the job and leaves before staging anything.
+  const sealed = await sealAccountProfile(collaboratorKey, { publicPseudonym: "Member Handover" },
+    { accountId: collaborator.accountId, epoch: 1, revision: 2 });
+  const jobId = opaqueId();
+  expect((await sharingRequest(collaborator, "/api/private/pseudonym-updates", "PUT", { jobId,
+    profile: { ciphertext: encodeTreeBytes(sealed.ciphertext), epoch: 1, revision: 2 } })).status).toBe(201);
+  expect((await attributionState(collaborator.accountId, thread)).pseudonym).toBe("Member Interrupted");
+  // The second enrolled device opens its own Grant envelope, stages and commits.
+  expect(await runPseudonymUpdate(jobId, pseudonymBrowser(second, collaboratorKey))).toBe(true);
+  const after = await attributionState(collaborator.accountId, thread);
+  expect(after.revision).toBe(2);
+  expect(after.pseudonym).toBe("Member Handover");
 });
 
 it("rejects malformed staging and can cancel a job without changing the pseudonym", async () => {

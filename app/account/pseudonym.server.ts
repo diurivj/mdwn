@@ -13,7 +13,7 @@ import {
   publicAttributionKeyContext,
   publicCommentEnvelope,
 } from "~/comments/public-content";
-import { accountProfileContext } from "~/crypto/account-profile";
+import { accountProfileContext, MAX_ACCOUNT_PROFILE_BYTES } from "~/crypto/account-profile";
 import { inspectEnvelope } from "~/crypto/enc-v1";
 import { HPKE_SUITE } from "~/crypto/enc-v1/format";
 import { createDb, sql } from "~/db/client.server";
@@ -58,7 +58,7 @@ const positiveEpoch = (value: unknown): value is number =>
 const positiveRevision = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 
-const PROFILE_CIPHERTEXT_BYTES = 4_096;
+const PROFILE_CIPHERTEXT_BYTES = MAX_ACCOUNT_PROFILE_BYTES;
 /** Contexts per staging page. One envelope read per thread context keeps a full
  * page inside D1 Free's per-invocation query budget. */
 const PSEUDONYM_PAGE = 20;
@@ -413,7 +413,7 @@ async function stepJob(env: Env, auth: AuthorizedDevice, jobId: string, value: u
       revision = (SELECT i.revision FROM pseudonym_update_items i WHERE i.job_id = ${jobId}
         AND i.kind = 'thread' AND i.record_id = thread_attributions.id),
       updated_at = ${now}
-    WHERE author_id = ${auth.accountId} AND EXISTS (SELECT 1 FROM pseudonym_update_items i
+    WHERE author_id = ${auth.accountId} AND revision + 1 = (SELECT i.revision FROM pseudonym_update_items i
       WHERE i.job_id = ${jobId} AND i.kind = 'thread' AND i.record_id = thread_attributions.id) AND ${marker}`,
     sql`UPDATE publication_authors SET
       ciphertext = (SELECT i.ciphertext FROM pseudonym_update_items i WHERE i.job_id = ${jobId}
@@ -421,7 +421,7 @@ async function stepJob(env: Env, auth: AuthorizedDevice, jobId: string, value: u
       revision = (SELECT i.revision FROM pseudonym_update_items i WHERE i.job_id = ${jobId}
         AND i.kind = 'publication' AND i.record_id = publication_authors.id),
       updated_at = ${now}
-    WHERE author_id = ${auth.accountId} AND EXISTS (SELECT 1 FROM pseudonym_update_items i
+    WHERE author_id = ${auth.accountId} AND revision + 1 = (SELECT i.revision FROM pseudonym_update_items i
       WHERE i.job_id = ${jobId} AND i.kind = 'publication' AND i.record_id = publication_authors.id) AND ${marker}`,
     sql`UPDATE crypto_jobs SET state = 'complete', progress = ${staged?.count ?? 0}, updated_at = ${now}
       WHERE id = ${jobId} AND ${marker}`,

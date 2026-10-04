@@ -23,6 +23,7 @@
     "app/device/store.ts",
     "app/device/proof.ts",
     "app/device/private-client.ts",
+    "app/device/private-browser.ts",
     "app/device/owned-provision-client.ts",
     "app/signup/protocol.ts",
     "app/namespace-v1/**/*.ts",

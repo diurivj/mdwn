@@ -25,6 +25,9 @@ export class CommentsNotFoundError extends Error {
 export class CommentsSealedError extends Error {
   constructor() { super("key_rotation_required"); }
 }
+export class PseudonymUpdatePendingError extends Error {
+  constructor() { super("pseudonym_update_pending"); }
+}
 
 export type CommentView = {
   id: string; authorId: string; sequence: number; revision: number;
@@ -205,6 +208,7 @@ export async function createPrivateComment(access: RootAccess, thread: PrivateCo
   if (response.status === 409) {
     const body = await response.json() as { error?: string };
     if (body.error === "key_rotation_required") throw new CommentsSealedError();
+    if (body.error === "pseudonym_update_pending") throw new PseudonymUpdatePendingError();
     throw new CommentsChangedError();
   }
   if (response.status === 404) throw new CommentsNotFoundError();

@@ -33,6 +33,9 @@ export class PublicCommentsNotFoundError extends Error {
 export class PublicCommentsSealedError extends Error {
   constructor() { super("key_rotation_required"); }
 }
+export class PublicCommentsPseudonymPendingError extends Error {
+  constructor() { super("pseudonym_update_pending"); }
+}
 export class PublicCommentsLimitedError extends Error {
   constructor() { super("rate_limited"); }
 }
@@ -232,7 +235,11 @@ async function seal(input: { capability: Uint8Array; publicationId: string; capa
 
 function mutationError(status: number, error?: string): never {
   if (status === 404) throw new PublicCommentsNotFoundError();
-  if (status === 409) throw error === "key_rotation_required" ? new PublicCommentsSealedError() : new PublicCommentsChangedError();
+  if (status === 409) {
+    if (error === "key_rotation_required") throw new PublicCommentsSealedError();
+    if (error === "pseudonym_update_pending") throw new PublicCommentsPseudonymPendingError();
+    throw new PublicCommentsChangedError();
+  }
   if (status === 429) throw new PublicCommentsLimitedError();
   throw new Error("Comment could not be saved");
 }
