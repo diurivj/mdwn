@@ -24,14 +24,20 @@ import { spawnSync } from "node:child_process";
 const CI_NODE_MAJOR = 24; // actions/setup-node in ci.yml
 const wip = process.argv.includes("--wip");
 
+/** @type {Array<{ name: string, command: string, args: string[], browser?: boolean }>} */
 const STEPS = [
-  ["Typecheck", "npm", ["run", "typecheck"]],
-  ["Unicode namespace data drift check", "npm", ["run", "check:namespace"]],
-  ["Unit and Workers tests", "npm", ["test"]],
-  ["Production build", "npm", ["run", "build"]],
-  ["D1 migration smoke test (fresh local D1)", "npm", ["run", "db:smoke"]],
-  ["Secret-leak check on client bundle", "npm", ["run", "check:secrets"]],
-  ["Browser tests (chromium, firefox, webkit)", "npx", ["playwright", "test", "--forbid-only"], { browser: true }],
+  { name: "Typecheck", command: "npm", args: ["run", "typecheck"] },
+  { name: "Unicode namespace data drift check", command: "npm", args: ["run", "check:namespace"] },
+  { name: "Unit and Workers tests", command: "npm", args: ["test"] },
+  { name: "Production build", command: "npm", args: ["run", "build"] },
+  { name: "D1 migration smoke test (fresh local D1)", command: "npm", args: ["run", "db:smoke"] },
+  { name: "Secret-leak check on client bundle", command: "npm", args: ["run", "check:secrets"] },
+  {
+    name: "Browser tests (chromium, firefox, webkit)",
+    command: "npx",
+    args: ["playwright", "test", "--forbid-only"],
+    browser: true,
+  },
 ];
 
 /** @param {string[]} args */
@@ -75,10 +81,11 @@ if (before.length > 0 && !wip) {
 
 /** @type {Array<[string, number]>} */
 const timings = [];
-for (const [name, command, args, options] of STEPS) {
+for (const { name, command, args, browser } of STEPS) {
   console.log(`\n▶ ${name}`);
+  /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, CI: "true" };
-  if (options?.browser) delete env.CI;
+  if (browser) delete env.CI;
   const started = Date.now();
   const result = spawnSync(command, args, { stdio: "inherit", env });
   timings.push([name, Date.now() - started]);
