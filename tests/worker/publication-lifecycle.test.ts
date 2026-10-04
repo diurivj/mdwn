@@ -41,7 +41,7 @@ type Epoch = { threadId: string; epochId: string; capabilityId: string; capabili
   audience: "public" | "collaborators_only" };
 
 type Publication = { publicationId: string; linkId: string; linkKey: Awaited<ReturnType<typeof createPublicationKeyPair>>;
-  fragment: string; epochs: Epoch[] };
+  fragment: string; declarationId: string | null; epochs: Epoch[] };
 
 /** A real first audience epoch with the Owner recovery envelope and link wrapper. */
 async function audienceEpoch(publicationId: string, linkId: string,
@@ -69,14 +69,17 @@ async function publish(owner: SharingAccount, fileId: string, options: {
   const epoch = await audienceEpoch(publicationId, linkId, linkKey, owner, options.audience ?? "public", opaqueId());
   const ciphertext = await sealPublicRepresentation({ publicationId, linkId, publicKey: linkKey.publicKey, revision: 1 },
     publicPresentation(options.markdown ?? "# Public body"));
+  const declarationId = options.pseudonym ? newPublicationIdentifier() : null;
+  const author = options.pseudonym && declarationId ? { declarationId, ciphertext: encodeTreeBytes(await sealAuthorDeclaration(
+    { publicationId, linkId, publicKey: linkKey.publicKey, declarationId, revision: 1 }, options.pseudonym)) } : null;
   const response = await sharingRequest(owner, `/api/private/publications/files/${fileId}`, "PUT", {
     publicationId, linkId, publicKey: encodeTreeBytes(linkKey.publicKey),
     expectedRevision: current.revision, expectedRepresentationId: current.representationId,
-    representation: { ciphertext: encodeTreeBytes(ciphertext) }, author: null,
+    representation: { ciphertext: encodeTreeBytes(ciphertext) }, author,
     comments: epoch.body,
   });
   if (response.status !== 201) throw new Error(`publish failed: ${response.status} ${await response.text()}`);
-  return { publicationId, linkId, linkKey, fragment: formatPublicationFragment(linkKey.privateKey),
+  return { publicationId, linkId, linkKey, fragment: formatPublicationFragment(linkKey.privateKey), declarationId,
     epochs: [{ threadId: epoch.threadId, epochId: epoch.epochId, capabilityId: epoch.capabilityId,
       capability: epoch.capability, audience: epoch.audience }] };
 }
@@ -204,9 +207,10 @@ describe("link rotation", () => {
   it("replaces the path in one transaction, keeping the Publication, representation and Comments", async () => {
     const owner = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
-    const publication = await publish(owner, fileId, { markdown: "# Public body" });
+    const publication = await publish(owner, fileId, { markdown: "# Public body", pseudonym: "Member Owner" });
     await comment(owner, fileId, publication, "Comment before rotation");
     const before = await fileView(owner, fileId);
+    expect(((await (await readAnonymous(publication.linkId)).json()) as Anonymous).authors).toHaveLength(1);
     const rotation = await rotate(owner, fileId, publication, "# Public body");
     const response = await sharingRequest(owner, `/api/private/publications/files/${fileId}/link`, "PUT", rotation.body);
     expect(response.status).toBe(200);
@@ -233,6 +237,18 @@ describe("link rotation", () => {
     expect(await notFoundShape(retired)).toEqual(await notFoundShape(unknown));
     await openAnonymous(rotation.linkId, formatPublicationFragment(rotation.linkKey.privateKey), "# Public body",
       ["Comment before rotation"]);
+    // The retired link's author declaration is never served for the new link;
+    // the author's own device re-declares when it next sees the File.
+    const rotatedView = await fileView(owner, fileId);
+    expect(rotatedView.publication!.declaration).toMatchObject({ declarationId: publication.declarationId,
+      current: false, revision: 1 });
+    expect(((await (await readAnonymous(rotation.linkId)).json()) as Anonymous).authors).toEqual([]);
+    await sharingRequest(owner, `/api/private/publications/files/${fileId}/authors/${publication.declarationId}/declaration`,
+      "PUT", { publicationId: publication.publicationId, linkId: rotation.linkId, revision: 2,
+        ciphertext: encodeTreeBytes(await sealAuthorDeclaration({ publicationId: publication.publicationId,
+          linkId: rotation.linkId, publicKey: rotation.linkKey.publicKey, declarationId: publication.declarationId!,
+          revision: 2 }, "Member Owner")) });
+    expect(((await (await readAnonymous(rotation.linkId)).json()) as Anonymous).authors).toHaveLength(1);
     const state = await panelState(owner, fileId);
     expect(state.publication).toMatchObject({ publicationId: publication.publicationId, state: "active",
       linkId: rotation.linkId });
@@ -451,6 +467,7 @@ describe("unpublish teardown", () => {
     // A non-Owner can neither read progress nor resume the deletion.
     expect((await sharingRequest(collaborator, `/api/private/publications/files/${fileId}/teardown`, "POST")).status).toBe(404);
     expect((await sharingRequest(stranger, `/api/private/publications/files/${fileId}/teardown`, "POST")).status).toBe(404);
+    expect(await panelState(collaborator, fileId)).toMatchObject({ isOwner: false, commentCount: 0, teardown: null });
     expect(await count("comments", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(201);
 
     const first = await sharingRequest(owner, `/api/private/publications/files/${fileId}/teardown`, "POST");

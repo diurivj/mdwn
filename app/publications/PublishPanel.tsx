@@ -21,7 +21,7 @@ const messages: Record<PublicationError["code"], string> = {
   "author-limit": "This Publication already credits the maximum number of authors.",
   "link-required": "Paste the complete public link (including the part after #) to enable public comments.",
   "pseudonym-pending": "Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before changing authors.",
-  "rotation-required": "Secure access must finish updating before the comment audience can change.",
+  "rotation-required": "Secure access must finish updating before the Public link or comment audience can change.",
   unavailable: "The change could not be confirmed. Try again.",
 };
 
@@ -58,6 +58,11 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
       if (!signal.aborted) setPanel({ status: "ready", state });
     } catch { if (!signal.aborted) setPanel({ status: "failed" }); }
   }, [fileId]);
+
+  // A failed or superseded attempt must never be shown as the active link. The
+  // map is keyed by path identifier so a rotation keeps both candidates.
+  const completeLinkFor = useCallback((value: { linkId?: string | null } | null | undefined) =>
+    value?.linkId ? links.get(value.linkId)?.url ?? null : null, [links]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -112,18 +117,17 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
   async function changeAudience(next: CommentAudience, signal: AbortSignal) {
     const file = await loadFile(accessRef.current, fileId, parentKey!, signal);
     if (!file.publication || file.publication.publicationId !== publication?.publicationId) throw new PublicationError("changed");
-    const completeLink = links.get(file.publication.linkId)?.url ?? linkInput.trim() ?? "";
+    const link = completeLinkFor(file.publication) ?? linkInput.trim() ?? "";
     await changeCommentAudience(accessRef.current, fileId, {
       publicationId: file.publication.publicationId, linkId: file.publication.linkId,
       publicKey: file.publication.publicKey, expectedEpochId: panel.status === "ready" ? panel.state.comments?.epochId ?? null : null,
       threadId: panel.status === "ready" ? panel.state.comments?.threadId ?? null : null,
-    }, next, completeLink || null, signal);
+    }, next, link || null, signal);
     setLinkInput("");
   }
 
   // A failed or superseded attempt must never be shown as the active link.
-  const completeLink = panel.status === "ready" && panel.state.publication
-    ? panel.state.publication.linkId ? links.get(panel.state.publication.linkId)?.url ?? null : null : null;
+  const completeLink = panel.status === "ready" ? completeLinkFor(panel.state.publication) : null;
   async function copy() {
     if (!completeLink) return;
     try { await navigator.clipboard.writeText(completeLink); setCopied("copied"); }
@@ -171,7 +175,7 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
         <h3 className="text-sm font-medium">Comments</h3>
         <p className="text-sm text-stone-600">Audience: <span className="font-medium text-stone-900">
           {state.comments ? state.comments.audience === "public" ? "Public" : "Collaborators only" : "Not set up"}</span></p>
-        {state.comments?.audience !== "public" && !(publication.linkId && links.get(publication.linkId)) && <label className="mt-1 block text-sm">
+        {state.comments?.audience !== "public" && !completeLink && <label className="mt-1 block text-sm">
           Complete public link
           <input value={linkInput} disabled={busy} onChange={(event) => setLinkInput(event.target.value)}
             className="mt-1 block w-full rounded border border-stone-300 p-1 font-mono text-xs"
@@ -239,8 +243,12 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
         </div> : <>
           <p className="text-sm text-stone-600">Unpublishing is permanent: it seals the link immediately and deletes the Public
             representation and every Public Comment.</p>
-          <button type="button" disabled={busy} onClick={() => setConfirming(true)}
-            className="mt-2 rounded border px-3 py-1 text-sm">Unpublish…</button>
+          <button type="button" disabled={busy} onClick={() => {
+            setConfirming(true);
+            // Refresh the current opaque count so the confirmation is honest.
+            const controller = lifetime.current;
+            if (controller && !controller.signal.aborted) void reload(controller.signal);
+          }} className="mt-2 rounded border px-3 py-1 text-sm">Unpublish…</button>
         </>}
       </div>
     </> : <>

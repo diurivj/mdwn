@@ -32,7 +32,13 @@ const notFound = () => failure("not_found", 404);
 const invalid = () => failure("invalid_publication_request", 400);
 const denied = () => failure("device_proof_required", 403);
 const publicationChanged = () => failure("publication_changed", 409);
-const sealed = () => failure("key_rotation_required", 409);
+const rotationRequired = () => failure("key_rotation_required", 409);
+
+/** Public Comments of one Publication's single Public thread. */
+function publicCommentCount(publicationId: SQL): SQL {
+  return sql`(SELECT count(*) FROM comments c JOIN comment_threads ct ON ct.id = c.thread_id
+    WHERE ct.publication_id = ${publicationId} AND ct.purpose = 'public')`;
+}
 
 const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
   Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -58,8 +64,7 @@ type PublicationState = {
 async function publicationState(env: Env, auth: AuthorizedDevice, fileId: string): Promise<PublicationState | null> {
   return (await createDb(env.DB).get<PublicationState>(sql`
     SELECT p.id, p.state, p.created_at, l.id AS link_id, l.public_key,
-      (SELECT count(*) FROM comments c JOIN comment_threads ct ON ct.id = c.thread_id
-        WHERE ct.publication_id = p.id AND ct.purpose = 'public') AS comment_count,
+      ${publicCommentCount(sql`p.id`)} AS comment_count,
       (SELECT td.comment_total FROM publication_teardowns td WHERE td.publication_id = p.id) AS teardown_total
     FROM publications p LEFT JOIN publication_links l ON l.id = p.current_link_id AND l.publication_id = p.id
     WHERE ${filePublication(fileId)} AND ${accessPredicate(auth, fileId, "read")}`)) ?? null;
@@ -121,9 +126,10 @@ async function readPublication(env: Env, auth: AuthorizedDevice, fileId: string)
         self: author.author_id === auth.accountId, declared: Boolean(author.declared) })) } : null,
     comments: comments ? { threadId: comments.threadId, epochId: comments.epochId, audience: comments.audience } : null,
     // The confirmation copy states the current opaque count; a sealed teardown
-    // reports its pinned total and live remaining count for progress.
-    commentCount: publication?.comment_count ?? 0,
-    teardown: publication && publication.state === "deleting"
+    // reports its pinned total and live remaining count for progress. Progress
+    // is Owner-only: a Collaborator never learns how many Comments remain.
+    commentCount: owner ? publication?.comment_count ?? 0 : 0,
+    teardown: owner && publication && publication.state === "deleting"
       ? { commentTotal: publication.teardown_total ?? 0, commentsRemaining: publication.comment_count } : null,
     requests: requests.map((request) => ({ requestId: request.id, own: request.requester_id === auth.accountId,
       createdAt: request.created_at })),
@@ -548,7 +554,7 @@ async function rotatePublication(request: Request, env: Env, auth: AuthorizedDev
         epoch.wrapper_link !== input.expectedLinkId) return publicationChanged();
   }
   if (submitted.size !== expected.length) return publicationChanged();
-  if (await db.get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return sealed();
+  if (await db.get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return rotationRequired();
   const quota = await creationQuota(request, env, auth);
   if (quota) return quota;
   const now = Date.now(), representationId = newOpaqueId();
@@ -611,8 +617,7 @@ async function unpublishPublication(env: Env, auth: AuthorizedDevice, fileId: st
         AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
     (marker) => [
       sql`INSERT INTO publication_teardowns (publication_id, owner_id, comment_total, created_at)
-        SELECT p.id, p.owner_id, (SELECT count(*) FROM comments c JOIN comment_threads t ON t.id = c.thread_id
-          WHERE t.publication_id = p.id AND t.purpose = 'public'), ${now}
+        SELECT p.id, p.owner_id, ${publicCommentCount(sql`p.id`)}, ${now}
         FROM publications p WHERE p.file_id = ${fileId} AND p.state = 'deleting'
           AND p.owner_id = ${auth.accountId} AND ${marker}`,
       // Wrappers are bound to the retired link and can never be served again.
@@ -624,12 +629,11 @@ async function unpublishPublication(env: Env, auth: AuthorizedDevice, fileId: st
           AND p.owner_id = ${auth.accountId}) AND ${marker}`,
     ], { deferForeignKeys: true });
   } catch { committed = false; }
-  const sealed = await db.get<{ id: string; comment_total: number }>(sql`
+  const existing = await db.get<{ id: string; comment_total: number }>(sql`
     SELECT p.id, t.comment_total FROM publications p JOIN publication_teardowns t ON t.publication_id = p.id
     WHERE p.file_id = ${fileId} AND p.state = 'deleting' AND p.owner_id = ${auth.accountId}
       AND ${accessPredicate(auth, fileId, "owner")}`);
-  if (sealed) return Response.json({ publicationId: sealed.id, commentTotal: sealed.comment_total,
-    alreadyUnpublished: !committed }, { headers });
+  if (existing) return Response.json({ publicationId: existing.id, commentTotal: existing.comment_total }, { headers });
   if (!committed && await proofSpent(env, auth)) return denied();
   return notFound();
 }
@@ -682,8 +686,7 @@ async function teardownPublication(env: Env, auth: AuthorizedDevice, fileId: str
   const publication = await db.get<TeardownState>(sql`
     SELECT p.id, t.comment_total,
       (SELECT ct.id FROM comment_threads ct WHERE ct.publication_id = p.id AND ct.purpose = 'public') AS thread_id,
-      (SELECT count(*) FROM comments c JOIN comment_threads ct ON ct.id = c.thread_id
-        WHERE ct.publication_id = p.id AND ct.purpose = 'public') AS comments_remaining
+      ${publicCommentCount(sql`p.id`)} AS comments_remaining
     FROM publications p JOIN publication_teardowns t ON t.publication_id = p.id
     WHERE p.file_id = ${fileId} AND p.state = 'deleting' AND p.owner_id = ${auth.accountId}
       AND ${accessPredicate(auth, fileId, "owner")}`);

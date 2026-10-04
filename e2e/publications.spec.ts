@@ -265,6 +265,23 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
   await expect(ownerComments.locator("li").filter({ hasText: "Survives rotation" })).toBeVisible();
   await ownerTab.close();
 
+  // Close and reopen the audience so a second, retained public epoch exists:
+  // rotation must rewrap every public epoch, not only the current one.
+  await panel.getByRole("button", { name: "Make comments collaborators only" }).click();
+  await expect(panel.getByText("Audience: Collaborators only", { exact: false })).toBeVisible();
+  await panel.getByRole("button", { name: "Make comments public" }).click();
+  await expect(panel.getByText("Audience: Public", { exact: false })).toBeVisible();
+  const secondTab = await page.context().newPage();
+  await secondTab.goto(first);
+  const secondComments = secondTab.getByRole("region", { name: "Public comments", exact: true });
+  await secondComments.getByLabel("Add a public comment").fill("In the second epoch");
+  const postedSecond = secondTab.waitForResponse((response) => response.request().method() === "POST" &&
+    response.url().includes("/api/private/comments/links/") && response.status() === 201);
+  await secondComments.getByRole("button", { name: "Comment", exact: true }).click();
+  await postedSecond;
+  await expect(secondComments.getByLabel("Add a public comment")).toHaveValue("");
+  await secondTab.close();
+
   await panel.getByRole("button", { name: "Rotate link" }).click();
   await expect.poll(() => panel.getByLabel("Public link").inputValue()).not.toBe(first);
   const rotated = await panel.getByLabel("Public link").inputValue();
@@ -272,7 +289,7 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
   expect(new URL(rotated).pathname).not.toBe(new URL(first).pathname);
 
   // The retired path is indistinguishable from unknown; the new path serves
-  // the same document and Comment.
+  // the same document and both public epochs' Comments.
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   try {
     const reader = await context.newPage();
@@ -283,6 +300,7 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
     await expect(article.getByRole("heading", { name: "Diet plan", level: 1 })).toBeVisible();
     const comments = reader.getByRole("region", { name: "Public comments", exact: true });
     await expect(comments.getByText("Survives rotation")).toBeVisible();
+    await expect(comments.getByText("In the second epoch")).toBeVisible();
   } finally { await context.close(); }
 });
 
