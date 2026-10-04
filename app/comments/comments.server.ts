@@ -12,7 +12,7 @@ import {
   MAX_COMMENTS_PAGE,
 } from "~/comments/content";
 import { commentEnvelopeWire, readCommentEnvelope, type CommentEnvelope } from "~/comments/envelopes.server";
-import { changePublicAudience, createPublicComment, deletePublicComment, editPublicComment, readFilePublicComments } from "~/comments/public.server";
+import { changePublicAudience, createPublicComment, deletePublicComment, editPublicComment, readFilePublicComments, reportPublicComment } from "~/comments/public.server";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { isPublicationIdentifier } from "~/publications/capability";
 import { createDb, sql } from "~/db/client.server";
@@ -342,6 +342,7 @@ export async function commentsAction(request: Request, env: Env): Promise<Respon
   const publicEntry = /^\/api\/private\/comments\/files\/([0-9a-f-]+)\/public\/entries\/([0-9a-f-]+)$/.exec(path);
   const linkEntries = /^\/api\/private\/comments\/links\/([A-Za-z0-9_-]{43})\/entries$/.exec(path);
   const linkEntry = /^\/api\/private\/comments\/links\/([A-Za-z0-9_-]{43})\/entries\/([0-9a-f-]+)$/.exec(path);
+  const reports = /^\/api\/private\/comments\/reports$/.exec(path);
   const allowed = (collection && (request.method === "POST" || request.method === "PUT")) ||
     (entries && request.method === "POST") ||
     (entry && (request.method === "PATCH" || request.method === "DELETE")) ||
@@ -349,7 +350,8 @@ export async function commentsAction(request: Request, env: Env): Promise<Respon
     (publicEntries && request.method === "POST") ||
     (publicEntry && (request.method === "PATCH" || request.method === "DELETE")) ||
     (linkEntries && request.method === "POST") ||
-    (linkEntry && (request.method === "PATCH" || request.method === "DELETE"));
+    (linkEntry && (request.method === "PATCH" || request.method === "DELETE")) ||
+    (reports && request.method === "POST");
   if (!allowed) return notFound();
   const fileMatch = collection ?? entries ?? entry ?? publicThread ?? publicEntries ?? publicEntry;
   const fileId = fileMatch?.[1] ?? null;
@@ -383,6 +385,7 @@ export async function commentsAction(request: Request, env: Env): Promise<Respon
   catch { return denied(); }
   const auth = await authorizePrivateRequest(request, env, proof, raw);
   if (!auth) return denied();
+  if (reports) return reportPublicComment(request, env, auth, value);
   if (collection) return request.method === "PUT" ? createThread(env, auth, fileId!, value)
     : readComments(env, auth, fileId!, cursor, probe);
   if (entries) return createComment(env, auth, fileId!, value);

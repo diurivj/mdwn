@@ -121,4 +121,22 @@ describe("committed Drizzle migrations", () => {
     expect(sql).toContain("`public_key` blob NOT NULL");
     expect(sql).not.toMatch(/fragment|capability_key|private_key|secret|plaintext|title|markdown/i);
   });
+
+  it("adds category-only reports and timed suspensions without any content or request identifiers", () => {
+    const name = migrations.find((migration) => migration.startsWith("0024_"));
+    expect(name).toBeDefined();
+    const sql = readFileSync(join(DRIZZLE_DIR, name!), "utf8");
+    for (const table of ["public_comment_reports", "public_participation_suspensions"]) {
+      expect(sql).toContain(`CREATE TABLE \`${table}\``);
+    }
+    // One report per reporter and Comment, retained no longer than 30 days.
+    expect(sql).toContain("CREATE UNIQUE INDEX `public_comment_reports_reporter_comment_idx`");
+    expect(sql).toContain('CHECK("public_comment_reports"."category" IN (\'spam\', \'abuse\', \'other\'))');
+    expect(sql).toContain("ON DELETE cascade");
+    // A suspension is exactly Account, strike, fixed reason, start and expiry.
+    expect(sql).toContain("`strike_count` integer NOT NULL");
+    expect(sql).toContain("public_participation_suspensions_reason_valid");
+    expect(sql).toContain("public_participation_suspensions_bounded");
+    expect(sql).not.toMatch(/plaintext|body_ciphertext|capability|fragment|raw_ip|user_agent|full_url|cookie|session_token/i);
+  });
 });

@@ -9,6 +9,33 @@ export class PrivateAccessError extends Error {
   }
 }
 
+/**
+ * A fixed application policy denial returned by a private route. It stays an
+ * access error for every generic caller, but names the policy and its bounded
+ * metadata so a participating surface can explain the exact restriction (for
+ * example a Public-participation suspension) instead of a generic failure.
+ */
+export class PrivatePolicyError extends PrivateAccessError {
+  constructor(readonly policy: string, readonly detail: { readonly suspendedUntil: number | null }) {
+    super("denied");
+    this.name = "PrivatePolicyError";
+  }
+}
+
+/** Recognize only the fixed policy-denial body; every other 403 stays a
+ * device-proof denial. The response body is cloned, never consumed. */
+async function policyDenial(response: Response): Promise<PrivatePolicyError | null> {
+  try {
+    const body = await response.clone().json() as { error?: unknown; suspendedUntil?: unknown };
+    if (body.error !== "public_participation_suspended") return null;
+    const suspendedUntil = typeof body.suspendedUntil === "number" && Number.isSafeInteger(body.suspendedUntil)
+      && body.suspendedUntil > 0 ? body.suspendedUntil : null;
+    return new PrivatePolicyError(body.error, { suspendedUntil });
+  } catch {
+    return null;
+  }
+}
+
 type RegistryState = {
   accountId: string;
   deviceId: string | null;
@@ -85,7 +112,11 @@ export async function privateRequest(
       cache: "no-store", redirect: "error",
     });
     if (response.status === 401) throw new PrivateAccessError("signed-out");
-    if (response.status === 403) throw new PrivateAccessError("denied");
+    if (response.status === 403) {
+      const policy = await policyDenial(response);
+      if (policy) throw policy;
+      throw new PrivateAccessError("denied");
+    }
     return response;
   } catch (error) {
     if (error instanceof PrivateAccessError) throw error;

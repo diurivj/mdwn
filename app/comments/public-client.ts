@@ -1,9 +1,10 @@
 import { readPseudonym } from "~/account/profile-client";
 import { openVaultRecoveryEnvelope } from "~/crypto/vault";
-import { privateRequest, PrivateAccessError } from "~/device/private-client";
+import { privateRequest, PrivateAccessError, PrivatePolicyError } from "~/device/private-client";
 import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { openCommentKeyEnvelope, type CommentKeyContext } from "~/sharing/comment-keys";
+import type { ReportCategory } from "~/security/public-participation";
 import { openRoot, type RootAccess } from "~/tree/client";
 import { decodeTreeBytes } from "~/tree/wire";
 import { MAX_COMMENT_KEY_ENVELOPE_BYTES } from "./content";
@@ -44,6 +45,25 @@ export class PublicCommentsPreparingError extends Error {
 }
 export class PublicCommentsSignInError extends Error {
   constructor(readonly state: "signed-out" | "unprovisioned") { super("sign-in-required"); }
+}
+export class PublicCommentsSuspendedError extends Error {
+  constructor(readonly suspendedUntil: number | null) { super("public_participation_suspended"); }
+}
+
+/** A policy denial (a Public-participation suspension) is not a proof failure;
+ * the composer explains it with the fixed automatic end. */
+function policyDenial(error: unknown): never {
+  if (error instanceof PrivatePolicyError && error.policy === "public_participation_suspended") {
+    throw new PublicCommentsSuspendedError(error.detail.suspendedUntil);
+  }
+  throw error;
+}
+
+/** Proof-guarded File-route request whose policy denial maps to a suspension. */
+async function fileRequest(path: string,
+  init: { method: "POST" | "PATCH" | "DELETE"; body?: string; signal?: AbortSignal }): Promise<Response> {
+  try { return await privateRequest(path, init); }
+  catch (error) { return policyDenial(error); }
 }
 
 export type PublicEpoch = { epochId: string; ordinal: number; audience: "public" | "collaborators_only";
@@ -252,11 +272,19 @@ async function privateMutation(path: string, method: "POST" | "PATCH" | "DELETE"
     if (response.status === 403) throw new PublicCommentsSignInError("signed-out");
     mutationError(response.status, (await response.json() as { error?: string }).error);
   } catch (error) {
+    if (error instanceof PrivatePolicyError) policyDenial(error);
     if (error instanceof PrivateAccessError) {
       throw new PublicCommentsSignInError(error.state === "unprovisioned" ? "unprovisioned" : "signed-out");
     }
     throw error;
   }
+}
+
+/** Submit one category-only report for an opaque Public Comment ID. The report
+ * carries no text and grants no content access. */
+export async function reportPublicComment(commentId: string, category: ReportCategory,
+  signal?: AbortSignal): Promise<void> {
+  await privateMutation("/api/private/comments/reports", "POST", { commentId, category }, signal);
 }
 
 async function pseudonymFor(access: RootAccess, needed: boolean): Promise<string | null> {
@@ -405,7 +433,7 @@ export async function createFilePublicComment(access: RootAccess, thread: Public
   const pseudonym = await pseudonymFor(access, !thread.pseudonyms.has(thread.viewerAccountId ?? ""));
   const sealed = await seal({ capability: epoch.capability, publicationId: thread.publicationId,
     capabilityId: epoch.capabilityId, keyEpoch: epoch.capabilityEpoch, text, pseudonym });
-  const response = await privateRequest(fileEntryPath(thread), { method: "POST", signal, body: JSON.stringify({
+  const response = await fileRequest(fileEntryPath(thread), { method: "POST", signal, body: JSON.stringify({
     commentId: sealed.commentId, threadId: thread.threadId, epochId: epoch.epochId, capabilityId: epoch.capabilityId,
     capabilityEpoch: epoch.capabilityEpoch, bodyCiphertext: sealed.bodyCiphertext,
     contentKeyEnvelope: sealed.contentKeyEnvelope, attribution: sealed.attribution }) });
@@ -419,7 +447,7 @@ export async function editFilePublicComment(thread: PublicThreadView, comment: P
   const revision = comment.revision + 1;
   const sealed = await sealPublicCommentBody(epoch.capability, { publicationId: thread.publicationId,
     commentId: comment.id, capabilityId: epoch.capabilityId, keyEpoch: epoch.capabilityEpoch, revision, text });
-  const response = await privateRequest(fileEntryPath(thread, `/${comment.id}`), { method: "PATCH", signal,
+  const response = await fileRequest(fileEntryPath(thread, `/${comment.id}`), { method: "PATCH", signal,
     body: JSON.stringify({ threadId: thread.threadId, capabilityId: epoch.capabilityId,
       capabilityEpoch: epoch.capabilityEpoch, epochId: comment.epochId, expectedRevision: comment.revision,
       bodyCiphertext: sealed.bodyCiphertext, contentKeyEnvelope: sealed.contentKeyEnvelope }) });
@@ -429,7 +457,7 @@ export async function editFilePublicComment(thread: PublicThreadView, comment: P
 
 export async function deleteFilePublicComment(thread: PublicThreadView, comment: PublicComment, signal?: AbortSignal): Promise<void> {
   const epoch = epochOf(thread, comment.epochId);
-  const response = await privateRequest(fileEntryPath(thread, `/${comment.id}`), { method: "DELETE", signal,
+  const response = await fileRequest(fileEntryPath(thread, `/${comment.id}`), { method: "DELETE", signal,
     body: JSON.stringify({ threadId: thread.threadId, capabilityId: epoch.capabilityId,
       capabilityEpoch: epoch.capabilityEpoch, epochId: comment.epochId, expectedRevision: comment.revision }) });
   if (!response.ok) mutationError(response.status, (await response.json() as { error?: string }).error);

@@ -1,4 +1,4 @@
-# Comment threads (tickets 21 and 23)
+# Comment threads (tickets 21, 23, and 26)
 
 A File has exactly one **Private comment thread** for its Owner and every Account
 with current File-read access through an active Grant. Comment participation
@@ -76,6 +76,7 @@ enforces the 16,384-byte body and wrapper column bounds.
 | `POST /api/private/comments/links/:linkId/entries` | Signed-in link visitor creates in the current public epoch |
 | `PATCH /api/private/comments/links/:linkId/entries/:commentId` | Author-only edit through the active public link |
 | `DELETE /api/private/comments/links/:linkId/entries/:commentId` | Author or File-Owner hard deletion through the active public link |
+| `POST /api/private/comments/reports` | Category-only report for an opaque Public Comment ID; carries no content and grants no content access |
 | `GET /api/public/publications/:linkId` | Anonymous Public data plus the public-epoch page and wrappers |
 | `GET /api/public/publications/:linkId/comments?cursor=<sequence>` | Anonymous continuation page for public epochs |
 | `POST /api/private/profile` | The current encrypted Account profile for local pseudonym resolution |
@@ -148,7 +149,8 @@ threads, owned Comment recovery envelopes and rotation staging before the node.
   anonymously even by a past author. Author identity, Owner hard-delete, the
   2,000-character plain-text bound and the 50-Comment page apply to both
   threads. Public create and edit consume the `public_comment.mutate` counters
-  before acceptance (reports are ticket 26).
+  before acceptance; a suspended Account is refused before any counter is
+  consumed, and reports consume the separate `public_comment.report` limit.
 - The Public reader page renders only public epochs under the document, with no
   Private/Public selector. In Collaborators-only mode an unauthenticated reader
   receives **Sign in to see or add comments if you have access to this file** and
@@ -182,6 +184,38 @@ link wrapper to the replacement Publication capability in the same transaction
 that swaps the active link; the epoch capabilities and the device envelopes are
 untouched, and a Collaborators-only epoch has no wrapper to rotate.
 
+## Reports and Public-participation suspension (ticket 26)
+
+A signed-in Account may report one opaque Public Comment ID with one fixed
+category — `spam`, `abuse`, or `other` — through
+`POST /api/private/comments/reports`. A report conveys no plaintext and grants
+no content access: the reporter needs no fragment, capability, or thread read,
+and the stored row is only `(reporter Account, Comment ID, category,
+created_at, expires_at)`. The proof-guarded request consumes the
+`public_comment.report` limit (3 per Account per 24 hours) and is idempotent per
+reporter and Comment, so a lost-response retry adds nothing. Reports expire
+after 30 days and are purged by the same 15-minute Cron; deleting the Comment
+deletes its reports with it, so Owner or teardown hard deletion removes the
+signal too.
+
+Reports are operator-only pattern metadata, never evidence the service can
+read. File Owner hard deletion remains the primary unwanted-Comment control and
+is surfaced as such in the report control itself.
+
+Repeated technical abuse or a metadata-supported report pattern may trigger an
+operator-applied **Public-participation suspension**: the first lasts seven days
+and any later one 30 days, whether or not the earlier one expired. The suspended
+Account is refused Public Comment create and edit and Publication create/rotate
+with `403 { error: "public_participation_suspended", suspendedUntil }`. The
+check reads `expires_at` live, so a suspension stops applying automatically at
+its recorded end without any cleanup, and the operator can clear a mistaken
+record (see [serving and security](serving-and-security.md)), which also removes
+the escalation. Nothing else is blocked: private Files and Shares, export,
+recovery, ownership, Private Comments, Comment hard deletion, unpublishing and
+teardown, and session revocation stay available. The UI states only the fixed
+reason and automatic end; there is no appeal flow, content moderation, or
+account deletion.
+
 ## Verification seams
 
 `tests/worker/private-comments.test.ts` drives the signed API against real
@@ -196,7 +230,11 @@ denial, Private-thread absence and the revocation rotation of a current
 Collaborators-only epoch. `tests/worker/publication-lifecycle.test.ts` covers
 link rotation and the sealed, Owner-resumable teardown with bounded batches. `tests/comment-content.test.ts` and
 `tests/public-comment-content.test.ts` cover the browser envelope shapes, link
-wrappers and bounds. `e2e/private-comments.spec.ts` exercises the wide inspector
+wrappers and bounds. `tests/worker/public-abuse-response.test.ts` proves the
+report shape and limit, the suspension enforcement boundary (create, edit,
+create/rotate blocked; private read, hard deletion, unpublish/teardown and
+sign-out available), automatic expiry, repeat escalation, operator correction,
+and report retention. `e2e/private-comments.spec.ts` exercises the wide inspector
 and narrow Comments view, and `e2e/public-comments.spec.ts` posts from a public
 page and closes and reopens the audience in Chromium, Firefox and WebKit.
 

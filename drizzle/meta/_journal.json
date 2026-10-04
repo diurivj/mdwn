@@ -169,6 +169,13 @@
       "when": 1791093781128,
       "tag": "0023_majestic_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1791097029576,
+      "tag": "0024_eminent_stingray",
+      "breakpoints": true
     }
   ]
 }

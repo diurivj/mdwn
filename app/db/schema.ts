@@ -312,6 +312,80 @@ export const securityEvents = sqliteTable(
 export type RateLimitCounter = typeof rateLimitCounters.$inferSelect;
 export type SecurityEvent = typeof securityEvents.$inferSelect;
 
+/**
+ * Category-only Public Comment reports (ticket 26). One row names the
+ * reporter Account, the opaque Public Comment ID and one fixed category; it
+ * carries no content, capability, request identifier, network data or
+ * plaintext of any kind. Reports are bounded operator metadata and expire
+ * after 30 days; deleting the Comment removes its reports with it.
+ */
+export const publicCommentReports = sqliteTable(
+  "public_comment_reports",
+  {
+    id: text("id").primaryKey(),
+    reporterId: text("reporter_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "restrict" }),
+    commentId: text("comment_id")
+      .notNull()
+      .references(() => comments.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+    createdAt: integer("created_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("public_comment_reports_reporter_comment_idx").on(table.reporterId, table.commentId),
+    index("public_comment_reports_expiry_idx").on(table.expiresAt),
+    index("public_comment_reports_comment_idx").on(table.commentId, table.createdAt),
+    check(
+      "public_comment_reports_category_valid",
+      sql`${table.category} IN ('spam', 'abuse', 'other')`,
+    ),
+    check(
+      "public_comment_reports_retention_bounded",
+      sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + 2592000000`,
+    ),
+  ],
+);
+
+/**
+ * One Public-participation suspension per Account, applied by the operator for
+ * repeated technical abuse or a metadata-supported report pattern. It carries
+ * only the strike count, fixed reason, start and expiry. It is not a content
+ * moderation record, an account deletion, or a private-vault lockout: every
+ * private operation, hard deletion, unpublishing, recovery and session
+ * revocation stays available. Expiry is evaluated against `expires_at`, so a
+ * suspension automatically stops applying at its end time; the row is retained
+ * (and may be cleared by the operator) so a later offense is a 30-day repeat.
+ */
+export const publicParticipationSuspensions = sqliteTable(
+  "public_participation_suspensions",
+  {
+    accountId: text("account_id")
+      .primaryKey()
+      .references(() => accounts.id, { onDelete: "restrict" }),
+    strikeCount: integer("strike_count").notNull(),
+    reason: text("reason").notNull(),
+    startedAt: integer("started_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    check("public_participation_suspensions_strike_positive", sql`${table.strikeCount} >= 1`),
+    check(
+      "public_participation_suspensions_reason_valid",
+      sql`${table.reason} IN ('repeated_technical_abuse', 'report_pattern')`,
+    ),
+    check(
+      "public_participation_suspensions_bounded",
+      sql`${table.expiresAt} > ${table.startedAt} AND ${table.expiresAt} <= ${table.startedAt} + 2592000000`,
+    ),
+  ],
+);
+
+export type PublicCommentReport = typeof publicCommentReports.$inferSelect;
+export type PublicParticipationSuspensionRow = typeof publicParticipationSuspensions.$inferSelect;
+
 /** Signup's five-minute, one-use, random registration/PoW challenge. */
 export const registrationChallenges = sqliteTable("registration_challenges", {
   id: text("id").primaryKey(),

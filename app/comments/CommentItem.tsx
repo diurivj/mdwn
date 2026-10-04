@@ -1,4 +1,5 @@
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
+import type { ReactNode } from "react";
 
 /**
  * One displayed Comment, shared by the Private inspector and the authenticated
@@ -15,12 +16,14 @@ const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", tim
 const stamp = (value: number) => timeFormat.format(new Date(value));
 
 export function CommentItem({ comment, pseudonym, viewerAccountId, note, editing, deleting, busy, onEdit,
-  onEditText, onSubmitEdit, onCancelEdit, onDelete, onConfirmDelete, onCancelDelete }: {
+  onEditText, onSubmitEdit, onCancelEdit, onDelete, onConfirmDelete, onCancelDelete, reportControl }: {
   comment: CommentItemView; pseudonym: string | undefined; viewerAccountId: string | null; note?: string;
   editing: { id: string; text: string } | null; deleting: string | null; busy: boolean;
   onEdit: (comment: CommentItemView) => void; onEditText: (text: string) => void; onSubmitEdit: () => void;
   onCancelEdit: () => void; onDelete: (comment: CommentItemView) => void;
   onConfirmDelete: (comment: CommentItemView) => void; onCancelDelete: () => void;
+  /** Inline category-only report control; absent for surfaces that cannot report. */
+  reportControl?: ReactNode;
 }) {
   const edit = editing && editing.id === comment.id ? editing : null;
   return <li className="rounded border border-stone-200 p-3">
@@ -46,12 +49,13 @@ export function CommentItem({ comment, pseudonym, viewerAccountId, note, editing
       </div>
     </form> : <p className="mt-2 whitespace-pre-wrap break-words">
       {comment.text ?? <span className="text-rose-700">This comment couldn’t be decrypted on this device.</span>}</p>}
-    {(comment.canEdit || comment.canDelete) && !edit && <div className="mt-2 flex gap-2 text-sm">
+    {(comment.canEdit || comment.canDelete || reportControl) && !edit && <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
       {comment.canEdit && comment.text !== null && <button type="button" disabled={busy} onClick={() => onEdit(comment)}>Edit</button>}
       {comment.canDelete && (deleting === comment.id ? <>
         <button type="button" disabled={busy} className="text-rose-700" onClick={() => onConfirmDelete(comment)}>Confirm delete</button>
         <button type="button" disabled={busy} onClick={onCancelDelete}>Cancel</button>
       </> : <button type="button" disabled={busy} className="text-rose-700" onClick={() => onDelete(comment)}>Delete</button>)}
+      {reportControl}
     </div>}
   </li>;
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { publicParticipationSuspensionNotice } from "~/security/public-participation";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import {
   addAccountAuthor, addSelfAuthor, changeCommentAudience, continuePublicationTeardown, loadPublicationState, publishFile,
@@ -22,6 +23,7 @@ const messages: Record<PublicationError["code"], string> = {
   "link-required": "Paste the complete public link (including the part after #) to enable public comments.",
   "pseudonym-pending": "Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before changing authors.",
   "rotation-required": "Secure access must finish updating before the Public link or comment audience can change.",
+  suspended: "Your account can’t publish or rotate a public link right now because public participation is suspended.",
   unavailable: "The change could not be confirmed. Try again.",
 };
 
@@ -115,7 +117,9 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
       await reload(controller.signal);
     } catch (error) {
       if (controller.signal.aborted) return;
-      setMessage(error instanceof PublicationError ? messages[error.code] : messages.unavailable);
+      setMessage(error instanceof PublicationError
+        ? error.code === "suspended" ? publicParticipationSuspensionNotice(error.suspendedUntil) : messages[error.code]
+        : messages.unavailable);
       await reload(controller.signal);
     } finally { if (!controller.signal.aborted) setBusy(false); }
   }

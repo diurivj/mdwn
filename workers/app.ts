@@ -3,6 +3,7 @@ import { RouterContextProvider } from "react-router";
 import { envContext } from "~/context/env";
 import { purgeExpiredSignupProofs } from "~/device/proof.server";
 import { purgeExpiredAbuseRecords } from "~/security/abuse-control.server";
+import { purgeExpiredPublicCommentReports } from "~/security/public-participation.server";
 import { buildSecurityHeaders, DYNAMIC_CACHE_CONTROL, generateCspNonce } from "~/security/headers";
 import { cspNonceContext } from "~/security/nonce";
 import { purgeExpiredGrantDependents } from "~/sharing/grant-expiry.server";
@@ -49,6 +50,7 @@ const requestHandler = createRequestHandler<Env>({
 export default {
   async scheduled(_controller, env) {
     await purgeExpiredAbuseRecords(env.DB);
+    await purgeExpiredPublicCommentReports(env.DB);
     await purgeExpiredSignupProofs(env);
     await purgeExpiredGrantDependents(env);
   },

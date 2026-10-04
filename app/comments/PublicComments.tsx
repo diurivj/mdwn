@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { PublicPage } from "~/publications/public-client";
+import { publicParticipationSuspensionNotice } from "~/security/public-participation";
 import { CommentItem } from "./CommentItem";
+import { CommentReportControl } from "./CommentReportControl";
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
 import {
   deleteLinkPublicComment,
@@ -13,6 +15,7 @@ import {
   PublicCommentsNotFoundError,
   PublicCommentsSealedError,
   PublicCommentsSignInError,
+  PublicCommentsSuspendedError,
   type PublicComment,
   type PublicLinkComments,
   type PublicThreadView,
@@ -68,6 +71,8 @@ export function PublicComments({ page, linkId, onRefresh }: { page: ReadyPage; l
         : "Sign in to add a comment.");
     } else if (error instanceof PublicCommentsLimitedError) {
       setMessage("You’ve reached the comment limit for now. Try again later.");
+    } else if (error instanceof PublicCommentsSuspendedError) {
+      setMessage(publicParticipationSuspensionNotice(error.suspendedUntil));
     } else if (error instanceof PublicCommentsSealedError) {
       setMessage("Secure access must finish updating before comments can change.");
     } else if (error instanceof PublicCommentsChangedError || error instanceof PublicCommentsNotFoundError) {
@@ -93,6 +98,8 @@ export function PublicComments({ page, linkId, onRefresh }: { page: ReadyPage; l
       {thread.comments.map((comment) => <CommentItem key={comment.id} comment={comment}
         pseudonym={thread.pseudonyms.get(comment.authorId)} viewerAccountId={thread.viewerAccountId}
         editing={editing} deleting={deleting} busy={busy}
+        reportControl={thread.postingState === "ready" && comment.authorId !== thread.viewerAccountId
+          ? <CommentReportControl commentId={comment.id} /> : undefined}
         onEdit={(selected) => { setDeleting(null); setEditing({ id: selected.id, text: selected.text ?? "" }); }}
         onEditText={(text) => { if (editing) setEditing({ id: editing.id, text }); }}
         onSubmitEdit={() => { if (!editing) return; const edit = editing;
