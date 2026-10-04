@@ -42,17 +42,14 @@ function filePublication(fileId: string | SQL): SQL {
 }
 
 type PublicationState = {
-  id: string; owner_id: string; state: "active" | "deleting"; created_at: number;
-  link_id: string | null; public_key: ArrayBuffer | null; representation_id: string | null; revision: number | null;
+  id: string; state: "active" | "deleting"; created_at: number; link_id: string | null; public_key: ArrayBuffer | null;
 };
 
+/** The File's Publication and active link, re-deriving the actor's File-read access. */
 async function publicationState(env: Env, auth: AuthorizedDevice, fileId: string): Promise<PublicationState | null> {
   return (await createDb(env.DB).get<PublicationState>(sql`
-    SELECT p.id, p.owner_id, p.state, p.created_at, l.id AS link_id, l.public_key,
-      r.id AS representation_id, r.revision
-    FROM publications p
-    LEFT JOIN publication_links l ON l.id = p.current_link_id AND l.publication_id = p.id
-    LEFT JOIN public_representations r ON r.id = p.current_representation_id AND r.publication_id = p.id
+    SELECT p.id, p.state, p.created_at, l.id AS link_id, l.public_key
+    FROM publications p LEFT JOIN publication_links l ON l.id = p.current_link_id AND l.publication_id = p.id
     WHERE ${filePublication(fileId)} AND ${accessPredicate(auth, fileId, "read")}`)) ?? null;
 }
 
