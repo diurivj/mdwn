@@ -1,4 +1,16 @@
+import type { Locator } from "@playwright/test";
 import { installWorkspaceScript, test, expect } from "./workspace-fixture";
+
+async function pasteText(source: Locator, text: string, start: number, end: number) {
+  await source.evaluate((element, selection) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.setSelectionRange(selection.start, selection.end);
+    const data = new DataTransfer(); data.setData("text/plain", selection.text);
+    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: data });
+    textarea.dispatchEvent(event);
+  }, { text, start, end });
+}
 
 test("edits a tab-local draft and renders sanitized GFM live in the split workspace", async ({ page, workspace }) => {
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
@@ -55,32 +67,104 @@ test("debounces autosave for 750 ms and Ctrl/Cmd+S flushes encrypted content imm
   await expect(source).toHaveValue("# Shortcut draft");
 });
 
+test("accepted paste cannot override a newer selection or replacement", async ({ page, workspace }) => {
+  const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
+  // Hold animation frames until after the user has made a newer selection.
+  // Keep the clock behind the Worker's real clock for request-bound proofs.
+  const time = new Date(Date.now() - 10_000);
+  await page.clock.install({ time });
+  await page.clock.pauseAt(new Date(time.getTime() + 5_000));
+  await source.fill("abc");
+  await pasteText(source, "🙂", 1, 2);
+  await expect(source).toHaveValue("a🙂c");
+  await source.selectText();
+  await page.clock.runFor(16);
+  expect(await source.evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    return [textarea.selectionStart, textarea.selectionEnd];
+  })).toEqual([0, 4]);
+  const replacement = "a".repeat(262_140);
+  await page.keyboard.insertText(replacement);
+  await expect(source).toHaveValue(replacement);
+});
+
+test("paste commits its caret before the next frame, including an unchanged draft", async ({ page, workspace }) => {
+  const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
+  const time = new Date(Date.now() - 10_000);
+  await page.clock.install({ time });
+  await page.clock.pauseAt(new Date(time.getTime() + 5_000));
+  for (const example of [
+    { text: "🙂", value: "a🙂c", caret: 3 },
+    { text: "b", value: "abc", caret: 2 },
+  ]) {
+    await source.fill("abc");
+    await pasteText(source, example.text, 1, 2);
+    await expect(source).toHaveValue(example.value);
+    expect(await source.evaluate((element) => {
+      const textarea = element as HTMLTextAreaElement;
+      return [textarea.selectionStart, textarea.selectionEnd];
+    })).toEqual([example.caret, example.caret]);
+    await source.selectText();
+    await page.clock.runFor(16);
+    expect(await source.evaluate((element) => {
+      const textarea = element as HTMLTextAreaElement;
+      return [textarea.selectionStart, textarea.selectionEnd];
+    })).toEqual([0, example.value.length]);
+    await page.keyboard.insertText("# Newer edit");
+    await expect(source).toHaveValue("# Newer edit");
+    await expect(page.getByRole("region", { name: "Preview", exact: true })
+      .getByRole("heading", { name: "Newer edit", exact: true })).toBeVisible();
+  }
+});
+
+test("paste leaves no caret work after the editor is unmounted", async ({ page, workspace }) => {
+  const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
+  await source.fill("abc");
+  // Hold only animation frames: navigation's readiness timers must keep running.
+  const frames = await page.evaluateHandle(() => {
+    const request = window.requestAnimationFrame, cancel = window.cancelAnimationFrame;
+    const pending = new Map<number, FrameRequestCallback>();
+    window.requestAnimationFrame = (callback) => {
+      const id = request.call(window, () => {});
+      cancel.call(window, id); pending.set(id, callback); return id;
+    };
+    window.cancelAnimationFrame = (id) => { pending.delete(id); cancel.call(window, id); };
+    return () => {
+      window.requestAnimationFrame = request; window.cancelAnimationFrame = cancel;
+      const callbacks = [...pending.values()]; pending.clear();
+      for (const callback of callbacks) callback(performance.now());
+    };
+  });
+  try {
+    await pasteText(source, "🙂", 1, 2);
+    await expect(source).toHaveValue("a🙂c");
+    const detached = await source.elementHandle();
+    await source.press("ControlOrMeta+s");
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+    await page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Files", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+    await detached!.evaluate((element) => (element as HTMLTextAreaElement).setSelectionRange(0, 0));
+    await frames.evaluate((release) => release());
+    expect(await detached!.evaluate((element) => {
+      const textarea = element as HTMLTextAreaElement;
+      return { connected: textarea.isConnected, selection: [textarea.selectionStart, textarea.selectionEnd] };
+    })).toEqual({ connected: false, selection: [0, 0] });
+  } finally { await frames.evaluate((release) => release()); await frames.dispose(); }
+});
+
 test("rejects paste and an entire composition result without draft loss or another save", async ({ page, workspace }) => {
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await source.fill("abc");
-  await source.evaluate((element) => {
-    const textarea = element as HTMLTextAreaElement;
-    textarea.setSelectionRange(1, 2);
-    const data = new DataTransfer(); data.setData("text/plain", "🙂");
-    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "clipboardData", { value: data });
-    textarea.dispatchEvent(event);
-  });
+  await pasteText(source, "🙂", 1, 2);
   await expect(source).toHaveValue("a🙂c");
   const valid = "a".repeat(262_140);
   await source.fill(valid);
+  await expect(source).toHaveValue(valid);
   await source.press("ControlOrMeta+s");
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   let attempts = 0;
   page.on("request", (request) => { if (request.method() === "PATCH") attempts++; });
-  await source.evaluate((element) => {
-    const textarea = element as HTMLTextAreaElement;
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    const data = new DataTransfer(); data.setData("text/plain", "🙂x");
-    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "clipboardData", { value: data });
-    textarea.dispatchEvent(event);
-  });
+  await pasteText(source, "🙂x", valid.length, valid.length);
   await expect(source).toHaveValue(valid);
   await source.evaluate((element) => {
     const textarea = element as HTMLTextAreaElement;
