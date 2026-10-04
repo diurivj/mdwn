@@ -1,7 +1,6 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, beforeEach, expect, it } from "vitest";
-import { openPublicCommentBody, openCommentEpochLink, sealCommentEpochLink, sealPublicAttribution,
-  sealPublicCommentBody } from "../../app/comments/public-content";
+import { openPublicCommentBody, openCommentEpochLink, sealPublicCommentBody } from "../../app/comments/public-content";
 import { sealAttribution as sealPrivateAttribution, sealCommentBody as sealPrivateCommentBody } from "../../app/comments/content";
 import { sealVaultRecoveryEnvelope, generateVaultRootKey } from "../../app/crypto/vault";
 import { createPublicationKeyPair, newPublicationIdentifier } from "../../app/publications/capability";
@@ -10,96 +9,17 @@ import { createRecoveryMaterial, sealDeviceEnrollmentEnvelope } from "../../app/
 import { resumeRotation, type RotationBrowser } from "../../app/sharing/rotation-client";
 import { openCommentKeyEnvelope, createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
-import { formatPublicationFragment } from "../../app/publications/capability";
 import { invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild, type SharingAccount } from "./sharing-fixtures";
+
+import { anonymousComments as anonymous, commentPayload as payload, fileView,
+  firstEpoch, publish, sealedAttribution, sealedComment, type AnonymousComments, type Epoch,
+  type Publication } from "./publication-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
 // Abuse counters are keyed by the fixture edge address and would accumulate
 // across the scenarios in this file; each scenario starts from a clean window.
 beforeEach(async () => { await env.DB.prepare("DELETE FROM rate_limit_counters").run(); });
-
-type FileView = { revision: number; representationId: string };
-
-async function fileView(actor: SharingAccount, fileId: string): Promise<FileView> {
-  const response = await sharingRequest(actor, `/api/private/tree/files/${fileId}`);
-  if (!response.ok) throw new Error(`file read failed: ${response.status}`);
-  return response.json() as Promise<FileView>;
-}
-
-type Epoch = { threadId: string; epochId: string; capabilityId: string; capability: Uint8Array<ArrayBuffer>;
-  audience: "public" | "collaborators_only"; vaultRootKey: Uint8Array };
-
-type Publication = { publicationId: string; linkId: string; linkKey: Awaited<ReturnType<typeof createPublicationKeyPair>>;
-  fragment: string; epoch: Epoch };
-
-/** The Owner's browser half of publishing with its first audience epoch. */
-async function publish(owner: SharingAccount, fileId: string, audience: "public" | "collaborators_only" = "public",
-  recovery = generateVaultRootKey()): Promise<Publication> {
-  const current = await fileView(owner, fileId);
-  const linkKey = await createPublicationKeyPair();
-  const publicationId = newPublicationIdentifier(), linkId = newPublicationIdentifier();
-  const built = await firstEpoch(owner, publicationId, linkId, linkKey, audience, recovery);
-  const representation = await sealPublicRepresentation({ publicationId, linkId, publicKey: linkKey.publicKey, revision: 1 },
-    publicPresentation("# Public body"));
-  const response = await sharingRequest(owner, `/api/private/publications/files/${fileId}`, "PUT", {
-    publicationId, linkId, publicKey: encodeTreeBytes(linkKey.publicKey),
-    expectedRevision: current.revision, expectedRepresentationId: current.representationId,
-    representation: { ciphertext: encodeTreeBytes(representation) }, author: null,
-    comments: { threadId: built.threadId, epochId: built.epochId, capabilityId: built.capabilityId,
-      audience, recoveryEnvelope: encodeTreeBytes(built.recoveryEnvelope),
-      linkWrapper: built.linkWrapper ? encodeTreeBytes(built.linkWrapper) : null },
-  });
-  if (response.status !== 201) throw new Error(`publish failed: ${response.status} ${await response.text()}`);
-  return { publicationId, linkId, linkKey, fragment: formatPublicationFragment(linkKey.privateKey),
-    epoch: { threadId: built.threadId, epochId: built.epochId, capabilityId: built.capabilityId, capability: built.capability,
-      audience, vaultRootKey: recovery } };
-}
-
-async function firstEpoch(owner: SharingAccount, publicationId: string, linkId: string,
-  linkKey: Awaited<ReturnType<typeof createPublicationKeyPair>>, audience: "public" | "collaborators_only",
-  vaultRootKey: Uint8Array, threadId = opaqueId()) {
-  const epochId = opaqueId(), capabilityId = opaqueId();
-  const capability = crypto.getRandomValues(new Uint8Array(32));
-  const recoveryEnvelope = await sealVaultRecoveryEnvelope(vaultRootKey,
-    { scope: "owned", objectId: epochId, keyId: capabilityId, key: capability },
-    { purpose: "vault-recovery", vaultId: owner.accountId, objectId: epochId, keyId: capabilityId, keyEpoch: 1, revision: 1 });
-  const linkWrapper = audience === "public" ? await sealCommentEpochLink(linkKey.privateKey, linkKey.publicKey,
-    { publicationId, linkId, epochId, capabilityId, keyEpoch: 1, capability }) : null;
-  return { threadId, epochId, capabilityId, capability, recoveryEnvelope, linkWrapper };
-}
-
-function sealedComment(publication: Publication, text: string, revision = 1, epoch = publication.epoch) {
-  const commentId = opaqueId();
-  return sealPublicCommentBody(epoch.capability, { publicationId: publication.publicationId, commentId,
-    capabilityId: epoch.capabilityId, keyEpoch: 1, revision, text }).then((sealed) => ({ commentId, ...sealed }));
-}
-
-function sealedAttribution(publication: Publication, pseudonym: string) {
-  const attributionId = opaqueId();
-  return sealPublicAttribution(publication.epoch.capability, { publicationId: publication.publicationId, attributionId,
-    pseudonym, capabilityId: publication.epoch.capabilityId, keyEpoch: 1 });
-}
-
-function payload(publication: Publication, comment: { commentId: string; bodyCiphertext: string; contentKeyEnvelope: string },
-  attribution: { attributionId: string; ciphertext: string; contentKeyEnvelope: string } | null = null) {
-  return { commentId: comment.commentId, threadId: publication.epoch.threadId, epochId: publication.epoch.epochId,
-    capabilityId: publication.epoch.capabilityId, capabilityEpoch: 1,
-    bodyCiphertext: comment.bodyCiphertext, contentKeyEnvelope: comment.contentKeyEnvelope, attribution };
-}
-
-type AnonymousComments = { audience: string; threadId: string | null;
-  epochs: { epochId: string; capabilityId: string; capabilityEpoch: number; wrapper: string }[];
-  comments: { id: string; epochId: string; authorId: string; sequence: number; revision: number;
-    bodyCiphertext: string; contentKeyEnvelope: string; contentKeyEpoch: number }[];
-  attributions: { id: string; authorId: string; epochId: string; ciphertext: string; contentKeyEnvelope: string }[];
-  nextCursor: number | null };
-
-async function anonymous(linkId: string): Promise<AnonymousComments> {
-  const response = await SELF.fetch(`https://mdwn.test/api/public/publications/${linkId}`);
-  expect(response.status).toBe(200);
-  return ((await response.json()) as { comments: AnonymousComments }).comments;
-}
 
 type ThreadBody = { thread: null | { threadId: string; ownerId: string; publicationId: string; currentEpochId: string;
   audience: string; canComment: boolean; canDeleteAny: boolean; actorAccountId: string;

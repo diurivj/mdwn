@@ -19,6 +19,7 @@
     "db:smoke": "node scripts/smoke-db.mjs",
     "db:smoke:preview": "node scripts/smoke-db.mjs --remote preview",
     "db:smoke:production": "node scripts/smoke-db.mjs --remote production",
+    "participation": "node scripts/public-participation.mjs",
     "check:secrets": "node scripts/check-bundle-secrets.mjs",
     "check:namespace": "node scripts/generate-namespace-v1-data.mjs --check",
     "deploy:preview": "node scripts/deploy-worker.mjs preview",

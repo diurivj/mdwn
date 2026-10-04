@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { publicParticipationSuspensionNotice } from "~/security/public-participation";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import {
   addAccountAuthor, addSelfAuthor, changeCommentAudience, continuePublicationTeardown, loadPublicationState, publishFile,
@@ -10,7 +11,7 @@ import { loadFile } from "~/tree/client";
 
 type PanelState = { status: "loading" } | { status: "failed" } | { status: "ready"; state: PublicationState };
 
-const messages: Record<PublicationError["code"], string> = {
+const messages: Record<Exclude<PublicationError["code"], "suspended">, string> = {
   changed: "This File’s publication changed on another device. Refresh and try again.",
   exists: "This File is already published.",
   "file-changed": "This File was saved on another device. Publishing uses the latest saved version — try again.",
@@ -115,7 +116,9 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
       await reload(controller.signal);
     } catch (error) {
       if (controller.signal.aborted) return;
-      setMessage(error instanceof PublicationError ? messages[error.code] : messages.unavailable);
+      setMessage(error instanceof PublicationError
+        ? error.code === "suspended" ? publicParticipationSuspensionNotice(error.suspendedUntil) : messages[error.code]
+        : messages.unavailable);
       await reload(controller.signal);
     } finally { if (!controller.signal.aborted) setBusy(false); }
   }

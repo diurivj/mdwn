@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PSEUDONYM_UPDATE_PENDING_MESSAGE } from "~/account/pseudonym-client";
+import { publicParticipationSuspensionNotice } from "~/security/public-participation";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import { CommentItem } from "./CommentItem";
+import { CommentReportControl } from "./CommentReportControl";
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
 import {
   createFilePublicComment,
@@ -17,6 +19,7 @@ import {
   PublicCommentsPseudonymPendingError,
   PublicCommentsSealedError,
   PublicCommentsSignInError,
+  PublicCommentsSuspendedError,
   type FilePublicComments,
   type PublicComment,
   type PublicThreadView,
@@ -92,6 +95,7 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
       else if (error instanceof PublicCommentsPseudonymPendingError) setMessage(PSEUDONYM_UPDATE_PENDING_MESSAGE);
       else if (error instanceof PublicCommentsNotFoundError) setMessage("This comment is no longer available.");
       else if (error instanceof PublicCommentsLimitedError) setMessage("You’ve reached the comment limit for now. Try again later.");
+      else if (error instanceof PublicCommentsSuspendedError) setMessage(publicParticipationSuspensionNotice(error.suspendedUntil));
       else if (error instanceof PublicCommentsSignInError) setMessage("This browser can’t post comments right now.");
       else setMessage("The change could not be confirmed. Try again.");
     } finally { if (!controller.signal.aborted) setBusy(false); }
@@ -122,6 +126,8 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
         pseudonym={thread.pseudonyms.get(comment.authorId)} viewerAccountId={thread.viewerAccountId}
         note={comment.epochId !== thread.currentEpochId ? "earlier audience" : undefined}
         editing={editing} deleting={deleting} busy={busy}
+        reportControl={thread.postingState === "ready" && comment.authorId !== thread.viewerAccountId
+          ? <CommentReportControl commentId={comment.id} /> : undefined}
         onEdit={(selected) => { setDeleting(null); setEditing({ id: selected.id, text: selected.text ?? "" }); }}
         onEditText={(text) => { if (editing) setEditing({ id: editing.id, text }); }}
         onSubmitEdit={() => {

@@ -80,6 +80,10 @@ _Avoid_: Guest account, anonymous user account
 A temporary service restriction on an Account's ability to create public Comments or create or rotate Publications for technical abuse. It preserves the Account's private Files, Shares, export, recovery, and ownership; it is not content moderation or account deletion.
 _Avoid_: Vault lockout, content-based ban
 
+**Public Comment report**:
+A signed-in Account's category-only signal naming an opaque Public Comment ID. It carries no plaintext and grants no content access, expires after 30 days, and is never evidence the service can read; it is a pattern signal the operator may weigh, not a deletion or a verdict.
+_Avoid_: Moderation queue, complaint text, content takedown
+
 **Public pseudonym**:
 A generated, account-level label used for public attribution and in every Comment thread. It is pseudonymous rather than private, is separate from share-addressing identity, and may be changed subject to a cooldown.
 _Avoid_: Real name, anonymous commenter, share identifier

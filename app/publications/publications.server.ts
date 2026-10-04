@@ -6,6 +6,7 @@ import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, type AuthorizedDevice } from "~/device/proof.server";
 import { newOpaqueId } from "~/opaque-id";
 import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
+import { activePublicParticipationSuspension, publicParticipationSuspendedResponse } from "~/security/public-participation.server";
 import { epochInput, epochStatements, readPublicCommentPage, type EpochInput } from "~/comments/public.server";
 import { isCommentEpochLink } from "~/comments/public-content";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
@@ -177,8 +178,12 @@ async function creationInput(value: unknown, ownerId: string): Promise<Creation 
   } catch { return null; }
 }
 
-/** Publication-create/rotate abuse limit (5 / 24 h per Account) before the CAS. */
-async function creationQuota(request: Request, env: Env, auth: AuthorizedDevice): Promise<Response | null> {
+/** Publication create/rotate abuse limits (5 / 24 h per Account) and the
+ * Public-participation suspension boundary, both before the CAS. Unpublishing,
+ * teardown, author changes and requests never pass through here. */
+async function publicationMutationLimits(request: Request, env: Env, auth: AuthorizedDevice): Promise<Response | null> {
+  const suspension = await activePublicParticipationSuspension(env.DB, auth.accountId);
+  if (suspension) return publicParticipationSuspendedResponse(suspension);
   try {
     const limit = await enforceRateLimit({ db: env.DB, request, action: "publication.mutate",
       scopes: { accountId: auth.accountId }, hmacSecret: env.ABUSE_HMAC_SECRET });
@@ -212,7 +217,7 @@ async function createPublication(request: Request, env: Env, auth: AuthorizedDev
   if (file.current_revision !== input.expectedRevision || file.current_representation_id !== input.expectedRepresentationId) {
     return failure("file_changed", 409);
   }
-  const quota = await creationQuota(request, env, auth);
+  const quota = await publicationMutationLimits(request, env, auth);
   if (quota) return quota;
   const now = Date.now(), representationId = newOpaqueId();
   let committed = false;
@@ -559,7 +564,7 @@ async function rotatePublication(request: Request, env: Env, auth: AuthorizedDev
   }
   if (submitted.size !== expected.length) return publicationChanged();
   if (await db.get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return rotationRequired();
-  const quota = await creationQuota(request, env, auth);
+  const quota = await publicationMutationLimits(request, env, auth);
   if (quota) return quota;
   const now = Date.now(), representationId = newOpaqueId();
   let committed = false;

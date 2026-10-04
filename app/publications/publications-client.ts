@@ -3,7 +3,7 @@ import { loadFilePublicEpochs } from "~/comments/public-client";
 import { sealCommentEpochLink } from "~/comments/public-content";
 import { sealVaultRecoveryEnvelope } from "~/crypto/vault";
 import { FILE_SOURCE_LIMIT } from "~/crypto/file-source";
-import { privateRequest } from "~/device/private-client";
+import { privateRequest, isPublicParticipationSuspended } from "~/device/private-client";
 import { newOpaqueId } from "~/opaque-id";
 import { loadDirectory, loadFile, type FilePublication, type RootAccess } from "~/tree/client";
 import { convertFileCapability } from "~/tree/file-capability-client";
@@ -40,15 +40,25 @@ async function commentEpoch(access: RootAccess, input: {
     recoveryEnvelope: encodeTreeBytes(recoveryEnvelope), linkWrapper };
 }
 
-/** A bounded, non-revealing failure the Publish panel can explain. */
+/** A bounded, non-revealing failure the Publish panel can explain. A
+ * Public-participation suspension carries only its fixed automatic end. */
 export class PublicationError extends Error {
-  constructor(readonly code: "changed" | "exists" | "file-changed" | "limited" | "not-found" | "too-large"
-    | "author-exists" | "author-limit" | "link-required" | "pseudonym-pending" | "rotation-required" | "unavailable") { super(code); }
+  constructor(readonly code: "changed" | "exists" | "file-changed" | "limited" | "not-found" | "suspended"
+    | "too-large" | "author-exists" | "author-limit" | "link-required" | "pseudonym-pending" | "rotation-required"
+    | "unavailable", readonly suspendedUntil: number | null = null) { super(code); }
 }
 
 async function publicationRequest(path: string, method: "POST" | "PUT" | "DELETE", body?: object, signal?: AbortSignal) {
-  const response = await privateRequest(`/api/private/publications/files/${path}`, {
-    method, signal, ...(body ? { body: JSON.stringify(body) } : {}) });
+  let response: Response;
+  try {
+    response = await privateRequest(`/api/private/publications/files/${path}`, {
+      method, signal, ...(body ? { body: JSON.stringify(body) } : {}) });
+  } catch (error) {
+    if (isPublicParticipationSuspended(error)) {
+      throw new PublicationError("suspended", error.detail.suspendedUntil);
+    }
+    throw error;
+  }
   if (response.ok) return response;
   if (response.status === 404) throw new PublicationError("not-found");
   if (response.status === 429) throw new PublicationError("limited");

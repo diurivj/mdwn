@@ -144,8 +144,10 @@ symmetric link wrapper the creating browser sealed with the fragment it still
 holds. Creation without that first epoch is rejected, so no active Publication
 can exist without a Public thread; a pre-ticket-23 Publication gets one through
 the Owner-only audience endpoint. It applies the Publication create limit (5 per Account
-per 24 hours) before its transaction. Public-participation suspensions (ticket
-26) will add their check at the same point. Approval is publishing: a
+per 24 hours) before its transaction. A Public-participation suspension (ticket
+26) is checked at the same point and refuses create and rotate with
+`403 public_participation_suspended`; unpublishing and the Owner's teardown
+batches never pass through it. Approval is publishing: a
 Collaborator's request never creates a Publication, link, representation or
 public access, and creating the Publication removes every pending request in the
 same transaction.
@@ -189,7 +191,8 @@ wrappers are refused before the transaction. The logical Publication, Public
 Comment thread and all history survive, so a new link shows the same document
 and Comments. Author declarations are served only for the link they were sealed
 to: after rotation each selected author's device re-declares on its next File
-open. Rotation consumes the `publication.mutate` limit and waits out an active
+open. Rotation consumes the `publication.mutate` limit, is refused while a
+Public-participation suspension is active, and waits out an active
 key-rotation write seal (`409 key_rotation_required`). The new complete link is
 retained in page memory by the same rule as creation, so a lost response never
 loses the replacement capability.

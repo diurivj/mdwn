@@ -76,6 +76,8 @@ const EXPECTED_COLUMNS = {
   publication_requests: { id: "TEXT", file_id: "TEXT", owner_id: "TEXT", requester_id: "TEXT", created_at: "INTEGER" },
   publication_authors: { id: "TEXT", publication_id: "TEXT", author_id: "TEXT", ordinal: "INTEGER", link_id: "TEXT", revision: "INTEGER", ciphertext: "BLOB", created_at: "INTEGER", updated_at: "INTEGER" },
   publication_teardowns: { publication_id: "TEXT", owner_id: "TEXT", comment_total: "INTEGER", created_at: "INTEGER" },
+  public_comment_reports: { id: "TEXT", reporter_id: "TEXT", comment_id: "TEXT", category: "TEXT", created_at: "INTEGER", expires_at: "INTEGER" },
+  public_participation_suspensions: { account_id: "TEXT", strike_count: "INTEGER", reason: "TEXT", started_at: "INTEGER", expires_at: "INTEGER", updated_at: "INTEGER" },
 };
 const EXPECTED_INDEXES = [
   ["accounts", "accounts_share_id_unique", 1],
@@ -91,6 +93,9 @@ const EXPECTED_INDEXES = [
   ["security_events", "security_events_network_expiry_idx", 0],
   ["security_events", "security_events_account_created_idx", 0],
   ["security_events", "security_events_publication_created_idx", 0],
+  ["public_comment_reports", "public_comment_reports_reporter_comment_idx", 1],
+  ["public_comment_reports", "public_comment_reports_expiry_idx", 0],
+  ["public_comment_reports", "public_comment_reports_comment_idx", 0],
   ["registration_challenges", "registration_challenges_challenge_unique", 1],
   ["registration_challenges", "registration_challenges_expiry_idx", 0],
   ["account_encryption_identities", "account_encryption_identities_root_directory_id_unique", 1],
@@ -203,6 +208,9 @@ const EXPECTED_FOREIGN_KEYS = [
   "publication_authors:author_id:accounts:id:RESTRICT",
   "publication_teardowns:publication_id:publications:id:RESTRICT",
   "publication_teardowns:owner_id:accounts:id:RESTRICT",
+  "public_comment_reports:reporter_id:accounts:id:RESTRICT",
+  "public_comment_reports:comment_id:comments:id:CASCADE",
+  "public_participation_suspensions:account_id:accounts:id:RESTRICT",
 ];
 const EXPECTED_TRIGGERS = ["sharing_new_device_need", "sharing_new_comment_need",
   "sharing_comment_context_immutable", "sharing_rotated_comment_need",
