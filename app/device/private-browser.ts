@@ -9,10 +9,10 @@ import { decodeTreeBytes } from "~/tree/wire";
  * proof-bound `request`; this module never sends plaintext anywhere.
  */
 
-export type PrivateBrowser = {
-  accountId: string; deviceId: string; vaultRootKey: Uint8Array<ArrayBuffer>;
-  assertionKey: CryptoKey; transportKeyPair: CryptoKeyPair;
+export type PrivateAccountContext = {
+  accountId: string; deviceId: string; vaultRootKey: Uint8Array<ArrayBuffer>; assertionKey: CryptoKey;
 };
+export type PrivateBrowser = PrivateAccountContext & { transportKeyPair: CryptoKeyPair };
 
 /** Production adapter: device handles and Vault keys are loaded only in the browser. */
 export async function loadPrivateBrowser(signal?: AbortSignal): Promise<PrivateBrowser> {

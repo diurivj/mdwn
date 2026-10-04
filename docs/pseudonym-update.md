@@ -118,10 +118,11 @@ change after signup is immediate because signup leaves `pseudonym_changed_at`
 While a job is pending, every mutation that would mint a new attribution context
 is refused with `409 pseudonym_update_pending` before any counter or proof is
 consumed: creating a Private or Public Comment and writing a Publication
-declaration (including self-selection by the Owner). The workspace composer
-names the pending update and points at the Public pseudonym page instead of a
-generic conflict. Comment edits and hard deletions, key rotation, hard
-deletion, export, and session operations stay available. The block is per
+declaration (including self-selection by the Owner). The workspace composer and
+the Publish panel's author controls name the pending update and point at the
+Public pseudonym page instead of a generic conflict. Comment edits and hard
+deletions, key rotation, hard deletion, export, and session operations stay
+available. The block is per
 Account: a Collaborator's Comments on a shared File are unaffected. The UI keeps
 the workspace path visible but its own new Comments wait for the job to commit
 or be cancelled.

@@ -40,7 +40,7 @@ async function commentEpoch(access: RootAccess, input: {
 /** A bounded, non-revealing failure the Publish panel can explain. */
 export class PublicationError extends Error {
   constructor(readonly code: "changed" | "exists" | "file-changed" | "limited" | "not-found" | "too-large"
-    | "author-exists" | "author-limit" | "link-required" | "rotation-required" | "unavailable") { super(code); }
+    | "author-exists" | "author-limit" | "link-required" | "pseudonym-pending" | "rotation-required" | "unavailable") { super(code); }
 }
 
 async function publicationRequest(path: string, method: "POST" | "PUT" | "DELETE", body?: object, signal?: AbortSignal) {
@@ -52,7 +52,8 @@ async function publicationRequest(path: string, method: "POST" | "PUT" | "DELETE
   if (response.status === 409) {
     const error = (await response.json() as { error?: string }).error;
     throw new PublicationError(error === "publication_exists" ? "exists" : error === "file_changed" ? "file-changed"
-      : error === "author_exists" ? "author-exists" : error === "author_limit" ? "author-limit" : "changed");
+      : error === "author_exists" ? "author-exists" : error === "author_limit" ? "author-limit"
+      : error === "pseudonym_update_pending" ? "pseudonym-pending" : "changed");
   }
   throw new PublicationError("unavailable");
 }

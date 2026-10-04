@@ -1,6 +1,6 @@
 import { publicAttributionKeyContext, publicCommentKeyContext } from "~/comments/public-content";
 import { createSymmetricWriter, openSymmetric } from "~/crypto/enc-v1";
-import { loadPrivateBrowser } from "~/device/private-browser";
+import { loadPrivateBrowser, type PrivateAccountContext } from "~/device/private-browser";
 import { privateRequest } from "~/device/private-client";
 import { newOpaqueId } from "~/opaque-id";
 import { createListingHead, openDirectoryListing, openListingMembers, assertListingMember, rememberListing, type SealedEntry } from "~/tree/listing";
@@ -13,7 +13,8 @@ import { rotationResumeContext, rotationSourceVersion, type RotationDirectory, t
   type RotationJob, type RotationNext, type RotationSource } from "./rotation-wire";
 
 /** Browser-held crypto and a proof-bound external API transport; no plaintext is persisted. */
-export type RotationBrowser = { accountId: string; deviceId: string; vaultRootKey: Uint8Array; assertionKey: CryptoKey;
+export type RotationBrowser = Omit<PrivateAccountContext, "vaultRootKey"> & {
+  vaultRootKey: Uint8Array;
   request(path: string, method?: "POST" | "PATCH" | "PUT", body?: object): Promise<Response> };
 type Options = { maxSteps?: number; signal?: AbortSignal; onProgress?: (job: RotationJob) => void };
 type Directory = RotationDirectory & { entries: SealedEntry[] };

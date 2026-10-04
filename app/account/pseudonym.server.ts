@@ -58,9 +58,6 @@ const positiveEpoch = (value: unknown): value is number =>
 const positiveRevision = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 
-const PROFILE_CIPHERTEXT_BYTES = MAX_ACCOUNT_PROFILE_BYTES;
-/** Contexts per staging page. One envelope read per thread context keeps a full
- * page inside D1 Free's per-invocation query budget. */
 const PSEUDONYM_PAGE = 20;
 
 type JobRow = { jobId: string; state: string; progress: number; createdAt: number };
@@ -194,7 +191,7 @@ async function startJob(env: Env, auth: AuthorizedDevice, value: unknown): Promi
   if (profile.epoch !== current.epoch || profile.revision !== revision) return changed();
   let ciphertext: Uint8Array<ArrayBuffer>;
   try {
-    ciphertext = treeEnvelope(profile.ciphertext, PROFILE_CIPHERTEXT_BYTES, accountProfileContext({
+    ciphertext = treeEnvelope(profile.ciphertext, MAX_ACCOUNT_PROFILE_BYTES, accountProfileContext({
       accountId: auth.accountId, epoch: current.epoch, revision }));
   } catch { return invalid(); }
   const committed = await commitPrivateBatch(env, auth, (guard) => sql`

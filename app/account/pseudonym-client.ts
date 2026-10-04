@@ -33,6 +33,10 @@ export class PseudonymPendingError extends Error { constructor() { super("pseudo
 export class PseudonymPreparingError extends Error { constructor() { super("secure_access_preparing"); } }
 export class PseudonymChangedError extends Error { constructor() { super("pseudonym_update_changed"); } }
 
+/** Shared workspace copy when a pending update blocks a new attribution. */
+export const PSEUDONYM_UPDATE_PENDING_MESSAGE =
+  "Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before adding a comment.";
+
 type ProfileWire = { ciphertext: string; epoch: number; revision: number; nextChangeAt: number | null };
 type StagedProfile = { ciphertext: string; epoch: number; revision: number };
 type ThreadEnvelopeWire =
