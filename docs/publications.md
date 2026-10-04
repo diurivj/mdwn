@@ -236,4 +236,4 @@ collapsed panels/lost responses after the real Worker commits creation, retries
 that lose to an earlier pending commit, and paired saves with expanded titles.
 
 See [enc-v1](enc-v1.md), [serving and security](serving-and-security.md),
-[sharing](sharing.md) and [tree structure](tree-structure.md).
+[sharing](sharing.md), [public pseudonym update](pseudonym-update.md) and [tree structure](tree-structure.md).

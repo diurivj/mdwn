@@ -25,6 +25,9 @@ export type AccountProfileExpectation = {
   revision: number;
 };
 
+/** Maximum sealed Account-profile ciphertext, matching the signup envelope bound. */
+export const MAX_ACCOUNT_PROFILE_BYTES = 4_096;
+
 /** The only Account-profile fields a service persists or sends. */
 export type EncryptedAccountProfile = {
   ciphertext: Uint8Array<ArrayBuffer>;

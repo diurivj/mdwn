@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { PSEUDONYM_UPDATE_PENDING_MESSAGE } from "~/account/pseudonym-client";
 import {
   CommentsChangedError,
   CommentsNotFoundError,
   CommentsSealedError,
+  PseudonymUpdatePendingError,
   createPrivateComment,
   createPrivateThread,
   deletePrivateComment,
@@ -117,6 +119,7 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       if (controller.signal.aborted) return;
       if (error instanceof CommentsChangedError) setMessage("Comments changed on another device. Reopen this File.");
       else if (error instanceof CommentsSealedError) setMessage("Secure access must finish updating before comments can change.");
+      else if (error instanceof PseudonymUpdatePendingError) setMessage(PSEUDONYM_UPDATE_PENDING_MESSAGE);
       else if (error instanceof CommentsNotFoundError) setMessage("This comment is no longer available.");
       else setMessage("The change could not be confirmed. Try again.");
     } finally {

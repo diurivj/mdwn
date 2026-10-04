@@ -197,4 +197,4 @@ and narrow Comments view, and `e2e/public-comments.spec.ts` posts from a public
 page and closes and reopens the audience in Chromium, Firefox and WebKit.
 
 See [enc-v1](enc-v1.md), [sharing](sharing.md), [shared provisioning](shared-provisioning.md),
-and [key rotation](key-rotation.md).
+[public pseudonym update](pseudonym-update.md), and [key rotation](key-rotation.md).

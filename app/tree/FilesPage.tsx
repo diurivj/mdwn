@@ -341,7 +341,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       <Link to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`} className="mb-2 block font-medium hover:underline">{snapshot.access.rootKind === "file" ? "Shared File" : "Files"}</Link>
       <nav aria-label="Files">{directoryItems(snapshot.access.rootId)}</nav>
       <SharedProvisioning />
-      {snapshot.access.actorAccountId === snapshot.access.vaultId && <Link to="/account/key-rotations" className="mt-6 block text-sm underline">Secure access updates</Link>}
+      {snapshot.access.actorAccountId === snapshot.access.vaultId && <>
+        <Link to="/account/pseudonym" className="mt-6 block text-sm underline">Public pseudonym</Link>
+        <Link to="/account/key-rotations" className="mt-2 block text-sm underline">Secure access updates</Link>
+      </>}
     </aside>
     <section className="min-w-0 p-4 md:p-6">
       <div className="flex flex-wrap items-center gap-3">

@@ -20,6 +20,7 @@ const messages: Record<PublicationError["code"], string> = {
   "author-exists": "That Account is already credited.",
   "author-limit": "This Publication already credits the maximum number of authors.",
   "link-required": "Paste the complete public link (including the part after #) to enable public comments.",
+  "pseudonym-pending": "Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before changing authors.",
   "rotation-required": "Secure access must finish updating before the comment audience can change.",
   unavailable: "The change could not be confirmed. Try again.",
 };

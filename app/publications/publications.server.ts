@@ -7,6 +7,7 @@ import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, typ
 import { newOpaqueId } from "~/opaque-id";
 import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
 import { epochInput, epochStatements, readPublicCommentPage, type EpochInput } from "~/comments/public.server";
+import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { shareHandleLookupToken } from "~/sharing/address";
 import { accessPredicate, accountAccessQuery, effectiveAccess, permits } from "~/sharing/access.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
@@ -345,6 +346,10 @@ async function addAuthor(env: Env, auth: AuthorizedDevice, fileId: string, value
     candidate = account.id;
   }
   const self = candidate === auth.accountId, now = Date.now();
+  // Self-attribution writes a declaration immediately; a pending Pseudonym
+  // update blocks it so no context is minted with the old pseudonym.
+  if (self && await db.get(sql`SELECT 1 WHERE ${pseudonymUpdatePending(auth.accountId)}`))
+    return failure("pseudonym_update_pending", 409);
   let committed = false;
   try {
     committed = await commitPrivateMutation(env, auth, (guard) => sql`
@@ -396,6 +401,9 @@ async function declareAuthor(env: Env, auth: AuthorizedDevice, fileId: string, d
     WHERE id = ${declarationId} AND publication_id = ${publication.id} AND author_id = ${auth.accountId}
       AND ${accessPredicate(auth, fileId, "read")}`) : null;
   if (!publication || !author) return notFound();
+  // A declaration is a fresh attribution context; wait for a pending update.
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${pseudonymUpdatePending(auth.accountId)}`))
+    return failure("pseudonym_update_pending", 409);
   if (publication.state !== "active" || publication.id !== input.publicationId || publication.link_id !== input.linkId ||
       !publication.public_key || author.revision + 1 !== input.revision) return publicationChanged();
   let ciphertext: Uint8Array<ArrayBuffer>;
