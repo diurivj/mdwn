@@ -1,7 +1,6 @@
 import { isMap, isScalar, parseDocument } from "yaml";
 
 import { openForRecipient, sealToRecipient, type EnvelopeContext } from "~/crypto/enc-v1";
-import { FILE_SOURCE_LIMIT } from "~/crypto/file-source";
 import { importPublicationPublicKey, publicationRecipientId } from "./capability";
 
 /**
@@ -87,11 +86,16 @@ export function encodePublicPresentation(presentation: PublicPresentation): Uint
   }
   const title = encoder.encode(presentation.title ?? "");
   const markdown = encoder.encode(presentation.markdown);
-  if (title.length + markdown.length > FILE_SOURCE_LIMIT) throw new Error("invalid public presentation");
+  // YAML escapes may expand a valid File source. Presentation framing and the
+  // final encrypted envelope have their own bound, not the private source limit.
+  if (PRESENTATION_MAGIC.length + 8 + title.length + markdown.length > MAX_PUBLIC_REPRESENTATION_BYTES) {
+    throw new Error("invalid public presentation");
+  }
   return concat(PRESENTATION_MAGIC, u32(title.length), title, u32(markdown.length), markdown);
 }
 
 export function decodePublicPresentation(input: Uint8Array): PublicPresentation {
+  if (input.byteLength > MAX_PUBLIC_REPRESENTATION_BYTES) throw new Error("invalid public presentation");
   const bytes = new Uint8Array(input);
   const view = new DataView(bytes.buffer);
   const magic = PRESENTATION_MAGIC.length;
@@ -99,10 +103,9 @@ export function decodePublicPresentation(input: Uint8Array): PublicPresentation 
     throw new Error("invalid public presentation");
   }
   const titleLength = view.getUint32(magic);
-  if (titleLength > FILE_SOURCE_LIMIT || magic + 8 + titleLength > bytes.length) throw new Error("invalid public presentation");
+  if (magic + 8 + titleLength > bytes.length) throw new Error("invalid public presentation");
   const markdownLength = view.getUint32(magic + 4 + titleLength);
-  if (titleLength + markdownLength > FILE_SOURCE_LIMIT ||
-      magic + 8 + titleLength + markdownLength !== bytes.length) throw new Error("invalid public presentation");
+  if (magic + 8 + titleLength + markdownLength !== bytes.length) throw new Error("invalid public presentation");
   try {
     const title = decoder.decode(bytes.slice(magic + 4, magic + 4 + titleLength));
     const markdown = decoder.decode(bytes.slice(magic + 8 + titleLength));

@@ -26,9 +26,9 @@ const messages: Record<PublicationError["code"], string> = {
  * pending requests), sees the one-time complete link, and opts in to authors;
  * a Collaborator can only request publication. No panel state is persisted.
  */
-export function PublishPanel({ fileId, snapshot, fileReady, link, onPrepared }: {
+export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }: {
   fileId: string; snapshot: FilesSnapshot; fileReady: boolean;
-  link: PreparedPublicLink | null; onPrepared: (link: PreparedPublicLink) => void;
+  links: ReadonlyMap<string, PreparedPublicLink>; onPrepared: (link: PreparedPublicLink) => void;
 }) {
   const [panel, setPanel] = useState<PanelState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
@@ -72,8 +72,8 @@ export function PublishPanel({ fileId, snapshot, fileReady, link, onPrepared }: 
   }
 
   // A failed or superseded attempt must never be shown as the active link.
-  const completeLink = panel.status === "ready" && panel.state.publication?.publicationId === link?.publicationId
-    ? link?.url ?? null : null;
+  const completeLink = panel.status === "ready" && panel.state.publication
+    ? links.get(panel.state.publication.publicationId)?.url ?? null : null;
   async function copy() {
     if (!completeLink) return;
     try { await navigator.clipboard.writeText(completeLink); setCopied("copied"); }

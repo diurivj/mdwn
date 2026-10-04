@@ -33,8 +33,10 @@ https://<origin>/p/<path ID>#v1.<private scalar>
 
 The complete link exists only in the creating page's memory. Before sending
 the creation mutation, the browser retains it above the dismissible Publish
-panel, bound to its logical Publication ID. A collapsed panel or lost response
-cannot discard the key of a committed Publication; reopening reconciles the
+panel, keyed by its logical Publication ID. All prepared candidates remain in
+memory so a retry cannot discard an earlier attempt that subsequently commits.
+A collapsed panel or lost response cannot discard the key of a committed
+Publication; reopening reconciles the
 current Publication before showing that link with **Copy link**. Failed or
 superseded attempts are never shown as the active link. Leaving the creating
 page discards this memory, so copy the link before leaving; mdwn cannot recover
@@ -57,7 +59,10 @@ as a private representation. Its plaintext is the presentation payload:
 | Markdown length | u32 |
 | Markdown | UTF-8 body |
 
-Title and Markdown together are at most the 262,144-byte File source limit.
+The original Markdown source remains subject to its 262,144-byte File source
+limit. Decoding YAML escapes can expand a title, so the encoded presentation and
+its final encrypted envelope are bounded independently at 524,288 bytes; the
+smaller source limit is never reapplied to decoded presentation bytes.
 The editor's browser builds the payload from the saved source: a leading YAML
 front-matter block (`---` … `---` or `...`, with LF, CRLF or CR line endings) is
 removed entirely. The pinned `yaml` parser validates the whole YAML 1.2 mapping
@@ -217,7 +222,8 @@ hard deletion, fragment absence from every table and the reviewed query plans.
 fresh anonymous context and proves the fragment never reaches a request,
 header, cookie, console message or D1 row while saves keep the link live. It
 also covers fragment-only navigation, adversarial front-matter presentation,
-and collapsed panels/lost responses after the real Worker commits creation.
+collapsed panels/lost responses after the real Worker commits creation, retries
+that lose to an earlier pending commit, and paired saves with expanded titles.
 
 See [enc-v1](enc-v1.md), [serving and security](serving-and-security.md),
 [sharing](sharing.md) and [tree structure](tree-structure.md).

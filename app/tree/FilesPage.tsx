@@ -53,8 +53,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
-  // The complete Public link lives only in this page's memory, never in storage.
-  const [publicLink, setPublicLink] = useState<(PreparedPublicLink & { fileId: string }) | null>(null);
+  // Retain every prepared candidate until this page ends. A later attempt can
+  // lose to an earlier in-flight commit; it must not overwrite that link's key.
+  // Complete links stay only in browser memory, never in persistent storage.
+  const [publicLinks, setPublicLinks] = useState<ReadonlyMap<string, PreparedPublicLink>>(() => new Map());
   const [submitting, setSubmitting] = useState(false);
   const submission = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
@@ -361,8 +363,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           {snapshot.access.actorAccountId === snapshot.access.vaultId ? "Publish" : "Request publication"}</button>}
       </div>
       {kind === "file" && snapshot.file && publishOpen && <PublishPanel fileId={nodeId} snapshot={snapshot}
-        fileReady={fileReady && !busy} link={publicLink?.fileId === nodeId ? publicLink : null}
-        onPrepared={(link) => setPublicLink({ fileId: nodeId, ...link })} />}
+        fileReady={fileReady && !busy} links={publicLinks}
+        onPrepared={(link) => setPublicLinks((previous) => {
+          const next = new Map(previous);
+          next.set(link.publicationId, link);
+          return next;
+        })} />}
       {canChangeStructure && <div className="mt-3 flex flex-wrap gap-2">
         {(["up", "down"] as const).map((direction) => {
           const entries = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];

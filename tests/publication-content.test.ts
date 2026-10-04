@@ -115,7 +115,7 @@ describe("Public presentation", () => {
     const wrongMagic = new Uint8Array(encoded); wrongMagic[0] ^= 1;
     expect(() => decodePublicPresentation(wrongMagic)).toThrow();
     expect(() => encodePublicPresentation({ title: "", markdown: "x" })).toThrow();
-    expect(() => encodePublicPresentation({ title: null, markdown: "a".repeat(FILE_SOURCE_LIMIT + 1) })).toThrow();
+    expect(() => encodePublicPresentation({ title: null, markdown: "a".repeat(MAX_PUBLIC_REPRESENTATION_BYTES + 1) })).toThrow();
     expect(encodePublicPresentation({ title: null, markdown: "a".repeat(FILE_SOURCE_LIMIT) }).length)
       .toBeLessThan(MAX_PUBLIC_REPRESENTATION_BYTES);
   });
@@ -209,6 +209,16 @@ describe("Public representation envelopes", () => {
       publicRepresentationContext(context));
     expect(inspectEnvelope(forged).context.recipientId).toBe(publicationRecipientId(keys.publicKey));
     await expect(openPublicRepresentation(forged, pair, context)).rejects.toThrow();
+  });
+
+  it("bounds the presentation independently when YAML escapes expand a within-limit source", async () => {
+    const source = `---\ntitle: "${"\\L".repeat(100_000)}"\n---\nBody`;
+    expect(new TextEncoder().encode(source).length).toBeLessThanOrEqual(FILE_SOURCE_LIMIT);
+    const { envelope, pair, context } = await sealed(source);
+    expect(envelope.length).toBeLessThanOrEqual(MAX_PUBLIC_REPRESENTATION_BYTES);
+    const presentation = await openPublicRepresentation(envelope, pair, context);
+    expect(new TextEncoder().encode(presentation.title!).length).toBe(300_000);
+    expect(presentation.markdown).toBe("Body");
   });
 
   it("fits a maximum-size Markdown source within the representation bound", async () => {

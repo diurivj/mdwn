@@ -147,6 +147,76 @@ for (const collapse of [true, false]) {
   });
 }
 
+test("reconciles every prepared capability when an earlier request wins a reopened panel's retry", async ({ browser, page, workspace }) => {
+  let firstCaptured!: () => void, releaseFirst!: () => void, firstCommitted!: () => void;
+  const captured = new Promise<void>((resolve) => { firstCaptured = resolve; });
+  const released = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const committed = new Promise<void>((resolve) => { firstCommitted = resolve; });
+  let attempts = 0, firstLinkId = "";
+  await page.route(`**/api/private/publications/files/${workspace.fileId}`, async (route) => {
+    if (route.request().method() !== "PUT") { await route.continue(); return; }
+    attempts++;
+    if (attempts === 1) {
+      firstLinkId = (route.request().postDataJSON() as { linkId: string }).linkId;
+      firstCaptured();
+      await released;
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      firstCommitted();
+      await route.abort("failed");
+    } else {
+      releaseFirst();
+      await committed;
+      const response = await route.fetch();
+      expect(response.status()).toBe(409);
+      await route.fulfill({ response });
+    }
+  });
+  const toggle = page.getByRole("button", { name: "Publish", exact: true });
+  await toggle.click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await captured;
+  await toggle.click();
+  await expect(panel).toHaveCount(0);
+  await toggle.click();
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByLabel("Public link")).toBeVisible();
+  const link = await panel.getByLabel("Public link").inputValue();
+  expect(new URL(link).pathname).toBe(`/p/${firstLinkId}`);
+  expect(attempts).toBe(2);
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const reader = await context.newPage();
+    await reader.goto(link);
+    await expect(reader.getByRole("article", { name: "Published File" })
+      .getByRole("heading", { name: "Diet plan", exact: true })).toBeVisible();
+  } finally { await context.close(); }
+});
+
+test("saves a within-limit source whose decoded YAML title exceeds the source limit", async ({ browser, page, workspace }) => {
+  await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const link = await panel.getByLabel("Public link").inputValue();
+  const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
+  await source.fill(`---\ntitle: "${"\\L".repeat(100_000)}"\n---\n# Expanded title`);
+  await source.press("ControlOrMeta+s");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const reader = await context.newPage();
+    await reader.goto(link);
+    const article = reader.getByRole("article", { name: "Published File" });
+    await expect(article.getByRole("heading", { name: "Expanded title", exact: true })).toBeVisible();
+    expect(await article.locator("h1").first().evaluate((heading) => new TextEncoder().encode(heading.textContent ?? "").length))
+      .toBe(300_000);
+  } finally { await context.close(); }
+});
+
 for (const scenario of [
   { name: "a title-looking line inside a private YAML string", source: '---\nprivate: "note\ntitle: SECRET\nend"\n---\n# Public body', title: null },
   { name: "a folded title with a quoted key and CR-only front matter", source: '---\r"title": >-\r  Public\r  title\rprivate: SECRET\r---\r# Public body', title: "Public title" },
