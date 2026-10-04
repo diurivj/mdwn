@@ -28,8 +28,13 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs):
 }
 clientLoader.hydrate = true as const;
 
+// The fallback shares this shell with the page so it stays in the main route
+// chunk: hydrating with `clientLoader.hydrate` alongside a server loader needs
+// HydrateFallback in the hydrated route module, not only in the SSR build.
+const shell = "mx-auto max-w-3xl px-4";
+
 export function HydrateFallback() {
-  return <main className="mx-auto max-w-3xl px-4 py-12" role="status">Opening published File…</main>;
+  return <main className={`${shell} py-12`} role="status">Opening published File…</main>;
 }
 
 const unavailable: Record<Exclude<PublicPage["status"], "ready">, string> = {
@@ -42,11 +47,11 @@ const unavailable: Record<Exclude<PublicPage["status"], "ready">, string> = {
 /** A read-only document: no path, breadcrumbs, Owner, timestamps or raw front matter. */
 export default function PublicationRoute({ loaderData }: Route.ComponentProps) {
   const page = loaderData as PublicPage;
-  if (page.status !== "ready") return <main className="mx-auto max-w-3xl px-4 py-12">
+  if (page.status !== "ready") return <main className={`${shell} py-12`}>
     <h1 className="text-2xl font-semibold">Published File</h1>
     <p role="alert" className="mt-3 text-stone-600">{unavailable[page.status]}</p>
   </main>;
-  return <main className="mx-auto max-w-3xl px-4 py-10">
+  return <main className={`${shell} py-10`}>
     <article aria-label="Published File">
       {page.title && <h1 className="mb-4 text-3xl font-semibold">{page.title}</h1>}
       {page.authors.length > 0 && <p className="mb-6 text-sm text-stone-600">By {page.authors.join(", ")}</p>}

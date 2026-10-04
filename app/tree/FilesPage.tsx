@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/comments/comments-client";
+import { declarePublicationAuthor } from "~/publications/publications-client";
+import { PublishPanel } from "~/publications/PublishPanel";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/SharedProvisioning";
 
@@ -50,6 +52,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [drawer, setDrawer] = useState(false);
   const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  // The complete Public link lives only in this page's memory, never in storage.
+  const [publicLink, setPublicLink] = useState<{ fileId: string; url: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submission = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
@@ -92,6 +97,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     setStatus(initial.status);
     if (route.current !== `${kind}/${nodeId}`) {
       setDialog(null);
+      setPublishOpen(false);
       setStructuralReady(false);
       setView("edit");
       route.current = `${kind}/${nodeId}`;
@@ -109,6 +115,18 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     if (ensuredThread.current === nodeId) return;
     ensuredThread.current = nodeId;
     void ensurePrivateThread(snapshot.access, nodeId).catch(() => { /* The next File open retries. */ });
+  }, [kind, nodeId, snapshot]);
+
+  // A credited author's own device declares its Public pseudonym; the Owner's
+  // selection alone never writes one, and nothing is inferred from edits.
+  const declared = useRef<string | null>(null);
+  useEffect(() => {
+    const publication = kind === "file" ? snapshot?.file?.publication : null;
+    if (!snapshot || !publication?.declaration || publication.declaration.current) return;
+    const key = `${nodeId}/${publication.linkId}/${publication.declaration.revision}`;
+    if (declared.current === key) return;
+    declared.current = key;
+    void declarePublicationAuthor(snapshot.access, nodeId, publication).catch(() => { /* The next File open retries. */ });
   }, [kind, nodeId, snapshot]);
 
   async function toggle(entry: TreeEntry) {
@@ -338,7 +356,13 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         {canCreate && <><button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("directory")} className="rounded border px-2 py-1">New folder</button>
         <button type="button" disabled={busy || recoveryPending} onClick={() => startCreate("file")} className="rounded border px-2 py-1">New File</button></>}
         {canChangeStructure && <button type="button" disabled={busy || recoveryPending || (kind === "file" && !fileReady)} onClick={startRename} className="rounded border px-2 py-1">Rename</button>}
+        {kind === "file" && snapshot.file && <button type="button" aria-expanded={publishOpen}
+          onClick={() => setPublishOpen((open) => !open)} className="rounded border px-2 py-1">
+          {snapshot.access.actorAccountId === snapshot.access.vaultId ? "Publish" : "Request publication"}</button>}
       </div>
+      {kind === "file" && snapshot.file && publishOpen && <PublishPanel fileId={nodeId} snapshot={snapshot}
+        fileReady={fileReady && !busy} link={publicLink?.fileId === nodeId ? publicLink.url : null}
+        onPublished={(url) => setPublicLink({ fileId: nodeId, url })} />}
       {canChangeStructure && <div className="mt-3 flex flex-wrap gap-2">
         {(["up", "down"] as const).map((direction) => {
           const entries = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];

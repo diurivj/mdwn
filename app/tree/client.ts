@@ -14,6 +14,7 @@ export { rememberListing } from "./listing";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
 import { fileCapabilityContext, rememberFile, type FileCapability } from "./file-capability-client";
 import { createFileHead, verifyFileHead, type FileHead } from "./file-head";
+import { decodePublicationPublicKey, isPublicationIdentifier } from "~/publications/capability";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -198,12 +199,36 @@ export async function loadAncestors(nodeId: string, signal?: AbortSignal): Promi
   return result.ancestors;
 }
 
+/** The active Publication as the File response describes it to this actor:
+ * an editor's paired-save target or a credited author's declaration slot.
+ * It is opaque public-link metadata only; the read capability is never here. */
+export type FilePublication = {
+  publicationId: string; linkId: string; publicKey: Uint8Array<ArrayBuffer>; revision: number | null;
+  declaration: { declarationId: string; revision: number; current: boolean } | null;
+};
+type FilePublicationWire = { publicationId: string; linkId: string; publicKey: string; revision?: number;
+  declaration: { declarationId: string; revision: number; current: boolean } | null };
+
+function filePublication(value: FilePublicationWire | undefined, canEdit: boolean): FilePublication | null {
+  if (value === undefined) return null;
+  const count = (item: unknown, minimum: number): item is number =>
+    typeof item === "number" && Number.isSafeInteger(item) && item >= minimum;
+  const declaration = value.declaration;
+  if (!isPublicationIdentifier(value.publicationId) || !isPublicationIdentifier(value.linkId) ||
+      (canEdit ? !count(value.revision, 1) : value.revision !== undefined) ||
+      (declaration !== null && (!isPublicationIdentifier(declaration?.declarationId) || !count(declaration.revision, 0) ||
+        typeof declaration.current !== "boolean"))) throw new Error("invalid File publication");
+  return { publicationId: value.publicationId, linkId: value.linkId, publicKey: decodePublicationPublicKey(value.publicKey),
+    revision: canEdit ? value.revision! : null, declaration };
+}
+
 export async function loadFile(access: RootAccess, fileId: string, parentKey: Uint8Array,
   signal?: AbortSignal) {
   const file = await jsonResource<{ fileId: string; ownerId: string; parentId?: string; revision: number; representationId: string;
     contentKeyId: string; keyEpoch: number; ciphertext: string; keyEnvelope?: string; canEdit: boolean;
     capability?: FileCapability | null; representationKeyEnvelope?: string;
     fileHead?: FileHead & { signerDeviceId: string; signerPublicKey: string };
+    publication?: FilePublicationWire;
   }>(`/api/private/tree/files/${fileId}`, "POST", undefined, signal);
   if (file.fileId !== fileId || file.ownerId !== access.vaultId) throw new Error("invalid File identity");
   const context = { vaultId: access.vaultId, objectId: fileId,
@@ -239,6 +264,7 @@ export async function loadFile(access: RootAccess, fileId: string, parentKey: Ui
   const decoded = decodeFileRepresentation(content);
   return { parentId: access.rootKind === "file" ? null : file.parentId ?? null, revision: file.revision, keyEpoch: file.keyEpoch,
     canEdit: file.canEdit, capability: file.capability ?? null, capabilityKey,
+    publication: filePublication(file.publication, file.canEdit),
     ciphertext: file.ciphertext, keyEnvelope: file.keyEnvelope, representationKeyEnvelope: file.representationKeyEnvelope,
     contentKeyId: file.contentKeyId, representationId: file.representationId,
     ...decoded, sourceBytes: fileSourceBytes(decoded.markdown) };

@@ -5,7 +5,7 @@ import {
   sealAttribution,
   sealCommentBody,
 } from "~/comments/content";
-import { openAccountProfile } from "~/crypto/account-profile";
+import { readPseudonym } from "~/account/profile-client";
 import { openVaultRecoveryEnvelope, sealVaultRecoveryEnvelope } from "~/crypto/vault";
 import { privateRequest } from "~/device/private-client";
 import { getDevice } from "~/device/store";
@@ -14,7 +14,6 @@ import { openCommentKeyEnvelope, type CommentKeyContext } from "~/sharing/commen
 import type { RootAccess } from "~/tree/client";
 import { decodeTreeBytes, encodeTreeBytes } from "~/tree/wire";
 
-const PROFILE_CIPHERTEXT_BYTES = 4_096;
 const COMMENT_PAGE_BATCH = 10;
 
 export class CommentsChangedError extends Error {
@@ -99,15 +98,6 @@ async function decryptPage(thread: ThreadMeta, capability: Uint8Array, data: Thr
       canDelete: comment.authorId === thread.actorAccountId || thread.canDeleteAny });
   }
   return { comments, pseudonyms };
-}
-
-async function readPseudonym(access: RootAccess, signal?: AbortSignal): Promise<string> {
-  const response = await privateRequest("/api/private/profile", { method: "POST", signal });
-  if (!response.ok) throw new Error("Account profile unavailable");
-  const profile = await response.json() as { ciphertext: string; epoch: number; revision: number };
-  const opened = await openAccountProfile(decodeTreeBytes(profile.ciphertext, PROFILE_CIPHERTEXT_BYTES),
-    access.actorVaultRootKey, { accountId: access.actorAccountId, epoch: profile.epoch, revision: profile.revision });
-  return opened.publicPseudonym;
 }
 
 /** Read the Private thread and decrypt it locally. Plaintext never leaves the

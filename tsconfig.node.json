@@ -17,6 +17,7 @@
     "app/publications/capability.ts",
     "app/publications/content.ts",
     "app/comments/comments-client.ts",
+    "app/account/profile-client.ts",
     "app/device/store.ts",
     "app/device/proof.ts",
     "app/device/private-client.ts",
