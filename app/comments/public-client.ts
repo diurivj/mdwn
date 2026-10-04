@@ -36,6 +36,9 @@ export class PublicCommentsSealedError extends Error {
 export class PublicCommentsLimitedError extends Error {
   constructor() { super("rate_limited"); }
 }
+export class PublicCommentsPreparingError extends Error {
+  constructor() { super("secure_access_preparing"); }
+}
 export class PublicCommentsSignInError extends Error {
   constructor(readonly state: "signed-out" | "unprovisioned") { super("sign-in-required"); }
 }
@@ -304,7 +307,11 @@ export type FilePublicComments = { status: "absent"; canCreate: boolean; publica
 export async function loadFilePublicComments(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<FilePublicComments> {
   const response = await privateRequest(`/api/private/comments/files/${fileId}/public`, { method: "POST", signal });
   if (response.status === 404) throw new PublicCommentsNotFoundError();
-  if (response.status === 409) throw new PublicCommentsChangedError();
+  if (response.status === 409) {
+    const error = (await response.json() as { error?: string }).error;
+    if (error === "secure_access_preparing" || error === "owned_comment_key_missing") throw new PublicCommentsPreparingError();
+    throw new PublicCommentsChangedError();
+  }
   if (!response.ok) throw new Error("Comments unavailable");
   const data = await response.json() as FileThreadWire;
   if (!data.thread) return { status: "absent", canCreate: Boolean(data.canCreateThread), publicationId: data.publication?.publicationId ?? null };

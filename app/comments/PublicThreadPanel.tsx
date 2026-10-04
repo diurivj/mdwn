@@ -11,6 +11,7 @@ import {
   PublicCommentsChangedError,
   PublicCommentsLimitedError,
   PublicCommentsNotFoundError,
+  PublicCommentsPreparingError,
   PublicCommentsSealedError,
   PublicCommentsSignInError,
   type FilePublicComments,
@@ -18,7 +19,7 @@ import {
   type PublicThreadView,
 } from "./public-client";
 
-type PanelState = { status: "loading" } | { status: "failed"; message: string } | FilePublicComments;
+type PanelState = { status: "loading" } | { status: "preparing" } | { status: "failed"; message: string } | FilePublicComments;
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const stamp = (value: number) => timeFormat.format(new Date(value));
@@ -88,7 +89,8 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
       return next;
     } catch (error) {
       if (signal.aborted) return null;
-      if (error instanceof PublicCommentsNotFoundError) setPanel({ status: "failed", message: "This File’s public comments are unavailable." });
+      if (error instanceof PublicCommentsPreparingError) setPanel({ status: "preparing" });
+      else if (error instanceof PublicCommentsNotFoundError) setPanel({ status: "failed", message: "This File’s public comments are unavailable." });
       else if (error instanceof PublicCommentsChangedError) setPanel({ status: "failed", message: "Public comments changed on another device. Reopen this File." });
       else setPanel({ status: "failed", message: "Public comments could not be loaded. Try again." });
       return null;
@@ -140,6 +142,8 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
     if (controller) { setPanel({ status: "loading" }); void reload(controller.signal); } };
   if (panel.status === "loading") return <section aria-label="Public comments" className="mt-4">
     <p role="status">Loading public comments…</p></section>;
+  if (panel.status === "preparing") return <section aria-label="Public comments" className="mt-4">
+    <p role="status">Secure public comment access is being prepared on this device.</p></section>;
   if (panel.status === "failed") return <section aria-label="Public comments" className="mt-4">
     <p role="alert">{panel.message}</p>
     <button type="button" className="mt-2 rounded border px-3 py-1" onClick={retry}>Retry public comments</button>
