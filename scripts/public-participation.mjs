@@ -27,6 +27,9 @@
 import { isEnvironment, WRANGLER_TARGETS, spawnWrangler } from "./lib/wrangler-targets.mjs";
 
 const REASONS = ["repeated_technical_abuse", "report_pattern"];
+// Mirrors app/security/public-participation.ts / .server.ts; keep in lockstep.
+const FIRST_SUSPENSION_MS = 604_800_000;
+const REPEAT_SUSPENSION_MS = 2_592_000_000;
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const [command, rawEnv, ...args] = process.argv.slice(2);
@@ -60,12 +63,12 @@ if (command === "apply") {
   }
   statement = `INSERT INTO public_participation_suspensions
     (account_id, strike_count, reason, started_at, expires_at, updated_at)
-    VALUES (${literal(requireUuid(accountId, "accountId"))}, 1, ${literal(reason)}, ${NOW_MS}, ${NOW_MS} + 604800000, ${NOW_MS})
+    VALUES (${literal(requireUuid(accountId, "accountId"))}, 1, ${literal(reason)}, ${NOW_MS}, ${NOW_MS} + ${FIRST_SUSPENSION_MS}, ${NOW_MS})
     ON CONFLICT (account_id) DO UPDATE SET
       strike_count = public_participation_suspensions.strike_count + 1,
       reason = excluded.reason,
       started_at = excluded.started_at,
-      expires_at = excluded.started_at + 2592000000,
+      expires_at = excluded.started_at + ${REPEAT_SUSPENSION_MS},
       updated_at = excluded.updated_at
     RETURNING account_id, strike_count, reason, started_at, expires_at`;
 } else if (command === "clear") {

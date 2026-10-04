@@ -548,8 +548,8 @@ export async function deletePublicComment(env: Env, auth: AuthorizedDevice, targ
  * Report one Public Comment by opaque ID with a fixed category (ticket 26).
  * The report carries no plaintext and grants no content access: it records the
  * reporter Account, the Comment ID, the category and bounded timestamps only.
- * A signed-in Account may report the same Comment once; the 3/24-hour limit
- * still bounds every accepted report request.
+ * A signed-in Account may report the same Comment once; every accepted
+ * request — including an idempotent repeat — consumes the 3/24-hour window.
  */
 export async function reportPublicComment(request: Request, env: Env, auth: AuthorizedDevice,
   value: unknown): Promise<Response> {
@@ -563,8 +563,14 @@ export async function reportPublicComment(request: Request, env: Env, auth: Auth
   const comment = await db.get(sql`SELECT 1 FROM comments c
     JOIN comment_threads t ON t.id = c.thread_id AND t.purpose = 'public' WHERE c.id = ${commentId}`);
   if (!comment) return notFound();
-  const limit = await enforceRateLimit({ db: env.DB, request, action: "public_comment.report",
-    scopes: { accountId: auth.accountId }, hmacSecret: env.ABUSE_HMAC_SECRET });
+  let limit;
+  try {
+    limit = await enforceRateLimit({ db: env.DB, request, action: "public_comment.report",
+      scopes: { accountId: auth.accountId }, hmacSecret: env.ABUSE_HMAC_SECRET });
+  } catch (error) {
+    if (error instanceof AbuseControlUnavailableError) return abuseControlUnavailableResponse();
+    throw error;
+  }
   if (!limit.allowed) return rateLimitResponse(limit);
   const now = Date.now();
   const committed = await commitPrivateMutation(env, auth, (guard) => sql`

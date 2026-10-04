@@ -1,6 +1,6 @@
 import { readPseudonym } from "~/account/profile-client";
 import { openVaultRecoveryEnvelope } from "~/crypto/vault";
-import { privateRequest, PrivateAccessError, PrivatePolicyError } from "~/device/private-client";
+import { privateRequest, PrivateAccessError, PrivatePolicyError, isPublicParticipationSuspended } from "~/device/private-client";
 import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { openCommentKeyEnvelope, type CommentKeyContext } from "~/sharing/comment-keys";
@@ -53,7 +53,7 @@ export class PublicCommentsSuspendedError extends Error {
 /** A policy denial (a Public-participation suspension) is not a proof failure;
  * the composer explains it with the fixed automatic end. */
 function policyDenial(error: unknown): never {
-  if (error instanceof PrivatePolicyError && error.policy === "public_participation_suspended") {
+  if (isPublicParticipationSuspended(error)) {
     throw new PublicCommentsSuspendedError(error.detail.suspendedUntil);
   }
   throw error;

@@ -11,7 +11,7 @@ import { loadFile } from "~/tree/client";
 
 type PanelState = { status: "loading" } | { status: "failed" } | { status: "ready"; state: PublicationState };
 
-const messages: Record<PublicationError["code"], string> = {
+const messages: Record<Exclude<PublicationError["code"], "suspended">, string> = {
   changed: "This File’s publication changed on another device. Refresh and try again.",
   exists: "This File is already published.",
   "file-changed": "This File was saved on another device. Publishing uses the latest saved version — try again.",
@@ -23,7 +23,6 @@ const messages: Record<PublicationError["code"], string> = {
   "link-required": "Paste the complete public link (including the part after #) to enable public comments.",
   "pseudonym-pending": "Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before changing authors.",
   "rotation-required": "Secure access must finish updating before the Public link or comment audience can change.",
-  suspended: "Your account can’t publish or rotate a public link right now because public participation is suspended.",
   unavailable: "The change could not be confirmed. Try again.",
 };
 

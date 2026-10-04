@@ -3,7 +3,7 @@ import { loadFilePublicEpochs } from "~/comments/public-client";
 import { sealCommentEpochLink } from "~/comments/public-content";
 import { sealVaultRecoveryEnvelope } from "~/crypto/vault";
 import { FILE_SOURCE_LIMIT } from "~/crypto/file-source";
-import { privateRequest, PrivatePolicyError } from "~/device/private-client";
+import { privateRequest, isPublicParticipationSuspended } from "~/device/private-client";
 import { newOpaqueId } from "~/opaque-id";
 import { loadDirectory, loadFile, type FilePublication, type RootAccess } from "~/tree/client";
 import { convertFileCapability } from "~/tree/file-capability-client";
@@ -54,7 +54,7 @@ async function publicationRequest(path: string, method: "POST" | "PUT" | "DELETE
     response = await privateRequest(`/api/private/publications/files/${path}`, {
       method, signal, ...(body ? { body: JSON.stringify(body) } : {}) });
   } catch (error) {
-    if (error instanceof PrivatePolicyError && error.policy === "public_participation_suspended") {
+    if (isPublicParticipationSuspended(error)) {
       throw new PublicationError("suspended", error.detail.suspendedUntil);
     }
     throw error;

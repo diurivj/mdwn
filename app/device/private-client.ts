@@ -22,15 +22,22 @@ export class PrivatePolicyError extends PrivateAccessError {
   }
 }
 
+/** The one fixed policy denial a participating surface currently explains. */
+export const PUBLIC_PARTICIPATION_SUSPENDED = "public_participation_suspended";
+
+export function isPublicParticipationSuspended(error: unknown): error is PrivatePolicyError {
+  return error instanceof PrivatePolicyError && error.policy === PUBLIC_PARTICIPATION_SUSPENDED;
+}
+
 /** Recognize only the fixed policy-denial body; every other 403 stays a
  * device-proof denial. The response body is cloned, never consumed. */
 async function policyDenial(response: Response): Promise<PrivatePolicyError | null> {
   try {
     const body = await response.clone().json() as { error?: unknown; suspendedUntil?: unknown };
-    if (body.error !== "public_participation_suspended") return null;
+    if (body.error !== PUBLIC_PARTICIPATION_SUSPENDED) return null;
     const suspendedUntil = typeof body.suspendedUntil === "number" && Number.isSafeInteger(body.suspendedUntil)
       && body.suspendedUntil > 0 ? body.suspendedUntil : null;
-    return new PrivatePolicyError(body.error, { suspendedUntil });
+    return new PrivatePolicyError(PUBLIC_PARTICIPATION_SUSPENDED, { suspendedUntil });
   } catch {
     return null;
   }
