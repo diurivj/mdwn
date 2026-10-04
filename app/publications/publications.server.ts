@@ -7,9 +7,10 @@ import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, typ
 import { newOpaqueId } from "~/opaque-id";
 import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
 import { epochInput, epochStatements, readPublicCommentPage, type EpochInput } from "~/comments/public.server";
+import { isCommentEpochLink, MAX_PUBLIC_EPOCH_LINK_BYTES } from "~/comments/public-content";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { shareHandleLookupToken } from "~/sharing/address";
-import { accessPredicate, accountAccessQuery, effectiveAccess, permits } from "~/sharing/access.server";
+import { accessPredicate, accountAccessQuery, effectiveAccess, permits, sharingWriteBlocked } from "~/sharing/access.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
 import { decodePublicationPublicKey, isPublicationIdentifier } from "./capability";
 import {
@@ -31,11 +32,16 @@ const notFound = () => failure("not_found", 404);
 const invalid = () => failure("invalid_publication_request", 400);
 const denied = () => failure("device_proof_required", 403);
 const publicationChanged = () => failure("publication_changed", 409);
+const sealed = () => failure("key_rotation_required", 409);
 
 const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
   Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const positive = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && Number.isSafeInteger(value + 1);
+
+/** Bounds for link rotation and teardown batches. */
+const MAX_PUBLIC_AUDIENCE_EPOCHS = 100;
+const TEARDOWN_COMMENT_BATCH = 200;
 
 /** The one active-or-deleting Publication of a File. The identical `IN` term
  * lets SQLite use the partial unique index `publications_file_idx`. */
@@ -45,12 +51,16 @@ function filePublication(fileId: string | SQL): SQL {
 
 type PublicationState = {
   id: string; state: "active" | "deleting"; created_at: number; link_id: string | null; public_key: ArrayBuffer | null;
+  comment_count: number; teardown_total: number | null;
 };
 
 /** The File's Publication and active link, re-deriving the actor's File-read access. */
 async function publicationState(env: Env, auth: AuthorizedDevice, fileId: string): Promise<PublicationState | null> {
   return (await createDb(env.DB).get<PublicationState>(sql`
-    SELECT p.id, p.state, p.created_at, l.id AS link_id, l.public_key
+    SELECT p.id, p.state, p.created_at, l.id AS link_id, l.public_key,
+      (SELECT count(*) FROM comments c JOIN comment_threads ct ON ct.id = c.thread_id
+        WHERE ct.publication_id = p.id AND ct.purpose = 'public') AS comment_count,
+      (SELECT td.comment_total FROM publication_teardowns td WHERE td.publication_id = p.id) AS teardown_total
     FROM publications p LEFT JOIN publication_links l ON l.id = p.current_link_id AND l.publication_id = p.id
     WHERE ${filePublication(fileId)} AND ${accessPredicate(auth, fileId, "read")}`)) ?? null;
 }
@@ -105,10 +115,16 @@ async function readPublication(env: Env, auth: AuthorizedDevice, fileId: string)
     WHERE t.publication_id = ${publication.id} AND t.purpose = 'public' AND ${accessPredicate(auth, fileId, "read")}`) : null;
   return Response.json({
     fileId, isOwner: owner, canEdit: permits(access, "edit_markdown"),
-    publication: publication ? { publicationId: publication.id, state: publication.state, createdAt: publication.created_at,
+    publication: publication ? { publicationId: publication.id, state: publication.state,
+      ...(owner ? { linkId: publication.link_id } : {}), createdAt: publication.created_at,
       authors: authors.map((author) => ({ declarationId: author.id, ordinal: author.ordinal,
         self: author.author_id === auth.accountId, declared: Boolean(author.declared) })) } : null,
     comments: comments ? { threadId: comments.threadId, epochId: comments.epochId, audience: comments.audience } : null,
+    // The confirmation copy states the current opaque count; a sealed teardown
+    // reports its pinned total and live remaining count for progress.
+    commentCount: publication?.comment_count ?? 0,
+    teardown: publication && publication.state === "deleting"
+      ? { commentTotal: publication.teardown_total ?? 0, commentsRemaining: publication.comment_count } : null,
     requests: requests.map((request) => ({ requestId: request.id, own: request.requester_id === auth.accountId,
       createdAt: request.created_at })),
   }, { headers });
@@ -424,6 +440,290 @@ async function declareAuthor(env: Env, auth: AuthorizedDevice, fileId: string, d
   return await proofSpent(env, auth) ? denied() : publicationChanged();
 }
 
+/**
+ * Link rotation (ticket 25): the Owner's browser generates a fresh path
+ * identifier and capability, re-encrypts the current Public representation to
+ * the new public key, rewraps every public Comment epoch to the new
+ * Publication capability, and one transaction replaces the active link in
+ * place. The logical Publication, Public Comments and history survive; the
+ * retired identifier immediately stops routing and is never reused.
+ */
+type RotationEpoch = { epochId: string; capabilityId: string; keyEpoch: number; wrapper: Uint8Array<ArrayBuffer> };
+type Rotation = {
+  publicationId: string; linkId: string; expectedLinkId: string; publicKey: Uint8Array<ArrayBuffer>;
+  expectedPresentationRevision: number; expectedRevision: number; expectedRepresentationId: string;
+  ciphertext: Uint8Array<ArrayBuffer>; epochs: RotationEpoch[];
+};
+
+async function rotationInput(value: unknown): Promise<Rotation | null> {
+  const input = record(value), representation = record(input?.representation);
+  if (!input || !representation || !exact(input, ["publicationId", "linkId", "publicKey", "expectedLinkId",
+      "expectedPresentationRevision", "expectedRevision", "expectedRepresentationId", "representation", "epochs"]) ||
+      !exact(representation, ["ciphertext"]) ||
+      !isPublicationIdentifier(input.publicationId) || !isPublicationIdentifier(input.linkId) ||
+      !isPublicationIdentifier(input.expectedLinkId) || input.publicationId === input.linkId ||
+      input.linkId === input.expectedLinkId || !positive(input.expectedPresentationRevision) ||
+      !positive(input.expectedRevision) || !isV7(input.expectedRepresentationId) ||
+      !Array.isArray(input.epochs) || input.epochs.length > MAX_PUBLIC_AUDIENCE_EPOCHS) return null;
+  const epochs: RotationEpoch[] = [];
+  const seen = new Set<string>();
+  for (const entry of input.epochs) {
+    const epoch = record(entry);
+    if (!epoch || !exact(epoch, ["epochId", "capabilityId", "keyEpoch", "wrapper"]) || !isV7(epoch.epochId) ||
+        !isV7(epoch.capabilityId) || !positive(epoch.keyEpoch) || seen.has(epoch.epochId)) return null;
+    seen.add(epoch.epochId);
+    try {
+      const wrapper = decodeTreeBytes(epoch.wrapper, MAX_PUBLIC_EPOCH_LINK_BYTES);
+      if (!isCommentEpochLink(wrapper, { publicationId: input.publicationId, linkId: input.linkId,
+          epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.keyEpoch })) return null;
+      epochs.push({ epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.keyEpoch, wrapper });
+    } catch { return null; }
+  }
+  try {
+    const publicKey = await validPublicKey(input.publicKey);
+    const binding = { publicationId: input.publicationId, linkId: input.linkId, publicKey };
+    return { publicationId: input.publicationId, linkId: input.linkId, expectedLinkId: input.expectedLinkId, publicKey,
+      expectedPresentationRevision: input.expectedPresentationRevision, expectedRevision: input.expectedRevision,
+      expectedRepresentationId: input.expectedRepresentationId,
+      ciphertext: publicEnvelope(representation.ciphertext, MAX_PUBLIC_REPRESENTATION_BYTES,
+        publicRepresentationContext({ ...binding, revision: input.expectedPresentationRevision })), epochs };
+  } catch { return null; }
+}
+
+type RotationState = { id: string; owner_id: string; link_id: string; representation_id: string; revision: number; file_revision: number };
+
+/** A failed rotation reports precisely whether the File or the Publication moved. */
+async function rotationFailure(env: Env, auth: AuthorizedDevice, fileId: string, input: Rotation): Promise<Response> {
+  if (await proofSpent(env, auth)) return denied();
+  const current = await createDb(env.DB).get<{ id: string; state: string; link_id: string | null;
+    current_revision: number; current_representation_id: string }>(sql`
+    SELECT p.id, p.state, p.current_link_id AS link_id, f.current_revision, f.current_representation_id
+    FROM publications p JOIN files f ON f.node_id = p.file_id AND f.owner_id = p.owner_id
+    WHERE ${filePublication(fileId)} AND ${accessPredicate(auth, fileId, "owner")}`);
+  if (!current) return notFound();
+  if (current.state !== "active" || current.id !== input.publicationId || current.link_id !== input.expectedLinkId) {
+    return publicationChanged();
+  }
+  if (current.current_revision !== input.expectedRevision ||
+      current.current_representation_id !== input.expectedRepresentationId) return failure("file_changed", 409);
+  return publicationChanged();
+}
+
+async function rotatePublication(request: Request, env: Env, auth: AuthorizedDevice, fileId: string, value: unknown): Promise<Response> {
+  const input = await rotationInput(value);
+  if (!input) return invalid();
+  const db = createDb(env.DB);
+  const state = await db.get<RotationState>(sql`
+    SELECT p.id, p.owner_id, p.current_link_id AS link_id, p.current_representation_id AS representation_id,
+      r.revision, r.file_revision
+    FROM publications p
+    JOIN publication_links l ON l.id = p.current_link_id AND l.publication_id = p.id
+    JOIN public_representations r ON r.id = p.current_representation_id AND r.publication_id = p.id AND r.link_id = l.id
+    WHERE p.file_id = ${fileId} AND p.state = 'active' AND p.owner_id = ${auth.accountId}
+      AND ${accessPredicate(auth, fileId, "owner")}`);
+  if (!state) return notFound();
+  if (state.id !== input.publicationId || state.link_id !== input.expectedLinkId ||
+      state.revision !== input.expectedPresentationRevision) return publicationChanged();
+  const file = await db.get<{ current_revision: number; current_representation_id: string }>(sql`
+    SELECT f.current_revision, f.current_representation_id FROM files f JOIN vault_nodes n ON n.id = f.node_id
+    WHERE f.node_id = ${fileId} AND f.owner_id = ${state.owner_id} AND ${accessPredicate(auth, fileId, "owner")}`);
+  if (!file) return notFound();
+  if (file.current_revision !== input.expectedRevision ||
+      file.current_representation_id !== input.expectedRepresentationId) return failure("file_changed", 409);
+  // The submitted wrappers must be exactly the thread's public epochs, each
+  // bound to its own capability identity; anything else rotates nothing.
+  const expected = await db.all<{ epoch_id: string; capability_id: string; key_epoch: number; wrapper_link: string | null }>(sql`
+    SELECT e.id AS epoch_id, c.capability_id, e.key_epoch, w.link_id AS wrapper_link
+    FROM comment_thread_epochs e
+    JOIN comment_threads t ON t.id = e.thread_id AND t.purpose = 'public' AND t.publication_id = ${state.id}
+    JOIN sharing_comment_capabilities c ON c.object_id = e.id AND c.thread_id = t.id
+      AND c.purpose = 'public-comment-audience-epoch' AND c.capability_epoch = e.key_epoch
+    LEFT JOIN public_comment_epoch_links w ON w.epoch_id = e.id AND w.publication_id = t.publication_id
+    WHERE e.audience = 'public' ORDER BY e.ordinal`);
+  if (expected.length > MAX_PUBLIC_AUDIENCE_EPOCHS) return publicationChanged();
+  const submitted = new Map(input.epochs.map((epoch) => [epoch.epochId, epoch]));
+  for (const epoch of expected) {
+    const wrapper = submitted.get(epoch.epoch_id);
+    if (!wrapper || wrapper.capabilityId !== epoch.capability_id || wrapper.keyEpoch !== epoch.key_epoch ||
+        epoch.wrapper_link !== input.expectedLinkId) return publicationChanged();
+  }
+  if (submitted.size !== expected.length) return publicationChanged();
+  if (await db.get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return sealed();
+  const quota = await creationQuota(request, env, auth);
+  if (quota) return quota;
+  const now = Date.now(), representationId = newOpaqueId();
+  let committed = false;
+  try {
+    committed = await commitPrivateBatch(env, auth, (guard) => sql`
+      UPDATE publications SET current_link_id = ${input.linkId}, current_representation_id = ${representationId},
+        updated_at = ${now}
+      WHERE id = ${state.id} AND file_id = ${fileId} AND state = 'active' AND owner_id = ${auth.accountId}
+        AND current_link_id = ${input.expectedLinkId} AND current_representation_id = ${state.representation_id}
+        AND EXISTS (SELECT 1 FROM public_representations r WHERE r.id = ${state.representation_id}
+          AND r.publication_id = ${state.id} AND r.link_id = ${input.expectedLinkId}
+          AND r.revision = ${state.revision} AND r.file_revision = ${input.expectedRevision})
+        AND EXISTS (SELECT 1 FROM files f WHERE f.node_id = ${fileId} AND f.owner_id = ${state.owner_id}
+          AND f.current_revision = ${input.expectedRevision}
+          AND f.current_representation_id = ${input.expectedRepresentationId})
+        AND (SELECT count(*) FROM public_comment_epoch_links w JOIN comment_thread_epochs e ON e.id = w.epoch_id
+          JOIN comment_threads t ON t.id = e.thread_id AND t.purpose = 'public' AND t.publication_id = ${state.id}
+          WHERE e.audience = 'public' AND w.link_id = ${input.expectedLinkId}) = ${expected.length}
+        AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
+    (marker) => [
+      // Replace the active link identity in place: the retired path is gone and
+      // the same logical Publication keeps its thread, Comments and history.
+      sql`UPDATE publication_links SET id = ${input.linkId}, public_key = ${input.publicKey}, created_at = ${now}
+        WHERE id = ${input.expectedLinkId} AND publication_id = ${state.id} AND ${marker}`,
+      ...input.epochs.map((epoch) => sql`UPDATE public_comment_epoch_links SET link_id = ${input.linkId},
+        ciphertext = ${epoch.wrapper}, key_epoch = ${epoch.keyEpoch}, created_at = ${now}
+        WHERE epoch_id = ${epoch.epochId} AND publication_id = ${state.id}
+          AND link_id = ${input.expectedLinkId} AND ${marker}`),
+      sql`DELETE FROM public_representations WHERE id = ${state.representation_id}
+        AND publication_id = ${state.id} AND ${marker}`,
+      sql`INSERT INTO public_representations (id, publication_id, link_id, revision, file_revision, ciphertext,
+          ciphertext_size, created_at)
+        SELECT ${representationId}, ${state.id}, ${input.linkId}, ${state.revision}, ${state.file_revision},
+          ${input.ciphertext}, ${input.ciphertext.byteLength}, ${now} WHERE ${marker}`,
+    ], { deferForeignKeys: true });
+  } catch { committed = false; }
+  if (committed) return Response.json({ publicationId: state.id, linkId: input.linkId,
+    representation: { revision: state.revision } }, { headers });
+  return rotationFailure(env, auth, fileId, input);
+}
+
+/**
+ * Unpublish (ticket 25): seal first, delete later. One transaction removes the
+ * active link, flips the Publication irreversibly to `deleting`, and pins the
+ * opaque Public Comment count. Every Public route denies access immediately;
+ * only the Owner's browser then drives bounded deletion batches.
+ */
+async function unpublishPublication(env: Env, auth: AuthorizedDevice, fileId: string, value: unknown): Promise<Response> {
+  const input = record(value ?? {});
+  if (!input || !exact(input, [])) return invalid();
+  const db = createDb(env.DB);
+  const now = Date.now();
+  let committed = false;
+  try {
+    committed = await commitPrivateBatch(env, auth, (guard) => sql`
+      UPDATE publications SET state = 'deleting', current_link_id = NULL, current_representation_id = NULL,
+        updated_at = ${now}
+      WHERE file_id = ${fileId} AND state = 'active' AND owner_id = ${auth.accountId}
+        AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
+    (marker) => [
+      sql`INSERT INTO publication_teardowns (publication_id, owner_id, comment_total, created_at)
+        SELECT p.id, p.owner_id, (SELECT count(*) FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+          WHERE t.publication_id = p.id AND t.purpose = 'public'), ${now}
+        FROM publications p WHERE p.file_id = ${fileId} AND p.state = 'deleting'
+          AND p.owner_id = ${auth.accountId} AND ${marker}`,
+      // Wrappers are bound to the retired link and can never be served again.
+      sql`DELETE FROM public_comment_epoch_links WHERE publication_id IN
+        (SELECT p.id FROM publications p WHERE p.file_id = ${fileId} AND p.state = 'deleting'
+          AND p.owner_id = ${auth.accountId}) AND ${marker}`,
+      sql`DELETE FROM publication_links WHERE publication_id IN
+        (SELECT p.id FROM publications p WHERE p.file_id = ${fileId} AND p.state = 'deleting'
+          AND p.owner_id = ${auth.accountId}) AND ${marker}`,
+    ], { deferForeignKeys: true });
+  } catch { committed = false; }
+  const sealed = await db.get<{ id: string; comment_total: number }>(sql`
+    SELECT p.id, t.comment_total FROM publications p JOIN publication_teardowns t ON t.publication_id = p.id
+    WHERE p.file_id = ${fileId} AND p.state = 'deleting' AND p.owner_id = ${auth.accountId}
+      AND ${accessPredicate(auth, fileId, "owner")}`);
+  if (sealed) return Response.json({ publicationId: sealed.id, commentTotal: sealed.comment_total,
+    alreadyUnpublished: !committed }, { headers });
+  if (!committed && await proofSpent(env, auth)) return denied();
+  return notFound();
+}
+
+type TeardownState = { id: string; comment_total: number; thread_id: string | null; comments_remaining: number };
+
+/** Every non-Comment row teardown removes, including the Publication itself. */
+function teardownStatements(publicationId: string, fileId: string, ownerId: string, threadId: string | null, marker: SQL): SQL[] {
+  return [
+    ...(threadId === null ? [] : [
+      // A public_history staging row names its epoch in `thread_id`; a private
+      // staging row names the thread, and both hold comment content-key bytes.
+      sql`DELETE FROM key_rotation_comment_items WHERE (thread_id = ${threadId}
+        OR thread_id IN (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId})) AND ${marker}`,
+      sql`DELETE FROM key_rotation_items WHERE kind = 'public_history' AND object_id IN
+        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
+      sql`DELETE FROM grant_comment_key_envelopes WHERE object_id IN
+        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
+      sql`DELETE FROM share_comment_key_envelopes WHERE object_id IN
+        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
+      sql`DELETE FROM key_envelopes WHERE object_id IN
+        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
+      sql`DELETE FROM sharing_comment_capabilities WHERE thread_id = ${threadId} AND ${marker}`,
+      sql`DELETE FROM public_comment_epoch_links WHERE publication_id = ${publicationId} AND ${marker}`,
+      sql`DELETE FROM comments WHERE thread_id = ${threadId} AND ${marker}`,
+      sql`DELETE FROM thread_attributions WHERE thread_id = ${threadId} AND ${marker}`,
+      sql`DELETE FROM comment_thread_epochs WHERE thread_id = ${threadId} AND ${marker}`,
+      sql`DELETE FROM comment_threads WHERE id = ${threadId} AND ${marker}`,
+    ]),
+    sql`DELETE FROM public_representations WHERE publication_id = ${publicationId} AND ${marker}`,
+    sql`DELETE FROM publication_authors WHERE publication_id = ${publicationId} AND ${marker}`,
+    sql`DELETE FROM publication_requests WHERE file_id = ${fileId} AND owner_id = ${ownerId} AND ${marker}`,
+    sql`DELETE FROM publication_teardowns WHERE publication_id = ${publicationId} AND ${marker}`,
+    sql`DELETE FROM publications WHERE id = ${publicationId} AND file_id = ${fileId}
+      AND owner_id = ${ownerId} AND state = 'deleting' AND ${marker}`,
+  ];
+}
+
+/**
+ * One idempotent bounded teardown batch. While Public Comments remain it
+ * hard-deletes at most `TEARDOWN_COMMENT_BATCH` of them; once none remain it
+ * removes the thread and epochs, envelopes, attribution, representation,
+ * authors, requests, teardown state and the Publication row atomically. Only
+ * the Owner may resume, and no participation limit can block deletion.
+ */
+async function teardownPublication(env: Env, auth: AuthorizedDevice, fileId: string, value: unknown): Promise<Response> {
+  const input = record(value ?? {});
+  if (!input || !exact(input, [])) return invalid();
+  const db = createDb(env.DB);
+  const publication = await db.get<TeardownState>(sql`
+    SELECT p.id, t.comment_total,
+      (SELECT ct.id FROM comment_threads ct WHERE ct.publication_id = p.id AND ct.purpose = 'public') AS thread_id,
+      (SELECT count(*) FROM comments c JOIN comment_threads ct ON ct.id = c.thread_id
+        WHERE ct.publication_id = p.id AND ct.purpose = 'public') AS comments_remaining
+    FROM publications p JOIN publication_teardowns t ON t.publication_id = p.id
+    WHERE p.file_id = ${fileId} AND p.state = 'deleting' AND p.owner_id = ${auth.accountId}
+      AND ${accessPredicate(auth, fileId, "owner")}`);
+  if (!publication) {
+    // Only the Owner can observe or resume a teardown; anyone else gets 404.
+    const owner = await db.get(sql`SELECT 1 FROM files f JOIN vault_nodes n ON n.id = f.node_id
+      WHERE f.node_id = ${fileId} AND n.owner_id = ${auth.accountId}
+        AND ${accessPredicate(auth, fileId, "owner")}`);
+    if (!owner) return notFound();
+    // Idempotent completion; a live Publication means this is not a teardown.
+    const live = await db.get(sql`SELECT 1 FROM publications p WHERE p.file_id = ${fileId}
+      AND ${accessPredicate(auth, fileId, "owner")}`);
+    return live ? publicationChanged() : Response.json({ done: true, commentTotal: 0, commentsRemaining: 0 }, { headers });
+  }
+  const now = Date.now();
+  let committed = false;
+  try {
+    committed = await commitPrivateBatch(env, auth, (guard) => sql`
+      UPDATE publications SET updated_at = ${now}
+      WHERE id = ${publication.id} AND file_id = ${fileId} AND state = 'deleting'
+        AND owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
+    (marker) => publication.comments_remaining > 0 ? [
+      sql`DELETE FROM comments WHERE id IN (SELECT c.id FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+        WHERE t.publication_id = ${publication.id} AND t.purpose = 'public'
+        ORDER BY c.sequence LIMIT ${TEARDOWN_COMMENT_BATCH}) AND ${marker}`,
+    ] : teardownStatements(publication.id, fileId, auth.accountId, publication.thread_id, marker),
+    { deferForeignKeys: true });
+  } catch { committed = false; }
+  const remaining = (await db.get<{ n: number }>(sql`SELECT count(*) AS n FROM comments c
+    JOIN comment_threads t ON t.id = c.thread_id
+    WHERE t.publication_id = ${publication.id} AND t.purpose = 'public'`))?.n ?? 0;
+  if (committed) return Response.json({ done: remaining === 0 && publication.comments_remaining === 0,
+    commentTotal: publication.comment_total, commentsRemaining: remaining }, { headers });
+  if (await proofSpent(env, auth)) return denied();
+  const stillSealed = await db.get(sql`SELECT 1 FROM publications p WHERE p.file_id = ${fileId}
+    AND p.state = 'deleting' AND ${accessPredicate(auth, fileId, "owner")}`);
+  return stillSealed ? publicationChanged() : Response.json({ done: true, commentTotal: publication.comment_total,
+    commentsRemaining: 0 }, { headers });
+}
+
 /** Resource-only, proof-guarded Publication API. Reads are bodyless POSTs. */
 export async function publicationsAction(request: Request, env: Env): Promise<Response> {
   const path = new URL(request.url).pathname;
@@ -433,11 +733,15 @@ export async function publicationsAction(request: Request, env: Env): Promise<Re
   const authors = /^\/api\/private\/publications\/files\/([0-9a-f-]+)\/authors$/.exec(path);
   const author = /^\/api\/private\/publications\/files\/([0-9a-f-]+)\/authors\/([A-Za-z0-9_-]+)$/.exec(path);
   const declaration = /^\/api\/private\/publications\/files\/([0-9a-f-]+)\/authors\/([A-Za-z0-9_-]+)\/declaration$/.exec(path);
+  const link = /^\/api\/private\/publications\/files\/([0-9a-f-]+)\/link$/.exec(path);
+  const unpublish = /^\/api\/private\/publications\/files\/([0-9a-f-]+)\/unpublish$/.exec(path);
+  const teardown = /^\/api\/private\/publications\/files\/([0-9a-f-]+)\/teardown$/.exec(path);
   const allowed = (collection && (request.method === "POST" || request.method === "PUT")) ||
     (requests && request.method === "POST") || (requestEntry && request.method === "DELETE") ||
     (authors && request.method === "PUT") || (author && request.method === "DELETE") ||
-    (declaration && request.method === "PUT");
-  const match = collection ?? requests ?? requestEntry ?? authors ?? author ?? declaration;
+    (declaration && request.method === "PUT") || (link && request.method === "PUT") ||
+    (unpublish && request.method === "POST") || (teardown && request.method === "POST");
+  const match = collection ?? requests ?? requestEntry ?? authors ?? author ?? declaration ?? link ?? unpublish ?? teardown;
   if (!allowed || !match || new URL(request.url).search) return notFound();
   const fileId = match[1]!, entryId = match[2];
   if (!isV7(fileId) || (requestEntry && !isV7(entryId)) || ((author || declaration) && !isPublicationIdentifier(entryId))) {
@@ -445,7 +749,7 @@ export async function publicationsAction(request: Request, env: Env): Promise<Re
   }
   let raw = "", value: unknown = null;
   try {
-    if (collection && request.method === "POST") {
+    if ((collection || unpublish || teardown) && request.method === "POST") {
       if (!await hasEmptyBody(request)) return denied();
     } else {
       const parsed = await readAuthJsonText(request, 1536 * 1024);
@@ -463,6 +767,9 @@ export async function publicationsAction(request: Request, env: Env): Promise<Re
   if (requestEntry) return deleteRequest(env, auth, fileId, entryId!, value);
   if (authors) return addAuthor(env, auth, fileId, value);
   if (author) return removeAuthor(env, auth, fileId, entryId!, value);
+  if (link) return rotatePublication(request, env, auth, fileId, value);
+  if (unpublish) return unpublishPublication(env, auth, fileId, value);
+  if (teardown) return teardownPublication(env, auth, fileId, value);
   return declareAuthor(env, auth, fileId, entryId!, value);
 }
 
@@ -589,6 +896,7 @@ export function deletedFilePublications(ownerId: string, ids: SQL, committed: SQ
   const owned = sql`SELECT id FROM publications WHERE file_id IN (${ids}) AND owner_id = ${ownerId}`;
   return [
     sql`DELETE FROM public_comment_epoch_links WHERE publication_id IN (${owned}) AND ${committed}`,
+    sql`DELETE FROM publication_teardowns WHERE publication_id IN (${owned}) AND ${committed}`,
     sql`DELETE FROM publication_authors WHERE publication_id IN (${owned}) AND ${committed}`,
     sql`DELETE FROM publication_requests WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
     sql`DELETE FROM public_representations WHERE publication_id IN (${owned}) AND ${committed}`,

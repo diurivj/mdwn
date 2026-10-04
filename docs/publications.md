@@ -3,9 +3,8 @@
 A **Publication** exposes exactly one File through a **Public link**. It is
 independent of Shares and Grants, follows File identity through rename and move,
 and always presents the latest successfully saved representation. Only the File
-Owner creates or configures it; link rotation and unpublishing arrive in ticket 25
-and keep that Owner-only rule. A Publication also owns one Public Comment thread
-(ticket 23, see [comments](comments.md)).
+Owner creates, configures, rotates or unpublishes it. A Publication also owns
+one Public Comment thread (ticket 23, see [comments](comments.md)).
 
 ## Link and capability
 
@@ -132,6 +131,10 @@ proof. Reads are bodyless POSTs; responses are `no-store`.
 | `DELETE /api/private/publications/files/:fileId/authors/:declarationId` | Owner removes an author |
 | `PUT /api/private/publications/files/:fileId/authors/:declarationId/declaration` | The selected author's own device declares its pseudonym to the current link |
 
+| `PUT /api/private/publications/files/:fileId/link` | Owner rotates to a new path and key; carries the re-encrypted representation and every rewrapped public epoch |
+| `POST /api/private/publications/files/:fileId/unpublish` | Owner seals the Publication irreversibly and pins the Public Comment count |
+| `POST /api/private/publications/files/:fileId/teardown` | Owner drives one idempotent bounded deletion batch; returns `done` and progress |
+
 Creation pins `expectedRevision` and `expectedRepresentationId`, so the first
 Public representation is exactly the latest saved one; a newer save returns
 `409 file_changed`. The same transaction installs the Public Comment thread and
@@ -162,6 +165,55 @@ selection is pending and nothing is shown. A credited author's browser declares
 when it next opens the File. Pseudonym updates (ticket 24) re-declare through the
 same endpoint, and a rotated link (ticket 25) needs re-declaration because a
 declaration is served only for the link it was encrypted to.
+
+## Link rotation
+
+The Owner's browser may replace the active link without ending the Publication.
+It generates a fresh path ID and key pair, re-encrypts the current Public
+representation to the new public key from the current saved source, and rewraps
+every public Comment epoch's symmetric link wrapper to the new Publication
+capability. The epoch capabilities themselves and every device envelope are
+unchanged. One D1 transaction replaces the link identity in place, moves the
+Publication pointer, replaces the Public representation at the same
+presentation revision and rewrites the wrappers; `publication_links` refuses any
+other update. The retired identifier stops routing immediately and is never kept
+or reused, and the old path returns the same ciphertext-free `404` as an unknown
+one.
+
+The rotation CAS pins the expected active link, the presentation revision and
+the exact File revision/representation the payload was rebuilt from; any move is
+`409 publication_changed` or `409 file_changed`, and mismatched or mis-bound
+wrappers are refused before the transaction. The logical Publication, Public
+Comment thread and all history survive, so a new link shows the same document
+and Comments. Author declarations are served only for the link they were sealed
+to: after rotation each selected author's device re-declares on its next File
+open. Rotation consumes the `publication.mutate` limit and waits out an active
+key-rotation write seal (`409 key_rotation_required`). The new complete link is
+retained in page memory by the same rule as creation, so a lost response never
+loses the replacement capability.
+
+## Unpublishing
+
+Unpublishing is permanent and is never blocked by Public-participation limits or
+suspensions. The confirmation states the irreversible effect and the current
+opaque count, for example **Unpublish and permanently delete 12 Public
+Comments**. The seal transaction verifies Owner authority, deletes the active
+link and its wrappers, flips the Publication irreversibly to `deleting`, nulls
+its pointers and writes the pinned count to `publication_teardowns`. Every Public
+route and Public-thread endpoint denies access from that moment, and triggers
+forbid a sealed Publication from gaining a link, representation, thread or
+`active` state again.
+
+The Owner's browser then drives idempotent bounded batches through
+`POST …/teardown`, showing **Deleting public material…** with progress. Each call
+hard-deletes at most 200 Public Comments; once none remain, one transaction
+removes the thread and its epochs, Comments, attributions, Owner and device
+envelopes, capabilities, link wrappers, Public representations, author
+declarations, requests, teardown progress and finally the Publication row. A
+lost response or interrupted browser is resumed by any Owner device; no other
+Account can read progress or delete anything. The File's partial unique index
+keeps it unpublished until cleanup completes, and a later Publication starts
+entirely fresh with new identifiers and an empty thread.
 
 ## Public reader
 
@@ -198,10 +250,13 @@ declaration is served only for the link it was encrypted to.
 current link and Public representation pointers. Triggers make a Publication
 start `active` on a converted File, keep its identity immutable, make the
 `deleting` seal irreversible, and forbid rewriting links, Public representations,
-requests or author identities in place. Ticket 25 owns the seal and teardown
-transactions. File and Directory hard deletion explicitly remove author rows,
-requests, Public representations, links and the Publication in the tree's
-deletion transaction, so deleting a File revokes its Publication.
+requests or author identities in place — the one exception is the in-place
+rotation of the active link identity, which must already be the Publication's
+current pointer. A `deleting` Publication's `publication_teardowns` row is
+insert-only and immutable until the final batch deletes it with the Publication.
+File and Directory hard deletion explicitly remove author rows, requests, Public
+representations, links and the Publication in the tree's deletion transaction, so
+deleting a File revokes its Publication.
 
 ## Trust limits
 
@@ -228,12 +283,21 @@ link, in Node, workerd, Chromium, Firefox and WebKit.
 D1: Owner-only creation, requests, attribution, paired-save atomicity and
 rollback, indistinguishable `404`s, anonymous responses, storage constraints,
 hard deletion, fragment absence from every table and the reviewed query plans.
-`e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
+`tests/worker/publication-lifecycle.test.ts` proves in-place rotation (the old
+path is byte-identical to unknown, the new fragment opens the same presentation
+and Comments, every public epoch is rewrapped, Collaborators-only epochs and
+device envelopes are untouched, stale/mis-bound material changes nothing) and
+the sealed, Owner-resumable teardown (pinned count, bounded 200-Comment
+batches, idempotent completion, non-Owner denial, no participation-limit
+blocking, every public row and ciphertext removed, and a fresh later
+Publication). `e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
 fresh anonymous context and proves the fragment never reaches a request,
 header, cookie, console message or D1 row while saves keep the link live. It
 also covers fragment-only navigation, adversarial front-matter presentation,
 collapsed panels/lost responses after the real Worker commits creation, retries
-that lose to an earlier pending commit, and paired saves with expanded titles.
+that lose to an earlier pending commit, paired saves with expanded titles, link
+rotation with a surviving Comment, and an unpublish whose counted confirmation,
+bounded progress and fresh later Publication are asserted.
 
 See [enc-v1](enc-v1.md), [serving and security](serving-and-security.md),
 [sharing](sharing.md), [public pseudonym update](pseudonym-update.md) and [tree structure](tree-structure.md).

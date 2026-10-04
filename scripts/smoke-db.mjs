@@ -75,6 +75,7 @@ const EXPECTED_COLUMNS = {
   public_representations: { id: "TEXT", publication_id: "TEXT", link_id: "TEXT", revision: "INTEGER", file_revision: "INTEGER", ciphertext: "BLOB", ciphertext_size: "INTEGER", created_at: "INTEGER" },
   publication_requests: { id: "TEXT", file_id: "TEXT", owner_id: "TEXT", requester_id: "TEXT", created_at: "INTEGER" },
   publication_authors: { id: "TEXT", publication_id: "TEXT", author_id: "TEXT", ordinal: "INTEGER", link_id: "TEXT", revision: "INTEGER", ciphertext: "BLOB", created_at: "INTEGER", updated_at: "INTEGER" },
+  publication_teardowns: { publication_id: "TEXT", owner_id: "TEXT", comment_total: "INTEGER", created_at: "INTEGER" },
 };
 const EXPECTED_INDEXES = [
   ["accounts", "accounts_share_id_unique", 1],
@@ -200,11 +201,15 @@ const EXPECTED_FOREIGN_KEYS = [
   "publication_requests:file_id:files:node_id:RESTRICT",
   "publication_authors:publication_id:publications:id:RESTRICT",
   "publication_authors:author_id:accounts:id:RESTRICT",
+  "publication_teardowns:publication_id:publications:id:RESTRICT",
+  "publication_teardowns:owner_id:accounts:id:RESTRICT",
 ];
 const EXPECTED_TRIGGERS = ["sharing_new_device_need", "sharing_new_comment_need",
   "sharing_comment_context_immutable", "sharing_rotated_comment_need",
   "publication_created_active", "publication_identity_immutable", "publication_seal_irreversible",
-  "publication_link_immutable", "public_representation_immutable", "publication_author_identity_immutable",
+  "publication_link_rotation_guard", "publication_sealed_link_guard", "publication_sealed_representation_guard",
+  "comment_thread_public_sealed_guard", "publication_teardown_guard", "publication_teardown_immutable",
+  "public_representation_immutable", "publication_author_identity_immutable",
   "publication_request_immutable"];
 
 /**

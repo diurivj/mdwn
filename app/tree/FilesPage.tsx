@@ -369,7 +369,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         fileReady={fileReady && !busy} links={publicLinks}
         onPrepared={(link) => setPublicLinks((previous) => {
           const next = new Map(previous);
-          next.set(link.publicationId, link);
+          next.set(link.linkId, link);
           return next;
         })} />}
       {canChangeStructure && <div className="mt-3 flex flex-wrap gap-2">

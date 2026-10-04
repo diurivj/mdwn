@@ -1,5 +1,5 @@
 import type { Request } from "@playwright/test";
-import { test, expect } from "./workspace-fixture";
+import { objectId, test, expect } from "./workspace-fixture";
 
 test.use({ initialSource: "---\ntitle: Diet plan\ndate: 2026-01-02\nprivate: never public\n---\n# Week one\n\nEat **well**." });
 
@@ -243,3 +243,104 @@ for (const scenario of [
     });
   });
 }
+
+test("rotates the Public link, retires the old path, and keeps the Comments", async ({ browser, page, workspace }) => {
+  await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const first = await panel.getByLabel("Public link").inputValue();
+
+  // A Public Comment exists before rotation and must survive it.
+  const ownerTab = await page.context().newPage();
+  await ownerTab.goto(first);
+  const ownerComments = ownerTab.getByRole("region", { name: "Public comments", exact: true });
+  await ownerComments.getByLabel("Add a public comment").fill("Survives rotation");
+  const posted = ownerTab.waitForResponse((response) => response.request().method() === "POST" &&
+    response.url().includes("/api/private/comments/links/") && response.status() === 201);
+  await ownerComments.getByRole("button", { name: "Comment", exact: true }).click();
+  await posted;
+  await expect(ownerComments.getByLabel("Add a public comment")).toHaveValue("");
+  await expect(ownerComments.locator("li").filter({ hasText: "Survives rotation" })).toBeVisible();
+  await ownerTab.close();
+
+  await panel.getByRole("button", { name: "Rotate link" }).click();
+  await expect.poll(() => panel.getByLabel("Public link").inputValue()).not.toBe(first);
+  const rotated = await panel.getByLabel("Public link").inputValue();
+  expect(new URL(rotated).pathname).toMatch(/^\/p\/[A-Za-z0-9_-]{43}$/);
+  expect(new URL(rotated).pathname).not.toBe(new URL(first).pathname);
+
+  // The retired path is indistinguishable from unknown; the new path serves
+  // the same document and Comment.
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const reader = await context.newPage();
+    const retired = await reader.goto(first);
+    expect(retired?.status()).toBe(404);
+    await reader.goto(rotated);
+    const article = reader.getByRole("article", { name: "Published File" });
+    await expect(article.getByRole("heading", { name: "Diet plan", level: 1 })).toBeVisible();
+    const comments = reader.getByRole("region", { name: "Public comments", exact: true });
+    await expect(comments.getByText("Survives rotation")).toBeVisible();
+  } finally { await context.close(); }
+});
+
+test("unpublishes with a counted confirmation, shows bounded progress, and publishes fresh", async ({ browser, page, workspace }) => {  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const link = await panel.getByLabel("Public link").inputValue();
+  const thread = await workspace.db.prepare(
+    "SELECT id AS threadId, current_epoch_id AS epochId FROM comment_threads WHERE file_id = ? AND purpose = 'public'")
+    .bind(workspace.fileId).first<{ threadId: string; epochId: string }>();
+  expect(thread).not.toBeNull();
+  // 250 opaque Comment rows cross the bounded batch boundary twice.
+  for (let sequence = 1; sequence <= 250; sequence++) {
+    await workspace.db.prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision,
+        body_ciphertext, body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, X'01', 1, X'01', 1, 1, 1)`)
+      .bind(objectId(), thread!.threadId, thread!.epochId, workspace.accountId, sequence).run();
+  }
+  // Reopen the panel so its state carries the current opaque count.
+  const toggle = page.getByRole("button", { name: "Publish", exact: true });
+  await toggle.click();
+  await expect(panel).toHaveCount(0);
+  await toggle.click();
+  await expect(panel.getByRole("button", { name: "Unpublish…" })).toBeVisible();
+  // Hold the second batch so the bounded progress state is observable.
+  let teardownCalls = 0, release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(`**/api/private/publications/files/${workspace.fileId}/teardown`, async (route) => {
+    teardownCalls++;
+    if (teardownCalls === 2) await held;
+    await route.continue();
+  });
+
+  await panel.getByRole("button", { name: "Unpublish…" }).click();
+  await expect(panel.getByText(/permanently deletes this Public link/)).toBeVisible();
+  await panel.getByRole("button", { name: "Unpublish and permanently delete 250 Public Comments" }).click();
+  await expect(panel.getByText("Deleting public material…")).toBeVisible();
+  await expect(panel.getByText("200 of 250 Public Comments deleted.", { exact: true })).toBeVisible();
+  release();
+  await expect(panel.getByRole("button", { name: "Publish File" })).toBeVisible();
+  expect(await workspace.db.prepare("SELECT count(*) AS n FROM publications WHERE file_id = ?")
+    .bind(workspace.fileId).first<{ n: number }>()).toEqual({ n: 0 });
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    expect((await (await context.newPage().then((reader) => reader.goto(link)))?.status())).toBe(404);
+  } finally { await context.close(); }
+
+  // A later Publication starts entirely fresh.
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const fresh = await panel.getByLabel("Public link").inputValue();
+  expect(fresh).not.toBe(link);
+  const readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const reader = await readerContext.newPage();
+    await reader.goto(fresh);
+    const comments = reader.getByRole("region", { name: "Public comments", exact: true });
+    await expect(comments.getByText("No comments yet.")).toBeVisible();
+  } finally { await readerContext.close(); }
+});

@@ -177,7 +177,10 @@ device envelopes. A **current Collaborators-only** epoch rotates in place the
 same way as a Private thread (same staging endpoint, epoch-scoped records), so a
 revoked device's key can never decrypt what remains; a public epoch never
 rewrites its link wrapper on revocation because anyone with the link could
-already read it. Ticket 25 rotates the wrappers themselves for a new link.
+already read it. A **link rotation** (ticket 25) rewraps every public epoch's
+link wrapper to the replacement Publication capability in the same transaction
+that swaps the active link; the epoch capabilities and the device envelopes are
+untouched, and a Collaborators-only epoch has no wrapper to rotate.
 
 ## Verification seams
 
@@ -190,7 +193,8 @@ ciphertext. `tests/worker/public-comments.test.ts` covers creation defaults, the
 anonymous page, signed-in visitor posting, audience transitions in both
 directions, retained history for eligible devices, unauthorized signed-in
 denial, Private-thread absence and the revocation rotation of a current
-Collaborators-only epoch. `tests/comment-content.test.ts` and
+Collaborators-only epoch. `tests/worker/publication-lifecycle.test.ts` covers
+link rotation and the sealed, Owner-resumable teardown with bounded batches. `tests/comment-content.test.ts` and
 `tests/public-comment-content.test.ts` cover the browser envelope shapes, link
 wrappers and bounds. `e2e/private-comments.spec.ts` exercises the wide inspector
 and narrow Comments view, and `e2e/public-comments.spec.ts` posts from a public

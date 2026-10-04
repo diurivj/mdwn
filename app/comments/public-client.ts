@@ -347,6 +347,30 @@ export async function loadFilePublicComments(access: RootAccess, fileId: string,
     data.thread.actorAccountId, data.thread.canDeleteAny) };
 }
 
+/** Epoch capabilities for link rotation: no Comment page is decrypted, so a
+ * rotation rewraps every public epoch without reading its content. */
+export async function loadFilePublicEpochs(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<{
+  publicationId: string; ownerId: string; epochs: PublicEpoch[];
+}> {
+  const response = await privateRequest(`/api/private/comments/files/${fileId}/public`, { method: "POST", signal });
+  if (response.status === 404) throw new PublicCommentsNotFoundError();
+  if (response.status === 409) {
+    const error = (await response.json() as { error?: string }).error;
+    if (error === "secure_access_preparing" || error === "owned_comment_key_missing") throw new PublicCommentsPreparingError();
+    throw new PublicCommentsChangedError();
+  }
+  if (!response.ok) throw new Error("Comments unavailable");
+  const data = await response.json() as FileThreadWire;
+  if (!data.thread) throw new PublicCommentsNotFoundError();
+  const epochs: PublicEpoch[] = [];
+  for (const epoch of data.thread.epochs) {
+    const capability = await openWireEnvelope(access, data.thread.ownerId, epoch);
+    epochs.push({ epochId: epoch.epochId, ordinal: epoch.ordinal, audience: epoch.audience, state: epoch.state,
+      capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch, capability });
+  }
+  return { publicationId: data.thread.publicationId, ownerId: data.thread.ownerId, epochs };
+}
+
 /** Page more authenticated history with the already-opened epoch capabilities. */
 export async function loadMoreFilePublicComments(thread: PublicThreadView, signal?: AbortSignal): Promise<{
   comments: PublicComment[]; pseudonyms: Map<string, string>; nextCursor: number | null }> {

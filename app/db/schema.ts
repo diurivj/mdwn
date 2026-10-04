@@ -1088,6 +1088,23 @@ export const publicationAuthors = sqliteTable("publication_authors", {
       AND length(${table.ciphertext}) BETWEEN 1 AND 4096)`),
 ]);
 
+/** The sealed teardown marker for one `deleting` Publication. Its presence is
+ * what makes the irreversible state recoverable (Owner-resumable bounded
+ * deletion batches); the count is the progress denominator the seal computed.
+ * Immutable: only deleting the whole Publication removes it. No ciphertext,
+ * Comment text, capability, or other Public material is stored here.
+ */
+export const publicationTeardowns = sqliteTable("publication_teardowns", {
+  publicationId: text("publication_id").primaryKey().references(() => publications.id, { onDelete: "restrict" }),
+  ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  /** Public Comments counted in the seal transaction; the confirmation total. */
+  commentTotal: integer("comment_total").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  check("publication_teardowns_comment_total", sql`${table.commentTotal} >= 0`),
+]);
+
 export type Publication = typeof publications.$inferSelect;
 export type PublicationLink = typeof publicationLinks.$inferSelect;
 export type PublicRepresentation = typeof publicRepresentations.$inferSelect;
+export type PublicationTeardown = typeof publicationTeardowns.$inferSelect;
