@@ -1,4 +1,5 @@
-import { data } from "react-router";
+import { useEffect, useRef } from "react";
+import { data, useLocation, useRevalidator } from "react-router";
 import { getEnv } from "~/context/env";
 import { activePublicLink } from "~/publications/publications.server";
 import { loadPublicPage, type PublicPage } from "~/publications/public-client";
@@ -23,8 +24,16 @@ export async function loader({ params, context }: Route.LoaderArgs) {
 
 /** The read capability exists only in this browser's `location.hash`. */
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs): Promise<PublicPage> {
-  const sameDocument = window.location.pathname === new URL(request.url).pathname;
-  return loadPublicPage(params.linkId, sameDocument ? window.location.hash : "", request.signal);
+  const pathname = new URL(request.url).pathname;
+  while (true) {
+    request.signal.throwIfAborted();
+    const hash = window.location.pathname === pathname ? window.location.hash : "";
+    const page = await loadPublicPage(params.linkId, hash, request.signal);
+    request.signal.throwIfAborted();
+    // A fragment can change during initial hydration, before the page mounts.
+    // Never install a result decrypted for a superseded browser capability.
+    if (window.location.pathname !== pathname || window.location.hash === hash) return page;
+  }
 }
 clientLoader.hydrate = true as const;
 
@@ -47,6 +56,22 @@ const unavailable: Record<Exclude<PublicPage["status"], "ready">, string> = {
 /** A read-only document: no path, breadcrumbs, Owner, timestamps or raw front matter. */
 export default function PublicationRoute({ loaderData }: Route.ComponentProps) {
   const page = loaderData as PublicPage;
+  const location = useLocation();
+  const { revalidate, state } = useRevalidator();
+  const locationKey = location.pathname + location.hash;
+  const previousLocation = useRef<string | null>(null);
+  const changed = previousLocation.current !== null && previousLocation.current !== locationKey;
+  const incompleteNavigation = previousLocation.current === null && page.status === "missing-key" && !!location.hash;
+  useEffect(() => {
+    const changed = previousLocation.current !== null && previousLocation.current !== locationKey;
+    const incomplete = previousLocation.current === null && page.status === "missing-key" && !!location.hash;
+    previousLocation.current = locationKey;
+    // RR skips loaders for hash-only navigation. Revalidate through its native
+    // cancellation/race handling; the fragment stays browser-local, not in a URL
+    // passed to fetch, a submission or server loader data.
+    if (changed || incomplete) void revalidate();
+  }, [locationKey, location.hash, page.status, revalidate]);
+  if (changed || incompleteNavigation || state === "loading") return <HydrateFallback />;
   if (page.status !== "ready") return <main className={`${shell} py-12`}>
     <h1 className="text-2xl font-semibold">Published File</h1>
     <p role="alert" className="mt-3 text-stone-600">{unavailable[page.status]}</p>

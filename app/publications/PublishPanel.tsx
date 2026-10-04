@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import {
   addAccountAuthor, addSelfAuthor, loadPublicationState, publishFile, PublicationError, removeAuthor,
-  removePublicationRequest, requestPublication, type PublicationState,
+  removePublicationRequest, requestPublication, type PreparedPublicLink, type PublicationState,
 } from "./publications-client";
 import { loadFile } from "~/tree/client";
 
@@ -26,9 +26,9 @@ const messages: Record<PublicationError["code"], string> = {
  * pending requests), sees the one-time complete link, and opts in to authors;
  * a Collaborator can only request publication. No panel state is persisted.
  */
-export function PublishPanel({ fileId, snapshot, fileReady, link, onPublished }: {
+export function PublishPanel({ fileId, snapshot, fileReady, link, onPrepared }: {
   fileId: string; snapshot: FilesSnapshot; fileReady: boolean;
-  link: string | null; onPublished: (url: string) => void;
+  link: PreparedPublicLink | null; onPrepared: (link: PreparedPublicLink) => void;
 }) {
   const [panel, setPanel] = useState<PanelState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
@@ -71,9 +71,12 @@ export function PublishPanel({ fileId, snapshot, fileReady, link, onPublished }:
     } finally { if (!controller.signal.aborted) setBusy(false); }
   }
 
+  // A failed or superseded attempt must never be shown as the active link.
+  const completeLink = panel.status === "ready" && panel.state.publication?.publicationId === link?.publicationId
+    ? link?.url ?? null : null;
   async function copy() {
-    if (!link) return;
-    try { await navigator.clipboard.writeText(link); setCopied("copied"); }
+    if (!completeLink) return;
+    try { await navigator.clipboard.writeText(completeLink); setCopied("copied"); }
     catch { setCopied("failed"); }
   }
 
@@ -93,13 +96,13 @@ export function PublishPanel({ fileId, snapshot, fileReady, link, onPublished }:
     {message && <p role="alert" className="text-rose-700">{message}</p>}
     {publication?.state === "deleting" ? <p role="status">Deleting public material…</p> : state.isOwner ? publication ? <>
       <p role="status">Published. Anyone with the complete link can read the latest saved version of this File.</p>
-      {link ? <div className="space-y-2">
+      {completeLink ? <div className="space-y-2">
         <label className="block text-sm">Public link
-          <input readOnly value={link} onFocus={(event) => event.currentTarget.select()}
+          <input readOnly value={completeLink} onFocus={(event) => event.currentTarget.select()}
             className="mt-1 w-full rounded border border-stone-300 p-2 font-mono text-xs" /></label>
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" onClick={() => void copy()} className="rounded border px-3 py-1">Copy link</button>
-          <a href={link} target="_blank" rel="noopener noreferrer" className="underline">Open public page</a>
+          <a href={completeLink} target="_blank" rel="noopener noreferrer" className="underline">Open public page</a>
           {copied === "copied" && <span role="status">Copied.</span>}
           {copied === "failed" && <span role="alert">Copy failed. Select the link and copy it.</span>}
         </div>
@@ -150,9 +153,8 @@ export function PublishPanel({ fileId, snapshot, fileReady, link, onPublished }:
         onChange={(event) => setIncludeSelf(event.target.checked)} /> Show my Public pseudonym as an author</label>
       <button type="button" disabled={busy || !fileReady || !parentKey} className="rounded bg-stone-900 px-3 py-1 text-white"
         onClick={() => void run(async (signal) => {
-          const { url } = await publishFile({ access: accessRef.current, fileId, parentId, parentKey: parentKey!,
-            includeSelf, signal });
-          onPublished(url);
+          await publishFile({ access: accessRef.current, fileId, parentId, parentKey: parentKey!,
+            includeSelf, signal, onPrepared });
         })}>{busy ? "Publishing…" : "Publish File"}</button>
       {!fileReady && <p role="status" className="text-sm">Save your draft before publishing.</p>}
     </> : publication ? <p role="status">This File is published by its Owner.{publication.authors.length > 0 &&

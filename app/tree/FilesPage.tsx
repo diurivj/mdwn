@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/comments/comments-client";
-import { declarePublicationAuthor } from "~/publications/publications-client";
+import { declarePublicationAuthor, type PreparedPublicLink } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/PublishPanel";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/SharedProvisioning";
@@ -54,7 +54,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   // The complete Public link lives only in this page's memory, never in storage.
-  const [publicLink, setPublicLink] = useState<{ fileId: string; url: string } | null>(null);
+  const [publicLink, setPublicLink] = useState<(PreparedPublicLink & { fileId: string }) | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submission = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
@@ -361,8 +361,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           {snapshot.access.actorAccountId === snapshot.access.vaultId ? "Publish" : "Request publication"}</button>}
       </div>
       {kind === "file" && snapshot.file && publishOpen && <PublishPanel fileId={nodeId} snapshot={snapshot}
-        fileReady={fileReady && !busy} link={publicLink?.fileId === nodeId ? publicLink.url : null}
-        onPublished={(url) => setPublicLink({ fileId: nodeId, url })} />}
+        fileReady={fileReady && !busy} link={publicLink?.fileId === nodeId ? publicLink : null}
+        onPrepared={(link) => setPublicLink({ fileId: nodeId, ...link })} />}
       {canChangeStructure && <div className="mt-3 flex flex-wrap gap-2">
         {(["up", "down"] as const).map((direction) => {
           const entries = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];

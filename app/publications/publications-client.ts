@@ -38,16 +38,22 @@ export async function loadPublicationState(fileId: string, signal?: AbortSignal)
   return (await publicationRequest(fileId, "POST", undefined, signal)).json() as Promise<PublicationState>;
 }
 
+/** Browser-memory-only material, never a route submission or server value. */
+export type PreparedPublicLink = { publicationId: string; url: string };
+
 /**
  * The Owner's browser publishes the latest saved representation. It creates the
  * link key pair and identifiers locally, sends only the public key, path and
- * ciphertext, and returns the complete link. The `#` key never leaves here.
+ * ciphertext, and retains/returns the complete link only in browser memory.
+ * The `#` key never leaves the browser.
  */
 export async function publishFile(options: { access: RootAccess; fileId: string; parentId: string | null;
-  parentKey: Uint8Array; includeSelf: boolean; signal?: AbortSignal }): Promise<{ url: string }> {
+  parentKey: Uint8Array; includeSelf: boolean; signal?: AbortSignal;
+  onPrepared: (link: PreparedPublicLink) => void }): Promise<PreparedPublicLink> {
   const { access, fileId, parentKey, signal } = options;
   let document = await loadFile(access, fileId, parentKey, signal);
   if (document.sourceBytes > FILE_SOURCE_LIMIT) throw new PublicationError("too-large");
+  if (document.publication) throw new PublicationError("exists");
   if (!document.capability) {
     // A legacy parent-wrapped File first gets its stable File capability, so
     // every later paired save is a parent-free converted save.
@@ -66,10 +72,15 @@ export async function publishFile(options: { access: RootAccess; fileId: string;
     author = { declarationId, ciphertext: encodeTreeBytes(await sealAuthorDeclaration(
       { ...binding, declarationId, revision: 1 }, await readPseudonym(access, signal))) };
   }
+  signal?.throwIfAborted();
+  const link = { publicationId, url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
+  // Preserve the capability above the dismissible panel BEFORE the Worker can
+  // commit. Aborting a fetch or losing its response does not undo that commit.
+  options.onPrepared(link);
   await publicationRequest(fileId, "PUT", { publicationId, linkId, publicKey: encodeTreeBytes(keys.publicKey),
     expectedRevision: document.revision, expectedRepresentationId: document.representationId,
     representation: { ciphertext: encodeTreeBytes(ciphertext) }, author }, signal);
-  return { url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
+  return link;
 }
 
 export async function requestPublication(fileId: string, signal?: AbortSignal) {

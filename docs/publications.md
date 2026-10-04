@@ -31,10 +31,16 @@ https://<origin>/p/<path ID>#v1.<private scalar>
   with one (HPKE binds `pkR` into the KEM context). RFC 9180 `DeriveKeyPair` was
   not used: WebKit rejects the scalar-only PKCS#8 import it relies on.
 
-The complete link exists only in the creating page's memory. The Publish panel
-shows it once with **Copy link**; mdwn cannot show it again. Anyone holding the
-complete link can read the current Public representation until the link stops
-being active, and copies already downloaded cannot be recalled.
+The complete link exists only in the creating page's memory. Before sending
+the creation mutation, the browser retains it above the dismissible Publish
+panel, bound to its logical Publication ID. A collapsed panel or lost response
+cannot discard the key of a committed Publication; reopening reconciles the
+current Publication before showing that link with **Copy link**. Failed or
+superseded attempts are never shown as the active link. Leaving the creating
+page discards this memory, so copy the link before leaving; mdwn cannot recover
+it. Anyone holding the complete link can read the current Public representation
+until the link stops being active, and copies already downloaded cannot be
+recalled.
 
 ## Public representation
 
@@ -53,11 +59,15 @@ as a private representation. Its plaintext is the presentation payload:
 
 Title and Markdown together are at most the 262,144-byte File source limit.
 The editor's browser builds the payload from the saved source: a leading YAML
-front-matter block (`---` … `---` or `...`) is removed entirely and only a
-top-level plain, single-quoted or double-quoted `title` scalar is kept. Block,
-flow, anchored, tagged, null or unparseable values yield no title rather than
-raw YAML. Raw front matter, the File name or path, user-authored timestamps and
-Owner identity never enter the payload.
+front-matter block (`---` … `---` or `...`, with LF, CRLF or CR line endings) is
+removed entirely. The pinned `yaml` parser validates the whole YAML 1.2 mapping
+before selecting a top-level string `title`; plain, quoted, literal and folded
+strings, quoted keys, anchored strings and explicit standard string tags are
+supported. Structured, aliased, null, unsupported-tag or unparseable values
+yield no title rather than raw YAML. The browser inspects the scalar directly
+without expanding aliases or converting other fields to JavaScript. A title-looking line inside another field is never an
+author-selected title. Raw front matter, the File name or path, user-authored
+timestamps and Owner identity never enter the payload.
 
 The envelope context names only the Publication, never the Owner's Vault, the
 Account or the File:
@@ -150,7 +160,10 @@ declaration is served only for the link it was encrypted to.
   `referrerPolicy: "no-referrer"` and `cache: "no-store"`, decrypts locally and
   renders sanitized GFM (`react-markdown`, `remark-gfm`, `rehype-sanitize`)
   with the title and declared authors only. Messages for a missing key or an
-  unreadable link never echo the fragment.
+  unreadable link never echo the fragment. Hash-only navigation (including
+  back/forward) triggers `useRevalidator`, because React Router otherwise skips
+  loaders; a changed fragment hides the old document until the browser loader
+  finishes, and cancellation prevents stale decryptions from winning.
 - `GET /api/public/publications/:linkId` returns, in one statement, the
   Publication ID, the link's public key, the current Public representation and
   current-link author declarations — never a File, Owner or Account ID, private
@@ -190,7 +203,8 @@ page persists nothing in the browser.
 
 ## Verification
 
-`tests/publication-content.test.ts` covers presentation parsing and framing,
+`tests/publication-content.test.ts` covers presentation parsing and framing
+(including private multiline YAML, quoted/block titles and all line endings),
 the fragment format, key import and envelope bindings. The shared contract in
 `tests/support/enc-v1-contract.ts` opens an independently framed Public
 representation and author declaration from a fixed link fragment, and a fresh
@@ -201,7 +215,9 @@ rollback, indistinguishable `404`s, anonymous responses, storage constraints,
 hard deletion, fragment absence from every table and the reviewed query plans.
 `e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
 fresh anonymous context and proves the fragment never reaches a request,
-header, cookie, console message or D1 row while saves keep the link live.
+header, cookie, console message or D1 row while saves keep the link live. It
+also covers fragment-only navigation, adversarial front-matter presentation,
+and collapsed panels/lost responses after the real Worker commits creation.
 
 See [enc-v1](enc-v1.md), [serving and security](serving-and-security.md),
 [sharing](sharing.md) and [tree structure](tree-structure.md).

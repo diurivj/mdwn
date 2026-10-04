@@ -68,6 +68,15 @@ test("the Owner publishes a File that an anonymous reader decrypts locally, live
     // An incomplete or unknown link reveals nothing and never echoes a key.
     await reader.goto(`${url.origin}${url.pathname}`);
     await expect(reader.getByRole("alert")).toHaveText("This public link is incomplete. Ask for the complete link, including the part after #.");
+    // Hash-only navigation does not run RR loaders automatically. Adding,
+    // removing and restoring a capability must still replace the reader state.
+    await reader.evaluate((hash) => { window.location.hash = hash; }, fragment);
+    await expect(article.getByRole("heading", { name: "Diet plan v2", level: 1 })).toBeVisible();
+    await reader.evaluate(() => { window.location.hash = ""; });
+    await expect(reader.getByRole("alert")).toHaveText("This public link is incomplete. Ask for the complete link, including the part after #.");
+    await expect(article).toHaveCount(0);
+    await reader.goBack();
+    await expect(article.getByText("Updated for everyone")).toBeVisible();
     const unknown = await reader.goto(`${url.origin}/p/${"A".repeat(43)}#${fragment}`);
     expect(unknown?.status()).toBe(404);
 
@@ -97,3 +106,70 @@ test("the Owner publishes a File that an anonymous reader decrypts locally, live
     }
   }
 });
+
+for (const collapse of [true, false]) {
+  test(collapse ? "keeps the complete link when Publish is collapsed after the Worker commits" :
+    "keeps the complete link when the publication response is lost after commit", async ({ browser, page, workspace }) => {
+    let release!: () => void;
+    let committed!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const saved = new Promise<void>((resolve) => { committed = resolve; });
+    await page.route(`**/api/private/publications/files/${workspace.fileId}`, async (route) => {
+      if (route.request().method() !== "PUT") { await route.continue(); return; }
+      // Real Worker/D1 commit, then a delayed or lost browser response.
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      committed();
+      await held;
+      await route.abort("failed");
+    });
+    const toggle = page.getByRole("button", { name: "Publish", exact: true });
+    await toggle.click();
+    const panel = page.getByRole("region", { name: "Publish", exact: true });
+    await panel.getByRole("button", { name: "Publish File" }).click();
+    await saved;
+    if (collapse) {
+      await toggle.click();
+      await expect(panel).toHaveCount(0);
+    }
+    release();
+    if (collapse) await toggle.click();
+    await expect(panel.getByText(/^Published\./)).toBeVisible();
+    await expect(panel.getByLabel("Public link")).toBeVisible();
+    const link = await panel.getByLabel("Public link").inputValue();
+    const context = await browser.newContext({ ignoreHTTPSErrors: true });
+    try {
+      const reader = await context.newPage();
+      await reader.goto(link);
+      await expect(reader.getByRole("article", { name: "Published File" })
+        .getByRole("heading", { name: "Diet plan", exact: true })).toBeVisible();
+    } finally { await context.close(); }
+  });
+}
+
+for (const scenario of [
+  { name: "a title-looking line inside a private YAML string", source: '---\nprivate: "note\ntitle: SECRET\nend"\n---\n# Public body', title: null },
+  { name: "a folded title with a quoted key and CR-only front matter", source: '---\r"title": >-\r  Public\r  title\rprivate: SECRET\r---\r# Public body', title: "Public title" },
+]) {
+  test.describe(scenario.name, () => {
+    test.use({ initialSource: scenario.source });
+    test("publishes only the parsed title and Markdown body", async ({ browser, page, workspace }) => {
+      await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
+      await page.getByRole("button", { name: "Publish", exact: true }).click();
+      const panel = page.getByRole("region", { name: "Publish", exact: true });
+      await panel.getByRole("button", { name: "Publish File" }).click();
+      await expect(panel.getByText("Published.", { exact: false })).toBeVisible();
+      const link = await panel.getByLabel("Public link").inputValue();
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      try {
+        const reader = await context.newPage();
+        await reader.goto(link);
+        const article = reader.getByRole("article", { name: "Published File" });
+        await expect(article.getByRole("heading", { name: "Public body" })).toBeVisible();
+        if (scenario.title) await expect(article.getByRole("heading", { name: scenario.title, exact: true })).toBeVisible();
+        else await expect(article.getByRole("heading")).toHaveCount(1);
+        await expect(reader.getByText("SECRET", { exact: false })).toHaveCount(0);
+      } finally { await context.close(); }
+    });
+  });
+}

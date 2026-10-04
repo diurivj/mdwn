@@ -3,7 +3,7 @@ import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
 import { inspectEnvelope, type EnvelopeContext } from "~/crypto/enc-v1";
 import { HPKE_SUITE } from "~/crypto/enc-v1/format";
 import { createDb, sql } from "~/db/client.server";
-import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
+import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, type AuthorizedDevice } from "~/device/proof.server";
 import { newOpaqueId } from "~/opaque-id";
 import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
 import { shareHandleLookupToken } from "~/sharing/address";
@@ -221,7 +221,8 @@ async function createRequest(env: Env, auth: AuthorizedDevice, fileId: string, v
   if (!access || !permits(access, "request_publication")) return notFound();
   const db = createDb(env.DB);
   const existing = () => db.get<{ id: string }>(sql`SELECT id FROM publication_requests
-    WHERE file_id = ${fileId} AND requester_id = ${auth.accountId}`);
+    WHERE file_id = ${fileId} AND requester_id = ${auth.accountId}
+      AND ${accessPredicate(auth, fileId, "read")}`);
   const requestId = newOpaqueId();
   const committed = await commitPrivateMutation(env, auth, (guard) => sql`
     INSERT INTO publication_requests (id, file_id, owner_id, requester_id, created_at)
@@ -231,10 +232,12 @@ async function createRequest(env: Env, auth: AuthorizedDevice, fileId: string, v
       AND NOT EXISTS (SELECT 1 FROM publication_requests r WHERE r.file_id = f.node_id AND r.requester_id = ${auth.accountId})
       AND ${guard}`);
   if (committed) return Response.json({ requestId, created: true }, { status: 201, headers });
+  if (await proofSpent(env, auth)) return denied();
   const pending = await existing();
   if (pending) return Response.json({ requestId: pending.id, created: false }, { headers });
-  if (await db.get(sql`SELECT 1 FROM publications p WHERE ${filePublication(fileId)}`)) return failure("publication_exists", 409);
-  return await proofSpent(env, auth) ? denied() : notFound();
+  if (await db.get(sql`SELECT 1 FROM publications p WHERE ${filePublication(fileId)}
+    AND ${accessPredicate(auth, fileId, "read")}`)) return failure("publication_exists", 409);
+  return notFound();
 }
 
 /** The requester cancels or the File Owner denies; either hard-deletes it. */
@@ -249,8 +252,15 @@ async function deleteRequest(env: Env, auth: AuthorizedDevice, fileId: string, r
         OR (owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")}))
       AND ${guard}`);
   if (committed) return Response.json({ deleted: true }, { headers });
-  const row = await createDb(env.DB).get(sql`SELECT 1 FROM publication_requests WHERE id = ${requestId} AND file_id = ${fileId}`);
-  if (row) return await proofSpent(env, auth) ? denied() : notFound();
+  // An absent request is idempotent only while File authority is still live.
+  // Another requester's entry is indistinguishable from an inaccessible File.
+  const row = await createDb(env.DB).get<{ id: string | null }>(sql`
+    SELECT r.id FROM files f LEFT JOIN publication_requests r ON r.id = ${requestId} AND r.file_id = f.node_id
+    WHERE f.node_id = ${fileId} AND ${accessPredicate(auth, fileId, "read")}
+      AND (r.id IS NULL OR r.requester_id = ${auth.accountId}
+        OR (f.owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")}))`);
+  if (!row) return notFound();
+  if (row.id) return await proofSpent(env, auth) ? denied() : notFound();
   return Response.json({ deleted: true, alreadyDeleted: true }, { headers });
 }
 
@@ -304,9 +314,9 @@ async function addAuthor(env: Env, auth: AuthorizedDevice, fileId: string, value
     // Only an Account holding current access to this File can be credited;
     // an unknown address and an Account without access are indistinguishable.
     const account = await db.get<{ id: string }>(sql`SELECT id FROM accounts
-      WHERE ${lookup} AND id != ${auth.accountId} AND ${privateReadGuard(auth)}`);
+      WHERE ${lookup} AND id != ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")}`);
     if (!account || !await db.get(sql`SELECT 1 FROM (${accountAccessQuery(account.id, fileId)}) a
-      WHERE a.kind = 'file' AND ${privateReadGuard(auth)}`)) return notFound();
+      WHERE a.kind = 'file' AND ${accessPredicate(auth, fileId, "owner")}`)) return notFound();
     candidate = account.id;
   }
   const self = candidate === auth.accountId, now = Date.now();
@@ -326,10 +336,14 @@ async function addAuthor(env: Env, auth: AuthorizedDevice, fileId: string, value
   } catch { return publicationChanged(); }
   if (committed) return Response.json({ declarationId: input.declarationId }, { status: 201, headers });
   if (await proofSpent(env, auth)) return denied();
-  const authors = await db.get<{ total: number; present: number }>(sql`SELECT count(*) AS total,
-      coalesce(sum(author_id = ${candidate}), 0) AS present FROM publication_authors WHERE publication_id = ${publication.id}`);
-  if (authors?.present) return failure("author_exists", 409);
-  if ((authors?.total ?? 0) >= MAX_PUBLICATION_AUTHORS) return failure("author_limit", 409);
+  const authors = await db.get<{ total: number; present: number }>(sql`
+    SELECT (SELECT count(*) FROM publication_authors WHERE publication_id = p.id) AS total,
+      EXISTS (SELECT 1 FROM publication_authors WHERE publication_id = p.id AND author_id = ${candidate}) AS present
+    FROM publications p WHERE p.id = ${publication.id} AND ${filePublication(fileId)}
+      AND p.owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")}`);
+  if (!authors) return notFound();
+  if (authors.present) return failure("author_exists", 409);
+  if (authors.total >= MAX_PUBLICATION_AUTHORS) return failure("author_limit", 409);
   return publicationChanged();
 }
 
@@ -354,7 +368,8 @@ async function declareAuthor(env: Env, auth: AuthorizedDevice, fileId: string, d
       !isPublicationIdentifier(input.publicationId) || !isPublicationIdentifier(input.linkId) || !positive(input.revision)) return invalid();
   const publication = await publicationState(env, auth, fileId);
   const author = publication ? await createDb(env.DB).get<{ revision: number }>(sql`SELECT revision FROM publication_authors
-    WHERE id = ${declarationId} AND publication_id = ${publication.id} AND author_id = ${auth.accountId}`) : null;
+    WHERE id = ${declarationId} AND publication_id = ${publication.id} AND author_id = ${auth.accountId}
+      AND ${accessPredicate(auth, fileId, "read")}`) : null;
   if (!publication || !author) return notFound();
   if (publication.state !== "active" || publication.id !== input.publicationId || publication.link_id !== input.linkId ||
       !publication.public_key || author.revision + 1 !== input.revision) return publicationChanged();

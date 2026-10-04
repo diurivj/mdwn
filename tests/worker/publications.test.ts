@@ -10,6 +10,8 @@ import {
 import {
   openAuthorDeclaration, openPublicRepresentation, publicPresentation, sealAuthorDeclaration, sealPublicRepresentation,
 } from "../../app/publications/content";
+import { publicationsAction } from "../../app/publications/publications.server";
+import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import { createFileHead } from "../../app/tree/file-head";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import {
@@ -586,6 +588,18 @@ describe("author attribution", () => {
 });
 
 describe("Publication requests", () => {
+  it("rejects a spent create proof rather than returning pending-request metadata", async () => {
+    const owner = await sharingAccount(), actor = await sharingAccount();
+    const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    await grant(owner, actor, fileId, "read_only");
+    const path = `/api/private/publications/files/${fileId}/requests`;
+    expect((await sharingRequest(actor, path, "POST", {}, "create-request-replay")).status).toBe(201);
+    const replay = await sharingRequest(actor, path, "POST", {}, "create-request-replay");
+    expect(replay.status).toBe(403);
+    expect(await replay.json()).toEqual({ error: "device_proof_required" });
+    expect(await count("publication_requests", "file_id = ?", fileId)).toBe(1);
+  });
+
   it("allows one pending request that the requester cancels or the Owner denies", async () => {
     const owner = await sharingAccount(), first = await sharingAccount(), second = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
@@ -597,11 +611,17 @@ describe("Publication requests", () => {
     expect(await (await sharingRequest(first, path, "POST", {})).json()).toEqual({ requestId: created.requestId, created: false });
     const other = await (await sharingRequest(second, path, "POST", {})).json() as { requestId: string };
     // A Collaborator cannot remove another requester's request; the Owner sees both.
-    expect((await sharingRequest(second, `${path}/${created.requestId}`, "DELETE", {})).status).toBe(404);
+    const forbidden = await sharingRequest(second, `${path}/${created.requestId}`, "DELETE", {});
+    expect(forbidden.status).toBe(404);
+    expect(await forbidden.json()).toEqual({ error: "not_found" });
     const ownerView = await (await sharingRequest(owner, `/api/private/publications/files/${fileId}`)).json() as { requests: { requestId: string }[] };
     expect(ownerView.requests.map((request) => request.requestId).sort()).toEqual([created.requestId, other.requestId].sort());
     expect((await sharingRequest(first, `${path}/${created.requestId}`, "DELETE", {})).status).toBe(200);
+    expect(await (await sharingRequest(first, `${path}/${created.requestId}`, "DELETE", {})).json())
+      .toEqual({ deleted: true, alreadyDeleted: true });
     expect((await sharingRequest(owner, `${path}/${other.requestId}`, "DELETE", {})).status).toBe(200);
+    expect(await (await sharingRequest(owner, `${path}/${other.requestId}`, "DELETE", {})).json())
+      .toEqual({ deleted: true, alreadyDeleted: true });
     expect(await count("publication_requests", "file_id = ?", fileId)).toBe(0);
     // The Owner never requests; an Account without access gets the same 404.
     expect((await sharingRequest(owner, path, "POST", {})).status).toBe(404);
@@ -611,6 +631,225 @@ describe("Publication requests", () => {
     expect(published.status).toBe(409);
     expect(await published.json()).toEqual({ error: "publication_exists" });
   });
+});
+
+/** Supplemental binding-boundary tests: every query/batch still executes on
+ * migrated D1 in workerd. The proxy only schedules a real revocation immediately
+ * before the selected statement; route coverage above continues through SELF.
+ */
+async function publicationAtBoundary(actor: SharingAccount, path: string, method: "POST" | "PUT" | "DELETE",
+  value: object, targetQuery: RegExp, before: () => Promise<void>) {
+  const url = `https://mdwn.test${path}`, body = JSON.stringify(value);
+  const proof = await signDeviceProof(actor.assertion.privateKey, {
+    sessionBinding: await sessionBindingDigest(actor.session.id), deviceId: actor.deviceId,
+    registryEpoch: actor.registryEpoch, method, url, body,
+  });
+  let hits = 0, rows: unknown[] | undefined;
+  const statements = new WeakMap<D1PreparedStatement, { real: D1PreparedStatement; query: string }>();
+  async function intercept(query: string) {
+    if (hits || !targetQuery.test(query.replace(/\s+/g, " ").trim())) return false;
+    hits++;
+    await before();
+    return true;
+  }
+  function wrap(real: D1PreparedStatement, query: string): D1PreparedStatement {
+    const wrapped = new Proxy(real, {
+      get(statement, property) {
+        if (property === "bind") return (...values: unknown[]) => wrap(statement.bind(...values), query);
+        if (property === "all") return async <T>() => {
+          const hit = await intercept(query);
+          const result = await statement.all<T>();
+          if (hit) rows = result.results;
+          return result;
+        };
+        const member = Reflect.get(statement, property);
+        return typeof member === "function" ? member.bind(statement) : member;
+      },
+    });
+    statements.set(wrapped, { real, query });
+    return wrapped;
+  }
+  const DB = new Proxy(env.DB, {
+    get(database, property) {
+      if (property === "prepare") return (query: string) => wrap(database.prepare(query), query);
+      if (property === "batch") return async (batch: D1PreparedStatement[]) => {
+        for (const statement of batch) {
+          const entry = statements.get(statement);
+          if (entry) await intercept(entry.query);
+        }
+        return database.batch(batch.map((statement) => statements.get(statement)?.real ?? statement));
+      };
+      const member = Reflect.get(database, property);
+      return typeof member === "function" ? member.bind(database) : member;
+    },
+  });
+  const response = await publicationsAction(new Request(url, { method, body, headers: {
+    cookie: actor.session.cookie, origin: "https://mdwn.test", "content-type": "application/json",
+    "X-Mdwn-Device-Proof": JSON.stringify(proof),
+  } }), { ...env, DB });
+  expect(hits, "the intended D1 statement boundary must execute").toBe(1);
+  return { response, rows, proofId: proof.proofId };
+}
+
+const authorityLosses = ["Session revocation", "device revocation", "registry epoch", "last Grant loss"] as const;
+type AuthorityLoss = typeof authorityLosses[number];
+async function revokePublicationAuthority(kind: AuthorityLoss, actor: SharingAccount, fileId: string) {
+  if (kind === "Session revocation") {
+    await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?").bind(Date.now(), actor.session.id).run();
+  } else if (kind === "device revocation") {
+    await env.DB.prepare("UPDATE encryption_devices SET state = 'revoked' WHERE id = ?").bind(actor.deviceId).run();
+  } else if (kind === "registry epoch") {
+    await env.DB.prepare("UPDATE account_encryption_identities SET registry_epoch = registry_epoch + 1 WHERE account_id = ?")
+      .bind(actor.accountId).run();
+  } else {
+    const revoked = "SELECT id FROM grants WHERE recipient_id = ? AND target_id = ?";
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM grant_comment_key_envelopes WHERE relationship_id IN (${revoked})`).bind(actor.accountId, fileId),
+      env.DB.prepare(`DELETE FROM grant_key_envelopes WHERE relationship_id IN (${revoked})`).bind(actor.accountId, fileId),
+      env.DB.prepare(`DELETE FROM provisioning_needs WHERE grant_id IN (${revoked})`).bind(actor.accountId, fileId),
+      env.DB.prepare("DELETE FROM grants WHERE recipient_id = ? AND target_id = ?").bind(actor.accountId, fileId),
+    ]);
+    expect(await count("grants", "recipient_id = ?", actor.accountId)).toBe(0);
+  }
+}
+
+async function expectAuthorityNotFound(result: Awaited<ReturnType<typeof publicationAtBoundary>>, actor: SharingAccount) {
+  expect(result.response.status).toBe(404);
+  expect(result.response.headers.get("cache-control")).toBe("no-store");
+  expect(await result.response.json()).toEqual({ error: "not_found" });
+  expect(await count("device_proof_uses", "account_id = ? AND proof_id = ?", actor.accountId, result.proofId)).toBe(0);
+}
+
+describe("statement-time Publication authority", () => {
+  for (const loss of authorityLosses) {
+    it(`does not disclose a duplicate request after ${loss}`, async () => {
+      const owner = await sharingAccount(), actor = await sharingAccount();
+      const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+      await grant(owner, actor, fileId, "read_only");
+      const path = `/api/private/publications/files/${fileId}/requests`;
+      expect((await sharingRequest(actor, path, "POST", {})).status).toBe(201);
+      const result = await publicationAtBoundary(actor, path, "POST", {}, /^SELECT id FROM publication_requests /,
+        () => revokePublicationAuthority(loss, actor, fileId));
+      await expectAuthorityNotFound(result, actor);
+      expect(result.rows).toEqual([]);
+      expect(await count("publication_requests", "file_id = ?", fileId)).toBe(1);
+    });
+
+    it(`does not disclose publication_exists after ${loss}`, async () => {
+      const owner = await sharingAccount(), actor = await sharingAccount();
+      const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+      await grant(owner, actor, fileId, "read_only");
+      const published = await publish(owner, fileId);
+      const result = await publicationAtBoundary(actor, `/api/private/publications/files/${fileId}/requests`, "POST", {},
+        /^SELECT 1 FROM publications p WHERE /, () => revokePublicationAuthority(loss, actor, fileId));
+      await expectAuthorityNotFound(result, actor);
+      expect(result.rows).toEqual([]);
+      expect(await count("publication_requests", "file_id = ?", fileId)).toBe(0);
+      expect((await publicationRows(fileId)).results[0]!.id).toBe(published.publicationId);
+    });
+
+    it(`does not claim idempotent deletion of an absent request after ${loss}`, async () => {
+      const owner = await sharingAccount(), actor = await sharingAccount();
+      const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+      await grant(owner, actor, fileId, "read_only");
+      const result = await publicationAtBoundary(actor, `/api/private/publications/files/${fileId}/requests/${opaqueId()}`,
+        "DELETE", {}, /^SELECT (?:r.id FROM files f LEFT JOIN publication_requests|1 FROM publication_requests WHERE id)/,
+        () => revokePublicationAuthority(loss, actor, fileId));
+      await expectAuthorityNotFound(result, actor);
+      expect(result.rows).toEqual([]);
+    });
+
+    it(`does not delete or disclose an existing request when ${loss} wins the CAS`, async () => {
+      const owner = await sharingAccount(), actor = await sharingAccount();
+      const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+      await grant(owner, actor, fileId, "read_only");
+      const path = `/api/private/publications/files/${fileId}/requests`;
+      const created = await (await sharingRequest(actor, path, "POST", {})).json() as { requestId: string };
+      const result = await publicationAtBoundary(actor, `${path}/${created.requestId}`, "DELETE", {},
+        /^DELETE FROM publication_requests /, () => revokePublicationAuthority(loss, actor, fileId));
+      await expectAuthorityNotFound(result, actor);
+      expect(await count("publication_requests", "id = ?", created.requestId)).toBe(1);
+    });
+
+    it(`does not read an author's revision after ${loss}`, async () => {
+      const owner = await sharingAccount(), actor = await sharingAccount();
+      const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+      await grant(owner, actor, fileId, "read_only");
+      const published = await publish(owner, fileId), declarationId = newPublicationIdentifier();
+      expect((await sharingRequest(owner, `/api/private/publications/files/${fileId}/authors`, "PUT", {
+        publicationId: published.publicationId, declarationId, account: { shareId: actor.shareId }, declaration: null,
+      })).status).toBe(201);
+      const result = await publicationAtBoundary(actor,
+        `/api/private/publications/files/${fileId}/authors/${declarationId}/declaration`, "PUT", {
+          publicationId: published.publicationId, linkId: published.linkId, revision: 2, ciphertext: "AQ",
+        }, /^SELECT revision FROM publication_authors /, () => revokePublicationAuthority(loss, actor, fileId));
+      await expectAuthorityNotFound(result, actor);
+      expect(result.rows).toEqual([]);
+      expect(await env.DB.prepare("SELECT revision, ciphertext FROM publication_authors WHERE id = ?").bind(declarationId).first())
+        .toEqual({ revision: 0, ciphertext: null });
+    });
+  }
+
+  for (const loss of authorityLosses.slice(0, 3)) {
+    for (const fallback of ["duplicate", "limit"] as const) {
+      it(`does not expose the author ${fallback} fallback after ${loss}`, async () => {
+        const owner = await sharingAccount(), candidate = await sharingAccount();
+        const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+        await grant(owner, candidate, fileId, "read_only");
+        const published = await publish(owner, fileId);
+        const path = `/api/private/publications/files/${fileId}/authors`;
+        if (fallback === "duplicate") {
+          expect((await sharingRequest(owner, path, "PUT", { publicationId: published.publicationId,
+            declarationId: newPublicationIdentifier(), account: { shareId: candidate.shareId }, declaration: null })).status).toBe(201);
+        } else {
+          // Seed opaque selected authors at the storage boundary, not a D1 mock.
+          const now = Date.now();
+          await env.DB.batch(Array.from({ length: 20 }, (_, ordinal) => {
+            const accountId = opaqueId();
+            return [env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
+              .bind(accountId, opaqueId(), now, now),
+            env.DB.prepare(`INSERT INTO publication_authors (id, publication_id, author_id, ordinal, revision, created_at, updated_at)
+              VALUES (?, ?, ?, ?, 0, ?, ?)`).bind(newPublicationIdentifier(), published.publicationId, accountId, ordinal + 1, now, now)];
+          }).flat());
+          const authorized = await sharingRequest(owner, path, "PUT", { publicationId: published.publicationId,
+            declarationId: newPublicationIdentifier(), account: { shareId: candidate.shareId }, declaration: null });
+          expect(authorized.status).toBe(409);
+          expect(await authorized.json()).toEqual({ error: "author_limit" });
+        }
+        const result = await publicationAtBoundary(owner, path, "PUT", { publicationId: published.publicationId,
+          declarationId: newPublicationIdentifier(), account: { shareId: candidate.shareId }, declaration: null },
+        /^SELECT (?:count\(\*\) AS total|\(SELECT count\(\*\) FROM publication_authors)/,
+        () => revokePublicationAuthority(loss, owner, fileId));
+        await expectAuthorityNotFound(result, owner);
+        expect(result.rows).toEqual([]);
+        expect(await count("publication_authors", "publication_id = ?", published.publicationId)).toBe(fallback === "duplicate" ? 1 : 20);
+      });
+    }
+  }
+
+  for (const stage of ["account lookup", "candidate access"] as const) {
+    for (const loss of [...authorityLosses.slice(0, 3), "File deletion"] as const) {
+      it(`pins Owner authority during ${stage} after ${loss}`, async () => {
+        const owner = await sharingAccount(), candidate = await sharingAccount();
+        const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+        await grant(owner, candidate, fileId, "read_only");
+        const published = await publish(owner, fileId);
+        const deletion = await deletePayload(owner, owner.accountId, fileId, owner.rootId);
+        const result = await publicationAtBoundary(owner, `/api/private/publications/files/${fileId}/authors`, "PUT", {
+          publicationId: published.publicationId, declarationId: newPublicationIdentifier(),
+          account: { shareId: candidate.shareId }, declaration: null,
+        }, stage === "account lookup" ? /^SELECT id FROM accounts / : /^SELECT 1 FROM \(WITH RECURSIVE lineage/,
+        async () => {
+          if (loss === "File deletion") {
+            expect((await sharingRequest(owner, `/api/private/tree/nodes/${fileId}`, "DELETE", deletion)).status).toBe(200);
+          } else await revokePublicationAuthority(loss, owner, fileId);
+        });
+        await expectAuthorityNotFound(result, owner);
+        expect(result.rows).toEqual([]);
+        expect(await count("publication_authors", "publication_id = ?", published.publicationId)).toBe(0);
+      });
+    }
+  }
 });
 
 describe("fragment privacy and hard deletion", () => {

@@ -46,6 +46,38 @@ describe("Public presentation", () => {
     expect(publicPresentation("---\n---\n")).toEqual({ title: null, markdown: "" });
   });
 
+  it.each(["\n", "\r\n", "\r"])("strips front matter with %j line endings without rewriting the body", (newline) => {
+    const body = `# Public${newline}${newline}Body${newline}`;
+    expect(publicPresentation(["---", "title: Public", "private: never public", "---", body].join(newline)))
+      .toEqual({ title: "Public", markdown: body });
+  });
+
+  it("keeps only a real top-level title, never text from another YAML value", () => {
+    for (const yaml of [
+      'private: "note\ntitle: SECRET\nend"',
+      "private: 'note\ntitle: SECRET\nend'",
+      "private: |\n  title: SECRET",
+      "private:\n  title: SECRET",
+      "title: Public\n  private: SECRET",
+      "title: First\ntitle: SECRET",
+    ]) {
+      expect(publicPresentation(`---\n${yaml}\n---\nBody`), yaml).toEqual({ title: null, markdown: "Body" });
+    }
+  });
+
+  it.each([
+    ['"title": Valid title', "Valid title"],
+    ["'title': Valid title", "Valid title"],
+    ["  title: Indented root", "Indented root"],
+    ["title: &anchor Anchored title", "Anchored title"],
+    ["title: !!str 123", "123"],
+    ["title: |-\n  Literal\n  title", "Literal\ntitle"],
+    ["title: >-\n  Folded\n  title", "Folded title"],
+    ['title: "Multi\n  line"', "Multi line"],
+  ])("reads a valid YAML string title from %j", (yaml, expected) => {
+    expect(publicPresentation(`---\n${yaml}\n---\nBody`)).toEqual({ title: expected, markdown: "Body" });
+  });
+
   it("treats an unterminated leading block as ordinary Markdown", () => {
     const source = "---\ntitle: Not front matter\n\nBody";
     expect(publicPresentation(source)).toEqual({ title: null, markdown: source });
@@ -65,9 +97,9 @@ describe("Public presentation", () => {
 
   it("never renders structured, empty, null or nested title values", () => {
     const title = (line: string) => publicPresentation(`---\n${line}\n---\nBody`).title;
-    for (const line of ["title:", "title: |\n  Block", "title: >\n  Folded", "title: [a, b]", "title: {a: b}",
-      "title: &anchor value", "title: *alias", "title: !tag value", "title: ~", "title: null", "title: \"unterminated",
-      "title: 'unterminated", "title: \"bad \\q escape\"", "  title: indented", "subtitle: nope", "title:no-space",
+    for (const line of ["title:", "title: [a, b]", "title: {a: b}",
+      "title: *alias", "private: &secret SECRET\ntitle: *secret", "title: !tag value", "title: ~", "title: null", "title: \"unterminated",
+      "title: 'unterminated", "title: \"bad \\q escape\"", "subtitle: nope", "title:no-space",
       "Title: case-sensitive"]) {
       expect(title(line), line).toBeNull();
     }

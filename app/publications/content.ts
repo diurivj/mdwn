@@ -1,3 +1,5 @@
+import { isMap, isScalar, parseDocument } from "yaml";
+
 import { openForRecipient, sealToRecipient, type EnvelopeContext } from "~/crypto/enc-v1";
 import { FILE_SOURCE_LIMIT } from "~/crypto/file-source";
 import { importPublicationPublicKey, publicationRecipientId } from "./capability";
@@ -25,88 +27,43 @@ const AUTHOR_MAGIC = encoder.encode("mdwn/publication-author/v1\0");
 
 export type PublicPresentation = { title: string | null; markdown: string };
 
-const OPENING = /^﻿?---[ \t]*\r?\n/;
+const OPENING = /^﻿?---[ \t]*(?:\r\n|\n|\r)/;
 const CLOSING = /^(?:---|\.\.\.)[ \t]*$/;
 
 /**
- * A leading `---` block closed by `---` or `...` is YAML front matter: it is
- * removed, and only a top-level scalar `title` is kept. Anything not clearly a
- * plain or quoted scalar yields no title rather than leaking raw YAML.
+ * Strip a leading YAML front-matter block without rewriting the Markdown body.
+ * Parse the whole mapping before selecting its title: a title-looking line can
+ * be part of another field's multiline string, not a public title.
  */
 export function publicPresentation(source: string): PublicPresentation {
   const opening = OPENING.exec(source);
   if (!opening) return { title: null, markdown: source };
   const lines: string[] = [];
+  const newline = /\r\n|\n|\r/g;
   let offset = opening[0].length;
   while (true) {
-    const end = source.indexOf("\n", offset);
-    const raw = end === -1 ? source.slice(offset) : source.slice(offset, end);
-    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    newline.lastIndex = offset;
+    const end = newline.exec(source);
+    const line = source.slice(offset, end?.index ?? source.length);
     if (CLOSING.test(line)) {
-      return { title: frontMatterTitle(lines), markdown: end === -1 ? "" : source.slice(end + 1) };
+      return { title: frontMatterTitle(lines), markdown: end ? source.slice(newline.lastIndex) : "" };
     }
-    if (end === -1) return { title: null, markdown: source };
+    if (!end) return { title: null, markdown: source };
     lines.push(line);
-    offset = end + 1;
+    offset = newline.lastIndex;
   }
 }
 
 function frontMatterTitle(lines: readonly string[]): string | null {
-  const index = lines.findIndex((line) => /^title[ \t]*:(?:[ \t]|$)/.test(line));
-  if (index === -1) return null;
-  const value = lines[index]!.slice(lines[index]!.indexOf(":") + 1).trim();
-  if (!value) return null;
-  let title: string | null;
-  if (value.startsWith('"')) title = doubleQuoted(value);
-  else if (value.startsWith("'")) title = singleQuoted(value);
-  else {
-    if (/^[|>[\]{}&*!%@`#,?-]/.test(value) && !/^-[^ \t]/.test(value)) return null;
-    const parts = [stripComment(value)];
-    for (const line of lines.slice(index + 1)) {
-      if (!/^[ \t]+\S/.test(line) || /^[ \t]+#/.test(line)) break;
-      parts.push(stripComment(line.trim()));
-    }
-    title = parts.join(" ").trim();
-    if (/^(?:~|null|Null|NULL)$/.test(title)) return null;
-  }
-  return title ? title : null;
-}
-
-function stripComment(value: string): string {
-  const comment = /[ \t]#/.exec(value);
-  return (comment ? value.slice(0, comment.index) : value).trim();
-}
-
-function trailingOk(rest: string): boolean {
-  return /^[ \t]*(?:#.*)?$/.test(rest);
-}
-
-function doubleQuoted(value: string): string | null {
-  let result = "";
-  for (let index = 1; index < value.length; index++) {
-    const character = value[index]!;
-    if (character === '"') return trailingOk(value.slice(index + 1)) ? result : null;
-    if (character !== "\\") { result += character; continue; }
-    const escape = value[++index];
-    const simple: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", n: "\n", t: "\t", r: "\r", " ": " " };
-    if (escape !== undefined && Object.hasOwn(simple, escape)) result += simple[escape];
-    else if (escape === "u" && /^[0-9a-fA-F]{4}$/.test(value.slice(index + 1, index + 5))) {
-      const code = parseInt(value.slice(index + 1, index + 5), 16);
-      if (code >= 0xd800 && code <= 0xdfff) return null;
-      result += String.fromCharCode(code); index += 4;
-    } else return null;
-  }
-  return null;
-}
-
-function singleQuoted(value: string): string | null {
-  let result = "";
-  for (let index = 1; index < value.length; index++) {
-    if (value[index] !== "'") { result += value[index]; continue; }
-    if (value[index + 1] === "'") { result += "'"; index++; continue; }
-    return trailingOk(value.slice(index + 1)) ? result : null;
-  }
-  return null;
+  try {
+    const document = parseDocument(lines.join("\n"), { version: "1.2", strict: true, uniqueKeys: true });
+    if (document.errors.length || document.warnings.length || !isMap(document.contents)) return null;
+    // Inspect the scalar directly, never convert the document to JS or expand
+    // aliases. An alias must not promote another private field into the title.
+    const title = document.get("title", true);
+    return isScalar(title) && typeof title.value === "string" && title.value
+      ? title.value : null;
+  } catch { return null; }
 }
 
 function u32(value: number): Uint8Array {
