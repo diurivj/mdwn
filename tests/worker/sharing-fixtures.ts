@@ -58,6 +58,9 @@ export async function sharingRequest(account: SharingAccount, path: string,
   });
   if (proofId) account.proofs.set(proofId, proof);
   return SELF.fetch(url, { method, headers: { cookie: account.session.cookie, origin: "https://mdwn.test",
+    // Real Workers requests always carry the edge address; network-scoped abuse
+    // limits fail closed without it.
+    "CF-Connecting-IP": "203.0.113.7",
     "X-Mdwn-Device-Proof": JSON.stringify(proof), ...(body ? { "content-type": "application/json" } : {}) }, body });
 }
 

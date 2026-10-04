@@ -198,6 +198,7 @@ version, not a permissive v1 decoder.
 | 19 | `device-label` |
 | 20 | `file-capability` |
 | 21 | `publication-attribution` |
+| 22 | `public-comment-epoch-link` |
 
 Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
  key`, `Comment audience epoch`); only the numeric ID is serialized. Every HPKE
@@ -254,7 +255,12 @@ authenticated Publication protocol, not from a successful open. See
 
 `app/sharing/comment-keys` uses purposes 10 and 11 for direct HPKE device delivery, with an independent source-device intent signature. Pending Share acceptance requires the Owner; ticket 20 also permits a current recipient holder to forward an accepted Grant's capability within the same Account/Grant, with source authority rechecked in the committing transaction. Its externally expected context and signature additionally bind File, logical thread, root Grant relationship/target and both approved registry snapshots. Purpose 11 binds the logical Publication, never a URL fragment. Grant routes reject symmetric wrappers and all crossed contexts; acceptance requires complete current-device root and registered Comment/history coverage. These envelopes remain outside Account-owned recovery/enrollment stores. See [sharing](sharing.md) for the producer registration and lifecycle integration contract.
 
-This consumer pins HPKE locally; it does not assign a global suite to purposes that still have other consumers. Ticket 23 must give the Publication-link symmetric wrapper a distinct new purpose rather than repurpose a direct-device Grant envelope or renumber existing purposes.
+Ticket 23 adds the symmetric `public-comment-epoch-link` purpose (22) for the
+Publication-link wrapper of a `public` audience epoch. It is derived from the
+fragment scalar and the stored public point with HKDF-SHA-256 and never reaches
+the service; the direct device envelope keeps the HPKE
+`public-comment-audience-epoch` purpose (11), so the two remain distinguishable
+by purpose and suite in the authenticated context.
 
 ## Consumers and open decisions
 
@@ -278,15 +284,13 @@ Their purpose names are pinned here:
 | 24 Public pseudonym update | `attribution` |
 | 29, 30 Import | `archive-manifest`, `import-staging-manifest`, `import-chunk` |
 
-Two decisions stay open, and later tickets own them:
+One decision stays open, and later tickets own it:
 
-1. **Public audience epoch needs two purposes.** Ticket 23 needs a symmetric
-   wrapper for the Publication capability and an HPKE envelope for each device,
-   so one `public-comment-audience-epoch` purpose is not enough. Split it and keep
-   the two distinguishable in the authenticated context.
-2. **Purpose-to-suite enforcement.** The module does not stop a producer sealing
+1. **Purpose-to-suite enforcement.** The module does not stop a producer sealing
    any purpose with either suite. Tickets 18, 21, 22, and 23 should add a
-   purpose-to-suite table once every purpose has exactly one suite.
+   purpose-to-suite table once every purpose has exactly one suite. Ticket 23
+   resolves the Public audience epoch split: (11) is the direct-device HPKE
+   envelope and (22) the Publication-link symmetric wrapper.
 
 ## Sources
 

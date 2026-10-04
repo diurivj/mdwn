@@ -1,3 +1,4 @@
+import { publicAttributionKeyContext, publicCommentKeyContext } from "~/comments/public-content";
 import { createSymmetricWriter, openSymmetric } from "~/crypto/enc-v1";
 import { openDeviceEnrollmentEnvelope } from "~/crypto/vault";
 import { privateRequest } from "~/device/private-client";
@@ -86,11 +87,12 @@ async function replacementKey(browser: RotationBrowser, job: RotationJob, item: 
 async function start(browser: RotationBrowser, next: RotationNext) {
   const { item, source, job } = next;
   if (!item || !source || !item.targetEpoch) throw new Error("Invalid rotation step");
-  // Retained public history is not a future audience key. Only its device
-  // envelopes change; the Publication-link/body lifecycle remains independent.
+  // A retained public history epoch is not a future audience key: only its
+  // device envelopes change. A current Collaborators-only epoch (item.rotate)
+  // advances in place so a revoked device's key cannot read what follows.
   const currentComment = item.kind === "public_history" || item.kind === "private_comment" ? await sourceKey(browser, source) : null;
   if (currentComment && currentComment.length !== 32) throw new Error("Invalid current Comment key");
-  const key = item.kind === "public_history" ? currentComment! : crypto.getRandomValues(new Uint8Array(32));
+  const key = item.kind === "public_history" && !item.rotate ? currentComment! : crypto.getRandomValues(new Uint8Array(32));
   const resumeEnvelope = encodeTreeBytes(await (await createSymmetricWriter(browser.vaultRootKey)).seal(key,
     rotationResumeContext(browser.accountId, job.jobId, item.objectId, item.targetEpoch)));
   return { operation: "start", operationId: newOpaqueId(), objectId: item.objectId, sourceEpoch: item.sourceEpoch,
@@ -112,11 +114,17 @@ async function stageComments(browser: RotationBrowser, next: RotationNext) {
   const page = await json<RotationCommentPage>(browser,
     `/api/private/key-rotations/${job.jobId}/items/${item.objectId}/comment-items${item.cursor ? `?cursor=${item.cursor}` : ""}`);
   if (page.records.length < 1 || page.records.length > 20) throw new Error("Invalid Comment page");
+  // Public Comment contexts bind the logical Publication, never the Owner Vault.
+  const vaultId = source.kind === "public_history" ? source.publicationId! : browser.accountId;
   const writer = await createSymmetricWriter(key), records = [];
   for (const record of page.records) {
-    const context = { purpose: record.kind === "comment" ? "comment-content" as const : "attribution" as const,
-      vaultId: browser.accountId, objectId: record.recordId, keyId: item.capabilityId,
-      keyEpoch: item.sourceEpoch, revision: record.revision };
+    const context = source.kind === "public_history"
+      ? record.kind === "comment"
+        ? publicCommentKeyContext(vaultId, record.recordId, item.capabilityId, item.sourceEpoch, record.revision)
+        : publicAttributionKeyContext(vaultId, record.recordId, item.capabilityId, item.sourceEpoch, record.revision)
+      : { purpose: record.kind === "comment" ? "comment-content" as const : "attribution" as const,
+        vaultId, objectId: record.recordId, keyId: item.capabilityId,
+        keyEpoch: item.sourceEpoch, revision: record.revision };
     const contentKey = await openSymmetric(decodeTreeBytes(record.contentKeyEnvelope, 16_384), oldKey, { context });
     if (contentKey.length !== 32) throw new Error("Invalid Comment content key");
     records.push({ recordId: record.recordId, kind: record.kind, revision: record.revision,
@@ -127,7 +135,9 @@ async function stageComments(browser: RotationBrowser, next: RotationNext) {
 
 async function stage(browser: RotationBrowser, next: RotationNext) {
   const { item, source, job } = next;
-  if (source?.kind === "private_comment") return stageComments(browser, next);
+  if (source?.kind === "private_comment" || source?.kind === "public_history" && item?.rotate) {
+    return stageComments(browser, next);
+  }
   if (!item || source?.kind !== "directory") throw new Error("Invalid Directory step");
   const oldKey = await sourceKey(browser, source), key = await replacementKey(browser, job, item);
   const page = await json<RotationEntries>(browser, `/api/private/key-rotations/${job.jobId}/items/${item.objectId}/entries${item.cursor ? `?cursor=${item.cursor}` : ""}`);

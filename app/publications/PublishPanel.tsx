@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import {
-  addAccountAuthor, addSelfAuthor, loadPublicationState, publishFile, PublicationError, removeAuthor,
-  removePublicationRequest, requestPublication, type PreparedPublicLink, type PublicationState,
+  addAccountAuthor, addSelfAuthor, changeCommentAudience, loadPublicationState, publishFile, PublicationError,
+  removeAuthor, removePublicationRequest, requestPublication,
+  type CommentAudience, type PreparedPublicLink, type PublicationState,
 } from "./publications-client";
 import { loadFile } from "~/tree/client";
 
@@ -18,6 +19,8 @@ const messages: Record<PublicationError["code"], string> = {
   "too-large": "Reduce this File within the source limit before publishing it.",
   "author-exists": "That Account is already credited.",
   "author-limit": "This Publication already credits the maximum number of authors.",
+  "link-required": "Paste the complete public link (including the part after #) to enable public comments.",
+  "rotation-required": "Secure access must finish updating before the comment audience can change.",
   unavailable: "The change could not be confirmed. Try again.",
 };
 
@@ -34,6 +37,8 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [includeSelf, setIncludeSelf] = useState(false);
+  const [audience, setAudience] = useState<CommentAudience>("public");
+  const [linkInput, setLinkInput] = useState("");
   const [address, setAddress] = useState("");
   const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
   const lifetime = useRef<AbortController | null>(null);
@@ -69,6 +74,18 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
       setMessage(error instanceof PublicationError ? messages[error.code] : messages.unavailable);
       await reload(controller.signal);
     } finally { if (!controller.signal.aborted) setBusy(false); }
+  }
+
+  async function changeAudience(next: CommentAudience, signal: AbortSignal) {
+    const file = await loadFile(accessRef.current, fileId, parentKey!, signal);
+    if (!file.publication || file.publication.publicationId !== publication?.publicationId) throw new PublicationError("changed");
+    const completeLink = links.get(file.publication.publicationId)?.url ?? linkInput.trim() ?? "";
+    await changeCommentAudience(accessRef.current, fileId, {
+      publicationId: file.publication.publicationId, linkId: file.publication.linkId,
+      publicKey: file.publication.publicKey, expectedEpochId: panel.status === "ready" ? panel.state.comments?.epochId ?? null : null,
+      threadId: panel.status === "ready" ? panel.state.comments?.threadId ?? null : null,
+    }, next, completeLink || null, signal);
+    setLinkInput("");
   }
 
   // A failed or superseded attempt must never be shown as the active link.
@@ -108,6 +125,25 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
         </div>
         <p className="text-sm text-stone-600">Copy this link now. mdwn never stores the key after #, so it can’t show this link again.</p>
       </div> : <p className="text-sm text-stone-600">The complete link was shown when you published. mdwn never stores the key after #, so it can’t show the link again.</p>}
+      <div>
+        <h3 className="text-sm font-medium">Comments</h3>
+        <p className="text-sm text-stone-600">Audience: <span className="font-medium text-stone-900">
+          {state.comments ? state.comments.audience === "public" ? "Public" : "Collaborators only" : "Not set up"}</span></p>
+        {state.comments?.audience !== "public" && !links.get(publication.publicationId) && <label className="mt-1 block text-sm">
+          Complete public link
+          <input value={linkInput} disabled={busy} onChange={(event) => setLinkInput(event.target.value)}
+            className="mt-1 block w-full rounded border border-stone-300 p-1 font-mono text-xs"
+            placeholder="https://…/p/…#v1.…" />
+        </label>}
+        <div className="mt-2 flex flex-wrap gap-2">
+          {state.comments?.audience === "public"
+            ? <button type="button" disabled={busy} className="rounded border px-3 py-1 text-sm"
+              onClick={() => void run((signal) => changeAudience("collaborators_only", signal))}>Make comments collaborators only</button>
+            : <button type="button" disabled={busy} className="rounded border px-3 py-1 text-sm"
+              onClick={() => void run((signal) => changeAudience("public", signal))}>
+              {state.comments ? "Make comments public" : "Set up public comments"}</button>}
+        </div>
+      </div>
       <div>
         <h3 className="text-sm font-medium">Authors</h3>
         {publication.authors.length ? <ul aria-label="Authors" className="mt-1 space-y-1">{publication.authors.map((author) =>
@@ -154,8 +190,15 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
       <button type="button" disabled={busy || !fileReady || !parentKey} className="rounded bg-stone-900 px-3 py-1 text-white"
         onClick={() => void run(async (signal) => {
           await publishFile({ access: accessRef.current, fileId, parentId, parentKey: parentKey!,
-            includeSelf, signal, onPrepared });
+            includeSelf, audience, signal, onPrepared });
         })}>{busy ? "Publishing…" : "Publish File"}</button>
+      <fieldset className="text-sm">
+        <legend>Comments audience</legend>
+        <label className="mr-3"><input type="radio" name="audience" checked={audience === "public"} disabled={busy}
+          onChange={() => setAudience("public")} /> Public</label>
+        <label><input type="radio" name="audience" checked={audience === "collaborators_only"} disabled={busy}
+          onChange={() => setAudience("collaborators_only")} /> Collaborators only</label>
+      </fieldset>
       {!fileReady && <p role="status" className="text-sm">Save your draft before publishing.</p>}
     </> : publication ? <p role="status">This File is published by its Owner.{publication.authors.length > 0 &&
       ` You’re credited as an author (${publication.authors[0]!.declared ? "shown publicly" : "waiting for this device"}).`}</p>

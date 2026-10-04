@@ -49,16 +49,19 @@ export function liveRotation(auth: AuthorizedDevice, job: RotationJob) {
 }
 
 export async function readRotationItem(env: Env, auth: AuthorizedDevice, job: RotationJob, objectId?: string) {
-  const row = await createDb(env.DB).get<Omit<RotationItem, "resumeEnvelope"> & { resume: ArrayBuffer | null }>(sql`
+  const row = await createDb(env.DB).get<Omit<RotationItem, "resumeEnvelope" | "rotate"> & {
+    resume: ArrayBuffer | null; rotate: number }>(sql`
     SELECT object_id AS objectId, kind, file_id AS fileId, depth, state, source_epoch AS sourceEpoch,
       target_epoch AS targetEpoch, capability_id AS capabilityId, source_revision AS sourceRevision,
-      source_representation_id AS sourceRepresentationId, resume_envelope AS resume, cursor
+      source_representation_id AS sourceRepresentationId, resume_envelope AS resume, cursor,
+      EXISTS (SELECT 1 FROM comment_thread_epochs e WHERE e.id = key_rotation_items.object_id
+        AND e.audience = 'collaborators_only' AND e.state = 'active') AS rotate
     FROM key_rotation_items WHERE job_id = ${job.jobId}
       AND ${objectId ? sql`object_id = ${objectId}` : sql`state != 'complete'`}
       AND ${privateReadGuard(auth)} ORDER BY depth, object_id LIMIT 1`);
   if (!row) return null;
-  const { resume, ...item } = row;
-  return { ...item, resumeEnvelope: encoded(resume) };
+  const { resume, rotate, ...item } = row;
+  return { ...item, rotate: rotate === 1, resumeEnvelope: encoded(resume) };
 }
 
 export async function readRotationSource(env: Env, auth: AuthorizedDevice, item: RotationItem): Promise<RotationSource | null> {
@@ -132,15 +135,18 @@ export async function rotationCommentItems(env: Env, auth: AuthorizedDevice, job
   cursor: string | null): Promise<{ records: RotationCommentRecord[]; nextCursor: string | null }> {
   // Pin the Owner and the installed capability epoch in the same statement as
   // the ciphertext, so a concurrent promotion cannot stage old-epoch wrappers.
+  // A Private thread scopes records by thread; a rotated Public audience epoch
+  // scopes the same records by their epoch identity.
   const installed = sql`EXISTS (SELECT 1 FROM sharing_comment_capabilities c WHERE c.object_id = ${item.objectId}
     AND c.owner_id = ${auth.accountId} AND c.file_id = ${item.fileId} AND c.capability_epoch = ${item.sourceEpoch})`;
+  const scope = item.kind === "public_history" ? sql`epoch_id = ${item.objectId}` : sql`thread_id = ${item.objectId}`;
   const rows = await createDb(env.DB).all<{ record_id: string; kind: "comment" | "attribution"; revision: number;
     content_key_envelope: ArrayBuffer }>(sql`SELECT * FROM (
       SELECT id AS record_id, 'comment' AS kind, revision, content_key_envelope FROM comments
-        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} AND ${installed}
+        WHERE ${scope} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} AND ${installed}
       UNION ALL
       SELECT id AS record_id, 'attribution' AS kind, revision, content_key_envelope FROM thread_attributions
-        WHERE thread_id = ${item.objectId} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} AND ${installed}
+        WHERE ${scope} AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} AND ${installed}
     ) ORDER BY record_id LIMIT ${ROTATION_PAGE + 1}`);
   return { records: rows.slice(0, ROTATION_PAGE).map((row) => ({ recordId: row.record_id, kind: row.kind,
     revision: row.revision, contentKeyEnvelope: encoded(row.content_key_envelope)! })),

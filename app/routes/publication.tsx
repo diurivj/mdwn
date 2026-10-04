@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { data, useLocation, useRevalidator } from "react-router";
+import { PublicComments } from "~/comments/PublicComments";
 import { getEnv } from "~/context/env";
 import { activePublicLink } from "~/publications/publications.server";
 import { loadPublicPage, type PublicPage } from "~/publications/public-client";
@@ -54,7 +55,7 @@ const unavailable: Record<Exclude<PublicPage["status"], "ready">, string> = {
 };
 
 /** A read-only document: no path, breadcrumbs, Owner, timestamps or raw front matter. */
-export default function PublicationRoute({ loaderData }: Route.ComponentProps) {
+export default function PublicationRoute({ loaderData, params }: Route.ComponentProps) {
   const page = loaderData as PublicPage;
   const location = useLocation();
   const { revalidate, state } = useRevalidator();
@@ -82,6 +83,8 @@ export default function PublicationRoute({ loaderData }: Route.ComponentProps) {
       {page.authors.length > 0 && <p className="mb-6 text-sm text-stone-600">By {page.authors.join(", ")}</p>}
       <div className="space-y-3 break-words"><MarkdownPreview source={page.markdown} /></div>
     </article>
+    {/* No Private/Public selector: the reader sees only explicitly public epochs. */}
+    <PublicComments page={page} linkId={params.linkId} onRefresh={() => void revalidate()} />
     <footer className="mt-12 border-t border-stone-200 pt-4 text-xs text-stone-500">
       Read-only. This page is decrypted in your browser with the key after # in its link; mdwn never receives that key.
     </footer>

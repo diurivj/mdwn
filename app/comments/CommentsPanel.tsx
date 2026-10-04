@@ -15,6 +15,7 @@ import {
   type PrivateComments,
 } from "./comments-client";
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
+import { PublicThreadPanel } from "./PublicThreadPanel";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 
 type PanelState = { status: "loading" } | { status: "failed"; message: string } | CommentsState;
@@ -67,7 +68,7 @@ function CommentItem({ comment, thread, editing, deleting, busy, onEdit, onEditT
  * The Private Comment inspector. Thread ciphertext is fetched through the
  * proof-guarded Comment endpoint and decrypted only in this browser.
  */
-export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: FilesSnapshot }) {
+function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: FilesSnapshot }) {
   const [panel, setPanel] = useState<PanelState>({ status: "loading" });
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
@@ -180,10 +181,6 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
   const thread = panel.thread;
   const tooLong = commentCharacters(draft) > MAX_COMMENT_CHARS;
   return <section aria-label="Private comments" className="mt-4 flex min-h-0 flex-col lg:mt-0">
-    <div className="flex items-center gap-3">
-      <h2 className="font-medium">Comments</h2>
-      <span aria-label="Selected thread" className="rounded border border-stone-300 px-2 py-0.5 text-sm">Private</span>
-    </div>
     {message && <p role="alert" className="mt-2 text-rose-700">{message}</p>}
     <ol aria-label="Private comments" className="mt-3 flex-1 space-y-3 overflow-y-auto pr-1">
       {thread.comments.map((comment) => <CommentItem key={comment.id} comment={comment} thread={thread}
@@ -230,4 +227,27 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       </div>
     </form>
   </section>;
+}
+
+/**
+ * The authenticated thread selector. Private is the default thread; the Public
+ * thread loads through its own endpoint and is never combined with it.
+ */
+export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: FilesSnapshot }) {
+  const [selected, setSelected] = useState<"private" | "public">("private");
+  const tab = (kind: "private" | "public", label: string) => <button type="button" role="tab"
+    aria-selected={selected === kind} id={`${kind}-thread-tab`} aria-controls={`${kind}-thread-panel`}
+    onClick={() => setSelected(kind)}
+    className={selected === kind ? "rounded border border-stone-900 bg-stone-900 px-3 py-0.5 text-sm text-white"
+      : "rounded border border-stone-300 px-3 py-0.5 text-sm"}>{label}</button>;
+  return <div className="flex min-h-0 flex-col">
+    <div role="tablist" aria-label="Comment thread" className="flex items-center gap-2">
+      {tab("private", "Private")}
+      {tab("public", "Public")}
+    </div>
+    <div role="tabpanel" id={`${selected}-thread-panel`} aria-labelledby={`${selected}-thread-tab`}>
+      {selected === "public" ? <PublicThreadPanel fileId={fileId} snapshot={snapshot} />
+        : <PrivateCommentsPanel fileId={fileId} snapshot={snapshot} />}
+    </div>
+  </div>;
 }

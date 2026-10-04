@@ -4,7 +4,8 @@ A **Publication** exposes exactly one File through a **Public link**. It is
 independent of Shares and Grants, follows File identity through rename and move,
 and always presents the latest successfully saved representation. Only the File
 Owner creates or configures it; link rotation and unpublishing arrive in ticket 25
-and keep that Owner-only rule. Public Comment threads are ticket 23.
+and keep that Owner-only rule. A Publication also owns one Public Comment thread
+(ticket 23, see [comments](comments.md)).
 
 ## Link and capability
 
@@ -133,11 +134,17 @@ proof. Reads are bodyless POSTs; responses are `no-store`.
 
 Creation pins `expectedRevision` and `expectedRepresentationId`, so the first
 Public representation is exactly the latest saved one; a newer save returns
-`409 file_changed`. It applies the Publication create limit (5 per Account per
-24 hours) before its transaction. Public-participation suspensions (ticket 26)
-will add their check at the same point. Approval is publishing: a Collaborator's
-request never creates a Publication, link, representation or public access, and
-creating the Publication removes every pending request in the same transaction.
+`409 file_changed`. The same transaction installs the Public Comment thread and
+its first audience epoch: the payload's `comments` carries the epoch identity,
+audience, Owner recovery envelope and — for the default `public` audience — the
+symmetric link wrapper the creating browser sealed with the fragment it still
+holds. A legacy caller may send `comments: null` and configure the thread later
+from the Publish panel. It applies the Publication create limit (5 per Account
+per 24 hours) before its transaction. Public-participation suspensions (ticket
+26) will add their check at the same point. Approval is publishing: a
+Collaborator's request never creates a Publication, link, representation or
+public access, and creating the Publication removes every pending request in the
+same transaction.
 
 ## Author attribution
 
@@ -169,12 +176,14 @@ declaration is served only for the link it was encrypted to.
   back/forward) triggers `useRevalidator`, because React Router otherwise skips
   loaders; a changed fragment hides the old document until the browser loader
   finishes, and cancellation prevents stale decryptions from winning.
-- `GET /api/public/publications/:linkId` returns, in one statement, the
-  Publication ID, the link's public key, the current Public representation and
-  current-link author declarations — never a File, Owner or Account ID, private
-  representation, Key envelope, Comment, Comment capability or
-  Collaborators-only material. Every inactive path gets the byte-identical
-  `{"error":"not_found"}` `404`.
+- `GET /api/public/publications/:linkId` returns the Publication ID, the link's
+  public key, the current Public representation, current-link author declarations
+  and the eligible Public Comment epochs — never a File, Owner or Account ID,
+  private representation, Key envelope, device envelope, Private Comment or
+  Collaborators-only material. Each public epoch carries its symmetric
+  Publication-capability wrapper, never its plaintext capability. A
+  Collaborators-only current audience returns no epoch ciphertext at all. Every
+  inactive path gets the byte-identical `{"error":"not_found"}` `404`.
 - Every response carries `X-Robots-Tag: noindex, nofollow, noarchive` and
   `Referrer-Policy: no-referrer`; the page also emits the matching robots and
   referrer `<meta>` tags. The Public route sets no cookie and its data request

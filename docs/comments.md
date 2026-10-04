@@ -1,10 +1,15 @@
-# Private Comment threads (ticket 21)
+# Comment threads (tickets 21 and 23)
 
 A File has exactly one **Private comment thread** for its Owner and every Account
 with current File-read access through an active Grant. Comment participation
 follows File-read access, never Markdown write strength: a read-only Collaborator
 reads, creates, edits and hard-deletes its own Comments with the normal composer.
-Public Comment threads and audience epochs remain ticket 23.
+
+A logical Publication has exactly one separate **Public comment thread**, built
+from ordered, independently keyed **Comment audience epochs**. Each epoch is
+immutable `public` or `collaborators_only`; every audience change starts a fresh
+epoch, and anonymous readers receive only epochs explicitly marked public.
+Private and Public threads are separate endpoints and are never combined.
 
 ## Data model
 
@@ -15,10 +20,14 @@ Public Comment threads and audience epochs remain ticket 23.
   reciprocal foreign key `(current_epoch_id, id) ->
   comment_thread_epochs(id, thread_id)`, so a thread can only point at its own
   epoch; Drizzle cannot express that circular relationship.
-- `comment_thread_epochs`: the constrained representation of a thread's current
-  key epoch. A Private thread keeps exactly one `active` row (partial unique
-  `thread_id` index) whose `key_epoch` is the thread capability epoch; Public
-  threads will retain prior audience epochs. `audience` is `NULL` for Private.
+- `comment_thread_epochs`: one ordered audience epoch per Public thread
+  lifecycle step. A Private thread keeps exactly one `active` row (partial unique
+  `thread_id` index) whose `key_epoch` is the thread capability epoch; `audience`
+  is `NULL` for Private. A Public thread keeps one `active` row and any number of
+  `retained` rows, each with an immutable audience, its own capability identity
+  and a unique ordinal. The reviewed `0021` migration also adds
+  `public_comment_epoch_links`: the one symmetric wrapper per public epoch that
+  names its Publication, link and capability epoch.
 - `comments`: thread, epoch, opaque author Account, per-thread `sequence`,
   `revision`, bounded `comment-content` body ciphertext, its byte size, and the
   per-record content-key wrapper plus wrapper epoch. No plain text, displayed
@@ -38,6 +47,13 @@ beneath the current thread capability. A displayed pseudonym uses the
 `attribution` purpose in the same two-layer shape. A record's own opaque identity
 is its content-key identity, so every open still supplies an external expected
 context and the service can validate framing and context without decrypting.
+Private Comment contexts bind the Owner Vault; Public Comment contexts bind the
+logical Publication instead, so an anonymous reader can open them from the
+opaque link response alone. A public epoch is additionally wrapped with the
+symmetric `public-comment-epoch-link` purpose (22) to the **Publication
+capability**, a key derived by HKDF-SHA-256 from the fragment scalar and the
+stored public point. The service stores that wrapper ciphertext but can never
+derive its key.
 Bodies are plain text with line feeds only: the browser normalizes CRLF/CR,
 counts at most 2,000 Unicode characters, and renders React text with
 `white-space: pre-wrap`; HTML and Markdown are never interpreted. The server
@@ -52,12 +68,22 @@ enforces the 16,384-byte body and wrapper column bounds.
 | `POST /api/private/comments/files/:fileId/entries` | Create a Comment, optionally its author's first attribution |
 | `PATCH /api/private/comments/files/:fileId/entries/:commentId` | Author-only edit with expected revision |
 | `DELETE /api/private/comments/files/:fileId/entries/:commentId` | Author or File-Owner hard deletion |
+| `POST /api/private/comments/files/:fileId/public[?cursor=<sequence>]` | Authenticated Public-thread read: every authorized epoch with this device's envelope, ordered Comments and author attributions |
+| `PUT /api/private/comments/files/:fileId/public` | Owner-only audience change, or first thread/epoch for a pre-ticket-23 Publication |
+| `POST /api/private/comments/files/:fileId/public/entries` | Create a Comment in the current epoch through the File route |
+| `PATCH /api/private/comments/files/:fileId/public/entries/:commentId` | Author-only edit in the Comment's own epoch |
+| `DELETE /api/private/comments/files/:fileId/public/entries/:commentId` | Author or File-Owner hard deletion |
+| `POST /api/private/comments/links/:linkId/entries` | Signed-in link visitor creates in the current public epoch |
+| `PATCH /api/private/comments/links/:linkId/entries/:commentId` | Author-only edit through the active public link |
+| `DELETE /api/private/comments/links/:linkId/entries/:commentId` | Author or File-Owner hard deletion through the active public link |
+| `GET /api/public/publications/:linkId` | Anonymous Public data plus the public-epoch page and wrappers |
+| `GET /api/public/publications/:linkId/comments?cursor=<sequence>` | Anonymous continuation page for public epochs |
 | `POST /api/private/profile` | The current encrypted Account profile for local pseudonym resolution |
 
 Reads are bodyless POSTs, `no-store`, and never consume a proof. They return at
 most 50 Comments per page with an explicit sequence cursor; the browser loads up
 to ten bounded pages and continues the flat list on demand. The Private and
-future Public threads use separate endpoints and are never combined.
+Public threads use separate endpoints and are never combined.
 
 ## Capability delivery and authorization
 
@@ -91,6 +117,38 @@ Hard deletion stays available while a rotation seal blocks new writes. A File or
 Directory hard deletion explicitly removes Comments, attributions, epochs,
 threads, owned Comment recovery envelopes and rotation staging before the node.
 
+## Public audience epochs
+
+- A **public** epoch is wrapped to the Publication capability and directly
+  enveloped to eligible devices: the Owner's active devices open the epoch's
+  `vault-recovery` envelope under the Vault root key, and every Account with
+  current effective File-read access receives a signed HPKE
+  `public-comment-audience-epoch` (11) device envelope through the ticket 18/20
+  machinery. The fragment is never needed in the authenticated workspace.
+- A **collaborators_only** epoch has only those device envelopes and no link
+  wrapper. The anonymous route returns no thread ciphertext while the current
+  audience is collaborators-only, including retained public history.
+- `public -> collaborators_only` starts a fresh device-enveloped epoch in the
+  same statement that moves the thread pointer, so anonymous delivery stops
+  immediately. `collaborators_only -> public` starts a fresh public epoch with a
+  new wrapper; prior Collaborators-only epochs are never returned anonymously,
+  while prior public epochs remain public as they always were.
+- Losing the last File-read path immediately fails the File route's authority
+  predicate and the link route's audience check. The next rotation rotates the
+  current Collaborators-only epoch in place for remaining devices; a create in
+  the sealed window is a ciphertext-free `409 key_rotation_required`.
+- Every create edits only the thread's current epoch; edit and delete operate on
+  the Comment's own retained epoch with that epoch's capability. Author identity,
+  Owner hard-delete, the 2,000-character plain-text bound and the 50-Comment
+  page apply to both threads. Public create and edit consume the
+  `public_comment.mutate` counters before acceptance (reports are ticket 26).
+- The Public reader page renders only public epochs under the document, with no
+  Private/Public selector. In Collaborators-only mode an unauthenticated reader
+  receives **Sign in to see or add comments if you have access to this file** and
+  no thread ciphertext. A signed-in visitor posts through a private-capable,
+  device-bound Session plus the fragment capability held locally; an
+  unprovisioned Session cannot post.
+
 ## Rotation
 
 A Private thread capability rotation stages every current Comment and attribution
@@ -105,8 +163,12 @@ wrappers, advances `comment_thread_epochs.key_epoch` and
 installs the replacement `vault-recovery` envelope in one transaction. Body and
 pseudonym ciphertext never change. A Comment deleted during staging simply drops
 its staged row; a revision that advanced blocks promotion instead of reusing an
-old wrapper. Public history keeps its existing keys and only renews device
-envelopes (ticket 23/25).
+old wrapper. Retained public history keeps its existing key and only renews
+device envelopes. A **current Collaborators-only** epoch rotates in place the
+same way as a Private thread (same staging endpoint, epoch-scoped records), so a
+revoked device's key can never decrypt what remains; a public epoch never
+rewrites its link wrapper on revocation because anyone with the link could
+already read it. Ticket 25 rotates the wrappers themselves for a new link.
 
 ## Verification seams
 
@@ -115,9 +177,15 @@ migrated D1: one-thread constraints, ordered ciphertext reads, crossed/oversized
 envelope rejection, read-only participation, author and Owner mutation rules,
 idempotent create retries, revocation and revoked-device denial, missing-envelope
 states, write seals, hard deletion and a full rotation that preserves body
-ciphertext. `tests/comment-content.test.ts` covers the browser envelope shapes
-and bounds. `e2e/private-comments.spec.ts` exercises the wide inspector and
-narrow Comments view in Chromium, Firefox and WebKit.
+ciphertext. `tests/worker/public-comments.test.ts` covers creation defaults, the
+anonymous page, signed-in visitor posting, audience transitions in both
+directions, retained history for eligible devices, unauthorized signed-in
+denial, Private-thread absence and the revocation rotation of a current
+Collaborators-only epoch. `tests/comment-content.test.ts` and
+`tests/public-comment-content.test.ts` cover the browser envelope shapes, link
+wrappers and bounds. `e2e/private-comments.spec.ts` exercises the wide inspector
+and narrow Comments view, and `e2e/public-comments.spec.ts` posts from a public
+page and closes and reopens the audience in Chromium, Firefox and WebKit.
 
 See [enc-v1](enc-v1.md), [sharing](sharing.md), [shared provisioning](shared-provisioning.md),
 and [key rotation](key-rotation.md).

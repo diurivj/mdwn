@@ -14,6 +14,7 @@
     "app/security/**/*.ts",
     "app/crypto/**/*.ts",
     "app/comments/content.ts",
+    "app/comments/public-content.ts",
     "app/publications/capability.ts",
     "app/publications/content.ts",
     "app/comments/comments-client.ts",

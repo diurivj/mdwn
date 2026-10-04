@@ -89,7 +89,10 @@ async function nextRotation(env: Env, auth: AuthorizedDevice, job: RotationJob) 
         return Response.json({ job, item, source, operation: "advance" }, { headers });
       const fence = await createDb(env.DB).get<{ key_epoch: number }>(sql`SELECT key_epoch FROM sharing_write_blocks
         WHERE target_id = ${item.objectId} AND ${privateReadGuard(auth)}`);
-      const targetEpoch = item.kind === "public_history" ? sourceEpoch : Math.max(sourceEpoch + 1, fence?.key_epoch ?? 0);
+      // A retained Public epoch keeps its key. The current Collaborators-only
+      // epoch advances in place before remaining devices post again.
+      const targetEpoch = item.kind === "public_history" && !item.rotate ? sourceEpoch
+        : Math.max(sourceEpoch + 1, fence?.key_epoch ?? 0);
       if (!Number.isSafeInteger(targetEpoch) || targetEpoch < 1) return failure("rotation_changed", 409);
       return Response.json({ job, item: { ...item, sourceEpoch, targetEpoch,
         capabilityId: source.kind === "directory" ? item.objectId : source.kind === "file" ? source.capability?.id ?? null : source.capabilityId },
@@ -97,7 +100,7 @@ async function nextRotation(env: Env, auth: AuthorizedDevice, job: RotationJob) 
     }
     const remaining = item.kind === "directory"
       ? (await rotationEntries(env, auth, job, item, item.cursor, false)).entries.length
-      : item.kind === "private_comment"
+      : item.kind === "private_comment" || item.kind === "public_history" && item.rotate
         ? (await rotationCommentItems(env, auth, job, item, item.cursor)).records.length : 0;
     return Response.json({ job, item, source, operation: remaining ? "stage" : "promote" }, { headers });
   }
@@ -175,12 +178,14 @@ export async function rotationAction(request: Request, env: Env): Promise<Respon
     if (!c) return failure("not_found", 404);
     const source = await readRotationSource(env, auth, { objectId: sourcePath[2]!, kind: c.purpose === "private-comment-thread" ? "private_comment" : "public_history",
       fileId: c.file_id, depth: 0, state: "ready", sourceEpoch: null, targetEpoch: null, capabilityId: null,
-      sourceRevision: null, sourceRepresentationId: null, resumeEnvelope: null, cursor: null });
+      sourceRevision: null, sourceRepresentationId: null, resumeEnvelope: null, cursor: null, rotate: false });
     return source ? Response.json(source, { headers }) : failure("not_found", 404);
   }
   if (commentItems) {
     const item = await readRotationItem(env, auth, job, commentItems[2]!);
-    if (!item || item.kind !== "private_comment") return failure("not_found", 404);
+    if (!item || (item.kind !== "private_comment" && !(item.kind === "public_history" && item.rotate))) {
+      return failure("not_found", 404);
+    }
     return Response.json(await rotationCommentItems(env, auth, job, item, cursor), { headers });
   }
   const item = await readRotationItem(env, auth, job, entries![2]!);

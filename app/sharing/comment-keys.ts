@@ -1,4 +1,5 @@
 import { EnvelopeError, inspectEnvelope, openForRecipient, sealToRecipient, type EnvelopeContext } from "~/crypto/enc-v1";
+import { isPublicationIdentifier } from "~/publications/capability";
 import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
 import type { GrantKeyContext } from "./grant-keys";
 
@@ -17,7 +18,7 @@ function validate(context: AddressedContext) {
     (context.targetKind !== "directory" && context.targetKind !== "file")) throw new Error("invalid comment key context");
   if (context.purpose === "private-comment-thread") {
     if (context.publicationId !== null || context.objectId !== context.threadId) throw new Error("invalid comment key context");
-  } else if (context.purpose !== "public-comment-audience-epoch" || !isV7(context.publicationId)) {
+  } else if (context.purpose !== "public-comment-audience-epoch" || !isPublicationIdentifier(context.publicationId)) {
     throw new Error("invalid comment key context");
   }
 }

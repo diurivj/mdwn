@@ -1,6 +1,7 @@
 import type { SQL } from "drizzle-orm";
 import { attributionKeyContext, commentKeyContext, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES,
   MAX_COMMENT_KEY_ENVELOPE_BYTES } from "~/comments/content";
+import { publicAttributionKeyContext, publicCommentEnvelope, publicCommentKeyContext } from "~/comments/public-content";
 import { createDb, sql } from "~/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { decodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
@@ -32,7 +33,8 @@ async function startItem(env: Env, auth: AuthorizedDevice, job: RotationJob, ite
   const { epoch: before, revision } = rotationSourceVersion(source);
   const fence = await createDb(env.DB).get<{ key_epoch: number }>(sql`SELECT key_epoch FROM sharing_write_blocks
     WHERE target_id = ${item.objectId} AND ${privateReadGuard(auth)}`);
-  const targetEpoch = item.kind === "public_history" ? before : Math.max(before + 1, fence?.key_epoch ?? 0);
+  const targetEpoch = item.kind === "public_history" && !item.rotate ? before
+    : Math.max(before + 1, fence?.key_epoch ?? 0);
   const capabilityId = source.kind === "directory" ? item.objectId : source.kind === "file" ? source.capability?.id ?? input.capabilityId : source.capabilityId;
   if (item.state !== "ready" || input.sourceEpoch !== before || input.sourceRevision !== revision || input.targetEpoch !== targetEpoch ||
       input.capabilityId !== capabilityId || source.kind === "file" && input.sourceRepresentationId !== source.representationId ||
@@ -102,10 +104,12 @@ async function stageEntries(env: Env, auth: AuthorizedDevice, job: RotationJob, 
  */
 async function stageCommentItems(env: Env, auth: AuthorizedDevice, job: RotationJob, item: RotationItem,
   source: RotationSource, input: Record<string, unknown>, operationId: string, digest: Uint8Array) {
-  if (source.kind !== "private_comment" || item.state !== "staging" || !item.capabilityId || !item.targetEpoch ||
+  const rotatingEpoch = source.kind === "public_history" && item.rotate;
+  if (source.kind !== "private_comment" && !rotatingEpoch || item.state !== "staging" || !item.capabilityId || !item.targetEpoch ||
       !exact(input, [...common, "cursor", "records"]) || input.cursor !== item.cursor ||
-      !Array.isArray(input.records) || input.records.length < 1 || input.records.length > 20)
+      !Array.isArray(input.records) || input.records.length < 1 || input.records.length > 20) {
     return failure("invalid_rotation_request", 400);
+  }
   const expected = await rotationCommentItems(env, auth, job, item, item.cursor);
   if (expected.records.length !== input.records.length) return failure("rotation_changed", 409);
   const records: { recordId: string; kind: "comment" | "attribution"; revision: number; envelope: Uint8Array }[] = [];
@@ -114,12 +118,20 @@ async function stageCommentItems(env: Env, auth: AuthorizedDevice, job: Rotation
       const old = expected.records[index]!, value = record(input.records[index]);
       if (!value || !exact(value, ["recordId", "kind", "revision", "contentKeyEnvelope"]) ||
           value.recordId !== old.recordId || value.kind !== old.kind || value.revision !== old.revision) throw new Error();
+      // Public Comment contexts bind the logical Publication, never the Owner Vault.
+      const vaultId = source.kind === "public_history" ? source.publicationId! : auth.accountId;
       const context = old.kind === "comment"
-        ? commentKeyContext(auth.accountId, old.recordId, item.capabilityId, item.targetEpoch, old.revision)
-        : attributionKeyContext(auth.accountId, old.recordId, item.capabilityId, item.targetEpoch, old.revision);
+        ? source.kind === "public_history"
+          ? publicCommentKeyContext(vaultId, old.recordId, item.capabilityId, item.targetEpoch, old.revision)
+          : commentKeyContext(vaultId, old.recordId, item.capabilityId, item.targetEpoch, old.revision)
+        : source.kind === "public_history"
+          ? publicAttributionKeyContext(vaultId, old.recordId, item.capabilityId, item.targetEpoch, old.revision)
+          : attributionKeyContext(vaultId, old.recordId, item.capabilityId, item.targetEpoch, old.revision);
+      const max = old.kind === "comment" ? MAX_COMMENT_KEY_ENVELOPE_BYTES : MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES;
       records.push({ recordId: old.recordId, kind: old.kind, revision: old.revision,
-        envelope: treeEnvelope(value.contentKeyEnvelope,
-          old.kind === "comment" ? MAX_COMMENT_KEY_ENVELOPE_BYTES : MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES, context) });
+        envelope: source.kind === "public_history"
+          ? publicCommentEnvelope(value.contentKeyEnvelope, max, context)
+          : treeEnvelope(value.contentKeyEnvelope, max, context) });
     }
   } catch { return failure("invalid_rotation_request", 400); }
   const committed = await commitStep(env, auth, job, operationId, digest,
@@ -129,8 +141,8 @@ async function stageCommentItems(env: Env, auth: AuthorizedDevice, job: Rotation
       ...records.map((entry) => sql`INSERT INTO key_rotation_comment_items (job_id, thread_id, kind, record_id, revision, content_key_envelope)
         SELECT ${job.jobId}, ${item.objectId}, ${entry.kind}, ${entry.recordId}, ${entry.revision}, ${entry.envelope}
         WHERE ${marker} AND ${entry.kind === "comment"
-          ? sql`EXISTS (SELECT 1 FROM comments WHERE id = ${entry.recordId} AND thread_id = ${item.objectId} AND revision = ${entry.revision})`
-          : sql`EXISTS (SELECT 1 FROM thread_attributions WHERE id = ${entry.recordId} AND thread_id = ${item.objectId} AND revision = ${entry.revision})`}`),
+          ? sql`EXISTS (SELECT 1 FROM comments WHERE id = ${entry.recordId} AND ${rotatingEpoch ? sql`epoch_id = ${item.objectId}` : sql`thread_id = ${item.objectId}`} AND revision = ${entry.revision})`
+          : sql`EXISTS (SELECT 1 FROM thread_attributions WHERE id = ${entry.recordId} AND ${rotatingEpoch ? sql`epoch_id = ${item.objectId}` : sql`thread_id = ${item.objectId}`} AND revision = ${entry.revision})`}`),
       sql`UPDATE key_rotation_items SET cursor = ${records.at(-1)!.recordId}
         WHERE job_id = ${job.jobId} AND object_id = ${item.objectId} AND ${marker}`,
     ]);
@@ -190,6 +202,7 @@ export async function stepRotation(env: Env, auth: AuthorizedDevice, job: Rotati
   if (input.operation === "stage") return source.kind === "directory"
     ? stageEntries(env, auth, job, item, source, input, input.operationId, digest)
     : stageCommentItems(env, auth, job, item, source, input, input.operationId, digest);
+  // Both Private threads and rotating Public epochs stage Comment wrappers.
   if (input.operation === "promote") {
     try {
       const promotion = await preparePromotion(env, auth, job, item, source, input);

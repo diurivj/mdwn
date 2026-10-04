@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { newPublicationIdentifier } from "../../app/publications/capability";
 import { opaqueId, sharingAccount, treeChild } from "./sharing-fixtures";
 
 /** Storage-boundary dependents for device-lifecycle tests, not an envelope-open
@@ -26,7 +27,7 @@ export async function seedRecipientEnvelopeDependents(recipientId: string, devic
         (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
         VALUES (?, ?, ?, ?, ?, ?, ?, 1)`)
         .bind(objectId, owner.accountId, fileId, index === 0 ? objectId : opaqueId(),
-          index === 0 ? "private-comment-thread" : "public-comment-audience-epoch", index === 0 ? null : opaqueId(), capabilityId).run();
+          index === 0 ? "private-comment-thread" : "public-comment-audience-epoch", index === 0 ? null : newPublicationIdentifier(), capabilityId).run();
       for (const deviceId of deviceIds) await env.DB.prepare(`INSERT INTO ${kind === "shares" ? "share_comment_key_envelopes" : "grant_comment_key_envelopes"}
         (relationship_id, device_id, capability_id, capability_epoch, grant_key_epoch, owner_registry_epoch, recipient_registry_epoch,
           ciphertext, signature, signer_device_id, object_id) VALUES (?, ?, ?, 1, 1, 1, ?, X'01', zeroblob(64), ?, ?)`)
