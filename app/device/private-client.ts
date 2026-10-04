@@ -1,3 +1,4 @@
+import { PUBLIC_PARTICIPATION_SUSPENDED } from "~/security/public-participation";
 import { signDeviceProof } from "./proof";
 import { getDevice, updateRegistryEpoch } from "./store";
 
@@ -23,7 +24,7 @@ export class PrivatePolicyError extends PrivateAccessError {
 }
 
 /** The one fixed policy denial a participating surface currently explains. */
-export const PUBLIC_PARTICIPATION_SUSPENDED = "public_participation_suspended";
+export { PUBLIC_PARTICIPATION_SUSPENDED };
 
 export function isPublicParticipationSuspended(error: unknown): error is PrivatePolicyError {
   return error instanceof PrivatePolicyError && error.policy === PUBLIC_PARTICIPATION_SUSPENDED;

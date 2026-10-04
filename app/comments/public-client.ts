@@ -4,7 +4,7 @@ import { privateRequest, PrivateAccessError, PrivatePolicyError, isPublicPartici
 import { getDevice } from "~/device/store";
 import { newOpaqueId } from "~/opaque-id";
 import { openCommentKeyEnvelope, type CommentKeyContext } from "~/sharing/comment-keys";
-import type { ReportCategory } from "~/security/public-participation";
+import { PUBLIC_PARTICIPATION_SUSPENDED, type ReportCategory } from "~/security/public-participation";
 import { openRoot, type RootAccess } from "~/tree/client";
 import { decodeTreeBytes } from "~/tree/wire";
 import { MAX_COMMENT_KEY_ENVELOPE_BYTES } from "./content";
@@ -47,7 +47,7 @@ export class PublicCommentsSignInError extends Error {
   constructor(readonly state: "signed-out" | "unprovisioned") { super("sign-in-required"); }
 }
 export class PublicCommentsSuspendedError extends Error {
-  constructor(readonly suspendedUntil: number | null) { super("public_participation_suspended"); }
+  constructor(readonly suspendedUntil: number | null) { super(PUBLIC_PARTICIPATION_SUSPENDED); }
 }
 
 /** A policy denial (a Public-participation suspension) is not a proof failure;

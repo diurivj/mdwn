@@ -1,6 +1,7 @@
 import { createDb, sql } from "~/db/client.server";
 import {
   FIRST_SUSPENSION_MS,
+  PUBLIC_PARTICIPATION_SUSPENDED,
   REPEAT_SUSPENSION_MS,
   isPublicParticipationSuspensionReason,
   type PublicParticipationSuspensionReason,
@@ -54,7 +55,7 @@ export function publicParticipationSuspendedResponse(
   suspension: Pick<PublicParticipationSuspension, "expiresAt">,
 ): Response {
   return Response.json(
-    { error: "public_participation_suspended", suspendedUntil: suspension.expiresAt },
+    { error: PUBLIC_PARTICIPATION_SUSPENDED, suspendedUntil: suspension.expiresAt },
     { status: 403, headers: { "Cache-Control": "no-store" } },
   );
 }

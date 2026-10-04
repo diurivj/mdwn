@@ -9,7 +9,7 @@ import { isCommentEpochLink, MAX_PUBLIC_EPOCH_LINK_BYTES, publicAttributionConte
 import { createDb, sql } from "~/db/client.server";
 import { commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { isPublicationIdentifier } from "~/publications/capability";
-import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
+import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse, type RateLimitDecision } from "~/security/abuse-control.server";
 import { isReportCategory, REPORT_RETENTION_MS } from "~/security/public-participation";
 import { activePublicParticipationSuspension, publicParticipationSuspendedResponse } from "~/security/public-participation.server";
 import { accessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
@@ -559,7 +559,7 @@ export async function reportPublicComment(request: Request, env: Env, auth: Auth
       !isReportCategory(input.category)) return invalid();
   const commentId = input.commentId, category = input.category;
   const db = createDb(env.DB);
-  let limit;
+  let limit: RateLimitDecision;
   try {
     limit = await enforceRateLimit({ db: env.DB, request, action: "public_comment.report",
       scopes: { accountId: auth.accountId }, hmacSecret: env.ABUSE_HMAC_SECRET });

@@ -10,6 +10,10 @@
 export const REPORT_CATEGORIES = ["spam", "abuse", "other"] as const;
 export type ReportCategory = (typeof REPORT_CATEGORIES)[number];
 
+/** The fixed wire error code the Worker returns for a suspension and the
+ * browser recognizes; one spelling, shared by both sides. */
+export const PUBLIC_PARTICIPATION_SUSPENDED = "public_participation_suspended";
+
 export const REPORT_CATEGORY_LABELS: Record<ReportCategory, string> = {
   spam: "Spam or advertising",
   abuse: "Abuse, harassment, or a threat",
