@@ -2,7 +2,7 @@ import type { Browser } from "@playwright/test";
 
 import { openRecoveryCapsule, sealVaultRecoveryEnvelope } from "../app/crypto/vault";
 import { test, expect } from "./fixtures";
-import { completeRecoveryPresentation } from "./signup-recovery";
+import { seedAccount, signInAccount } from "./support/seeded-account";
 
 test.setTimeout(240_000);
 
@@ -31,21 +31,13 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
   const env = await worker.getEnv();
-  const original = await authenticator(browser, origin);
+  const original = await seedAccount(browser, server, origin);
   let replacement: Awaited<ReturnType<typeof authenticator>> | undefined;
   try {
-    let identifier = "";
-    let code = "";
-    await original.page.getByRole("button", { name: "Create account", exact: true }).click();
-    const saved = await completeRecoveryPresentation(original.page, {
-      beforeConfirm: async () => {
-        const text = await original.page.getByText("Save this non-secret recovery identifier", { exact: false }).textContent();
-        identifier = text?.match(/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/)?.[0] ?? "";
-        code = (await original.page.locator("section ol li").first().textContent())?.replace(/^\d+\.\s*/, "").trim() ?? "";
-      },
-    });
-    const phrase = saved.phrase.map((word) => word.replace(/^\d+\.\s*/, "").trim()).join(" ");
-    await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    const identifier = original.accountId;
+    const code = original.recoveryCodes[0]!;
+    const phrase = original.phrase;
+    await signInAccount(original);
     const firstDevice = await env.DB.prepare("SELECT id FROM encryption_devices WHERE account_id = ?")
       .bind(identifier).first<{ id: string }>();
     expect(firstDevice?.id).toBeTruthy();

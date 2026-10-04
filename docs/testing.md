@@ -73,11 +73,31 @@ The contract suite also demonstrates the browser seams later cryptographic and
 device work will use. Those tests deliberately use a harness-owned IndexedDB
 schema and a shared test Account identifier, not a production Encryption-device
 store. `e2e/auth-sign-in.spec.ts` separately seeds Accounts with passkeys and
-signs in through the real routes; it also checks the Account-security SSR shell
-and fetcher revalidation. `e2e/signup.spec.ts`, `e2e/signup-integrity.spec.ts`,
+signs in through the real routes and checks fetcher revalidation. The
+Account-security SSR shell is checked through `SELF.fetch` in the Workers suite. `e2e/signup.spec.ts`, `e2e/signup-integrity.spec.ts`,
 and `e2e/device-store.spec.ts` exercise real signup, device enrollment, local
 recovery confirmation before any signup request, and persisted key handles
 through the same Worker/browser/engine harness.
+
+Use real signup only when signup itself is under test, or for the single
+signup-to-Files golden path in `private-tree-flow.spec.ts`. Tests that need an
+existing fully provisioned Account use `seedAccount` from
+`e2e/support/seeded-account.ts`, then `signInAccount` when they need a Session.
+The seed creates device keys through the production browser device store,
+uses production vault/profile/recovery crypto, and inserts signup-equivalent
+D1 rows with a real virtual-authenticator Passkey. It runs no signup ceremony
+or proof of work. Its recovery phrase and codes support real recovery routes;
+its Passkey can be synced into another context for real device enrollment.
+The atomic-signup test and seeded sign-out/sign-in test share
+`e2e/support/signup-shape.ts` to detect storage-shape drift.
+
+Assertions entirely about server responses/storage belong in the Workers suite,
+not in Playwright merely to generate a valid request. The signup verification
+Worker fixture generates genuine crypto material, solves the unchanged app
+proof of work, and supplies software WebAuthn `none` attestation. A successful
+unaltered commit guards the validity of the helper used by rejection tests.
+These changes do not reduce Chromium, Firefox, or WebKit coverage of remaining
+browser flows. See [ticket 36 measurements](browser-suite-signup-benchmark.md).
 
 `e2e/editor-workspace.spec.ts` exercises the real Files routes and encrypted
 save resource across all three engines, including UTF-8 source limits, whole

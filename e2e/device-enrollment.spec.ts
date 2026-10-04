@@ -2,7 +2,8 @@ import type { Browser } from "@playwright/test";
 import QRCode from "qrcode";
 
 import { test, expect } from "./fixtures";
-import { completeRecoveryPresentation } from "./signup-recovery";
+import { seedAccount, signInAccount } from "./support/seeded-account";
+import { primeSyncedPasskey } from "./support/passkey";
 
 test.setTimeout(240_000);
 
@@ -19,7 +20,8 @@ async function withPasskey(browser: Browser, origin: string,
   if (passkey) await context.credentials.create(new URL(origin).hostname, passkey);
   await context.credentials.install();
   const page = await context.newPage();
-  await page.goto(`${origin}/sign-up`, { waitUntil: "commit" });
+  await page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
+  if (passkey) await primeSyncedPasskey(page, passkey.id);
   return { context, page };
 }
 
@@ -28,16 +30,14 @@ test("a synced Passkey needs QR approval before the second browser can open File
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
   const env = await worker.getEnv();
-  const original = await withPasskey(browser, origin);
+  const original = await seedAccount(browser, server, origin);
   const browserErrors: string[] = [];
   original.page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
   });
   let candidate: Awaited<ReturnType<typeof withPasskey>> | undefined;
   try {
-    await original.page.getByRole("button", { name: "Create account", exact: true }).click();
-    await completeRecoveryPresentation(original.page);
-    await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    await signInAccount(original);
     const passkey = (await original.context.credentials.get())[0]!;
     candidate = await withPasskey(browser, origin, passkey);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
@@ -171,12 +171,10 @@ test("lost candidate keys, expiry, and stale registry state restart without acti
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
   const env = await worker.getEnv();
-  const original = await withPasskey(browser, origin);
+  const original = await seedAccount(browser, server, origin);
   let candidate: Awaited<ReturnType<typeof withPasskey>> | undefined;
   try {
-    await original.page.getByRole("button", { name: "Create account", exact: true }).click();
-    await completeRecoveryPresentation(original.page);
-    await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    await signInAccount(original);
     candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
@@ -244,12 +242,10 @@ test("approval tampering, stale freshness, and a removed approver never activate
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
   const env = await worker.getEnv();
-  const original = await withPasskey(browser, origin);
+  const original = await seedAccount(browser, server, origin);
   let candidate: Awaited<ReturnType<typeof withPasskey>> | undefined;
   try {
-    await original.page.getByRole("button", { name: "Create account", exact: true }).click();
-    await completeRecoveryPresentation(original.page);
-    await expect(original.page.getByText("Your account is ready.", { exact: false })).toBeVisible({ timeout: 120_000 });
+    await signInAccount(original);
     candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();

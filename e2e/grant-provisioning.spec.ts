@@ -1,16 +1,16 @@
 import { test, expect } from "./workspace-fixture";
 import { enroll, expectCommentKeys, expectPending, loadFixture, manualPass, provisioningNext, recover, shareWithComments,
-  sharedMarkdown, signup } from "./support/provisioning-fixtures";
+  sharedMarkdown, seededAccount } from "./support/provisioning-fixtures";
 
 test.setTimeout(240_000);
 test.use({ initialSource: sharedMarkdown });
 
 test("routine enrollment waits for a recipient holder; bounded forwarding retries identical ciphertext and resumes Comments", async ({
-  browser, page, workspace, workspaceScript, baseURL,
+  browser, page, workspace, workspaceScript, baseURL, server,
 }) => {
   const origin = new URL(baseURL!).origin;
   await page.route(provisioningNext, (route) => route.abort());
-  const original = await signup(browser, origin, workspaceScript);
+  const original = await seededAccount(browser, server, origin, workspaceScript);
   let candidate: Awaited<ReturnType<typeof enroll>> | undefined;
   try {
     const share = await shareWithComments(page, original, workspace);
@@ -72,11 +72,11 @@ test("routine enrollment waits for a recipient holder; bounded forwarding retrie
 });
 
 test("Vault recovery restores only owned Files; the Owner fulfills shared root and retained Comment history", async ({
-  browser, page, workspace, workspaceScript, baseURL,
+  browser, page, workspace, workspaceScript, baseURL, server,
 }) => {
   const origin = new URL(baseURL!).origin;
   await page.route(provisioningNext, (route) => route.abort());
-  const original = await signup(browser, origin, workspaceScript);
+  const original = await seededAccount(browser, server, origin, workspaceScript);
   let replacement: Awaited<ReturnType<typeof recover>> | undefined;
   try {
     const share = await shareWithComments(page, original, workspace, { ownerRecovery: true });
@@ -102,11 +102,11 @@ test("Vault recovery restores only owned Files; the Owner fulfills shared root a
 });
 
 test("revocation rejects a prepared upload after recovery and never resurrects the shared File", async ({
-  browser, page, workspace, workspaceScript, baseURL,
+  browser, page, workspace, workspaceScript, baseURL, server,
 }) => {
   const origin = new URL(baseURL!).origin;
   await page.route(provisioningNext, (route) => route.abort());
-  const original = await signup(browser, origin, workspaceScript);
+  const original = await seededAccount(browser, server, origin, workspaceScript);
   let replacement: Awaited<ReturnType<typeof recover>> | undefined;
   let release: (() => void) | undefined;
   try {
