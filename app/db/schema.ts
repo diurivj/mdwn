@@ -36,6 +36,8 @@ export const accountProfiles = sqliteTable(
     ciphertext: blob("ciphertext").notNull(),
     revision: integer("revision").notNull(),
     epoch: integer("epoch").notNull(),
+    /** Set only when a Pseudonym update commits; the next change waits 30 days. */
+    pseudonymChangedAt: integer("pseudonym_changed_at"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
   },
@@ -449,10 +451,53 @@ export const cryptoJobs = sqliteTable("crypto_jobs", {
   index("crypto_jobs_device_idx").on(table.accountId, table.deviceId, table.state),
   index("crypto_jobs_account_kind_idx").on(table.accountId, table.kind, table.state, table.id),
   uniqueIndex("crypto_jobs_rotation_target_idx").on(table.targetId).where(sql`${table.kind} = 'key_rotation' AND ${table.state} = 'pending'`),
-  check("crypto_jobs_kind_valid", sql`${table.kind} IN ('recovery_owned', 'enrollment_owned', 'key_rotation')`),
+  uniqueIndex("crypto_jobs_pseudonym_pending_idx").on(table.accountId)
+    .where(sql`${table.kind} = 'pseudonym_update' AND ${table.state} = 'pending'`),
+  check("crypto_jobs_kind_valid", sql`${table.kind} IN ('recovery_owned', 'enrollment_owned', 'key_rotation', 'pseudonym_update')`),
   check("crypto_jobs_state_valid", sql`${table.state} IN ('pending', 'complete', 'cancelled')`),
   check("crypto_jobs_rotation_metadata", sql`${table.progress} >= 0 AND (${table.kind} != 'key_rotation' OR
     (${table.targetId} IS NOT NULL AND ${table.keyEpoch} IS NOT NULL AND ${table.keyEpoch} >= 1 AND ${table.initiatingAccountId} IS NOT NULL))`),
+]);
+
+/** The staged replacement Account profile for one Pseudonym-update job. The
+ * service keeps only this opaque envelope until every attribution context is
+ * staged; commit copies it into `account_profiles` in the same transaction.
+ */
+export const pseudonymUpdateProfiles = sqliteTable("pseudonym_update_profiles", {
+  jobId: text("job_id").primaryKey().references(() => cryptoJobs.id, { onDelete: "restrict" }),
+  ciphertext: blob("ciphertext").notNull(),
+  epoch: integer("epoch").notNull(),
+  revision: integer("revision").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  check("pseudonym_update_profiles_epoch_positive", sql`${table.epoch} >= 1`),
+  check("pseudonym_update_profiles_revision_positive", sql`${table.revision} >= 1`),
+  check("pseudonym_update_profiles_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 4096`),
+]);
+
+/** One staged, re-encrypted attribution context for a Pseudonym-update job:
+ * `thread` names a `thread_attributions` row, `publication` a declaration row.
+ * A thread item carries the thread-capability-wrapped content key; a
+ * publication declaration is a single HPKE envelope to the Publication link.
+ */
+export const pseudonymUpdateItems = sqliteTable("pseudonym_update_items", {
+  jobId: text("job_id").notNull().references(() => cryptoJobs.id, { onDelete: "restrict" }),
+  kind: text("kind").notNull(),
+  recordId: text("record_id").notNull(),
+  revision: integer("revision").notNull(),
+  ciphertext: blob("ciphertext").notNull(),
+  contentKeyEnvelope: blob("content_key_envelope"),
+  contentKeyEpoch: integer("content_key_epoch"),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.jobId, table.kind, table.recordId] }),
+  check("pseudonym_update_items_kind_valid", sql`${table.kind} IN ('thread', 'publication')`),
+  check("pseudonym_update_items_revision_positive", sql`${table.revision} >= 1`),
+  check("pseudonym_update_items_shape", sql`(${table.kind} = 'thread' AND ${table.contentKeyEnvelope} IS NOT NULL
+      AND ${table.contentKeyEpoch} IS NOT NULL AND ${table.contentKeyEpoch} >= 1)
+    OR (${table.kind} = 'publication' AND ${table.contentKeyEnvelope} IS NULL AND ${table.contentKeyEpoch} IS NULL)`),
+  check("pseudonym_update_items_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 4096
+    AND (${table.contentKeyEnvelope} IS NULL OR length(${table.contentKeyEnvelope}) BETWEEN 1 AND 16384)`),
 ]);
 
 /** High-entropy authentication recovery codes: only SHA-256 hashes are retained. */

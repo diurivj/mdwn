@@ -149,15 +149,19 @@ export async function openPublicCommentBody(epochKey: Uint8Array, input: {
 
 export async function sealPublicAttribution(epochKey: Uint8Array, input: {
   publicationId: string; attributionId: string; pseudonym: string; capabilityId: string; keyEpoch: number;
+  /** A Pseudonym update re-seals the record at the next revision; new declarations are 1. */
+  revision?: number;
 }): Promise<SealedPublicAttribution> {
   if (typeof input.pseudonym !== "string" || !input.pseudonym || commentCharacters(input.pseudonym) > 256) {
     throw new Error("invalid_pseudonym");
   }
+  const revision = input.revision ?? 1;
+  if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("invalid_pseudonym");
   const contentKey = crypto.getRandomValues(new Uint8Array(32));
   const ciphertext = await (await createSymmetricWriter(contentKey)).seal(encoder.encode(input.pseudonym),
-    publicAttributionContext(input.publicationId, input.attributionId, 1));
+    publicAttributionContext(input.publicationId, input.attributionId, revision));
   const wrapper = await (await createSymmetricWriter(epochKey)).seal(contentKey,
-    publicAttributionKeyContext(input.publicationId, input.attributionId, input.capabilityId, input.keyEpoch, 1));
+    publicAttributionKeyContext(input.publicationId, input.attributionId, input.capabilityId, input.keyEpoch, revision));
   return { attributionId: input.attributionId, ciphertext: encodeTreeBytes(ciphertext), contentKeyEnvelope: encodeTreeBytes(wrapper) };
 }
 

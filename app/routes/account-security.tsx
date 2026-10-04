@@ -220,6 +220,12 @@ export default function AccountSecurity({ loaderData }: Route.ComponentProps) {
           </section>
 
           <section className="mt-10 border-t border-stone-200 pt-8">
+            <h2 className="text-lg font-medium">Public pseudonym</h2>
+            <p className="mt-2 text-sm text-stone-600">The generated label shown on your Comments and credited Publications. You can change it at most once every 30 days.</p>
+            <Link className="mt-3 inline-block underline" to="/account/pseudonym">View Public pseudonym</Link>
+          </section>
+
+          <section className="mt-10 border-t border-stone-200 pt-8">
             <h2 className="text-lg font-medium">Session management</h2>
             <p className="mt-2 text-sm text-stone-600">
               Refresh extends the 30-day idle deadline without extending the 90-day maximum.

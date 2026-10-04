@@ -1,4 +1,5 @@
 import type { SQL } from "drizzle-orm";
+import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { record } from "~/auth/request.server";
 import { MAX_ATTRIBUTION_BYTES, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES, MAX_COMMENT_BODY_BYTES,
   MAX_COMMENT_KEY_ENVELOPE_BYTES, MAX_COMMENTS_PAGE } from "~/comments/content";
@@ -401,6 +402,10 @@ export async function createPublicComment(request: Request, env: Env, auth: Auth
   if (input.threadId !== thread.threadId || input.epochId !== thread.currentEpochId ||
       input.capabilityId !== thread.capabilityId || input.capabilityEpoch !== thread.capabilityEpoch) return changed();
   if (await db.get(sql`SELECT 1 WHERE ${sharingWriteBlocked(thread.fileId)}`)) return sealed();
+  // A pending Pseudonym update owns every new attribution context; a create
+  // waits (and consumes no participation counter) until the job settles.
+  if (await db.get(sql`SELECT 1 WHERE ${pseudonymUpdatePending(auth.accountId)}`))
+    return failure("pseudonym_update_pending", 409);
   const quota = await publicCommentQuota(request, env, auth, thread.publicationId);
   if (quota) return quota;
   const commentId = input.commentId, threadId = input.threadId, epochId = input.epochId;

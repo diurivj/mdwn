@@ -91,15 +91,19 @@ export async function openCommentBody(threadKey: Uint8Array, input: {
 
 export async function sealAttribution(threadKey: Uint8Array, input: {
   vaultId: string; attributionId: string; pseudonym: string; capabilityId: string; keyEpoch: number;
+  /** A Pseudonym update re-seals the record at the next revision; new declarations are 1. */
+  revision?: number;
 }): Promise<SealedAttribution> {
   if (typeof input.pseudonym !== "string" || !input.pseudonym || commentCharacters(input.pseudonym) > 256) {
     throw new Error("invalid_pseudonym");
   }
+  const revision = input.revision ?? 1;
+  if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("invalid_pseudonym");
   const contentKey = crypto.getRandomValues(new Uint8Array(32));
   const ciphertext = await (await createSymmetricWriter(contentKey)).seal(
-    encoder.encode(input.pseudonym), attributionContext(input.vaultId, input.attributionId, 1));
+    encoder.encode(input.pseudonym), attributionContext(input.vaultId, input.attributionId, revision));
   const wrapper = await (await createSymmetricWriter(threadKey)).seal(
-    contentKey, attributionKeyContext(input.vaultId, input.attributionId, input.capabilityId, input.keyEpoch, 1));
+    contentKey, attributionKeyContext(input.vaultId, input.attributionId, input.capabilityId, input.keyEpoch, revision));
   return { attributionId: input.attributionId, ciphertext: encodeTreeBytes(ciphertext), contentKeyEnvelope: encodeTreeBytes(wrapper) };
 }
 

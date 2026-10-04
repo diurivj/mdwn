@@ -13,6 +13,7 @@ import {
 } from "~/comments/content";
 import { commentEnvelopeWire, readCommentEnvelope, type CommentEnvelope } from "~/comments/envelopes.server";
 import { changePublicAudience, createPublicComment, deletePublicComment, editPublicComment, readFilePublicComments } from "~/comments/public.server";
+import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { isPublicationIdentifier } from "~/publications/capability";
 import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
@@ -218,6 +219,10 @@ async function createComment(env: Env, auth: AuthorizedDevice, fileId: string, v
   const preflight = await threadPreflight(env, auth, fileId, threadId, epochId, capabilityId, capabilityEpoch);
   if ("response" in preflight) return preflight.response;
   const { thread } = preflight;
+  // A pending Pseudonym update owns every new attribution context; normal work
+  // that would mint one waits for the job to commit or be cancelled.
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${pseudonymUpdatePending(auth.accountId)}`))
+    return failure("pseudonym_update_pending", 409);
   // The same seal is rechecked in the committing CAS; this only reports it clearly.
   if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${sharingWriteBlocked(fileId)}`)) return failure("key_rotation_required", 409);
   let bodyCiphertext: Uint8Array, contentKeyEnvelope: Uint8Array;
