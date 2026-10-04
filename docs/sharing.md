@@ -39,6 +39,7 @@ Lists have a combined 100-relationship page and an explicit `nextCursor`. They r
 
 - `effectiveAccess` returns current authority, or null for an inaccessible target.
 - `effectiveAccessQuery` embeds the bounded query in a ciphertext SELECT or a mutation's first CAS.
+- `accountAccessQuery` runs the same bounded query for another Account without the acting device's guard. Owner-side policy uses it — for example, a Publication author must hold current File-read access ([publications](publications.md)) — always alongside the actor's own Device-proof guard in the same statement.
 - `accessPredicate` and `moveAccessPredicate` integrate current access into the tree's transactions.
 - `permits` specifies every private permission-matrix row, including Comment authorship, Publication requests, Import targets, and owned-File-only export. Later feature modules must apply these rules with their own stored-author/current-epoch conditions in the transaction, not cache a preflight Boolean.
 - `permitsPublicAudience` specifies the separate complete-active-link audience rule. Its facts must be established by the future Publication protocol and the Device-proof guard, never taken from request JSON. It grants no private or Collaborators-only authority.

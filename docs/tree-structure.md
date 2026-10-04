@@ -10,7 +10,7 @@ Ticket 17 extends both preflight and **transactional** authorization through the
 - Owner-controlled exits from any shared subtree remain explicitly rejected with `key_rotation_required`; [ticket 19](key-rotation.md) does not allow a move to publish future writes beneath an old capability. Moves between disconnected Collaborator write scopes are denied.
 - Revocation/leave/permission changes create current safety seals; future encrypted and structural writes beneath sealed targets fail closed until rotation. Reads and hard deletion remain available.
 - Direct File Grants follow identity without disclosing a parent/path. Converted Files support parent-free fresh-key saves through a stable File capability; legacy conversion requires authorized browser parent-write access. Ordinary converted saves do not advance a Directory revision.
-- Shares, Grants, their pending/active root and Comment device envelopes, provisioning needs, Comment capability requirements, safety seals, and targeted rotation jobs/staging/receipts are explicitly removed during hard deletion. Surviving staged parents restart against the updated signed listing. Surviving ancestor Grants keep their root envelopes; deleting their last missing Comment requirement can complete their need. Ticket 27 must extend that list when Publication or Comment body records are introduced.
+- Shares, Grants, their pending/active root and Comment device envelopes, provisioning needs, Comment capability requirements, safety seals, and targeted rotation jobs/staging/receipts are explicitly removed during hard deletion. Surviving staged parents restart against the updated signed listing. Surviving ancestor Grants keep their root envelopes; deleting their last missing Comment requirement can complete their need. Private Comment records (ticket 21) and Publication records (ticket 22) are removed too; ticket 27 still owns the complete Public Comment and teardown inventory.
 
 ## Protocol and concurrency
 
@@ -26,7 +26,7 @@ References: [D1 batch transactions](https://developers.cloudflare.com/d1/worker-
 
 The 500-node cap includes the selected Directory. Enumeration reads at most 501 nodes, authorizes each node/edge, and pins every parent relationship, Directory revision, and File pointer. The transaction rechecks the complete snapshot and bounded membership count, then explicitly removes:
 
-1. Pending/active Share/Grant root and Comment device envelopes, Comment capability requirements, affected provisioning needs, their targeted relationships, and current sharing safety seals;
+1. Pending/active Share/Grant root and Comment device envelopes, Comment capability requirements, Private Comment threads with their Comments and attributions, every Publication with its author declarations, requests, Public representations and link (deleting a File revokes its Publication), affected provisioning needs, their targeted relationships, and current sharing safety seals;
 2. Directory entries and their parent capability envelopes;
 3. object-addressed Key envelopes;
 4. private File representations;

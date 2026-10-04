@@ -135,7 +135,8 @@ export function PublishPanel({ fileId, snapshot, fileReady, link, onPublished }:
       </div>
     </> : <>
       <p className="text-sm text-stone-600">Publishing creates a read-only public link to the latest saved version of this File. Anyone
-        with the complete link can read it, and it updates when this File is saved. mdwn never receives the part of the link after #.</p>
+        with the complete link can read it, and it updates when this File is saved. mdwn never receives the part of the link after #.
+        Copies someone has already downloaded can’t be recalled.</p>
       {state.requests.length > 0 && <div>
         <p role="status">{state.requests.length === 1 ? "A collaborator asked" : `${state.requests.length} collaborators asked`} you
           to publish this File. Publishing approves every request.</p>

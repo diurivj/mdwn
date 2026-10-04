@@ -197,11 +197,13 @@ version, not a permissive v1 decoder.
 | 18 | `owned-device` |
 | 19 | `device-label` |
 | 20 | `file-capability` |
+| 21 | `publication-attribution` |
 
 Names follow the `CONTEXT.md` glossary (`Directory capability`, `File content
  key`, `Comment audience epoch`); only the numeric ID is serialized. Every HPKE
 envelope, `grant`, and `device-enrollment` requires a recipient ID.
-`public-representation` and `public-comment-audience-epoch` require a Publication ID.
+`public-representation`, `public-comment-audience-epoch` and
+`publication-attribution` require a Publication ID.
 Callers must supply the optional bindings for all other cases where applicable;
 for example a public Comment's content must bind its Publication, whereas a
 Private Comment has none. Purpose IDs must never be renumbered.
@@ -232,6 +234,22 @@ the Account and exact device ID. Neither purpose carries a Grant capability.
 
 [ADR-0008](adr/0008-parent-free-file-capabilities.md) adds a stable-between-rotations File capability between a Directory capability and fresh representation keys. Purpose 20 wraps that capability under the parent Directory. It binds Owner Vault, File ID, capability ID/current epoch and revision 1; older purposes retain their original numeric IDs. Representation-key envelopes continue to use `file-content-key`, now under the File capability. The device-signed File head independently binds the wrapping capability and exact representation/wrapper bytes. Direct recipients receive only the File capability through an independently signed HPKE `grant` envelope. Neither successful HPKE nor header inspection establishes live authority; see [the sharing protocol](sharing.md).
 
+## Public representation and author declarations (ticket 22)
+
+`app/publications/content` seals the Public representation (purpose 9) and each
+Owner-selected author's pseudonym declaration (purpose 21) with HPKE to the
+active Publication link's public key. This consumer pins HPKE for both purposes:
+the Worker rejects a symmetric envelope for either, and the browser opens them
+only with `openForRecipient`. The context binds the logical Publication as
+`vaultId` and `publicationId` (never the Owner's Vault or the File), the link's
+path ID as `keyId`, and the exact stored public key as `recipientId`; the
+representation's `objectId` is the Publication and a declaration's is its
+opaque declaration ID. The matching private scalar is the URL-fragment
+capability and never reaches the service. Editors encrypt without it. HPKE base
+mode names no sender, so authority to write either envelope comes from the
+authenticated Publication protocol, not from a successful open. See
+[publications](publications.md).
+
 ## Grant-derived Comment envelopes (ticket 18)
 
 `app/sharing/comment-keys` uses purposes 10 and 11 for direct HPKE device delivery, with an independent source-device intent signature. Pending Share acceptance requires the Owner; ticket 20 also permits a current recipient holder to forward an accepted Grant's capability within the same Account/Grant, with source authority rechecked in the committing transaction. Its externally expected context and signature additionally bind File, logical thread, root Grant relationship/target and both approved registry snapshots. Purpose 11 binds the logical Publication, never a URL fragment. Grant routes reject symmetric wrappers and all crossed contexts; acceptance requires complete current-device root and registered Comment/history coverage. These envelopes remain outside Account-owned recovery/enrollment stores. See [sharing](sharing.md) for the producer registration and lifecycle integration contract.
@@ -255,7 +273,7 @@ Their purpose names are pinned here:
 | 18 Extended Grant envelopes | `grant`, `private-comment-thread`, `public-comment-audience-epoch` |
 | 19 Key rotation, 20 Provisioning fulfillment | any affected purpose |
 | 21 Private comment threads | `private-comment-thread`, `comment-content`, `attribution` |
-| 22 Publish a File | `public-representation` |
+| 22 Publish a File | `public-representation`, `publication-attribution` |
 | 23 Public comment threads, 25 Link rotation and unpublish | `public-comment-audience-epoch` (see below) |
 | 24 Public pseudonym update | `attribution` |
 | 29, 30 Import | `archive-manifest`, `import-staging-manifest`, `import-chunk` |

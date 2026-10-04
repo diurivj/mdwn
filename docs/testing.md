@@ -89,6 +89,10 @@ script creates real browser key handles and signs the real Directory listing
 protocol. No production test route or persisted draft store is introduced.
 The File save API invariants run through `SELF.fetch` in
 `tests/worker/private-tree.test.ts`, with supplemental real-D1 rollback checks.
+`e2e/publications.spec.ts` publishes through the Publish panel and opens the
+Public link in a fresh anonymous context; it checks wire-level requests (URL
+without the never-transmitted fragment, headers and body), cookies, console
+messages and every D1 table for the fragment capability.
 
 Use existing UI links for in-app navigation. When a test intentionally replaces
 an already-ready Files/device-access document (for example, opening a shared

@@ -1,8 +1,9 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { sealAttribution, sealCommentBody } from "../../app/comments/content";
 import { createSymmetricWriter } from "../../app/crypto/enc-v1";
-import { createFileRepresentation } from "../../app/crypto/vault";
+import { createFileRepresentation, generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
 import {
   createPublicationKeyPair, formatPublicationFragment, importPublicationKeyPair, newPublicationIdentifier,
 } from "../../app/publications/capability";
@@ -12,7 +13,7 @@ import {
 import { createFileHead } from "../../app/tree/file-head";
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
 import {
-  deletePayload, grant, opaqueId, sharingAccount, sharingRequest, treeChild, type SharingAccount,
+  deletePayload, grant, movePayload, opaqueId, renamePayload, sharingAccount, sharingRequest, treeChild, type SharingAccount,
 } from "./sharing-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }
@@ -92,6 +93,25 @@ function oversized(length: number): string {
   const bytes = new Uint8Array(length);
   for (let offset = 0; offset < length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** A real Private thread, Comment and attribution on the File, for absence checks. */
+async function privateComment(owner: SharingAccount, fileId: string) {
+  const threadId = opaqueId(), epochId = opaqueId(), capabilityId = opaqueId(), commentId = opaqueId(), attributionId = opaqueId();
+  const capability = new Uint8Array(32).fill(9);
+  const recoveryEnvelope = encodeTreeBytes(await sealVaultRecoveryEnvelope(generateVaultRootKey(),
+    { scope: "owned", objectId: threadId, keyId: capabilityId, key: capability },
+    { purpose: "vault-recovery", vaultId: owner.accountId, objectId: threadId, keyId: capabilityId, keyEpoch: 1, revision: 1 }));
+  expect((await sharingRequest(owner, `/api/private/comments/files/${fileId}`, "PUT",
+    { threadId, epochId, capabilityId, recoveryEnvelope })).status).toBe(201);
+  const body = await sealCommentBody(capability, { vaultId: owner.accountId, commentId, capabilityId, keyEpoch: 1, revision: 1,
+    text: "private only" });
+  const attribution = await sealAttribution(capability, { vaultId: owner.accountId, attributionId, pseudonym: "Member Private",
+    capabilityId, keyEpoch: 1 });
+  expect((await sharingRequest(owner, `/api/private/comments/files/${fileId}/entries`, "POST", { commentId, threadId, capabilityId,
+    capabilityEpoch: 1, epochId, bodyCiphertext: body.bodyCiphertext, contentKeyEnvelope: body.contentKeyEnvelope,
+    attribution })).status).toBe(201);
+  return { threadId, commentId, bodyCiphertext: body.bodyCiphertext, attribution: attribution.ciphertext, recoveryEnvelope };
 }
 
 function readPublic(linkId: string, init: RequestInit = {}) {
@@ -228,6 +248,21 @@ describe("creating a Publication", () => {
     expect(blocked.status).toBe(409);
   });
 
+  it("follows File identity through Owner rename and move", async () => {
+    const owner = await sharingAccount();
+    const source = await treeChild(owner, owner.rootId, "directory"), destination = await treeChild(owner, owner.rootId, "directory");
+    const fileId = await treeChild(owner, source, "file", owner.accountId, true);
+    const published = await publish(owner, fileId);
+    expect((await sharingRequest(owner, `/api/private/tree/nodes/${fileId}/name`, "PATCH",
+      await renamePayload(owner, owner.accountId, fileId, source))).status).toBe(200);
+    expect((await sharingRequest(owner, `/api/private/tree/nodes/${fileId}/parent`, "PATCH",
+      await movePayload(owner, owner.accountId, fileId, source, destination))).status).toBe(200);
+    expect((await sharingRequest(owner, `/api/private/tree/files/${fileId}`, "PATCH",
+      await pairedSave(owner, owner.accountId, fileId, "Moved and saved"))).status).toBe(200);
+    expect((await openPublic(published)).presentation.markdown).toBe("Moved and saved");
+    expect((await publicationRows(fileId)).results).toHaveLength(1);
+  });
+
   it("applies the five-per-day Publication create limit per Account", async () => {
     const owner = await sharingAccount();
     for (let index = 0; index < 5; index++) await publish(owner, await treeChild(owner, owner.rootId, "file", owner.accountId, true));
@@ -290,6 +325,7 @@ describe("the anonymous Public route", () => {
   it("serves only the current Public representation, without cookies, Owner, File or private material", async () => {
     const owner = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    const comment = await privateComment(owner, fileId);
     const published = await publish(owner, fileId, { markdown: "# Shared plan" });
     const signedIn = await readPublic(published.linkId, { headers: { cookie: owner.session.cookie } });
     const anonymous = await readPublic(published.linkId);
@@ -305,8 +341,15 @@ describe("the anonymous Public route", () => {
       FROM file_representations r JOIN files f ON f.current_representation_id = r.id
       JOIN directory_entries e ON e.child_node_id = f.node_id WHERE f.node_id = ?`).bind(fileId)
       .first<{ ciphertext: ArrayBuffer; key_envelope: ArrayBuffer; edge: ArrayBuffer }>();
+    // Neither private nor Collaborators-only material: no representation, wrapper,
+    // edge, Comment thread, Comment body, attribution or Comment capability.
+    const capabilities = (await env.DB.prepare("SELECT object_id, capability_id FROM sharing_comment_capabilities WHERE file_id = ?")
+      .bind(fileId).all<{ object_id: string; capability_id: string }>()).results;
+    expect(capabilities.length).toBeGreaterThan(0);
     for (const forbidden of [owner.accountId, fileId, owner.rootId, encodeTreeBytes(new Uint8Array(privateRow!.ciphertext)),
-      encodeTreeBytes(new Uint8Array(privateRow!.key_envelope)), encodeTreeBytes(new Uint8Array(privateRow!.edge))]) {
+      encodeTreeBytes(new Uint8Array(privateRow!.key_envelope)), encodeTreeBytes(new Uint8Array(privateRow!.edge)),
+      comment.threadId, comment.commentId, comment.bodyCiphertext, comment.attribution, comment.recoveryEnvelope,
+      ...capabilities.flatMap((row) => [row.object_id, row.capability_id])]) {
       expect(text).not.toContain(forbidden);
     }
     expect((await openPublic(published)).presentation).toEqual({ title: null, markdown: "# Shared plan" });

@@ -309,7 +309,7 @@ async function addAuthor(env: Env, auth: AuthorizedDevice, fileId: string, value
     const account = await db.get<{ id: string }>(sql`SELECT id FROM accounts
       WHERE ${lookup} AND id != ${auth.accountId} AND ${privateReadGuard(auth)}`);
     if (!account || !await db.get(sql`SELECT 1 FROM (${accountAccessQuery(account.id, fileId)}) a
-      WHERE a.kind = 'file'`)) return notFound();
+      WHERE a.kind = 'file' AND ${privateReadGuard(auth)}`)) return notFound();
     candidate = account.id;
   }
   const self = candidate === auth.accountId, now = Date.now();
