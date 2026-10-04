@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { test, expect } from "./workspace-fixture";
 import { seededAccount, shareWithComments, loadFixture } from "./support/provisioning-fixtures";
+import { waitForSharedProvisioning } from "./support/navigation";
 import {
   ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, parseArchiveManifest, parsePrivateCommentsSidecar,
 } from "../app/archive/format";
@@ -145,6 +146,7 @@ test("a Collaborator cannot export shared-only content and is never offered expo
 
     // The Collaborator's own export contains only their owned content.
     const rootId = await recipient.page.evaluate(async () => (await window.workspaceFixture.openRoot()).rootId);
+    await waitForSharedProvisioning(recipient.page);
     await recipient.page.goto(`${origin}/d/${rootId}`);
     const pending = recipient.page.waitForEvent("download");
     await recipient.page.getByRole("button", { name: "Export my Files" }).click();

@@ -74,7 +74,7 @@ function sanitizeFilename(name: string): string {
   return cleaned ? Array.from(cleaned).slice(0, 80).join("") : "export";
 }
 
-export function exportFilename(selection: ExportSelection, at: Date): string {
+export function archiveFilename(selection: ExportSelection, at: Date): string {
   const stamp = at.toISOString().slice(0, 10);
   return selection.kind === "all" ? `mdwn-files-${stamp}.zip`
     : `mdwn-${sanitizeFilename(selection.name)}-${stamp}.zip`;
@@ -117,7 +117,7 @@ export async function exportOwnedFiles(options: {
     roots = [{ kind: "file", path: collected.files[0]!.path.join("/") }];
   }
   const bytes = await createZip(buildArchiveFiles(collected, { createdAt: at.toISOString(), roots }), { at });
-  return { blob: new Blob([bytes.slice()], { type: "application/zip" }), filename: exportFilename(selection, at),
+  return { blob: new Blob([bytes.slice()], { type: "application/zip" }), filename: archiveFilename(selection, at),
     files: collected.files.length, directories: collected.directories.length,
     comments: collected.files.reduce((total, file) => total + file.comments.length, 0),
     incompleteCommentFiles: collected.incompleteCommentFiles };

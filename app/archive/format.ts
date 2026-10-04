@@ -48,6 +48,7 @@ export type ArchiveErrorCode =
   | "too-deep"
   | "source-too-large"
   | "expanded-too-large"
+  | "archive-too-large"
   | "too-many-comments";
 
 /** `detail` may name a local archive path or failure; it never contains content. */
@@ -111,6 +112,11 @@ export const ARCHIVE_LIMITS: ArchiveLimits = {
   maxExpandedBytes: MAX_ARCHIVE_EXPANDED_BYTES,
   maxComments: MAX_HISTORICAL_COMMENTS,
 };
+
+/** The settled recognized-archive input bound; ticket 29 applies it before reading the ZIP. */
+export function checkArchiveCompressedSize(bytes: Uint8Array, max = MAX_ARCHIVE_COMPRESSED_BYTES): void {
+  if (bytes.length > max) throw new ArchiveError("archive-too-large");
+}
 
 const encoder = new TextEncoder();
 
@@ -204,7 +210,8 @@ export function parsePrivateCommentsSidecar(text: string): PrivateCommentsSideca
   return { format: COMMENTS_FORMAT, version: COMMENTS_VERSION, files };
 }
 
-function canonicalToken(segment: string): string {
+/** Comparison-key hex used only inside one browser/preflight; never sent to the service. */
+export function comparisonToken(segment: string): string {
   let token = "";
   for (const byte of comparisonKey(segment)) token += byte.toString(16).padStart(2, "0");
   return token;
@@ -223,7 +230,7 @@ function canonicalSegments(path: string): string[] {
 }
 
 function canonicalPathKey(segments: readonly string[]): string {
-  return segments.map((segment) => canonicalToken(segment)).join("/");
+  return segments.map((segment) => comparisonToken(segment)).join("/");
 }
 
 function metadataEntry(entry: ZipEntry): boolean {

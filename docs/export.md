@@ -43,11 +43,11 @@ README.md
 
 - A Directory keeps its exact display name; Directories never merge or rename.
 - A File name already ending in `.md` or `.markdown` keeps its name; otherwise
-  `.md` is appended. If that mapping (or a preserved Directory name) would
-  collide, the File gets the locked `mdwn/namespace-v1` Keep-both suffix
-  (`a` with `a.md` already present becomes `a (2).md`). A mapping that would
-  exceed the 255-byte segment profile falls back to the exact name rather than
-  truncating.
+  `.md` is appended. Explicit names are reserved before generated ones, so a
+  Vault containing `a`, `a.md`, and `a (2).md` exports them as `a.md`,
+  `a (2).md`, and `a (3).md`. Every generated name uses the locked
+  `mdwn/namespace-v1` Keep-both suffix; a mapping that would exceed the 255-byte
+  segment profile falls back to the exact name rather than truncating.
 - File bytes are the exact UTF-8 Markdown source. YAML front matter is part of
   the source and is never interpreted or rewritten. A legacy source above the
   256 KiB source limit still exports; it simply cannot pass the Import archive
@@ -89,10 +89,12 @@ collaboration, or recovery authority.
 ```
 
 The sidecar preserves each owned File's Private Comment plain text, thread
-order (`sequence`), timestamps, and the displayed Public pseudonym. A File
-whose Comment history could not be read on this device is exported without a
-sidecar entry and counted in the UI result instead of failing the download;
-the collector never writes a partial or misattributed record.
+order (`sequence`), timestamps, and the displayed Public pseudonym. The
+collector pages the Private thread to its end (the workspace inspector stops
+after ten pages; export does not). A File whose Comment history could not be
+read completely on this device contributes **no** sidecar entry — a partial set
+is never presented as the File's thread — and is counted in the UI result
+instead of failing the download.
 
 ## Import preflight interaction (ticket 29)
 
@@ -100,10 +102,17 @@ the collector never writes a partial or misattributed record.
 Import preflight: exact metadata set, safe normalized `mdwn/namespace-v1`
 paths, duplicate detection (including folded case and equivalent Unicode),
 resolvable manifest roots, sidecar references to real Files, and the settled
-node/depth/source/expanded/Historical-Comment bounds. Collision choices,
-Import targets, and the encrypted staging plan remain the Import flow's work.
+node/depth/source/expanded/Historical-Comment bounds. `checkArchiveCompressedSize`
+applies the 8 MiB recognized-archive bound at the ZIP byte boundary before a
+read, exactly as ticket 29 will. Collision choices, Import targets, and the
+encrypted staging plan remain the Import flow's work.
 `tests/export-collect.test.ts` feeds a produced archive through
-`readZip` and `inspectArchive` to prove export output is Import-ready.
+`readZip` and `inspectArchive` to prove export output is Import-ready;
+`tests/archive.test.ts` pins the exact-boundary and one-over rejections.
+
+A defensive 256-Directory walk ceiling (well above the service's own
+100-Directory ancestry bound) turns a malformed or cyclic listing into a
+visible error instead of a runaway walk; a real Vault cannot reach it.
 
 ## UI and failure behavior
 

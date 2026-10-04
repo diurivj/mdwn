@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, ArchiveError, createArchiveManifest,
-  createPrivateCommentsSidecar, inspectArchive, parseArchiveManifest, parsePrivateCommentsSidecar,
-  serializeArchiveManifest, serializePrivateCommentsSidecar, type ArchiveErrorCode, type HistoricalComment,
+  ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, ArchiveError, checkArchiveCompressedSize,
+  createArchiveManifest, createPrivateCommentsSidecar, inspectArchive, parseArchiveManifest,
+  parsePrivateCommentsSidecar, serializeArchiveManifest, serializePrivateCommentsSidecar,
+  type ArchiveErrorCode, type HistoricalComment,
 } from "../app/archive/format";
 import { createZip, crc32, readZip, ZipError, type ZipEntry } from "../app/archive/zip";
 
@@ -202,5 +203,11 @@ describe("mdwn archive format", () => {
     throwsCode(() => inspectArchive([manifestEntry(), entry("notes.md", "x"),
       entry(ARCHIVE_COMMENTS_PATH, serializePrivateCommentsSidecar(createPrivateCommentsSidecar(
         [{ path: "absent.md", comments: [comment] }])))]), "malformed-comments");
+  });
+
+  it("enforces the recognized-archive input bound at the ZIP boundary", () => {
+    checkArchiveCompressedSize(new Uint8Array(8_388_608));
+    expect(() => checkArchiveCompressedSize(new Uint8Array(8_388_609))).toThrow();
+    throwsCode(() => checkArchiveCompressedSize(new Uint8Array(129), 128), "archive-too-large");
   });
 });

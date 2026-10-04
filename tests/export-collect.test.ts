@@ -127,6 +127,16 @@ describe("owned Files export collection", () => {
     expect(allocation.get("a")).toBe("b (2).md");
     expect(allocation.get("tarball")).toBe("archive.tar.md");
     expect(allocation.get("targz")).toBe("archive.tar.gz.md");
+    // Ticket 25 reservation order: explicit names keep their spelling before a
+    // File that needs `.md` appended takes a generated suffix.
+    const explicit = new Map(allocateExportPaths([], [
+      { kind: "file", nodeId: "bare", name: "a" },
+      { kind: "file", nodeId: "literal", name: "a.md" },
+      { kind: "file", nodeId: "suffixed", name: "a (2).md" },
+    ]).map((item) => [item.nodeId, item.segments.join("/")]));
+    expect(explicit.get("literal")).toBe("a.md");
+    expect(explicit.get("suffixed")).toBe("a (2).md");
+    expect(explicit.get("bare")).toBe("a (3).md");
     // The allocation is stable regardless of enumeration order.
     const reversed = new Map(allocateExportPaths([], children.slice().reverse())
       .map((item) => [item.nodeId, item.segments.join("/")]));
@@ -192,18 +202,18 @@ describe("owned Files export collection", () => {
       .resolves.toMatchObject({ files: [{ path: [".mdwn.md"] }] });
   });
 
-  it("reports unreadable Comment history instead of dropping it silently", async () => {
+  it("reports unreadable Comment history and omits that File from the sidecar", async () => {
     const root = folder("root", "Files", [
-      leaf("a", "A", "# A", [], false),
+      leaf("a", "A", "# A", [{ sequence: 0, text: "unreadable owner", pseudonym: "Member", createdAt: 1, updatedAt: 1 }], false),
       leaf("b", "B", "# B", [{ sequence: 0, text: "kept", pseudonym: "Member", createdAt: 1, updatedAt: 1 }]),
     ]);
     const collected = await collectExportTree(owned, sourceFor(root),
       { directoryId: "root", key: new Uint8Array(32), path: [], includeRoot: false }, { signal: signal() });
     expect(collected.incompleteCommentFiles).toBe(1);
     const entries = await entriesOf(buildArchiveFiles(collected, { createdAt: at.toISOString(), roots: [] }));
-    expect(entries.some((item) => item.path === ARCHIVE_COMMENTS_PATH)).toBe(true);
-    expect(parsePrivateCommentsSidecar(decoder.decode(entries.find((item) => item.path === ARCHIVE_COMMENTS_PATH)!.data)).files)
-      .toHaveLength(1);
+    const sidecar = parsePrivateCommentsSidecar(decoder.decode(entries.find((item) => item.path === ARCHIVE_COMMENTS_PATH)!.data));
+    expect(sidecar.files).toEqual([{ path: "B.md", comments: [{ sequence: 0, text: "kept", pseudonym: "Member",
+      createdAt: 1, updatedAt: 1 }] }]);
   });
 
   it("exports a legacy oversized source without the Import source bound blocking the download", async () => {

@@ -17,10 +17,10 @@
  */
 
 import {
-  canonicalizeSegment, comparisonKey, keepBothCandidate, NamespaceError, utf8Bytes,
+  canonicalizeSegment, keepBothCandidate, NamespaceError, utf8Bytes,
 } from "~/namespace-v1";
 import {
-  ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, ARCHIVE_METADATA_DIRECTORY,
+  ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, ARCHIVE_METADATA_DIRECTORY, comparisonToken,
   createArchiveManifest, createPrivateCommentsSidecar, serializeArchiveManifest,
   serializePrivateCommentsSidecar, type ArchiveRoot, type HistoricalComment,
 } from "~/archive/format";
@@ -37,12 +37,16 @@ export class ExportError extends Error {
 
 export type ExportEntry = { nodeId: string; kind: "directory" | "file"; name: string };
 
+/** The owning scope an export may read; a Grant scope is refused before any read. */
+export type ExportOwnerScope = { vaultId: string; actorAccountId: string };
+
 export type ExportProgress = { directories: number; files: number };
 
 export type ExportSource<Entry extends ExportEntry> = {
   listDirectory(directoryId: string, key: Uint8Array, signal: AbortSignal): Promise<readonly Entry[]>;
   openDirectory(parentKey: Uint8Array, entry: Entry): Promise<Uint8Array>;
-  /** `commentsComplete: false` means some Comment display data was unreadable. */
+  /** `commentsComplete: false` means some Comment display data was unreadable;
+   * `buildArchiveFiles` then omits that File's sidecar entry entirely. */
   readFile(fileId: string, parentKey: Uint8Array, signal: AbortSignal): Promise<{
     markdown: string; comments: readonly HistoricalComment[]; commentsComplete: boolean;
   }>;
@@ -66,14 +70,8 @@ export type ArchiveFile = { path: string; directory: boolean; data: Uint8Array }
 
 const encoder = new TextEncoder();
 const MD_EXTENSION = /\.(md|markdown)$/i;
-/** Defensive ceiling well above both the Import depth bound and any practical Vault. */
+/** Defensive ceiling above the service's 100-Directory ancestry bound; turns a malformed or cyclic listing into a visible error. */
 export const MAX_EXPORT_DIRECTORY_DEPTH = 256;
-
-function comparisonToken(segment: string): string {
-  let token = "";
-  for (const byte of comparisonKey(segment)) token += byte.toString(16).padStart(2, "0");
-  return token;
-}
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {
   const length = Math.min(a.length, b.length);
@@ -101,6 +99,10 @@ export function allocateExportPaths(parent: readonly string[], children: readonl
   const used = new Set<string>();
   const ordered = children.slice().sort((a, b) =>
     compareBytes(utf8Bytes(a.name), utf8Bytes(b.name)) || a.nodeId.localeCompare(b.nodeId));
+  const reserve = (child: ExportEntry, directory: boolean, display: string): void => {
+    used.add(comparisonToken(display));
+    allocations.set(child.nodeId, { nodeId: child.nodeId, directory, segments: [...parent, display] });
+  };
   for (const child of ordered) {
     if (child.kind !== "directory") continue;
     let display: string;
@@ -113,11 +115,26 @@ export function allocateExportPaths(parent: readonly string[], children: readonl
       throw new ExportError("reserved_name", display);
     }
     if (used.has(comparisonToken(display))) throw new ExportError("invalid_name", child.name);
-    used.add(comparisonToken(display));
-    allocations.set(child.nodeId, { nodeId: child.nodeId, directory: true, segments: [...parent, display] });
+    reserve(child, true, display);
   }
+  // The locked Keep-both rule reserves every non-colliding requested sibling
+  // name before allocating generated ones, so an explicit `report (2).md` keeps
+  // its name even when a colliding `report.md` needs a suffix. Here a File whose
+  // mapped path equals its exact display name is reserved first; Files that
+  // need `.md` appended yield to them, then to their own generated candidates.
+  const pending: ExportEntry[] = [];
   for (const child of ordered) {
     if (child.kind !== "file") continue;
+    let display: string;
+    try { display = canonicalizeSegment(exportFileName(child.name)).display; }
+    catch (error) {
+      if (error instanceof NamespaceError) throw new ExportError("invalid_name", child.name);
+      throw error;
+    }
+    if (display === child.name && !used.has(comparisonToken(display))) { reserve(child, false, display); continue; }
+    pending.push(child);
+  }
+  for (const child of pending) {
     let chosen: string;
     try { chosen = canonicalizeSegment(exportFileName(child.name)).display; }
     catch (error) {
@@ -134,13 +151,12 @@ export function allocateExportPaths(parent: readonly string[], children: readonl
         number += 1;
       }
     }
-    used.add(comparisonToken(chosen));
-    allocations.set(child.nodeId, { nodeId: child.nodeId, directory: false, segments: [...parent, chosen] });
+    reserve(child, false, chosen);
   }
   return children.map((child) => allocations.get(child.nodeId)!);
 }
 
-function assertOwned(access: { vaultId: string; actorAccountId: string }): void {
+function assertOwned(access: ExportOwnerScope): void {
   if (access.vaultId !== access.actorAccountId) throw new ExportError("not_owned");
 }
 
@@ -175,7 +191,7 @@ async function walk<Entry extends ExportEntry>(
 
 /** Collect one owned Directory subtree. `includeRoot` adds the selected Directory itself. */
 export async function collectExportTree<Entry extends ExportEntry>(
-  access: { vaultId: string; actorAccountId: string },
+  access: ExportOwnerScope,
   source: ExportSource<Entry>,
   start: { directoryId: string; key: Uint8Array; path: string[]; includeRoot: boolean },
   options: { signal: AbortSignal; onProgress?: (progress: ExportProgress) => void },
@@ -194,7 +210,7 @@ export async function collectExportTree<Entry extends ExportEntry>(
 
 /** Collect exactly one owned File, placed at the archive root. */
 export async function collectExportFile<Entry extends ExportEntry>(
-  access: { vaultId: string; actorAccountId: string },
+  access: ExportOwnerScope,
   source: ExportSource<Entry>,
   file: { fileId: string; parentKey: Uint8Array; name: string },
   options: { signal: AbortSignal; onProgress?: (progress: ExportProgress) => void },
@@ -212,6 +228,8 @@ export async function collectExportFile<Entry extends ExportEntry>(
 /**
  * Assemble the final archive entries. Metadata is written first; content paths
  * are bytewise-sorted so the same tree always produces the same archive bytes.
+ * A File whose Comment history was incomplete contributes no sidecar entry, so
+ * a partial set is never presented as the File's thread.
  */
 export function buildArchiveFiles(
   collected: CollectedExport,
@@ -222,7 +240,7 @@ export function buildArchiveFiles(
     { path: ARCHIVE_METADATA_DIRECTORY, directory: true, data: new Uint8Array() },
     { path: ARCHIVE_MANIFEST_PATH, directory: false, data: encoder.encode(serializeArchiveManifest(manifest)) },
   ];
-  const commented = collected.files.filter((file) => file.comments.length > 0);
+  const commented = collected.files.filter((file) => file.commentsComplete && file.comments.length > 0);
   if (commented.length) {
     const sidecar = createPrivateCommentsSidecar(commented.map((file) => ({
       path: file.path.join("/"), comments: [...file.comments],
