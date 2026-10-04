@@ -70,7 +70,8 @@ function currentThreadForLink(linkId: string | SQL): SQL {
   return publicThreadSelect(sql`p.current_link_id = ${linkId}`);
 }
 
-/** The current epoch capability, pinned to live File-read access. */
+/** The current epoch capability, pinned to live File-read access and an active
+ * Publication: a sealed Publication's Public thread denies every endpoint. */
 function fileEpochAuthority(auth: AuthorizedDevice, input: {
   fileId: string; threadId: string; epochId: string; capabilityId: string; capabilityEpoch: number; currentOnly: boolean;
 }): SQL {
@@ -80,6 +81,7 @@ function fileEpochAuthority(auth: AuthorizedDevice, input: {
       AND c.purpose = 'public-comment-audience-epoch' AND c.capability_id = ${input.capabilityId}
       AND c.capability_epoch = ${input.capabilityEpoch}
     WHERE t.id = ${input.threadId} AND t.file_id = ${input.fileId} AND t.purpose = 'public'
+      AND EXISTS (SELECT 1 FROM publications p WHERE p.id = t.publication_id AND p.state = 'active')
       ${input.currentOnly ? sql`AND t.current_epoch_id = e.id` : sql``}
       AND ${accessPredicate(auth, input.fileId, "read")})`;
 }
@@ -454,7 +456,9 @@ export async function createPublicComment(request: Request, env: Env, auth: Auth
   return committed ? Response.json({ commentId, created: true }, { status: 201, headers }) : changed();
 }
 
-/** Resolve a Comment and its thread, re-deriving live access in the same statement. */
+/** Resolve a Comment and its thread, re-deriving live access in the same statement.
+ * The File route additionally requires the Publication to be active, so a sealed
+ * Publication's thread denies edit and delete before teardown removes the rows. */
 async function commentContext(env: Env, auth: AuthorizedDevice, target: CommentTarget, threadId: string, commentId: string) {
   return createDb(env.DB).get<{ author_id: string; epoch_id: string; revision: number; owner_id: string;
     file_id: string; publication_id: string }>(sql`
@@ -462,7 +466,8 @@ async function commentContext(env: Env, auth: AuthorizedDevice, target: CommentT
     FROM comments c JOIN comment_threads t ON t.id = c.thread_id AND t.purpose = 'public'
     WHERE c.id = ${commentId} AND c.thread_id = ${threadId}
       ${target.kind === "file"
-        ? sql`AND t.file_id = ${target.fileId} AND ${accessPredicate(auth, target.fileId, "read")}`
+        ? sql`AND t.file_id = ${target.fileId} AND ${accessPredicate(auth, target.fileId, "read")}
+            AND EXISTS (SELECT 1 FROM publications p WHERE p.id = t.publication_id AND p.state = 'active')`
         : sql`AND EXISTS (SELECT 1 FROM publications p JOIN comment_thread_epochs e ON e.thread_id = t.id AND e.id = c.epoch_id
             WHERE p.id = t.publication_id AND p.state = 'active' AND p.current_link_id = ${target.linkId}
               AND e.audience = 'public')`}`);

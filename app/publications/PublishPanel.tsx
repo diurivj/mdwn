@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import {
-  addAccountAuthor, addSelfAuthor, changeCommentAudience, loadPublicationState, publishFile, PublicationError,
-  removeAuthor, removePublicationRequest, requestPublication,
-  type CommentAudience, type PreparedPublicLink, type PublicationState,
+  addAccountAuthor, addSelfAuthor, changeCommentAudience, continuePublicationTeardown, loadPublicationState, publishFile,
+  PublicationError, removeAuthor, removePublicationRequest, requestPublication, rotatePublicationLink, unpublishPublication,
+  type CommentAudience, type PreparedPublicLink, type PublicationState, type TeardownProgress,
 } from "./publications-client";
 import { loadFile } from "~/tree/client";
 
@@ -21,7 +21,7 @@ const messages: Record<PublicationError["code"], string> = {
   "author-limit": "This Publication already credits the maximum number of authors.",
   "link-required": "Paste the complete public link (including the part after #) to enable public comments.",
   "pseudonym-pending": "Your Public pseudonym update is in progress. Finish or cancel it on the Public pseudonym page before changing authors.",
-  "rotation-required": "Secure access must finish updating before the comment audience can change.",
+  "rotation-required": "Secure access must finish updating before the Public link or comment audience can change.",
   unavailable: "The change could not be confirmed. Try again.",
 };
 
@@ -42,26 +42,69 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
   const [linkInput, setLinkInput] = useState("");
   const [address, setAddress] = useState("");
   const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [progress, setProgress] = useState<TeardownProgress | null>(null);
+  const [teardownAttempt, setTeardownAttempt] = useState(0);
+  const [teardownFailed, setTeardownFailed] = useState(false);
   const lifetime = useRef<AbortController | null>(null);
+  const reloadGeneration = useRef(0);
   const accessRef = useRef(snapshot.access);
   useEffect(() => { accessRef.current = snapshot.access; }, [snapshot.access]);
   const parentId = snapshot.file?.parentId ?? null;
   const parentKey = parentId ? snapshot.keys[parentId] : snapshot.access.rootKey;
 
   const reload = useCallback(async (signal: AbortSignal) => {
+    // Last-issued read wins: an overlapping refresh can never replace a newer
+    // state (for example the post-unpublish read) with a stale active panel.
+    const generation = ++reloadGeneration.current;
     try {
       const state = await loadPublicationState(fileId, signal);
-      if (!signal.aborted) setPanel({ status: "ready", state });
-    } catch { if (!signal.aborted) setPanel({ status: "failed" }); }
+      if (!signal.aborted && generation === reloadGeneration.current) setPanel({ status: "ready", state });
+    } catch {
+      if (!signal.aborted && generation === reloadGeneration.current) setPanel({ status: "failed" });
+    }
   }, [fileId]);
+
+  // A failed or superseded attempt must never be shown as the active link. The
+  // map is keyed by path identifier so a rotation keeps both candidates.
+  const completeLinkFor = useCallback((value: { linkId?: string | null } | null | undefined) =>
+    value?.linkId ? links.get(value.linkId)?.url ?? null : null, [links]);
 
   useEffect(() => {
     const controller = new AbortController();
     lifetime.current = controller;
     setPanel({ status: "loading" }); setMessage(""); setBusy(false);
+    setConfirming(false); setProgress(null); setTeardownFailed(false);
     void reload(controller.signal);
     return () => controller.abort();
   }, [reload]);
+
+  // The Owner's browser finishes a sealed teardown in idempotent bounded
+  // batches and shows progress until the Publication row is gone.
+  const deleting = panel.status === "ready" && panel.state.isOwner && panel.state.publication?.state === "deleting";
+  useEffect(() => {
+    if (!deleting) return;
+    const controller = new AbortController();
+    let active = true;
+    setTeardownFailed(false);
+    void (async () => {
+      try {
+        let next = await continuePublicationTeardown(fileId, controller.signal);
+        while (active && !next.done) {
+          setProgress(next);
+          next = await continuePublicationTeardown(fileId, controller.signal);
+        }
+        if (!active) return;
+        setProgress(next);
+        await reload(controller.signal);
+      } catch {
+        if (!active || controller.signal.aborted) return;
+        setTeardownFailed(true);
+        await reload(controller.signal);
+      }
+    })();
+    return () => { active = false; controller.abort(); };
+  }, [deleting, teardownAttempt, fileId, reload]);
 
   async function run(action: (signal: AbortSignal) => Promise<void>) {
     const controller = lifetime.current;
@@ -80,18 +123,17 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
   async function changeAudience(next: CommentAudience, signal: AbortSignal) {
     const file = await loadFile(accessRef.current, fileId, parentKey!, signal);
     if (!file.publication || file.publication.publicationId !== publication?.publicationId) throw new PublicationError("changed");
-    const completeLink = links.get(file.publication.publicationId)?.url ?? linkInput.trim() ?? "";
+    const link = completeLinkFor(file.publication) ?? linkInput.trim() ?? "";
     await changeCommentAudience(accessRef.current, fileId, {
       publicationId: file.publication.publicationId, linkId: file.publication.linkId,
       publicKey: file.publication.publicKey, expectedEpochId: panel.status === "ready" ? panel.state.comments?.epochId ?? null : null,
       threadId: panel.status === "ready" ? panel.state.comments?.threadId ?? null : null,
-    }, next, completeLink || null, signal);
+    }, next, link || null, signal);
     setLinkInput("");
   }
 
   // A failed or superseded attempt must never be shown as the active link.
-  const completeLink = panel.status === "ready" && panel.state.publication
-    ? links.get(panel.state.publication.publicationId)?.url ?? null : null;
+  const completeLink = panel.status === "ready" ? completeLinkFor(panel.state.publication) : null;
   async function copy() {
     if (!completeLink) return;
     try { await navigator.clipboard.writeText(completeLink); setCopied("copied"); }
@@ -109,10 +151,19 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
   const { state } = panel;
   const publication = state.publication;
   const ownRequest = state.requests.find((request) => request.own);
+  const teardown = progress ?? state.teardown ?? { commentTotal: 0, commentsRemaining: 0 };
   return <section aria-label="Publish" className="mt-4 space-y-3 rounded border border-stone-200 bg-white p-4">
     <h2 className="font-medium">{state.isOwner ? "Publish" : "Publication"}</h2>
     {message && <p role="alert" className="text-rose-700">{message}</p>}
-    {publication?.state === "deleting" ? <p role="status">Deleting public material…</p> : state.isOwner ? publication ? <>
+    {publication?.state === "deleting" ? <div className="space-y-2">
+      <p role="status">Deleting public material…</p>
+      {state.isOwner && <p className="text-sm text-stone-600">
+        {teardown.commentTotal - teardown.commentsRemaining} of {teardown.commentTotal} Public
+        {teardown.commentTotal === 1 ? " Comment" : " Comments"} deleted.</p>}
+      {state.isOwner && teardownFailed && <button type="button"
+        onClick={() => setTeardownAttempt((attempt) => attempt + 1)}
+        className="rounded border px-3 py-1 text-sm">Continue deleting</button>}
+    </div> : state.isOwner ? publication ? <>
       <p role="status">Published. Anyone with the complete link can read the latest saved version of this File.</p>
       {completeLink ? <div className="space-y-2">
         <label className="block text-sm">Public link
@@ -130,7 +181,7 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
         <h3 className="text-sm font-medium">Comments</h3>
         <p className="text-sm text-stone-600">Audience: <span className="font-medium text-stone-900">
           {state.comments ? state.comments.audience === "public" ? "Public" : "Collaborators only" : "Not set up"}</span></p>
-        {state.comments?.audience !== "public" && !links.get(publication.publicationId) && <label className="mt-1 block text-sm">
+        {state.comments?.audience !== "public" && !completeLink && <label className="mt-1 block text-sm">
           Complete public link
           <input value={linkInput} disabled={busy} onChange={(event) => setLinkInput(event.target.value)}
             className="mt-1 block w-full rounded border border-stone-300 p-1 font-mono text-xs"
@@ -172,6 +223,36 @@ export function PublishPanel({ fileId, snapshot, fileReady, links, onPrepared }:
               className="mt-1 block w-72 max-w-full rounded border border-stone-300 p-1" /></label>
           <button type="submit" disabled={busy || !address} className="rounded border px-3 py-1 text-sm">Add author</button>
         </form>
+      </div>
+      <div>
+        <h3 className="text-sm font-medium">Public link</h3>
+        <p className="text-sm text-stone-600">Rotating creates a new link and immediately retires the current one. This File’s
+          Public Comments and history stay, and the new link shows them.</p>
+        <button type="button" disabled={busy || !parentKey} className="mt-2 rounded border px-3 py-1 text-sm"
+          onClick={() => void run(async (signal) => {
+            await rotatePublicationLink({ access: accessRef.current, fileId, parentKey: parentKey!, signal, onPrepared });
+          })}>Rotate link</button>
+      </div>
+      <div>
+        <h3 className="text-sm font-medium">Unpublish</h3>
+        {confirming ? <div className="mt-1 space-y-2">
+          <p role="alert" className="text-sm text-stone-600">Unpublishing permanently deletes this Public link, the Public
+            representation, and {state.commentCount} Public {state.commentCount === 1 ? "Comment" : "Comments"}. It can’t be
+            undone, and copies already downloaded can’t be recalled.</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={busy} className="rounded bg-rose-700 px-3 py-1 text-sm text-white"
+              onClick={() => void run(async (signal) => { setConfirming(false); await unpublishPublication(fileId, signal); })}>
+              Unpublish and permanently delete {state.commentCount} Public {state.commentCount === 1 ? "Comment" : "Comments"}</button>
+            <button type="button" disabled={busy} onClick={() => setConfirming(false)}
+              className="rounded border px-3 py-1 text-sm">Cancel</button>
+          </div>
+        </div> : <>
+          <p className="text-sm text-stone-600">Unpublishing is permanent: it seals the link immediately and deletes the Public
+            representation and every Public Comment.</p>
+          <button type="button" disabled={busy}
+            onClick={() => void run(async () => { setConfirming(true); })}
+            className="mt-2 rounded border px-3 py-1 text-sm">Unpublish…</button>
+        </>}
       </div>
     </> : <>
       <p className="text-sm text-stone-600">Publishing creates a read-only public link to the latest saved version of this File. Anyone

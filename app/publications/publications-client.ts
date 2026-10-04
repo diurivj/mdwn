@@ -1,4 +1,5 @@
 import { readPseudonym } from "~/account/profile-client";
+import { loadFilePublicEpochs } from "~/comments/public-client";
 import { sealCommentEpochLink } from "~/comments/public-content";
 import { sealVaultRecoveryEnvelope } from "~/crypto/vault";
 import { FILE_SOURCE_LIMIT } from "~/crypto/file-source";
@@ -12,9 +13,11 @@ import { publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } f
 
 export type PublicationState = {
   fileId: string; isOwner: boolean; canEdit: boolean;
-  publication: null | { publicationId: string; state: "active" | "deleting"; createdAt: number;
+  publication: null | { publicationId: string; state: "active" | "deleting"; linkId?: string | null; createdAt: number;
     authors: { declarationId: string; ordinal: number; self: boolean; declared: boolean }[] };
   comments: { threadId: string; epochId: string; audience: "public" | "collaborators_only" } | null;
+  commentCount: number;
+  teardown: null | { commentTotal: number; commentsRemaining: number };
   requests: { requestId: string; own: boolean; createdAt: number }[];
 };
 
@@ -53,7 +56,8 @@ async function publicationRequest(path: string, method: "POST" | "PUT" | "DELETE
     const error = (await response.json() as { error?: string }).error;
     throw new PublicationError(error === "publication_exists" ? "exists" : error === "file_changed" ? "file-changed"
       : error === "author_exists" ? "author-exists" : error === "author_limit" ? "author-limit"
-      : error === "pseudonym_update_pending" ? "pseudonym-pending" : "changed");
+      : error === "pseudonym_update_pending" ? "pseudonym-pending"
+      : error === "key_rotation_required" ? "rotation-required" : "changed");
   }
   throw new PublicationError("unavailable");
 }
@@ -63,7 +67,7 @@ export async function loadPublicationState(fileId: string, signal?: AbortSignal)
 }
 
 /** Browser-memory-only material, never a route submission or server value. */
-export type PreparedPublicLink = { publicationId: string; url: string };
+export type PreparedPublicLink = { publicationId: string; linkId: string; url: string };
 
 /**
  * The Owner's browser publishes the latest saved representation. It creates the
@@ -103,7 +107,7 @@ export async function publishFile(options: { access: RootAccess; fileId: string;
   const comments = await commentEpoch(access, { publicationId, linkId, publicKey: keys.publicKey,
     audience: options.audience ?? "public", privateKey: keys.privateKey, threadId });
   signal?.throwIfAborted();
-  const link = { publicationId, url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
+  const link = { publicationId, linkId, url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
   // Preserve the capability above the dismissible panel BEFORE the Worker can
   // commit. Aborting a fetch or losing its response does not undo that commit.
   options.onPrepared(link);
@@ -189,4 +193,61 @@ export async function declarePublicationAuthor(access: RootAccess, fileId: strin
     publicKey: publication.publicKey, declarationId: declaration.declarationId, revision }, await readPseudonym(access, signal));
   await publicationRequest(`${fileId}/authors/${declaration.declarationId}/declaration`, "PUT", {
     publicationId: publication.publicationId, linkId: publication.linkId, revision, ciphertext: encodeTreeBytes(ciphertext) }, signal);
+}
+
+// ---------------------------------------------------------------------------
+// Link rotation and unpublish teardown (ticket 25)
+// ---------------------------------------------------------------------------
+
+/** Bounded teardown progress; `commentsRemaining` reaches zero one batch before
+ * the final batch removes the rest of the public material. */
+export type TeardownProgress = { done: boolean; commentTotal: number; commentsRemaining: number };
+
+/**
+ * The Owner's browser replaces the active link: it re-encrypts the current
+ * saved representation to a fresh key and rewraps every public Comment epoch,
+ * then the Worker swaps the path in one transaction. The retired link stops
+ * working; the logical Publication, Comments and history survive. The new
+ * complete link is retained above the dismissible panel before the request so
+ * a lost response never loses the replacement capability.
+ */
+export async function rotatePublicationLink(options: { access: RootAccess; fileId: string; parentKey: Uint8Array;
+  signal?: AbortSignal; onPrepared: (link: PreparedPublicLink) => void }): Promise<PreparedPublicLink> {
+  const { access, fileId, parentKey, signal } = options;
+  const document = await loadFile(access, fileId, parentKey, signal);
+  const publication = document.publication;
+  if (!publication || publication.revision === null) throw new PublicationError("changed");
+  const opened = await loadFilePublicEpochs(access, fileId, signal);
+  if (opened.publicationId !== publication.publicationId) throw new PublicationError("changed");
+  const keys = await createPublicationKeyPair();
+  const linkId = newPublicationIdentifier();
+  const revision = publication.revision;
+  const binding = { publicationId: publication.publicationId, linkId, publicKey: keys.publicKey };
+  const ciphertext = await sealPublicRepresentation({ ...binding, revision }, publicPresentation(document.markdown));
+  const epochs = [];
+  for (const epoch of opened.epochs) {
+    if (epoch.audience !== "public") continue;
+    epochs.push({ epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.capabilityEpoch,
+      wrapper: encodeTreeBytes(await sealCommentEpochLink(keys.privateKey, keys.publicKey,
+        { ...binding, epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.capabilityEpoch,
+          capability: epoch.capability })) });
+  }
+  signal?.throwIfAborted();
+  const link = { publicationId: publication.publicationId, linkId, url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
+  options.onPrepared(link);
+  await publicationRequest(`${fileId}/link`, "PUT", { publicationId: publication.publicationId, linkId,
+    publicKey: encodeTreeBytes(keys.publicKey), expectedLinkId: publication.linkId, expectedPresentationRevision: revision,
+    expectedRevision: document.revision, expectedRepresentationId: document.representationId,
+    representation: { ciphertext: encodeTreeBytes(ciphertext) }, epochs }, signal);
+  return link;
+}
+
+/** Seal the Publication: no Public route serves anything from this moment on. */
+export async function unpublishPublication(fileId: string, signal?: AbortSignal): Promise<{ publicationId: string; commentTotal: number }> {
+  return (await publicationRequest(`${fileId}/unpublish`, "POST", undefined, signal)).json();
+}
+
+/** One idempotent bounded deletion batch; the Owner's browser calls it until `done`. */
+export async function continuePublicationTeardown(fileId: string, signal?: AbortSignal): Promise<TeardownProgress> {
+  return (await publicationRequest(`${fileId}/teardown`, "POST", undefined, signal)).json();
 }

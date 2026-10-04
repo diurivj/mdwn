@@ -317,8 +317,8 @@ type FileThreadWire = { thread: null | { threadId: string; ownerId: string; publ
 export type FilePublicComments = { status: "absent"; canCreate: boolean; publicationId: string | null } |
   { status: "ready"; thread: PublicThreadView };
 
-/** The File route: this device's envelopes for every authorized epoch. */
-export async function loadFilePublicComments(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<FilePublicComments> {
+/** Fetch the authenticated Public thread wire; one mapping for every caller. */
+async function readFileThread(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<FileThreadWire> {
   const response = await privateRequest(`/api/private/comments/files/${fileId}/public`, { method: "POST", signal });
   if (response.status === 404) throw new PublicCommentsNotFoundError();
   if (response.status === 409) {
@@ -327,14 +327,26 @@ export async function loadFilePublicComments(access: RootAccess, fileId: string,
     throw new PublicCommentsChangedError();
   }
   if (!response.ok) throw new Error("Comments unavailable");
-  const data = await response.json() as FileThreadWire;
-  if (!data.thread) return { status: "absent", canCreate: Boolean(data.canCreateThread), publicationId: data.publication?.publicationId ?? null };
+  return await response.json() as FileThreadWire;
+}
+
+/** Open every epoch envelope this device can read, without any Comment page. */
+async function openFileEpochs(access: RootAccess,
+  thread: NonNullable<FileThreadWire["thread"]>): Promise<PublicEpoch[]> {
   const epochs: PublicEpoch[] = [];
-  for (const epoch of data.thread.epochs) {
-    const capability = await openWireEnvelope(access, data.thread.ownerId, epoch);
+  for (const epoch of thread.epochs) {
+    const capability = await openWireEnvelope(access, thread.ownerId, epoch);
     epochs.push({ epochId: epoch.epochId, ordinal: epoch.ordinal, audience: epoch.audience, state: epoch.state,
       capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch, capability });
   }
+  return epochs;
+}
+
+/** The File route: this device's envelopes for every authorized epoch. */
+export async function loadFilePublicComments(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<FilePublicComments> {
+  const data = await readFileThread(access, fileId, signal);
+  if (!data.thread) return { status: "absent", canCreate: Boolean(data.canCreateThread), publicationId: data.publication?.publicationId ?? null };
+  const epochs = await openFileEpochs(access, data.thread);
   const comments = data.comments ?? [], attributions = data.attributions ?? [];
   const decrypted = await decryptPage({ audience: data.thread.audience, threadId: data.thread.threadId,
     epochs: data.thread.epochs, comments, attributions, nextCursor: data.nextCursor ?? null },
@@ -345,6 +357,17 @@ export async function loadFilePublicComments(access: RootAccess, fileId: string,
     viewerAccountId: data.thread.actorAccountId, postingState: "ready", canDeleteAny: data.thread.canDeleteAny,
     epochs, comments: decrypted.comments, pseudonyms: decrypted.pseudonyms, nextCursor: data.nextCursor ?? null },
     data.thread.actorAccountId, data.thread.canDeleteAny) };
+}
+
+/** Epoch capabilities for link rotation: only the envelope open, so a rotation
+ * can rewrap every public epoch without decrypting any Comment page. */
+export async function loadFilePublicEpochs(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<{
+  publicationId: string; ownerId: string; epochs: PublicEpoch[];
+}> {
+  const data = await readFileThread(access, fileId, signal);
+  if (!data.thread) throw new PublicCommentsNotFoundError();
+  return { publicationId: data.thread.publicationId, ownerId: data.thread.ownerId,
+    epochs: await openFileEpochs(access, data.thread) };
 }
 
 /** Page more authenticated history with the already-opened epoch capabilities. */
