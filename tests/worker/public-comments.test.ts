@@ -504,3 +504,39 @@ it("reports secure access as preparing until a new epoch's device envelope arriv
   expect(ready.response.status).toBe(200);
   expect(ready.body!.thread!.audience).toBe("collaborators_only");
 });
+
+it("pages anonymous public epochs and rejects unknown or invalid cursors identically", async () => {
+  const owner = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+  const publication = await publish(owner, fileId);
+  const first = await sealedComment(publication, "First");
+  expect((await sharingRequest(owner, `/api/private/comments/files/${fileId}/public/entries`, "POST",
+    payload(publication, first))).status).toBe(201);
+  // Directly seeded older Comments keep the 50-Comment page bound testable
+  // without exhausting the public participation limits.
+  for (let sequence = 2; sequence <= 55; sequence++) {
+    await env.DB.prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision,
+        body_ciphertext, body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, X'01', 1, X'01', 1, 1, 1)`)
+      .bind(opaqueId(), publication.epoch.threadId, publication.epoch.epochId, owner.accountId, sequence).run();
+  }
+  const pageOneResponse = await SELF.fetch(`https://mdwn.test/api/public/publications/${publication.linkId}`);
+  expect(pageOneResponse.status).toBe(200);
+  const pageOne = (await pageOneResponse.json() as { comments: AnonymousComments }).comments;
+  expect(pageOne.comments).toHaveLength(50);
+  expect(pageOne.comments[0]!.id).toBe(first.commentId);
+  expect(pageOne.nextCursor).toBe(50);
+  const pageTwoResponse = await SELF.fetch(`https://mdwn.test/api/public/publications/${publication.linkId}/comments?cursor=50`);
+  expect(pageTwoResponse.status).toBe(200);
+  const pageTwo = (await pageTwoResponse.json() as { comments: AnonymousComments }).comments;
+  expect(pageTwo.comments.map((comment) => comment.sequence)).toEqual([51, 52, 53, 54, 55]);
+  expect(pageTwo.nextCursor).toBeNull();
+  // An invalid cursor is indistinguishable from an unknown link.
+  const invalid = await SELF.fetch(`https://mdwn.test/api/public/publications/${publication.linkId}/comments?cursor=nope`);
+  const unknown = await SELF.fetch(`https://mdwn.test/api/public/publications/${"A".repeat(43)}/comments`);
+  expect(invalid.status).toBe(404);
+  expect(unknown.status).toBe(404);
+  const [invalidBody, unknownBody] = [await invalid.text(), await unknown.text()];
+  expect(invalidBody).toBe(unknownBody);
+  expect(invalidBody).toBe(JSON.stringify({ error: "not_found" }));
+});

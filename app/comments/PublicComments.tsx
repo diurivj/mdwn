@@ -76,7 +76,13 @@ export function PublicComments({ page, linkId, onRefresh }: { page: ReadyPage; l
   const [deleting, setDeleting] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const lifetime = useRef<AbortController | null>(null);
   const shownThread = useRef<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => controller.abort();
+  }, []);
   // A revalidation for the same thread must never clear an unsent draft; only a
   // different link/thread resets composer, edit or pending delete state.
   useEffect(() => {
@@ -113,12 +119,13 @@ export function PublicComments({ page, linkId, onRefresh }: { page: ReadyPage; l
     onRefresh();
   }
 
-  async function mutate(action: () => Promise<void>) {
-    if (busy) return;
+  async function mutate(action: (signal: AbortSignal) => Promise<void>) {
+    const controller = lifetime.current;
+    if (!controller || busy || controller.signal.aborted) return;
     setBusy(true); setMessage("");
-    try { await action(); onRefresh(); }
-    catch (error) { fail(error); }
-    finally { setBusy(false); }
+    try { await action(controller.signal); onRefresh(); }
+    catch (error) { if (!controller.signal.aborted) fail(error); }
+    finally { if (!controller.signal.aborted) setBusy(false); }
   }
 
   const tooLong = commentCharacters(draft) > MAX_COMMENT_CHARS;
@@ -131,25 +138,31 @@ export function PublicComments({ page, linkId, onRefresh }: { page: ReadyPage; l
         onEdit={(selected) => { setDeleting(null); setEditing({ id: selected.id, text: selected.text ?? "" }); }}
         onEditText={(text) => { if (editing) setEditing({ id: editing.id, text }); }}
         onSubmitEdit={() => { if (!editing) return; const edit = editing;
-          void mutate(async () => { await editLinkPublicComment(thread, linkId, thread.comments.find((item) => item.id === edit.id)!, edit.text);
-            setEditing(null); }); }}
+          void mutate(async (signal) => {
+            const selected = thread.comments.find((item) => item.id === edit.id);
+            if (!selected) return;
+            await editLinkPublicComment(thread, linkId, selected, edit.text, signal);
+            setEditing(null);
+          }); }}
         onCancelEdit={() => setEditing(null)}
         onDelete={(selected) => { setEditing(null); setDeleting(selected.id); }}
         onCancelDelete={() => setDeleting(null)}
-        onConfirmDelete={(selected) => void mutate(async () => {
-          await deleteLinkPublicComment(thread, linkId, selected); setDeleting(null); })} />)}
+        onConfirmDelete={(selected) => void mutate(async (signal) => {
+          await deleteLinkPublicComment(thread, linkId, selected, signal); setDeleting(null); })} />)}
       {!thread.comments.length && <li className="text-stone-500">No comments yet.</li>}
     </ol>
     {thread.nextCursor !== null && <button type="button" disabled={busy} className="mt-3 rounded border px-3 py-1 text-sm"
       onClick={() => void (async () => {
-        if (busy) return;
+        const controller = lifetime.current;
+        if (!controller || busy || controller.signal.aborted) return;
         setBusy(true); setMessage("");
         try {
-          const next = await loadMoreLinkPublicComments(thread);
+          const next = await loadMoreLinkPublicComments(thread, controller.signal);
+          if (controller.signal.aborted) return;
           setView({ status: "ready", thread: { ...thread, comments: [...thread.comments, ...next.comments],
             pseudonyms: next.pseudonyms, nextCursor: next.nextCursor } });
-        } catch (error) { fail(error); }
-        finally { setBusy(false); }
+        } catch (error) { if (!controller.signal.aborted) fail(error); }
+        finally { if (!controller.signal.aborted) setBusy(false); }
       })()}>Load more comments</button>}
     {thread.postingState === "signed-out" && <p className="mt-4 border-t border-stone-200 pt-3 text-sm">
       <a href="/sign-in" className="underline">Sign in</a> to add a comment.</p>}
@@ -158,7 +171,7 @@ export function PublicComments({ page, linkId, onRefresh }: { page: ReadyPage; l
     {thread.postingState === "ready" && <form className="mt-4 border-t border-stone-200 pt-3" onSubmit={(event) => {
       event.preventDefault();
       if (!draft || tooLong) return;
-      void mutate(async () => { await postLinkPublicComment(thread, linkId, draft); setDraft(""); });
+      void mutate(async (signal) => { await postLinkPublicComment(thread, linkId, draft, signal); setDraft(""); });
     }}>
       <label className="block text-sm" htmlFor="public-comment">Add a public comment
         <textarea id="public-comment" value={draft} disabled={busy} rows={3} placeholder="Plain text only"

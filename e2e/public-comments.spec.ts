@@ -1,5 +1,5 @@
 import type { Request } from "@playwright/test";
-import { test, expect } from "./workspace-fixture";
+import { objectId, test, expect } from "./workspace-fixture";
 
 test.use({ initialSource: "# Public plan\n\nBody text." });
 
@@ -82,4 +82,44 @@ test("public readers decrypt public comments, signed-in visitors post, and the a
   } finally {
     await readerContext.close();
   }
+});
+
+test("pages a long authenticated Public thread past the first bounded page", async ({ page, workspace }) => {
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const thread = await workspace.db.prepare(
+    "SELECT id AS threadId, current_epoch_id AS epochId FROM comment_threads WHERE file_id = ? AND purpose = 'public'")
+    .bind(workspace.fileId).first<{ threadId: string; epochId: string }>();
+  expect(thread).not.toBeNull();
+  // Fifty opaque rows fill the bounded first page at the storage boundary; the
+  // real Comment is the only entry on page two and must decrypt after Load more.
+  for (let sequence = 1; sequence <= 50; sequence++) {
+    await workspace.db.prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision,
+        body_ciphertext, body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, X'01', 1, X'01', 1, 1, 1)`)
+      .bind(objectId(), thread!.threadId, thread!.epochId, workspace.accountId, sequence).run();
+  }
+  await workspace.db.prepare("UPDATE comment_threads SET next_sequence = 52 WHERE id = ?").bind(thread!.threadId).run();
+  await page.getByRole("button", { name: "Comments", exact: true }).click();
+  await page.getByRole("tab", { name: "Public", exact: true }).click();
+  const section = page.getByRole("region", { name: "Public comments", exact: true });
+  await expect(section.locator("li")).toHaveCount(50);
+  await section.getByLabel("Add a public comment").fill("Second page text");
+  await section.getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(section.getByLabel("Add a public comment")).toHaveValue("");
+  // The 51st Comment exists now: the panel's continuation affordance appears.
+  await expect(section.getByRole("button", { name: "Load more comments" })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Comments", exact: true }).click();
+  await page.getByRole("tab", { name: "Public", exact: true }).click();
+  await expect(section.locator("li")).toHaveCount(50);
+  await expect(section.getByText("Second page text")).toHaveCount(0);
+  await section.getByRole("button", { name: "Load more comments" }).click();
+  await expect(section.locator("li")).toHaveCount(51);
+  // The fixed client continuation keeps each epoch's capability identity, so
+  // the second page decrypts instead of degrading to display failures.
+  await expect(section.getByText("Second page text")).toBeVisible();
+  await expect(section.getByRole("button", { name: "Load more comments" })).toHaveCount(0);
 });

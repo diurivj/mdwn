@@ -103,31 +103,34 @@ function openWireEnvelope(access: RootAccess, ownerId: string, epoch: PublicEpoc
   });
 }
 
+/** One opened epoch capability and the identity its envelopes were bound to. */
+type OpenedEpoch = { capability: Uint8Array<ArrayBuffer>; capabilityId: string; capabilityEpoch: number };
+
 /** Decrypt one wire page with the capabilities this browser can open. */
-async function decryptPage(wire: PublicCommentsWire, capabilities: Map<string, Uint8Array<ArrayBuffer>>, publicationId: string) {
+async function decryptPage(wire: PublicCommentsWire, epochs: Map<string, OpenedEpoch>, publicationId: string) {
   const pseudonyms = new Map<string, string>();
   for (const attribution of wire.attributions) {
-    const capability = capabilities.get(attribution.epochId);
-    if (!capability) continue;
+    const epoch = epochs.get(attribution.epochId);
+    if (!epoch) continue;
     try {
-      pseudonyms.set(attribution.authorId, await openPublicAttribution(capability, {
+      pseudonyms.set(attribution.authorId, await openPublicAttribution(epoch.capability, {
         publicationId,
         attributionId: attribution.id, revision: attribution.revision,
-        capabilityId: wire.epochs.find((epoch) => epoch.epochId === attribution.epochId)!.capabilityId,
+        capabilityId: epoch.capabilityId,
         keyEpoch: attribution.contentKeyEpoch, ciphertext: attribution.ciphertext,
         contentKeyEnvelope: attribution.contentKeyEnvelope }));
     } catch { /* An unreadable pseudonym never blocks the rest of the thread. */ }
   }
   const comments: PublicComment[] = [];
   for (const comment of wire.comments) {
-    const capability = capabilities.get(comment.epochId);
+    const epoch = epochs.get(comment.epochId);
     let text: string | null = null;
-    if (capability) {
+    if (epoch) {
       try {
-        text = await openPublicCommentBody(capability, {
+        text = await openPublicCommentBody(epoch.capability, {
           publicationId,
           commentId: comment.id, revision: comment.revision,
-          capabilityId: wire.epochs.find((epoch) => epoch.epochId === comment.epochId)!.capabilityId,
+          capabilityId: epoch.capabilityId,
           keyEpoch: comment.contentKeyEpoch, bodyCiphertext: comment.bodyCiphertext,
           contentKeyEnvelope: comment.contentKeyEnvelope });
       } catch { /* Keep the record visible with an explicit display failure. */ }
@@ -138,6 +141,10 @@ async function decryptPage(wire: PublicCommentsWire, capabilities: Map<string, U
   }
   return { comments, pseudonyms };
 }
+
+const openedEpochs = (epochs: readonly PublicEpoch[]): Map<string, OpenedEpoch> =>
+  new Map(epochs.map((epoch) => [epoch.epochId, { capability: epoch.capability,
+    capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch }]));
 
 function withViewer(view: PublicThreadView, viewerAccountId: string | null, canDeleteAny: boolean): PublicThreadView {
   return { ...view, viewerAccountId, canDeleteAny,
@@ -157,20 +164,17 @@ export async function loadLinkPublicComments(input: {
   const { comments } = input;
   if (!comments.threadId || comments.audience !== "public") return { status: "unavailable", threadId: comments.threadId };
   const epochs: PublicEpoch[] = [];
-  const capabilities = new Map<string, Uint8Array<ArrayBuffer>>();
   for (const epoch of comments.epochs) {
     if (!epoch.wrapper) continue;
     try {
       const capability = await openCommentEpochLink(input.privateKey, input.publicKey, {
         publicationId: input.publicationId, linkId: input.linkId, epochId: epoch.epochId,
         capabilityId: epoch.capabilityId, keyEpoch: epoch.capabilityEpoch, ciphertext: epoch.wrapper });
-      capabilities.set(epoch.epochId, capability);
       epochs.push({ epochId: epoch.epochId, ordinal: epoch.ordinal, audience: "public", state: epoch.state,
         capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch, capability });
     } catch { /* An unreadable wrapper hides only its own epoch. */ }
   }
-  const decrypted = await decryptPage({ ...comments, epochs: comments.epochs.filter((epoch) => capabilities.has(epoch.epochId)) },
-    capabilities, input.publicationId);
+  const decrypted = await decryptPage(comments, openedEpochs(epochs), input.publicationId);
   const viewer = await postingViewer();
   return { status: "ready", thread: withViewer({
     threadId: comments.threadId, publicationId: input.publicationId, ownerId: null, fileId: null,
@@ -204,8 +208,7 @@ export async function loadMoreLinkPublicComments(thread: PublicThreadView, signa
   const body = await response.json() as { comments: unknown };
   const wire = publicCommentsWire(body.comments);
   if (!wire) throw new PublicCommentsChangedError();
-  const capabilities = new Map(thread.epochs.map((epoch) => [epoch.epochId, epoch.capability]));
-  const decrypted = await decryptPage(wire, capabilities, thread.publicationId);
+  const decrypted = await decryptPage(wire, openedEpochs(thread.epochs), thread.publicationId);
   const pseudonyms = new Map(thread.pseudonyms);
   for (const [authorId, pseudonym] of decrypted.pseudonyms) pseudonyms.set(authorId, pseudonym);
   return { comments: decrypted.comments, pseudonyms, nextCursor: wire.nextCursor };
@@ -234,9 +237,10 @@ function mutationError(status: number, error?: string): never {
   throw new Error("Comment could not be saved");
 }
 
-async function privateMutation(path: string, method: "POST" | "PATCH" | "DELETE", body: object): Promise<Response> {
+async function privateMutation(path: string, method: "POST" | "PATCH" | "DELETE", body: object,
+  signal?: AbortSignal): Promise<Response> {
   try {
-    const response = await privateRequest(path, { method, body: JSON.stringify(body) });
+    const response = await privateRequest(path, { method, body: JSON.stringify(body), signal });
     if (response.ok) return response;
     if (response.status === 403) throw new PublicCommentsSignInError("signed-out");
     mutationError(response.status, (await response.json() as { error?: string }).error);
@@ -254,7 +258,8 @@ async function pseudonymFor(access: RootAccess, needed: boolean): Promise<string
 
 /** A signed-in link visitor posts through its device-bound Session and the
  * locally held fragment capability; an unprovisioned Session cannot post. */
-export async function postLinkPublicComment(thread: PublicThreadView, linkId: string, text: string): Promise<{ commentId: string }> {
+export async function postLinkPublicComment(thread: PublicThreadView, linkId: string, text: string,
+  signal?: AbortSignal): Promise<{ commentId: string }> {
   const epoch = currentEpochOf(thread);
   let pseudonym: string | null = null;
   if (!thread.pseudonyms.has(thread.viewerAccountId ?? "")) {
@@ -266,11 +271,12 @@ export async function postLinkPublicComment(thread: PublicThreadView, linkId: st
   await privateMutation(`/api/private/comments/links/${linkId}/entries`, "POST", { commentId: sealed.commentId,
     threadId: thread.threadId, epochId: epoch.epochId, capabilityId: epoch.capabilityId,
     capabilityEpoch: epoch.capabilityEpoch, bodyCiphertext: sealed.bodyCiphertext,
-    contentKeyEnvelope: sealed.contentKeyEnvelope, attribution: sealed.attribution });
+    contentKeyEnvelope: sealed.contentKeyEnvelope, attribution: sealed.attribution }, signal);
   return { commentId: sealed.commentId };
 }
 
-export async function editLinkPublicComment(thread: PublicThreadView, linkId: string, comment: PublicComment, text: string): Promise<number> {
+export async function editLinkPublicComment(thread: PublicThreadView, linkId: string, comment: PublicComment,
+  text: string, signal?: AbortSignal): Promise<number> {
   const epoch = epochOf(thread, comment.epochId);
   const revision = comment.revision + 1;
   const sealed = await sealPublicCommentBody(epoch.capability, { publicationId: thread.publicationId,
@@ -278,15 +284,16 @@ export async function editLinkPublicComment(thread: PublicThreadView, linkId: st
   await privateMutation(`/api/private/comments/links/${linkId}/entries/${comment.id}`, "PATCH", {
     threadId: thread.threadId, capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch,
     epochId: comment.epochId, expectedRevision: comment.revision, bodyCiphertext: sealed.bodyCiphertext,
-    contentKeyEnvelope: sealed.contentKeyEnvelope });
+    contentKeyEnvelope: sealed.contentKeyEnvelope }, signal);
   return revision;
 }
 
-export async function deleteLinkPublicComment(thread: PublicThreadView, linkId: string, comment: PublicComment): Promise<void> {
+export async function deleteLinkPublicComment(thread: PublicThreadView, linkId: string, comment: PublicComment,
+  signal?: AbortSignal): Promise<void> {
   const epoch = epochOf(thread, comment.epochId);
   await privateMutation(`/api/private/comments/links/${linkId}/entries/${comment.id}`, "DELETE", {
     threadId: thread.threadId, capabilityId: epoch.capabilityId, capabilityEpoch: epoch.capabilityEpoch,
-    epochId: comment.epochId, expectedRevision: comment.revision });
+    epochId: comment.epochId, expectedRevision: comment.revision }, signal);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +331,7 @@ export async function loadFilePublicComments(access: RootAccess, fileId: string,
   const comments = data.comments ?? [], attributions = data.attributions ?? [];
   const decrypted = await decryptPage({ audience: data.thread.audience, threadId: data.thread.threadId,
     epochs: data.thread.epochs, comments, attributions, nextCursor: data.nextCursor ?? null },
-    new Map(epochs.map((epoch) => [epoch.epochId, epoch.capability])), data.thread.publicationId);
+    openedEpochs(epochs), data.thread.publicationId);
   return { status: "ready", thread: withViewer({
     threadId: data.thread.threadId, publicationId: data.thread.publicationId, ownerId: data.thread.ownerId,
     fileId, linkId: null, currentEpochId: data.thread.currentEpochId, audience: data.thread.audience,
@@ -342,8 +349,7 @@ export async function loadMoreFilePublicComments(thread: PublicThreadView, signa
   const data = await response.json() as FileThreadWire;
   const wire: PublicCommentsWire = { audience: thread.audience, threadId: thread.threadId, epochs: [],
     comments: data.comments ?? [], attributions: data.attributions ?? [], nextCursor: data.nextCursor ?? null };
-  const decrypted = await decryptPage(wire, new Map(thread.epochs.map((epoch) => [epoch.epochId, epoch.capability])),
-    thread.publicationId);
+  const decrypted = await decryptPage(wire, openedEpochs(thread.epochs), thread.publicationId);
   const pseudonyms = new Map(thread.pseudonyms);
   for (const [authorId, pseudonym] of decrypted.pseudonyms) pseudonyms.set(authorId, pseudonym);
   return { comments: decrypted.comments, pseudonyms, nextCursor: wire.nextCursor };
