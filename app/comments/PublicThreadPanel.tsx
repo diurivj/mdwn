@@ -126,8 +126,8 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
         pseudonym={thread.pseudonyms.get(comment.authorId)} viewerAccountId={thread.viewerAccountId}
         note={comment.epochId !== thread.currentEpochId ? "earlier audience" : undefined}
         editing={editing} deleting={deleting} busy={busy}
-        reportControl={comment.authorId === thread.viewerAccountId ? undefined
-          : <CommentReportControl commentId={comment.id} />}
+        reportControl={thread.postingState === "ready" && comment.authorId !== thread.viewerAccountId
+          ? <CommentReportControl commentId={comment.id} /> : undefined}
         onEdit={(selected) => { setDeleting(null); setEditing({ id: selected.id, text: selected.text ?? "" }); }}
         onEditText={(text) => { if (editing) setEditing({ id: editing.id, text }); }}
         onSubmitEdit={() => {

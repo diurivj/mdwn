@@ -48,5 +48,6 @@ describe("locked public-participation policy", () => {
     expect(operatorScript).toContain("const REPEAT_SUSPENSION_MS = 2_592_000_000;");
     expect(operatorScript).toContain('const REASONS = ["repeated_technical_abuse", "report_pattern"];');
     expect(operatorScript).toContain("expires_at = excluded.started_at + ${REPEAT_SUSPENSION_MS}");
+    expect(operatorScript).toContain("${NOW_MS} + ${FIRST_SUSPENSION_MS}");
   });
 });
