@@ -213,7 +213,7 @@ The Owner's browser then drives idempotent bounded batches through
 `POST …/teardown`, showing **Deleting public material…** with progress. Each call
 hard-deletes at most 200 Public Comments; once none remain, one transaction
 removes the thread and its epochs, Comments, attributions and reports, staged
-pseudonym declarations, Owner and device envelopes, capabilities, link
+pseudonym-update items, Owner and device envelopes, capabilities, link
 wrappers, Public representations, author
 declarations, requests, teardown progress and finally the Publication row. A
 lost response or interrupted browser is resumed by any Owner device; no other
@@ -261,7 +261,7 @@ rotation of the active link identity, which must already be the Publication's
 current pointer. A `deleting` Publication's `publication_teardowns` row is
 insert-only and immutable until the final batch deletes it with the Publication.
 File and Directory hard deletion explicitly remove Public Comment reports,
-staged pseudonym declarations, author rows, requests, Public representations,
+staged pseudonym-update items, author rows, requests, Public representations,
 links and the Publication in the tree's deletion transaction, so deleting a
 File revokes its Publication.
 

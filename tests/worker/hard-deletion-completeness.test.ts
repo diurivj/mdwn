@@ -218,7 +218,9 @@ describe("hard-deletion completeness", () => {
     const epochIds = [scope.privateThread.epochId, publication.epoch.epochId];
     const threadIds = [scope.privateThread.threadId, publication.epoch.threadId];
     const subtree = [directoryId, fileId];
+    const ids = [fileId, ...threadIds, ...epochIds];
     const threadPlaceholders = threadIds.map(() => "?").join(", ");
+    const idPlaceholders = ids.map(() => "?").join(", ");
     expect(await count("vault_nodes", "id IN (?, ?)", directoryId, fileId)).toBe(0);
     expect(await count("directory_entries", "child_node_id IN (?, ?)", directoryId, fileId)).toBe(0);
     expect(await count("directories", "node_id = ?", directoryId)).toBe(0);
@@ -230,15 +232,20 @@ describe("hard-deletion completeness", () => {
     expect(await count("grant_key_envelopes", `relationship_id IN (?, ?)`, scope.grantId, directoryGrant.grantId)).toBe(0);
     expect(await count("provisioning_needs", `grant_id IN (?, ?)`, scope.grantId, directoryGrant.grantId)).toBe(0);
     expect(await count("sharing_comment_capabilities", `file_id = ?`, fileId)).toBe(0);
+    expect(await count("share_comment_key_envelopes", `object_id IN (${idPlaceholders})`, ...ids)).toBe(0);
+    expect(await count("grant_comment_key_envelopes", `object_id IN (${idPlaceholders})`, ...ids)).toBe(0);
+    expect(await count("sharing_write_blocks", `target_id IN (?, ?)`, ...subtree)).toBe(0);
     expect(await count("comment_threads", `file_id = ?`, fileId)).toBe(0);
     expect(await count("comment_thread_epochs", `thread_id IN (${threadPlaceholders})`, ...threadIds)).toBe(0);
     expect(await count("thread_attributions", `thread_id IN (${threadPlaceholders})`, ...threadIds)).toBe(0);
     expect(await count("comments", `thread_id IN (${threadPlaceholders})`, ...threadIds)).toBe(0);
     expect(await count("public_comment_reports", `comment_id = ?`, scope.publicCommentId)).toBe(0);
+    expect(await count("public_comment_epoch_links", `publication_id = ?`, publication.publicationId)).toBe(0);
     expect(await count("publications", `file_id = ?`, fileId)).toBe(0);
     expect(await count("publication_links", `publication_id = ?`, publication.publicationId)).toBe(0);
     expect(await count("public_representations", `publication_id = ?`, publication.publicationId)).toBe(0);
     expect(await count("publication_authors", `publication_id = ?`, publication.publicationId)).toBe(0);
+    expect(await count("publication_teardowns", `publication_id = ?`, publication.publicationId)).toBe(0);
     expect(await count("publication_requests", `file_id = ?`, fileId)).toBe(0);
     expect(await count("pseudonym_update_items", `record_id IN (?, ?, ?)`,
       scope.privateAttributionId, scope.publicAttributionId, scope.authorDeclarationId)).toBe(0);
