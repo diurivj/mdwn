@@ -50,7 +50,10 @@ current read/write Directory Grant, decided from the already-decrypted snapshot
 (`canCreate`, the same effective authority the tree's create path enforces). A
 read-only Directory Grant and any direct File Grant are never eligible, and a
 direct File Grant exposes no parent Directory to infer. A drop or command in
-any other context opens a target chooser instead of a review.
+any other context opens a target chooser instead of a review; the chooser
+covers the eligible Directories already reachable in the current decrypted
+snapshot, and otherwise asks the person to open their own Files or an editable
+shared folder first.
 
 New descendants always receive the target Directory Owner's ownership. When
 the target belongs to another Account, the review states that new items will
@@ -61,11 +64,15 @@ not appear in the actor's **Export my Files**.
 Collisions never overwrite silently. For each candidate colliding with an
 existing sibling (case- and canonically-equivalent spellings fold together):
 
-- **Keep both** is the safe default; it uses the locked reservation, bytewise
+- **Keep both** is the safe default; it applies the locked reservation, bytewise
   source-path sort, ` (n)` suffix starting at 2, and availability rule from
-  `mdwn/namespace-v1`. An explicit source `report (2).md` keeps that name even
-  when a colliding `report.md` needs a suffix; literal suffixes have no special
-  meaning.
+  `mdwn/namespace-v1` (the vendored `keepBothCandidate`/`comparisonKey`
+  helpers), reimplemented here only so a per-candidate Skip/Replace/Rename or
+  over-limit block can interleave with allocation instead of aborting it. A
+  fixture test pins the result against `allocateKeepBothNames` for collisions
+  without over-limit names. An explicit source `report (2).md` keeps that name
+  even when a colliding `report.md` needs a suffix; literal suffixes have no
+  special meaning.
 - **Skip** omits the candidate; skipping a Directory omits its subtree. Skipped
   and replaced candidates still count toward the 100-node bound.
 - **Replace** (existing Files only) updates that File's current representation
@@ -99,8 +106,9 @@ its settled ceiling before chunking:
 Chunks are greedy complete-record ranges: at most 524,288 raw payload bytes and
 50 descriptors each, 1–40 chunks per session, at most 20 MiB payload and 2,000
 descriptors in aggregate, and a staging manifest of at most 131,072 bytes. The
-manifest ciphertext's SHA-256 and the sequence-ordered aggregate payload digest
-are recorded in server-visible routing metadata (`ImportStagingMetadata`).
+manifest's canonical digest (`digestEnvelope`, the SHA-256 of the whole
+envelope) and the sequence-ordered aggregate payload digest are recorded in
+server-visible routing metadata (`ImportStagingMetadata`).
 Any bound violation throws an `ImportError` naming the local issue and limit
 with remove/fix, re-export, or split-and-retry guidance; no session exists yet
 and nothing is uploaded.
@@ -133,7 +141,10 @@ person resolves it.
   eligibility and ownership.
 - `tests/import-browser.test.ts` — File and DataTransfer input reading,
   empty-folder preservation, fallback to `DataTransfer.files`, expanded guard.
-- `e2e/import-preflight.spec.ts` — the Files-chrome command, loose files,
-  folder selection, archive recognition, synthetic drop, unsupported input,
-  deterministic Keep-both names, measured plan, and zero Import or tree writes
-  across Chromium, Firefox, and WebKit.
+- `e2e/import-preflight.spec.ts` — the Files-chrome command (including a
+  `.zip` selection), loose files, folder selection, archive recognition,
+  synthetic drop, unsupported input, deterministic Keep-both names, measured
+  plan, and zero Import or tree writes across Chromium, Firefox, and WebKit.
+  The synthetic drop is skipped in WebKit because its constructed
+  `FileSystemEntry` cannot produce a File; the `DataTransfer.files` fallback is
+  covered in unit tests.

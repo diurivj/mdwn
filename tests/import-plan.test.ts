@@ -90,6 +90,8 @@ describe("import plan: complete encrypted record and chunk plan", () => {
     expect(plan.manifest.metadata.aggregateDigest).toBe(await sha256Hex(concatenated));
     expect(plan.manifest.metadata.chunkCount).toBe(plan.chunks.length);
     expect(plan.manifest.metadata.recordCount).toBe(plan.records.length);
+    expect(plan.manifest.metadata.manifestDigest).toBe(
+      Array.from(await digestEnvelope(plan.manifest.envelope), (byte) => byte.toString(16).padStart(2, "0")).join(""));
 
     const manifest = await readManifest(plan, targetKey);
     expect(manifest.counts).toMatchObject({ sources: 2, createFiles: 1, createDirectories: 1, records: 9, chunks: 1 });

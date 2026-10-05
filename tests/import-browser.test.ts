@@ -65,11 +65,9 @@ describe("import browser inputs", () => {
   });
 
   it("falls back to DataTransfer.files when no webkit entry is available", async () => {
-    const input = { path: "notes.md", bytes: undefined as Uint8Array | undefined };
     const dataTransfer = { items: [], files: [fakeFile("notes.md", "# Notes\n")] } as unknown as DataTransfer;
     const inputs = await inputsFromDataTransfer(dataTransfer);
     expect(inputs.map((item) => item.path)).toEqual(["notes.md"]);
-    void input;
   });
 
   it("rejects a selection larger than the expanded bound while reading", async () => {

@@ -13,9 +13,9 @@
  * creates no session and performs no upload.
  */
 
-import { canonicalizeSegment, comparisonKey, keepBothCandidate, NamespaceError, utf8Bytes } from "~/namespace-v1";
+import { canonicalizeSegment, keepBothCandidate, NamespaceError } from "~/namespace-v1";
 import { ImportError } from "./limits";
-import type { ImportSource, ImportSourceChild } from "./source";
+import { compareUtf8, foldedToken, type ImportSource, type ImportSourceChild } from "./source";
 
 export type ImportCollisionSibling = { nodeId: string; kind: "file" | "directory"; name: string };
 
@@ -43,6 +43,7 @@ export type ImportChoices = Readonly<Record<string, ImportChoice>>;
 
 export type ImportBlockedReason =
   | "parent_skipped"
+  | "parent_blocked"
   | "invalid_name"
   | "name_in_use"
   | "cannot_replace"
@@ -95,7 +96,7 @@ export type ImportReview = {
 };
 
 function token(segment: string): string {
-  return Array.from(comparisonKey(segment), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return foldedToken(segment);
 }
 
 function pathToken(path: string): string {
@@ -103,10 +104,7 @@ function pathToken(path: string): string {
 }
 
 function compareSourcePaths(a: string, b: string): number {
-  const left = utf8Bytes(a), right = utf8Bytes(b);
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index++) if (left[index] !== right[index]) return left[index]! - right[index]!;
-  return left.length - right.length;
+  return compareUtf8(a, b);
 }
 
 function makeNode(child: ImportSourceChild, parent: ImportReviewNode): ImportReviewNode {
@@ -147,8 +145,13 @@ function canonicalRename(name: string): string | null {
 
 /**
  * Reserve every explicit name first, then allocate generated Keep-both names
- * in bytewise source-path order. Children of newly created Directories are
- * allocated recursively; they have no existing siblings.
+ * in bytewise source-path order. This implements the locked reservation, sort,
+ * suffix, and availability rule with the vendored `keepBothCandidate` and
+ * `comparisonKey` helpers; it is not a call to `allocateKeepBothNames` because
+ * per-candidate Skip/Replace/Rename choices and over-limit blocking interleave
+ * with allocation (ticket 25 requires the blocked outcome, not a thrown abort).
+ * Children of newly created Directories have no existing siblings and are
+ * allocated recursively.
  */
 function allocateDirectory(node: ImportReviewNode, existingTokens: ReadonlyMap<string, ImportCollisionSibling>): void {
   const used = new Set<string>(existingTokens.keys());
@@ -175,7 +178,9 @@ function allocateDirectory(node: ImportReviewNode, existingTokens: ReadonlyMap<s
       continue;
     }
     if (choice.action === "replace") {
-      if (collision.kind !== "file") {
+      // Replace updates an existing File's representation; it can never turn
+      // a source Directory into that File or merge into a Directory.
+      if (collision.kind !== "file" || child.kind !== "file") {
         child.blocked = "cannot_replace";
         continue;
       }
@@ -242,6 +247,14 @@ function recomputeDisplayPaths(node: ImportReviewNode): void {
   }
 }
 
+/** Nothing under a blocked parent can be planned, whichever specific choice resolves it. */
+function markParentBlocked(node: ImportReviewNode): void {
+  for (const child of node.children) {
+    if (child.blocked === null) child.blocked = "parent_blocked";
+    markParentBlocked(child);
+  }
+}
+
 function flatten(tree: ImportReviewNode): ImportReviewNode[] {
   const nodes: ImportReviewNode[] = [];
   const visit = (node: ImportReviewNode): void => {
@@ -297,6 +310,10 @@ export function reviewImport(source: ImportSource, target: ImportTarget, choices
 
   allocateDirectory(tree, existingTokens);
   recomputeDisplayPaths(tree);
+  for (const node of flatten(tree)) {
+    if (node.kind === "directory" && node.blocked && node.blocked !== "parent_skipped" &&
+        node.blocked !== "parent_blocked") markParentBlocked(node);
+  }
   const nodes = flatten(tree);
 
   const counts: ImportReviewCounts = {
@@ -314,6 +331,7 @@ export function reviewImport(source: ImportSource, target: ImportTarget, choices
   const blocked: ImportReviewNode[] = [];
   for (const node of nodes) {
     if (node.blocked === "parent_skipped") { counts.skips += 1; continue; }
+    if (node.blocked === "parent_blocked") continue;
     if (node.action === "skip") { counts.skips += 1; continue; }
     if (node.blocked) { blocked.push(node); continue; }
     if (node.action === "replace") counts.replaces += 1;
@@ -336,11 +354,7 @@ export function reviewImport(source: ImportSource, target: ImportTarget, choices
   };
 }
 
-export function defaultImportChoice(): ImportChoice {
-  return { action: "keep_both" };
-}
-
-/** True when an over-limit generated name can fall back to an explicit File Replace. */
+/** True when a File candidate may take the explicit File Replace choice. */
 export function canReplace(node: ImportReviewNode): boolean {
-  return node.collision?.existingKind === "file";
+  return node.kind === "file" && node.collision?.existingKind === "file";
 }

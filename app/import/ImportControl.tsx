@@ -55,9 +55,10 @@ function blockedMessage(node: ImportReviewNode): string {
   switch (node.blocked) {
     case "over_limit": return importProblemMessage(new ImportError("generated-name-invalid", { item: node.displayPath.join("/") }));
     case "name_in_use": return importProblemMessage(new ImportError("name-in-use", { item: node.displayPath.join("/") }));
-    case "cannot_replace": return "Only an existing File can be replaced. Choose Keep both, Skip, or Rename for this folder.";
+    case "cannot_replace": return "Only an existing File can be replaced by a File candidate. Choose Keep both, Skip, or Rename for this folder.";
     case "invalid_name": return "That name cannot be used in the destination folder.";
     case "parent_skipped": return "This item is inside a skipped folder, so it will not be imported.";
+    case "parent_blocked": return "This item is inside a folder that needs a choice above.";
     default: return "This item needs a choice before the import can continue.";
   }
 }
@@ -169,7 +170,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
       <button type="button" disabled={disabled || recoveryPending} onClick={() => folderInput.current?.click()}
         className="rounded border px-2 py-1" data-testid="import-folder-command">Import folder</button>
       <span className="basis-full text-xs text-stone-500">Drop Markdown Files or folders on this page. Nothing is uploaded until you confirm the review.</span>
-      <input ref={fileInput} type="file" multiple accept=".md,.markdown,text/markdown" className="hidden"
+      <input ref={fileInput} type="file" multiple accept=".md,.markdown,text/markdown,.zip,application/zip" className="hidden"
         data-testid="import-files-input" onChange={(event) => void onFilesChosen(event.currentTarget)} />
       <input ref={(element) => { if (element) { element.setAttribute("webkitdirectory", ""); element.setAttribute("directory", ""); } }}
         type="file" className="hidden" data-testid="import-folder-input"
@@ -251,7 +252,8 @@ function CollisionChoices({ review, onChoose }: {
   review: ImportReview;
   onChoose: (sourcePath: string, choice: ImportChoice) => void;
 }) {
-  const collisions = review.nodes.filter((node) => node.collision && node.blocked !== "parent_skipped");
+  const collisions = review.nodes.filter((node) => node.collision && node.blocked !== "parent_skipped" &&
+    node.blocked !== "parent_blocked");
   if (!collisions.length) return null;
   return <section className="mt-4" aria-label="Name conflicts">
     <h3 className="text-sm font-semibold">Name conflicts</h3>

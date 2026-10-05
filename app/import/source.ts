@@ -68,12 +68,16 @@ type TreeNode = TreeFile | TreeDirectory;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const MARKDOWN_NAME = /\.(md|markdown)$/i;
 
-/** Folded sibling-comparison token; the same relation the namespace contract uses. */
 function token(segment: string): string {
+  return foldedToken(segment);
+}
+
+/** Folded sibling-comparison token; the same relation the namespace contract uses. */
+export function foldedToken(segment: string): string {
   return Array.from(comparisonKey(segment), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function compareUtf8(a: string, b: string): number {
+export function compareUtf8(a: string, b: string): number {
   const left = utf8Bytes(a), right = utf8Bytes(b);
   const length = Math.min(left.length, right.length);
   for (let index = 0; index < length; index++) if (left[index] !== right[index]) return left[index]! - right[index]!;

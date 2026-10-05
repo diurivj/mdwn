@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { allocateKeepBothNames } from "../app/namespace-v1";
 import { ImportError } from "../app/import/limits";
 import { reviewImport, type ImportChoice, type ImportCollisionSibling, type ImportTarget } from "../app/import/review";
 import { analyzeImportSelection, type ImportSource } from "../app/import/source";
@@ -118,6 +119,34 @@ describe("import review: explicit choices", () => {
     expect(folder.blocked).toBe("cannot_replace");
     expect(review.status).toBe("blocked");
     expect(review.canConfirm).toBe(false);
+  });
+
+  it("never lets a source Directory Replace an existing File, and excludes its children from create counts", async () => {
+    const choices: Record<string, ImportChoice> = { notes: { action: "replace" } };
+    const review = reviewImport(await sourceOf(["notes/draft.md"]),
+      target([sibling("existing-file", "file", "notes")]), choices);
+    const folder = review.nodes.find((node) => node.kind === "directory")!;
+    const child = review.nodes.find((node) => node.kind === "file")!;
+    expect(folder.blocked).toBe("cannot_replace");
+    expect(child.blocked).toBe("parent_blocked");
+    expect(review.counts.createFiles).toBe(0);
+    expect(review.counts.createDirectories).toBe(0);
+    expect(review.canConfirm).toBe(false);
+  });
+
+  it("matches the vendored Keep-both allocation for unblocked collisions", async () => {
+    const requests = [
+      { sourcePath: "report.md", requestedName: "report.md" },
+      { sourcePath: "report (2).md", requestedName: "report (2).md" },
+      { sourcePath: "other.md", requestedName: "other.md" },
+    ];
+    const review = reviewImport(await sourceOf(requests.map((request) => request.sourcePath)),
+      target([sibling("existing", "file", "report.md")]));
+    const vendored = allocateKeepBothNames(["report.md"], requests);
+    const vendoredByPath = new Map(vendored.map((allocation) => [allocation.sourcePath, allocation.display]));
+    for (const node of review.nodes) {
+      expect(node.displayName).toBe(vendoredByPath.get(node.sourcePath));
+    }
   });
 
   it("requires a valid, unused Rename", async () => {

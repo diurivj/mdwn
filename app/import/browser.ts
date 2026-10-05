@@ -18,11 +18,11 @@ import type { RawImportInput } from "./source";
 /** Defensive ceiling above the settled 100-node bound; prevents a runaway walk. */
 const MAX_RAW_INPUTS = 10_000;
 
-async function readFile(file: File, path: string, remaining: { bytes: number }): Promise<RawImportInput> {
+async function readFile(file: File, path: string, total: { bytes: number }): Promise<RawImportInput> {
   const buffer = new Uint8Array(await file.arrayBuffer());
-  remaining.bytes += buffer.length;
-  if (remaining.bytes > IMPORT_LIMITS.maxExpandedBytes) {
-    throw new ImportError("expanded-too-large", { item: path, limit: IMPORT_LIMITS.maxExpandedBytes, measured: remaining.bytes, action: "split" });
+  total.bytes += buffer.length;
+  if (total.bytes > IMPORT_LIMITS.maxExpandedBytes) {
+    throw new ImportError("expanded-too-large", { item: path, limit: IMPORT_LIMITS.maxExpandedBytes, measured: total.bytes, action: "split" });
   }
   return { path, bytes: buffer };
 }
@@ -35,12 +35,12 @@ function relativePath(file: File): string {
 /** Read one `<input type="file">` selection (loose Files or a selected folder). */
 export async function inputsFromFiles(files: Iterable<File>): Promise<RawImportInput[]> {
   const inputs: RawImportInput[] = [];
-  const remaining = { bytes: 0 };
+  const total = { bytes: 0 };
   for (const file of files) {
     if (inputs.length >= MAX_RAW_INPUTS) {
       throw new ImportError("too-many-nodes", { limit: IMPORT_LIMITS.maxNodes, measured: inputs.length + 1, action: "split" });
     }
-    inputs.push(await readFile(file, relativePath(file), remaining));
+    inputs.push(await readFile(file, relativePath(file), total));
   }
   return inputs;
 }
@@ -49,26 +49,26 @@ function readEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry
   return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
 }
 
-async function walkEntry(entry: FileSystemEntry, prefix: string, inputs: RawImportInput[], remaining: { bytes: number }): Promise<void> {
+async function walkEntry(entry: FileSystemEntry, prefix: string, inputs: RawImportInput[], total: { bytes: number }): Promise<void> {
   const path = prefix ? `${prefix}/${entry.name}` : entry.name;
   if (entry.isFile) {
     if (inputs.length >= MAX_RAW_INPUTS) {
       throw new ImportError("too-many-nodes", { limit: IMPORT_LIMITS.maxNodes, measured: inputs.length + 1, action: "split" });
     }
     const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
-    inputs.push(await readFile(file, path, remaining));
+    inputs.push(await readFile(file, path, total));
     return;
   }
   if (!entry.isDirectory) return;
   inputs.push({ path, directory: true });
   const children = await readEntries((entry as FileSystemDirectoryEntry).createReader());
-  for (const child of children) await walkEntry(child, path, inputs, remaining);
+  for (const child of children) await walkEntry(child, path, inputs, total);
 }
 
 /** Read a drag-and-drop selection, including explicitly empty folders. */
 export async function inputsFromDataTransfer(dataTransfer: DataTransfer): Promise<RawImportInput[]> {
   const inputs: RawImportInput[] = [];
-  const remaining = { bytes: 0 };
+  const total = { bytes: 0 };
   const entries: FileSystemEntry[] = [];
   for (const item of Array.from(dataTransfer.items)) {
     if (item.kind !== "file" || typeof item.webkitGetAsEntry !== "function") continue;
@@ -76,7 +76,7 @@ export async function inputsFromDataTransfer(dataTransfer: DataTransfer): Promis
     if (entry) entries.push(entry);
   }
   if (entries.length) {
-    for (const entry of entries) await walkEntry(entry, "", inputs, remaining);
+    for (const entry of entries) await walkEntry(entry, "", inputs, total);
     return inputs;
   }
   return inputsFromFiles(Array.from(dataTransfer.files));

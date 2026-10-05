@@ -40,8 +40,6 @@ export const IMPORT_LIMITS: ImportLimits = {
   maxComments: MAX_HISTORICAL_COMMENTS,
 };
 
-export const IMPORT_SOURCE_LIMIT = FILE_SOURCE_LIMIT;
-
 /** One Import staging chunk holds at most 512 KiB of raw record payload. */
 export const MAX_STAGING_CHUNK_BYTES = 524_288;
 /** One Import session accepts 1–40 chunks. */

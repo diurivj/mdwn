@@ -141,8 +141,12 @@ async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)));
 }
 
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  return Array.from(await sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return hex(await sha256(bytes));
 }
 
 function concat(parts: readonly Uint8Array[]): Uint8Array {
@@ -345,7 +349,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
   if (envelope.length > MAX_STAGING_MANIFEST_BYTES) {
     throw new ImportError("plan-too-large", { limit: MAX_STAGING_MANIFEST_BYTES, measured: envelope.length, action: "split" });
   }
-  const manifestDigest = await sha256Hex(await digestEnvelope(envelope));
+  const manifestDigest = hex(await digestEnvelope(envelope));
   return {
     importId,
     review,

@@ -63,7 +63,7 @@ describe("import source: loose selection", () => {
     await throwsCode(() => analyzeImportSelection([loose("image.png", new Uint8Array([1, 2, 3]))]), "unsupported-input");
     await throwsCode(() => analyzeImportSelection([loose("bad.md", new Uint8Array([0xff, 0xfe]))]), "not-utf8");
     for (const path of ["../escape.md", "/absolute.md", "a//b.md", "a/./b.md", "a/../b.md", "CON.md", "bad\u202e.md",
-      `${"x".repeat(253)}.md`]) {
+      "bad:name.md", "draft.", "trailing .md ", `${"x".repeat(253)}.md`]) {
       await throwsCode(() => analyzeImportSelection([loose(path)]), "invalid-path");
     }
     await throwsCode(() => analyzeImportSelection([]), "empty-selection");
@@ -106,6 +106,10 @@ describe("import source: loose selection", () => {
 
     // The expanded bound is easier to pin with a smaller override; the default
     // 16 MiB constant is asserted below.
+    const expandedAtLimit = await analyzeImportSelection([
+      loose("a.md", "1234"), loose("b.md", "5678"),
+    ], { limits: { maxExpandedBytes: 8, maxSourceBytes: 8 } });
+    expect(expandedAtLimit.expandedBytes).toBe(8);
     await throwsCode(() => analyzeImportSelection([
       loose("a.md", "1234"), loose("b.md", "5678"),
     ], { limits: { maxExpandedBytes: 7, maxSourceBytes: 8 } }), "expanded-too-large");
@@ -164,9 +168,11 @@ describe("import source: recognized archive", () => {
   });
 
   it("enforces the compressed archive bound before reading", async () => {
+    const small = await archive([{ path: "notes.md", data: "x" }]);
+    const atLimit = await analyzeImportSelection([small], { limits: { maxCompressedBytes: small.bytes!.length } });
+    expect(atLimit.compressedBytes).toBe(small.bytes!.length);
     await throwsCode(() => analyzeImportSelection([{ path: "big.zip", bytes: new Uint8Array(IMPORT_LIMITS.maxCompressedBytes + 1) }]),
       "archive-too-large");
-    const small = await archive([{ path: "notes.md", data: "x" }]);
     await throwsCode(() => analyzeImportSelection([small], { limits: { maxCompressedBytes: small.bytes!.length - 1 } }),
       "archive-too-large");
   });

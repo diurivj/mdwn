@@ -95,6 +95,3 @@ export function preferredImportTarget(
 }
 
 /** True when this snapshot is a direct File Grant with no parent Directory shown. */
-export function isDirectFileScope(snapshot: ImportScopeSnapshot): boolean {
-  return snapshot.access.rootKind === "file";
-}
