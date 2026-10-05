@@ -456,25 +456,54 @@ SEARCH g USING COVERING INDEX grants_recipient_target_idx (recipient_id=? AND ta
 
 ## bounded subtree deletion enumeration
 
-Source: `app/tree/tree.server.ts: deletionIds (500 + overflow sentinel)`
+Source: `app/tree/subtree.server.ts: one-child indexed cursor (501 candidates)`
 
 ```sql
-WITH RECURSIVE subtree(id) AS (SELECT 'root' UNION
-      SELECT n.id FROM vault_nodes n JOIN subtree p ON n.parent_node_id = p.id
-      WHERE n.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = n.import_id)
-      LIMIT 501) SELECT id FROM subtree
+WITH RECURSIVE walk(parent_id, cursor_id, stack, id, visited, steps) AS (
+    SELECT 'root', NULL, json_array(), 'root', 1, 1
+    UNION ALL
+    SELECT
+      CASE WHEN n.id IS NULL THEN json_extract(w.stack, '$[#-1][0]')
+        WHEN (n.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = n.import_id)) THEN n.id ELSE w.parent_id END,
+      CASE WHEN n.id IS NULL THEN json_extract(w.stack, '$[#-1][1]')
+        WHEN (n.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = n.import_id)) THEN NULL ELSE n.id END,
+      CASE WHEN n.id IS NULL THEN json_remove(w.stack, '$[#-1]')
+        WHEN (n.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = n.import_id)) THEN json_insert(w.stack, '$[#]', json_array(w.parent_id, n.id)) ELSE w.stack END,
+      CASE WHEN n.id IS NOT NULL AND (n.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = n.import_id)) THEN n.id ELSE NULL END,
+      w.visited + (n.id IS NOT NULL), w.steps + 1
+    FROM walk w LEFT JOIN vault_nodes n ON n.id = (
+      SELECT child.id FROM vault_nodes child INDEXED BY vault_nodes_parent_idx
+      WHERE child.parent_node_id = w.parent_id AND child.id > coalesce(w.cursor_id, '')
+      ORDER BY child.id LIMIT 1)
+    WHERE w.visited <= 500 AND w.steps < 1001
+      AND (n.id IS NOT NULL OR json_array_length(w.stack) > 0)
+  ), budget AS MATERIALIZED (SELECT max(visited) AS visited, max(steps) AS steps FROM walk)
+  SELECT w.id, budget.visited, budget.steps,
+    (budget.visited > 500 OR budget.steps >= 1001) AS overflow
+  FROM walk w CROSS JOIN budget WHERE w.id IS NOT NULL
 ```
 
 Selected plan:
 
 ```text
-CO-ROUTINE subtree
+MATERIALIZE walk
 SETUP
 SCAN CONSTANT ROW
 RECURSIVE STEP
-SCAN p
-SEARCH n USING COVERING INDEX vault_nodes_parent_idx (parent_node_id=?)
+SCAN w
+SEARCH n USING INDEX sqlite_autoindex_vault_nodes_1 (id=?) LEFT-JOIN
+CORRELATED SCALAR SUBQUERY 6
+SEARCH child USING COVERING INDEX vault_nodes_parent_idx (parent_node_id=? AND id>?)
 CORRELATED SCALAR SUBQUERY 2
 SEARCH c USING COVERING INDEX sqlite_autoindex_import_commits_1 (import_id=?)
-SCAN subtree
+CORRELATED SCALAR SUBQUERY 3
+SEARCH c USING COVERING INDEX sqlite_autoindex_import_commits_1 (import_id=?)
+CORRELATED SCALAR SUBQUERY 4
+SEARCH c USING COVERING INDEX sqlite_autoindex_import_commits_1 (import_id=?)
+CORRELATED SCALAR SUBQUERY 5
+SEARCH c USING COVERING INDEX sqlite_autoindex_import_commits_1 (import_id=?)
+MATERIALIZE budget
+SCAN walk
+SCAN w
+SCAN budget
 ```

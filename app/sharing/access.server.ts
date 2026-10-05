@@ -2,6 +2,8 @@ import type { SQL } from "drizzle-orm";
 import { createDb, sql } from "~/db/client.server";
 import { expiredGrant, liveGrant } from "./grant-lifetime.server";
 import { privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
+import { committedNodeVisible } from "../import/visibility.server";
+export { committedNodeVisible } from "../import/visibility.server";
 
 export type EffectiveAccess = {
   accountId: string; nodeId: string; ownerId: string; kind: "directory" | "file";
@@ -60,16 +62,6 @@ function accessQuery(accountId: string, nodeId: string | SQL, guard: SQL): SQL {
   ) SELECT *, kind = 'file' AND permission_rank > 0 AS can_read_private_comments,
     kind = 'file' AND permission_rank > 0 AS can_read_collaborators_public_comments
     FROM authority WHERE permission_rank > 0`;
-}
-
-/**
- * Normal-read gate for ticket 30's visible-atomic Imports: a node that names
- * an Import is readable only once its immutable commit marker exists. Import
- * staging materializes canonical rows inside the marker transaction, so this
- * predicate is defense in depth for the literal read invariant.
- */
-export function committedNodeVisible(alias: SQL): SQL {
-  return sql`(${alias}.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = ${alias}.import_id))`;
 }
 
 export async function effectiveAccess(env: Env, auth: AuthorizedDevice, nodeId: string): Promise<EffectiveAccess | null> {

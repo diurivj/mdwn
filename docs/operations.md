@@ -101,9 +101,18 @@ Reviewed results:
 - Exact recipient/target/Owner Grant probes and the production recursive access
   query use `grants_recipient_target_idx`. Ancestors are bounded to 100 edges /
   101 nodes. Collaborator overflow/unrooted ancestry fails closed.
-- Directory hard deletion enumerates at most 501 nodes (500 plus an overflow
-  sentinel), with UNION deduplication. Over-cap deletion changes nothing.
+- Directory hard deletion uses the production depth-first cursor from
+  `app/tree/subtree.server.ts`: one indexed successor child per step, at most
+  501 candidate nodes (including the root/overflow sentinel) and 1,001 cursor
+  states. The recursive queue has one successor; a wide Directory cannot
+  enqueue all its children before the output cap. Hidden Import candidates
+  count toward the safety budget but are not descended into or deleted.
+  Overflow fails closed and yields no eligible IDs in the snapshot CAS.
   Publication teardown and Grant cleanup retain their existing bounded batches.
+  `tests/worker/query-plans.test.ts` covers a 2,000-child tree; supplemental
+  `tests/subtree-work-bound.test.ts` instruments the identical production SQL
+  against the committed migrations in SQLite and observes **500** successor
+  child probes, not merely 501 output rows.
 - The Public path is a unique `publication_links.id` lookup joined to the
   **current** link of an active Publication; retired links are hard-deleted, not
   retained as link history. Existing Publication lifecycle tests exercise this.
@@ -204,9 +213,8 @@ Wrangler **4.135.0**, account's D1 Free, disposable remote
 - Pre-change migrations 0000–0026 applied; full export downloaded successfully.
   Bookmark: `00000001-00000044-000050fb-c094f43a8966e5d468c042db8547dcdc`.
 - Migrations 0027–0029 applied remotely. All 22 representative selected plans
-  and covering probes passed; their plan details matched the checked-in local
-  artifact. FKs were enabled with zero violations. Representation/capsule/
-  envelope sentinel bytes and the marker remained unchanged; challenge lifetime
+  and covering probes passed. FKs were enabled with zero violations.
+  Representation/capsule/envelope sentinel bytes and the marker remained unchanged; challenge lifetime
   shortened to 600,000 ms; the staging FK was absent.
 - Time Travel restored that bookmark. Data assertions passed, the 900,000-ms
   lifetime and staging FK returned, and all three new migration journal entries
@@ -219,6 +227,14 @@ Wrangler **4.135.0**, account's D1 Free, disposable remote
   the original lifetime. Production-sized export re-import is **not proven**.
 - The disposable remote D1 was deleted after successful verification; no
   rehearsal Worker was created. Local synthetic state is disposable.
+- After the one-child traversal fix, a second disposable remote D1,
+  `mdwn-retention-cursor-proof-20261005` /
+  `0a234baa-9bb0-4e7a-a002-4e416f58b248`, passed all **updated** 22 plans and FK
+  checks. Its synthetic 2,000-child tree produced 501 candidate visits, 1,000
+  cursor states, an overflow flag, **zero** eligible deletion IDs, and 2,000
+  retained children (5,001 rows read for enumeration; zero writes). This D1 was
+  also deleted; no Worker was deployed. The final local artifact records the
+  updated production traversal, not the former output-only cap.
 - A separate **read-only production** probe reported `foreign_keys = 1`, zero
   violations, and zero writes. No production migrations or restores were run.
 

@@ -8,6 +8,7 @@ import { authorizePrivateRequest, commitDirectoryMutation, commitPrivateBatch, c
 import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./listing";
 import { verifyFileHead, type FileHead, type FileHeadIdentity } from "./file-head";
+import { boundedSubtreeQuery, MAX_DELETE_NODES } from "./subtree.server";
 import { accessPredicate, committedNodeVisible, effectiveAccessQuery, exitsSharedScope, moveAccessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
 import { retireDeletedScopeNeeds } from "~/sharing/provisioning-needs.server";
 import {
@@ -457,23 +458,14 @@ async function moveChild(env: Env, auth: AuthorizedDevice, nodeId: string, value
   } catch { return structuralFailure(env, auth, expected, badRequest()); }
 }
 
-const MAX_DELETE_NODES = 500;
-
-/** Include the selected node in the cap. UNION deduplicates; LIMIT bounds the
- * recursive work as well as its output, including an unexpectedly wide tree.
- */
+/** Overflow yields no eligible IDs in the snapshot CAS; never partially delete. */
 function deletionIds(nodeId: string) {
-  return sql`WITH RECURSIVE subtree(id) AS (
-    SELECT ${nodeId} UNION
-    SELECT n.id FROM vault_nodes n JOIN subtree parent ON n.parent_node_id = parent.id
-    WHERE ${committedNodeVisible(sql`n`)}
-    LIMIT ${MAX_DELETE_NODES + 1}
-  ) SELECT id FROM subtree`;
+  return sql`SELECT id FROM (${boundedSubtreeQuery(nodeId)}) WHERE overflow = 0`;
 }
 
 type DeletionNode = { id: string; kind: string; owner_id: string; parent_node_id: string | null;
   entries_revision: number | null; current_revision: number | null; current_representation_id: string | null;
-  edge_parent: string | null; directory_owner: string | null; file_owner: string | null };
+  edge_parent: string | null; directory_owner: string | null; file_owner: string | null; overflow: number };
 
 async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, value: unknown): Promise<Response> {
   const input = record(value);
@@ -492,11 +484,12 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
   const rows = await createDb(env.DB).all<DeletionNode>(sql`
     SELECT n.id, n.kind, n.owner_id, n.parent_node_id, d.entries_revision, f.current_revision,
       f.current_representation_id, e.parent_node_id AS edge_parent,
-      d.owner_id AS directory_owner, f.owner_id AS file_owner
-    FROM vault_nodes n LEFT JOIN directories d ON d.node_id = n.id
+      d.owner_id AS directory_owner, f.owner_id AS file_owner, subtree.overflow
+    FROM (${boundedSubtreeQuery(nodeId)}) subtree JOIN vault_nodes n ON n.id = subtree.id
+    LEFT JOIN directories d ON d.node_id = n.id
     LEFT JOIN files f ON f.node_id = n.id
     LEFT JOIN directory_entries e ON e.child_node_id = n.id AND e.owner_id = n.owner_id
-    WHERE n.id IN (${deletionIds(nodeId)}) AND ${privateReadGuard(auth)}
+    WHERE ${privateReadGuard(auth)}
       AND EXISTS (SELECT 1 FROM vault_nodes root WHERE root.id = ${nodeId}
         AND root.owner_id = ${ownerId} AND root.parent_node_id = ${input.parentId})
       AND ${accessPredicate(auth, nodeId, "structure")}`);
@@ -510,7 +503,7 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
         : row.kind !== "file" || row.file_owner !== ownerId || row.current_revision === null || !row.current_representation_id))) {
     return notFound();
   }
-  if (rows.length > MAX_DELETE_NODES) return Response.json({ error: "directory_too_large", maxNodes: MAX_DELETE_NODES }, { status: 413, headers });
+  if (rows.some((row) => row.overflow) || rows.length > MAX_DELETE_NODES) return Response.json({ error: "directory_too_large", maxNodes: MAX_DELETE_NODES }, { status: 413, headers });
   try {
     const head = await signedListing(input.listingHead, auth, input.parentId, input.expectedRevision, ownerId, parent.key_epoch);
     const snapshot = JSON.stringify(rows);

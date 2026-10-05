@@ -4,8 +4,14 @@
  * Run identical SQL in local workerd and remote D1. SQLite can prefer a unique
  * point lookup over a covering index on unanalyzed/small tables; review that
  * selected plan AND an explicitly labelled covering companion probe. Only the
- * recursive Grant query retains its production INDEXED BY contract.
+ * recursive Grant and successor-child queries keep their production INDEXED BY contracts.
  */
+import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
+import { boundedSubtreeQuery } from "../../app/tree/subtree.server.ts";
+
+// Use the production traversal, with source-controlled synthetic values only.
+const subtreeSql = new SQLiteAsyncDialect().sqlToQuery(boundedSubtreeQuery("root").inlineParams()).sql;
+
 export const QUERY_PLANS = [
   {
     name: "children",
@@ -148,11 +154,8 @@ export const QUERY_PLANS = [
   },
   {
     name: "bounded subtree deletion enumeration",
-    source: "app/tree/tree.server.ts: deletionIds (500 + overflow sentinel)",
-    sql: `WITH RECURSIVE subtree(id) AS (SELECT 'root' UNION
-      SELECT n.id FROM vault_nodes n JOIN subtree p ON n.parent_node_id = p.id
-      WHERE n.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = n.import_id)
-      LIMIT 501) SELECT id FROM subtree`,
+    source: "app/tree/subtree.server.ts: one-child indexed cursor (501 candidates)",
+    sql: subtreeSql,
     covering: ["vault_nodes_parent_idx"],
   },
 ];

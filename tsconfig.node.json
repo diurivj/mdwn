@@ -1,5 +1,6 @@
 {
   "extends": "./tsconfig.json",
+  "files": ["app/import/visibility.server.ts"],
   "include": [
     "vite.config.ts",
     "vitest.config.ts",
@@ -35,6 +36,7 @@
     "app/tree/client.ts",
     "app/tree/listing.ts",
     "app/tree/wire.ts",
+    "app/tree/subtree.server.ts",
     "app/tree/file-client.ts",
     "app/tree/file-head.ts",
     "app/tree/file-capability-client.ts",
