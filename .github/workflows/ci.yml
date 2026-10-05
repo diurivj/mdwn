@@ -26,7 +26,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          # The persistent runner already keeps npm's cache locally.
+          package-manager-cache: false
       - name: Install
         run: npm ci
       - name: Typecheck
@@ -60,9 +61,14 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          # Avoid uploading the runner account's entire npm cache to GitHub.
+          package-manager-cache: false
       - name: Install
         run: npm ci
+      - name: Diagnose runner downloads (temporary)
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 3
+        run: node scripts/diagnose-runner-network.mjs
       - name: Install ${{ matrix.browser }}
         run: npx playwright install ${{ matrix.browser }}
       - name: Browser tests (${{ matrix.browser }})

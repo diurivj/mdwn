@@ -6,7 +6,7 @@ fast layers:
 ```sh
 npm test             # Node unit tests, then Workers-runtime tests
 npm run test:all     # npm test, a production Worker build, and all browser engines
-npm run verify       # the local merge gate: every CI check, then all browser engines
+npm run verify      # local preflight: every CI check, then all browser engines
 ```
 
 ## Workers runtime
@@ -138,9 +138,10 @@ purpose of a test is storage isolation.
 
 ## CI output
 
-The `ci` workflow is paused while GitHub Actions minutes are exhausted;
-`npm run verify` is the merge gate meanwhile (see AGENTS.md). This section
-describes CI when it runs.
+The `CI` workflow runs on the repository-scoped Mac mini. All CI jobs must
+pass at the current PR head before merging (see AGENTS.md). The persistent
+runner keeps npm's cache locally; CI disables `setup-node`'s GitHub cache
+restore/upload, which would otherwise transfer the account's entire npm cache.
 
 The `browser` CI job runs a non-fail-fast matrix with one job for each engine.
 Each job uses one Playwright worker; the local worker default stays automatic.
