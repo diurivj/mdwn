@@ -151,12 +151,14 @@ export const QUERY_PLANS = [
         AND (a.kind = 'directory' AND g.target_kind = 'directory'
           OR a.depth = 0 AND a.kind = 'file' AND g.target_kind = 'file')`,
     covering: ["grants_recipient_target_idx"],
+    allowedScans: ["lineage", "c", "a"],
   },
   {
     name: "bounded subtree deletion enumeration",
     source: "app/tree/subtree.server.ts: one-child indexed cursor (501 candidates)",
     sql: subtreeSql,
     covering: ["vault_nodes_parent_idx"],
+    allowedScans: ["walk", "w", "budget"],
   },
 ];
 
@@ -167,16 +169,26 @@ export function coveringProbeSql(query) {
     : query.sql;
 }
 
-/** @param {{name: string, covering: string[]}} query @param {{detail: string}[]} rows @param {boolean} [requireCovering] */
+/** @param {{name: string, covering: string[], allowedScans?: string[]}} query @param {{detail: string}[]} rows @param {boolean} [requireCovering] */
 export function assertQueryPlan(query, rows, requireCovering = true) {
   for (const index of requireCovering ? query.covering : []) {
     if (!rows.some((row) => row.detail.includes(`USING COVERING INDEX ${index}`))) {
       throw new Error(`${query.name}: missing covering index ${index}: ${rows.map((row) => row.detail).join("; ")}`);
     }
   }
-  // CTE/worklist scans are intentional and bounded. Base-table scans or
-  // automatic indexes conceal a missing persistent hot-path index.
-  if (rows.some((row) => /AUTOMATIC|SCAN (vault_nodes|grants|files|directories|sessions|shares|publication_requests|rate_limit_counters)\b/.test(row.detail))) {
-    throw new Error(`${query.name}: unindexed base-table access`);
+  // Only scans explicitly declared on the plan entry are permitted: the
+  // bounded CTE worklists of the recursive Grant and subtree queries. Every
+  // other `SCAN <token>` is an unindexed base-table access, including an
+  // aliased table (`SCAN n`) that a bare table-name list would miss, or an
+  // automatic substitute index that conceals the missing persistent one.
+  const allowedScans = new Set(query.allowedScans ?? []);
+  for (const row of rows) {
+    if (row.detail.includes("AUTOMATIC")) {
+      throw new Error(`${query.name}: automatic substitute index: ${row.detail}`);
+    }
+    const scan = row.detail.match(/\bSCAN\s+(CONSTANT ROW|[A-Za-z_][A-Za-z0-9_]*)/);
+    if (scan && scan[1] !== "CONSTANT ROW" && !allowedScans.has(scan[1])) {
+      throw new Error(`${query.name}: unindexed base-table access (SCAN ${scan[1]}): ${row.detail}`);
+    }
   }
 }

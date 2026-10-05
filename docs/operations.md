@@ -123,8 +123,10 @@ Reviewed results:
   provisioning needs, and rolling counter windows. Payload reads subsequently
   use current primary-key pointers; full ciphertext/enrollment payload reads
   need not be index-only.
-- CTE/worklist scans are bounded and intentional. Persistent base-table scans
-  and automatic substitute indexes are rejected for representative queries.
+- CTE/worklist scans are bounded and intentional: the two recursive plans declare the only allowed
+  scan tokens, and every other base-table scan (including an aliased one such
+  as `SCAN n`) or automatic substitute index is rejected for representative
+  queries.
 
 ## Migration rollback rehearsal
 
