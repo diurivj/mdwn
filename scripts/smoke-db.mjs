@@ -16,6 +16,7 @@
  * target, then asserts the remote schema matches the committed migration set.
  */
 import { mkdtempSync, rmSync } from "node:fs";
+import { verifyForeignKeys } from "./lib/d1-operations.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -53,6 +54,13 @@ const EXPECTED_COLUMNS = {
   recovery_capsules: { account_id: "TEXT", generation: "INTEGER", recovery_salt: "BLOB", ciphertext: "BLOB", verification_public_key: "BLOB" },
   authentication_recovery_codes: { account_id: "TEXT", ordinal: "INTEGER", code_hash: "BLOB" },
   device_proof_uses: { account_id: "TEXT", proof_id: "TEXT", session_id: "TEXT", expires_at: "INTEGER", commit_token: "TEXT" },
+  device_enrollments: { id: "TEXT", account_id: "TEXT", candidate_session_id: "TEXT", state: "TEXT", created_at: "INTEGER", expires_at: "INTEGER" },
+  recovery_enrollments: { id: "TEXT", account_id: "TEXT", session_id: "TEXT", generation: "INTEGER", state: "TEXT", created_at: "INTEGER", expires_at: "INTEGER" },
+  import_sessions: { id: "TEXT", account_id: "TEXT", session_id: "TEXT", manifest_ciphertext: "BLOB", state: "TEXT", expires_at: "INTEGER", committed_at: "INTEGER" },
+  import_records: { import_id: "TEXT", chunk_sequence: "INTEGER", ordinal: "INTEGER", kind: "TEXT", offset: "INTEGER", length: "INTEGER" },
+  import_chunks: { import_id: "TEXT", sequence: "INTEGER", payload: "BLOB", digest: "BLOB" },
+  import_session_kinds: { import_id: "TEXT", kind: "TEXT", expected_count: "INTEGER" },
+  import_commits: { import_id: "TEXT", account_id: "TEXT", target_directory_id: "TEXT", committed_at: "INTEGER" },
   vault_nodes: { id: "TEXT", kind: "TEXT", owner_id: "TEXT", parent_node_id: "TEXT", import_id: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
   directories: { node_id: "TEXT", owner_id: "TEXT", entries_revision: "INTEGER",
     listing_ciphertext: "BLOB", listing_digest: "BLOB", listing_signature: "BLOB", listing_device_id: "TEXT" },
@@ -218,7 +226,10 @@ const EXPECTED_TRIGGERS = ["sharing_new_device_need", "sharing_new_comment_need"
   "publication_link_rotation_guard", "publication_sealed_link_guard", "publication_sealed_representation_guard",
   "comment_thread_public_sealed_guard", "publication_teardown_guard", "publication_teardown_immutable",
   "public_representation_immutable", "publication_author_identity_immutable",
-  "publication_request_immutable"];
+  "publication_request_immutable", "import_commits_immutable", "import_commits_session_guard",
+  "webauthn_challenges_lifetime_insert", "webauthn_challenges_lifetime_update",
+  "registration_challenges_lifetime_insert", "registration_challenges_lifetime_update",
+  "recovery_enrollments_lifetime_insert", "recovery_enrollments_lifetime_update"];
 
 /**
  * Run a wrangler command; on failure print its output and exit non-zero.
@@ -292,6 +303,10 @@ function verifySchema(bindArgs, label) {
   for (const fact of required) {
     if (!facts.has(fact)) failNow(`${label}: missing schema fact ${fact}`);
   }
+  if (facts.has("fk:import_commits:import_id:import_sessions:id:RESTRICT")) {
+    failNow(`${label}: durable Import marker still depends on ephemeral staging`);
+  }
+  verifyForeignKeys(bindArgs);
   console.log(`✓ ${label}: schema matches the committed migration set`);
 }
 

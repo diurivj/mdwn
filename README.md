@@ -31,12 +31,16 @@ npm run dev          # local Workers runtime + D1 simulation + Tailwind
 | `npm run build` | production build into `build/` |
 | `npm run db:generate` | generate a migration from `app/db/schema.ts` into `drizzle/` |
 | `npm run db:migrate[:preview\|:production]` | apply migrations via Wrangler |
-| `npm run db:smoke` | fresh-D1 schema smoke test |
+| `npm run db:smoke` | fresh-D1 schema and foreign-key smoke test |
+| `npm run db:operations [-- --remote preview\|production]` | read-only remote FK/query-plan verification, or disposable local verification |
 | `npm run check:secrets` | assert no secret leaked into `build/client` |
 | `npm run deploy:preview` / `:production` | build + deploy that environment |
 
 Secrets: local values in gitignored `.dev.vars` (see `.dev.vars.example`);
 remote values as Cloudflare Secrets per environment.
+
+Scheduled retention, reviewed D1 query plans, and the Time Travel/pre-change
+export rollback rehearsal are documented in [`docs/operations.md`](docs/operations.md).
 
 ## Repo layout
 

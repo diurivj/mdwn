@@ -4,6 +4,7 @@ import { envContext } from "~/context/env";
 import { purgeExpiredSignupProofs } from "~/device/proof.server";
 import { purgeExpiredAbuseRecords } from "~/security/abuse-control.server";
 import { purgeExpiredPublicCommentReports } from "~/security/public-participation.server";
+import { purgeExpiredSecurityMaterial } from "~/retention/retention.server";
 import { buildSecurityHeaders, DYNAMIC_CACHE_CONTROL, generateCspNonce } from "~/security/headers";
 import { cspNonceContext } from "~/security/nonce";
 import { purgeExpiredGrantDependents } from "~/sharing/grant-expiry.server";
@@ -52,6 +53,7 @@ export default {
     await purgeExpiredAbuseRecords(env.DB);
     await purgeExpiredPublicCommentReports(env.DB);
     await purgeExpiredSignupProofs(env);
+    await purgeExpiredSecurityMaterial(env);
     await purgeExpiredGrantDependents(env);
   },
 
