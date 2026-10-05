@@ -21,7 +21,9 @@ The maintainer has registered the Mac mini runner and asked to point the paused 
 
 No runner installation, host configuration, deployment, application-code, schema, or dependency changes. The already-disabled worker-count pilot remains disabled.
 
-## First-run diagnosis
+## Comments
+
+### First-run diagnosis
 
 Run `37273523158` reached `Diegos-Mac-mini`. All verification commands passed, but the job was cancelled during upload of a 5,775,513,703-byte npm cache. All three browser jobs failed in `playwright install` with CDN connection timeouts; no browser tests executed. Disable GitHub npm-cache transfers and investigate the runner's download path without weakening test coverage or reporting the run as green.
 
