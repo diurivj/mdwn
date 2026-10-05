@@ -9,3 +9,12 @@ export const SUPPORT_ADDRESS_FIXTURES = {
   bitcoin: "mdwn-test-bitcoin-address-not-for-payment",
   lightning: "test-donations@mdwn.invalid",
 } as const;
+
+/** The Worker `vars` both test harnesses bind for the support-page tests. */
+export function supportAddressBindings(): Record<string, string> {
+  return {
+    SUPPORT_MONERO_ADDRESS: SUPPORT_ADDRESS_FIXTURES.monero,
+    SUPPORT_BITCOIN_ADDRESS: SUPPORT_ADDRESS_FIXTURES.bitcoin,
+    SUPPORT_LIGHTNING_ADDRESS: SUPPORT_ADDRESS_FIXTURES.lightning,
+  };
+}
