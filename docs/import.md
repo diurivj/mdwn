@@ -109,8 +109,15 @@ canonical field is checked against its settled ceiling before chunking:
 - File representation / Public representation: 524,288 bytes
 - Directory-entry name/order ciphertext: 4,096 bytes each
 - Key envelopes (Directory/File capability, representation key, entry key, comment key/attribution key): 16,384 bytes
-- Historical Comment body ciphertext: 16,384 bytes; attribution/displayed-pseudonym ciphertext: 4,096 bytes
+- Historical Comment body ciphertext: 16,384 bytes; attribution/displayed-pseudonym ciphertext: 4,096 bytes; encrypted display-metadata ciphertext: 4,096 bytes
 - File head: 96 canonical bytes; listing ciphertext: 524,288 bytes
+
+The signed Directory listing head follows the existing `directories.listing_ciphertext`
+commitment bound (`MAX_LISTING_BYTES`, 524,288) rather than the 16,384-byte
+auxiliary-metadata cap: it commits the target's whole current namespace,
+including pre-existing siblings that the Import did not create, and the same
+bound already governs every ordinary create/rename/reorder. The listing digest
+(32 bytes) and signature (64 bytes) are separate typed records.
 
 Chunks are greedy complete-record ranges: at most 524,288 raw payload bytes and
 50 descriptors each, 1–40 chunks per session, at most 20 MiB payload and 2,000
@@ -171,10 +178,22 @@ Historical Comments are the local sidecar, parsed per record and never
 uploaded as a sidecar. They start one fresh Private thread per imported File
 whose thread key is wrapped under the File capability key, so the thread
 follows current File-read access and restores no former author authority; the
-read path serves its envelope as a distinct `import` mode. Historical comments
-all belong to the importing Account, so one thread attribution keeps the
-sidecar's displayed pseudonym; the row's display timestamps come from the
-sidecar and the body stays encrypted.
+read path serves its envelope as a distinct `import` mode. The body, the
+displayed pseudonym, and the historical display timestamps are all encrypted
+`mdwn/enc-v1` records; timestamps are sealed under each Comment's own content
+key, so a thread-capability rotation rewraps the wrapper and leaves them
+readable, and no user-authored timestamp is ever plaintext at rest. Comments
+are numbered server-side in sidecar order. All historical comments belong to
+the importing Account, so one thread attribution keeps the sidecar's displayed
+pseudonym for the history; a sidecar whose comments carry different pseudonyms
+displays the first one, because the thread model holds one attribution per
+author.
+
+The preflight counts Historical Comments only for Files the review will create:
+a skipped or replaced candidate contributes none. A replaced candidate that
+carries Comment history fails closed with a named error (`historical-comments-replace`)
+rather than silently dropping it or merging into the existing thread, because
+Replace preserves that File's current Private/Public thread.
 
 ## Failure behavior
 
@@ -182,8 +201,8 @@ sidecar and the body stays encrypted.
 value, configured limit — never file content. `importProblemMessage` maps each
 code to a concrete next step. Unsupported, invalid, ambiguous, or over-limit
 input fails before review; a blocked collision keeps the review open until the
-person resolves it; upload failure cancels the session and says nothing became
-visible.
+person resolves it; an interrupted upload cancels the session and tells the
+person to check the folder before retrying.
 
 ## Verification seams
 
@@ -222,8 +241,10 @@ manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk,
 every canonical ciphertext cap, 1,000 Historical Comments), retries and
 mismatches, expiry/failure/stale-authority, no-visible-partial-tree, and that
 every worst-case upload and commit fits the 50-statement D1 Free invocation
-limit. The local Worker suite and the browser end-to-end test exercise the same
-matrix on workerd with real migrations; the deployed-D1 run remains a release
-gate because the agent environment has no Cloudflare credentials. If it fails,
-reduce the bounded plan or make the commit more efficient — never require a
-paid plan.
+limit. The local Worker suite and the browser end-to-end test exercise the
+protocol, exact/mismatched retries, key bounds, stale authority, cleanup, and
+the visible-atomic flow on workerd with real migrations; they do not replace
+the deployed-D1 boundary matrix or the 50-statement observation. The remote run
+remains a release gate because the agent environment has no Cloudflare
+credentials. If it fails, reduce the bounded plan or make the commit more
+efficient — never require a paid plan.

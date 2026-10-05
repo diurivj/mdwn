@@ -4,8 +4,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { generateDirectoryCapabilityKey } from "../../app/crypto/vault";
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
 import type { HistoricalComment } from "../../app/archive/format";
-import { prepareImportPlan, type ImportPlan } from "../../app/import/plan";
-import { reviewImport, type ImportTarget } from "../../app/import/review";
+import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../../app/import/plan";
+import { reviewImport, type ImportChoice, type ImportTarget } from "../../app/import/review";
 import { analyzeImportSelection, type ImportSource, type ImportSourceFile, type RawImportInput } from "../../app/import/source";
 import { encodeImportChunkBody, encodeImportSessionBody } from "../../app/import/staging";
 import { createFileHead } from "../../app/tree/file-head";
@@ -67,20 +67,30 @@ function collectFiles(children: readonly { kind: string; path: readonly string[]
 }
 
 async function buildPlan(f: Fixture, inputs: readonly RawImportInput[],
-  options: { comments?: ReadonlyMap<string, readonly HistoricalComment[]>; targetRevision?: number } = {}): Promise<ImportPlan> {
+  options: PlanOptions = {}): Promise<ImportPlan> {
   const source = await analyzeImportSelection(inputs);
   const files = new Map<string, ImportSourceFile>();
   collectFiles(source.roots as never, files);
   return preparePlan(f, source, files, options);
 }
 
+type PlanOptions = {
+  comments?: ReadonlyMap<string, readonly HistoricalComment[]>;
+  targetRevision?: number;
+  target?: Partial<ImportTarget>;
+  choices?: Record<string, ImportChoice>;
+  replacements?: Map<string, ImportReplacementDocument>;
+};
+
 async function preparePlan(f: Fixture, source: ImportSource, files: Map<string, ImportSourceFile>,
-  options: { comments?: ReadonlyMap<string, readonly HistoricalComment[]>; targetRevision?: number } = {}): Promise<ImportPlan> {
+  options: PlanOptions = {}): Promise<ImportPlan> {
   const target: ImportTarget = { directoryId: f.rootId, keyEpoch: 1, entriesRevision: options.targetRevision ?? 1,
-    ownerAccountId: f.accountId, actorAccountId: f.accountId, label: "Files", siblings: [], listing: [] };
-  const review = reviewImport(source, target);
+    ownerAccountId: f.accountId, actorAccountId: f.accountId, label: "Files", siblings: [], listing: [],
+    ...options.target };
+  const review = reviewImport(source, target, options.choices ?? {});
   return prepareImportPlan({
-    review, files, comments: options.comments ?? source.comments, targetKey: f.rootKey, replacements: new Map(),
+    review, files, comments: options.comments ?? source.comments, targetKey: f.rootKey,
+    replacements: options.replacements ?? new Map(),
     signFileHead: (identity) => createFileHead(f.assertion.privateKey, { ...identity, deviceId: f.deviceId }),
     signListingHead: (input) => createListingHead(input.parentKey, f.assertion.privateKey, {
       vaultId: f.accountId, directoryId: input.directoryId, deviceId: f.deviceId,
@@ -149,6 +159,11 @@ describe("import staging session, chunks, and visible-atomic commit", () => {
     expect((await send(f, `/api/private/imports/${importId}/chunks/0`, "PUT", otherBody)).status).toBe(409);
     expect((await env.DB.prepare("SELECT state FROM import_sessions WHERE id = ?").bind(importId)
       .first<{ state: string }>())?.state).toBe("failed");
+    // The failed session's staged payload is deleted immediately, not at expiry.
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM import_records WHERE import_id = ?").bind(importId)
+      .first<{ n: number }>())?.n).toBe(0);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM import_chunks WHERE import_id = ?").bind(importId)
+      .first<{ n: number }>())?.n).toBe(0);
     expect((await send(f, `/api/private/imports/${importId}/commit`, "POST")).status).toBe(409);
   });
 
@@ -172,11 +187,47 @@ describe("import staging session, chunks, and visible-atomic commit", () => {
 
   it("enforces D1 CHECK bounds on staging rows and requires the commit marker", async () => {
     const f = await fixture();
-    const oversized = new Uint8Array(524_289);
-    await expect(env.DB.prepare(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
-      VALUES ('missing', 0, ?, zeroblob(32), 1, zeroblob(32), 0)`).bind(oversized).run()).rejects.toThrow();
-    await expect(env.DB.prepare(`INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, import_id, created_at, updated_at)
-      VALUES (?, 'file', ?, NULL, ?, 0, 0)`).bind(id(), f.accountId, id()).run()).rejects.toThrow();
+    const plan = await buildPlan(f, [{ path: "draft.md", bytes: encoder.encode("x") }]);
+    const { importId } = await (async () => {
+      const session = await send(f, "/api/private/imports", "POST",
+        encodeImportSessionBody(plan.manifest.metadata, plan.manifest.envelope));
+      return await session.json() as { importId: string };
+    })();
+    const bind = (sql: string, ...values: unknown[]) => env.DB.prepare(sql).bind(...values as never[]);
+    // One unit over a 512 KiB chunk payload, a 51st descriptor, sequence 40,
+    // and a 128 KiB+1 manifest are all rejected by the schema itself.
+    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
+      VALUES (?, 0, ?, zeroblob(32), 1, zeroblob(32), 0)`, importId, new Uint8Array(524_289)).run()).rejects.toThrow();
+    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
+      VALUES (?, 0, zeroblob(1), zeroblob(32), 51, zeroblob(32), 0)`, importId).run()).rejects.toThrow();
+    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
+      VALUES (?, 40, zeroblob(1), zeroblob(32), 1, zeroblob(32), 0)`, importId).run()).rejects.toThrow();
+    await expect(bind(`UPDATE import_sessions SET manifest_ciphertext = zeroblob(131073) WHERE id = ?`, importId).run())
+      .rejects.toThrow();
+    expect((await env.DB.prepare(`SELECT length(manifest_ciphertext) AS n FROM import_sessions WHERE id = ?`)
+      .bind(importId).first<{ n: number }>())?.n).toBeLessThanOrEqual(131_072);
+    await expect(bind(`INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, import_id, created_at, updated_at)
+      VALUES (?, 'file', ?, NULL, ?, 0, 0)`, id(), f.accountId, id()).run()).rejects.toThrow();
+  });
+
+  it("rejects a commit whose recorded target Owner no longer matches", async () => {
+    const f = await fixture();
+    const plan = await buildPlan(f, [{ path: "draft.md", bytes: encoder.encode("x") }]);
+    const { importId } = await (async () => {
+      const session = await send(f, "/api/private/imports", "POST",
+        encodeImportSessionBody(plan.manifest.metadata, plan.manifest.envelope));
+      const parsed = await session.json() as { importId: string };
+      await send(f, `/api/private/imports/${parsed.importId}/chunks/0`, "PUT",
+        encodeImportChunkBody(plan.chunks[0]!.descriptors, plan.chunks[0]!.payload));
+      return parsed;
+    })();
+    const other = id(), at = Date.now();
+    await env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
+      .bind(other, id(), at, at).run();
+    await env.DB.prepare("UPDATE import_sessions SET target_owner_id = ? WHERE id = ?").bind(other, importId).run();
+    expect((await send(f, `/api/private/imports/${importId}/commit`, "POST")).status).toBe(409);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM import_commits WHERE import_id = ?").bind(importId)
+      .first<{ n: number }>())?.n).toBe(0);
   });
 
   it("creates no marker or visible content for a stale target revision", async () => {
@@ -220,6 +271,50 @@ describe("import staging session, chunks, and visible-atomic commit", () => {
       .first<{ n: number }>())?.n).toBe(0);
   });
 
+  it("leaves a staged Replace current until the commit, then moves it atomically", async () => {
+    const f = await fixture();
+    const fileId = id(), representationId = id(), capabilityId = id(), contentKeyId = id();
+    const now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at) VALUES (?, 'file', ?, ?, ?, ?)")
+        .bind(fileId, f.accountId, f.rootId, now, now),
+      env.DB.prepare("INSERT INTO files (node_id, owner_id, current_representation_id, current_revision, capability_id, capability_epoch) VALUES (?, ?, ?, 1, ?, 1)")
+        .bind(fileId, f.accountId, representationId, capabilityId),
+      env.DB.prepare(`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext, order_ciphertext, key_envelope)
+        VALUES (?, ?, ?, X'01', X'02', X'03')`).bind(fileId, f.accountId, f.rootId),
+      env.DB.prepare(`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id, key_epoch,
+        ciphertext, ciphertext_size, created_at) VALUES (?, ?, ?, 1, ?, 1, X'01', 1, ?)`)
+        .bind(representationId, fileId, f.accountId, contentKeyId, now),
+    ]);
+    const source = await analyzeImportSelection([{ path: "draft.md", bytes: encoder.encode("# replaced") }]);
+    const files = new Map<string, ImportSourceFile>();
+    collectFiles(source.roots as never, files);
+    const document: ImportReplacementDocument = {
+      revision: 1, keyEpoch: 1, contentKeyId, representationId, markdown: "old", metadata: new Uint8Array(),
+      capability: { id: capabilityId, epoch: 1 }, capabilityKey: crypto.getRandomValues(new Uint8Array(32)), publication: null,
+    };
+    const plan = await preparePlan(f, source, files, {
+      target: { siblings: [{ nodeId: fileId, kind: "file", name: "draft.md" }] },
+      choices: { "draft.md": { action: "replace" } },
+      replacements: new Map([[fileId, document]]),
+    });
+    const session = await send(f, "/api/private/imports", "POST",
+      encodeImportSessionBody(plan.manifest.metadata, plan.manifest.envelope));
+    const { importId } = await session.json() as { importId: string };
+    for (const chunk of plan.chunks) {
+      expect((await send(f, `/api/private/imports/${importId}/chunks/${chunk.sequence}`, "PUT",
+        encodeImportChunkBody(chunk.descriptors, chunk.payload))).status).toBe(201);
+    }
+    const before = await env.DB.prepare("SELECT current_representation_id FROM files WHERE node_id = ?")
+      .bind(fileId).first<{ current_representation_id: string }>();
+    expect(before?.current_representation_id).toBe(representationId);
+    expect((await send(f, `/api/private/imports/${importId}/commit`, "POST")).status).toBe(200);
+    const after = await env.DB.prepare("SELECT current_revision, current_representation_id FROM files WHERE node_id = ?")
+      .bind(fileId).first<{ current_revision: number; current_representation_id: string }>();
+    expect(after?.current_revision).toBe(2);
+    expect(after?.current_representation_id).not.toBe(representationId);
+  });
+
   it("stages Historical Comments as a fresh Private thread readable by File access", async () => {
     const f = await fixture();
     const comments: HistoricalComment[] = [
@@ -243,10 +338,11 @@ describe("import staging session, chunks, and visible-atomic commit", () => {
     const thread = await send(f, `/api/private/comments/files/${fileId}`, "POST");
     expect(thread.status).toBe(200);
     const body = await thread.json() as { thread: { envelope: { mode: string } } | null;
-      comments: { sequence: number; createdAt: number }[] };
+      comments: { sequence: number; createdAt: number; metaCiphertext: string | null }[] };
     expect(body.thread?.envelope.mode).toBe("import");
     expect(body.comments.map((comment) => comment.sequence)).toEqual([1, 2]);
-    expect(body.comments[0]!.createdAt).toBe(1_000);
+    // Historical display timestamps are sealed ciphertext, never plaintext D1 values.
+    expect(body.comments.every((comment) => typeof comment.metaCiphertext === "string" && comment.metaCiphertext.length > 0)).toBe(true);
   });
 
   it("rejects a session body whose manifest digest does not match", async () => {

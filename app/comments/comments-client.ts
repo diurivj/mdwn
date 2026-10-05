@@ -1,7 +1,7 @@
 import {
   MAX_COMMENT_KEY_ENVELOPE_BYTES,
   openAttribution,
-  openCommentBody,
+  openCommentRecord,
   sealAttribution,
   sealCommentBody,
 } from "~/comments/content";
@@ -57,7 +57,8 @@ type ThreadMeta = { fileId: string; threadId: string; ownerId: string; epochId: 
       signerPublicKey: string; ciphertext: string; signature: string }) };
 type ThreadResponse = { thread: ThreadMeta | null; canCreateThread?: boolean;
   comments?: { id: string; authorId: string; sequence: number; revision: number; bodyCiphertext: string;
-    contentKeyEnvelope: string; contentKeyEpoch: number; createdAt: number; updatedAt: number }[];
+    contentKeyEnvelope: string; metaCiphertext?: string | null;
+    contentKeyEpoch: number; createdAt: number; updatedAt: number }[];
   attributions?: { id: string; authorId: string; revision: number; ciphertext: string;
     contentKeyEnvelope: string; contentKeyEpoch: number }[];
   nextCursor?: number | null };
@@ -98,13 +99,18 @@ async function decryptPage(thread: ThreadMeta, capability: Uint8Array, data: Thr
   const comments: CommentView[] = [];
   for (const comment of data.comments ?? []) {
     let text: string | null = null;
+    let meta: { createdAt: number; updatedAt: number } | null = null;
     try {
-      text = await openCommentBody(capability, { vaultId: thread.ownerId, commentId: comment.id,
+      const opened = await openCommentRecord(capability, { vaultId: thread.ownerId, commentId: comment.id,
         revision: comment.revision, capabilityId: thread.capabilityId, keyEpoch: thread.capabilityEpoch,
-        bodyCiphertext: comment.bodyCiphertext, contentKeyEnvelope: comment.contentKeyEnvelope });
+        bodyCiphertext: comment.bodyCiphertext, contentKeyEnvelope: comment.contentKeyEnvelope,
+        metaCiphertext: comment.metaCiphertext });
+      text = opened.text;
+      meta = opened.meta;
     } catch { /* Keep the record visible with an explicit display failure. */ }
     comments.push({ id: comment.id, authorId: comment.authorId, sequence: comment.sequence,
-      revision: comment.revision, text, createdAt: comment.createdAt, updatedAt: comment.updatedAt,
+      revision: comment.revision, text, createdAt: meta?.createdAt ?? comment.createdAt,
+      updatedAt: meta?.updatedAt ?? comment.updatedAt,
       canEdit: comment.authorId === thread.actorAccountId,
       canDelete: comment.authorId === thread.actorAccountId || thread.canDeleteAny });
   }

@@ -91,7 +91,8 @@ async function threadEnvelope(env: Env, auth: AuthorizedDevice, thread: ThreadRo
 }
 
 type CommentRow = { id: string; author_id: string; sequence: number; revision: number; body_ciphertext: ArrayBuffer;
-  body_size: number; content_key_envelope: ArrayBuffer; content_key_epoch: number; created_at: number; updated_at: number };
+  body_size: number; content_key_envelope: ArrayBuffer; content_key_epoch: number; created_at: number; updated_at: number;
+  meta_ciphertext: ArrayBuffer | null };
 type AttributionRow = { id: string; author_id: string; revision: number; ciphertext: ArrayBuffer;
   content_key_envelope: ArrayBuffer; content_key_epoch: number };
 
@@ -111,10 +112,12 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
   if (!envelope) return failure(thread.ownerId === auth.accountId ? "owned_comment_key_missing" : "secure_access_preparing", 409);
   const authority = threadAuthority(auth, thread.fileId, thread.threadId,
     thread.capabilityId, thread.capabilityEpoch, thread.epochId);
-  const comments = await db.all<CommentRow>(sql`SELECT id, author_id, sequence, revision, body_ciphertext, body_size,
-      content_key_envelope, content_key_epoch, created_at, updated_at FROM comments
-    WHERE thread_id = ${thread.threadId} AND sequence > ${cursor} AND ${authority}
-    ORDER BY sequence LIMIT ${MAX_COMMENTS_PAGE + 1}`);
+  const comments = await db.all<CommentRow>(sql`SELECT c.id, c.author_id, c.sequence, c.revision, c.body_ciphertext,
+      c.body_size, c.content_key_envelope, c.content_key_epoch, c.created_at, c.updated_at,
+      m.ciphertext AS meta_ciphertext FROM comments c
+    LEFT JOIN import_comment_meta m ON m.comment_id = c.id
+    WHERE c.thread_id = ${thread.threadId} AND c.sequence > ${cursor} AND ${authority}
+    ORDER BY c.sequence LIMIT ${MAX_COMMENTS_PAGE + 1}`);
   const authors = [...new Set([auth.accountId, ...comments.map((comment) => comment.author_id)])];
   // Every displayed Comment author plus the actor is bounded by the page size,
   // so the pseudonym query returns exactly that set and never truncates one.
@@ -134,6 +137,7 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
       sequence: comment.sequence, revision: comment.revision,
       bodyCiphertext: encodeTreeBytes(new Uint8Array(comment.body_ciphertext)), bodySize: comment.body_size,
       contentKeyEnvelope: encodeTreeBytes(new Uint8Array(comment.content_key_envelope)),
+      metaCiphertext: comment.meta_ciphertext ? encodeTreeBytes(new Uint8Array(comment.meta_ciphertext)) : null,
       contentKeyEpoch: comment.content_key_epoch, createdAt: comment.created_at, updatedAt: comment.updated_at })),
     nextCursor: comments.length > MAX_COMMENTS_PAGE ? comments[MAX_COMMENTS_PAGE - 1]!.sequence : null,
     attributions: attributions.map((attribution) => ({ id: attribution.id,

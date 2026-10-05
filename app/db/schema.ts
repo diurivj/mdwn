@@ -1302,10 +1302,6 @@ export const importRecords = sqliteTable(
     headerRevision: integer("header_revision"),
     /** `replace`: the current File revision the plan reviewed. */
     expectedRevision: integer("expected_revision"),
-    /** `comment-meta`: display order and historical timestamps. */
-    displaySequence: integer("display_sequence"),
-    timestampCreated: integer("timestamp_created"),
-    timestampUpdated: integer("timestamp_updated"),
     /** `file-head`: the verified signing device. */
     headDeviceId: text("head_device_id"),
     /** `listing-signature`: the device whose signature this listing head carries. */
@@ -1326,11 +1322,11 @@ export const importRecords = sqliteTable(
       (${table.kind} IN ('node-directory', 'node-file') AND length(${table.payload}) = 0)
       OR (${table.kind} IN ('entry-name', 'entry-order', 'comment-attribution') AND length(${table.payload}) BETWEEN 1 AND 4096)
       OR (${table.kind} IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',
-        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key') AND length(${table.payload}) BETWEEN 1 AND 16384)
+        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')
+        AND length(${table.payload}) BETWEEN 1 AND 16384)
       OR (${table.kind} IN ('representation', 'public-representation', 'listing-ciphertext') AND length(${table.payload}) BETWEEN 1 AND 524288)
       OR (${table.kind} = 'file-head' AND length(${table.payload}) = 96)
       OR (${table.kind} = 'replace' AND length(${table.payload}) = 8)
-      OR (${table.kind} = 'comment-meta' AND length(${table.payload}) = 20)
       OR (${table.kind} = 'listing-digest' AND length(${table.payload}) = 32)
       OR (${table.kind} = 'listing-signature' AND length(${table.payload}) = 64)`),
     check("import_records_refs_bounded", sql`
@@ -1352,20 +1348,15 @@ export const importRecords = sqliteTable(
     check("import_records_header_fields", sql`
       (${table.kind} IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',
         'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',
-        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext')
+        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')
         AND ${table.headerKeyId} IS NOT NULL AND ${table.headerKeyEpoch} IS NOT NULL AND ${table.headerKeyEpoch} >= 1
         AND ${table.headerRevision} IS NOT NULL AND ${table.headerRevision} >= 1)
       OR (${table.kind} NOT IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',
         'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',
-        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext')
+        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')
         AND ${table.headerKeyId} IS NULL AND ${table.headerKeyEpoch} IS NULL AND ${table.headerRevision} IS NULL)`),
     check("import_records_expected_revision", sql`(${table.kind} = 'replace' AND ${table.expectedRevision} >= 1)
       OR (${table.kind} != 'replace' AND ${table.expectedRevision} IS NULL)`),
-    check("import_records_comment_meta", sql`
-      (${table.kind} = 'comment-meta' AND ${table.displaySequence} >= 1
-        AND ${table.timestampCreated} >= 0 AND ${table.timestampUpdated} >= ${table.timestampCreated})
-      OR (${table.kind} != 'comment-meta' AND ${table.displaySequence} IS NULL
-        AND ${table.timestampCreated} IS NULL AND ${table.timestampUpdated} IS NULL)`),
     check("import_records_file_head", sql`
       (${table.kind} = 'file-head' AND ${table.headDeviceId} IS NOT NULL AND ${table.signerDeviceId} IS NULL)
       OR (${table.kind} = 'listing-signature' AND ${table.signerDeviceId} IS NOT NULL AND ${table.headDeviceId} IS NULL)
@@ -1406,5 +1397,23 @@ export const importCommentEnvelopes = sqliteTable(
     index("import_comment_envelopes_file_idx").on(table.fileId, table.threadId),
     check("import_comment_envelopes_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 16384
       AND ${table.capabilityEpoch} >= 1 AND ${table.keyEpoch} >= 1`),
+  ],
+);
+
+/** Encrypted historical display metadata (order-adjacent timestamps) for an
+ * imported Comment. It is sealed under the Comment's own content key, so a
+ * thread-capability rotation rewraps the wrapper and this ciphertext stays
+ * valid without any plaintext user-authored timestamp at rest. */
+export const importCommentMeta = sqliteTable(
+  "import_comment_meta",
+  {
+    commentId: text("comment_id").primaryKey().references(() => comments.id, { onDelete: "restrict" }),
+    threadId: text("thread_id").notNull(),
+    ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+    ciphertext: blob("ciphertext").notNull(),
+  },
+  (table) => [
+    index("import_comment_meta_thread_idx").on(table.threadId, table.commentId),
+    check("import_comment_meta_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 4096`),
   ],
 );

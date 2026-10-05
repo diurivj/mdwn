@@ -12,7 +12,8 @@ import { createFileHead, type FileHead, type FileHeadIdentity } from "~/tree/fil
 import { createListingHead, type ListingHead } from "~/tree/listing";
 import { loadFile, type RootAccess } from "~/tree/client";
 import { IMPORT_LIMITS, ImportError } from "./limits";
-import type { ImportReplacementDocument, ImportSealedEntry } from "./plan";
+import type { ImportReplacementDocument } from "./plan";
+import type { ImportListingEntry } from "./review";
 import type { ImportReview } from "./review";
 import type { RawImportInput } from "./source";
 
@@ -87,7 +88,7 @@ export async function inputsFromDataTransfer(dataTransfer: DataTransfer): Promis
 export async function importSigners(access: RootAccess): Promise<{
   signFileHead: (identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>;
   signListingHead: (input: { parentKey: Uint8Array; vaultId: string; directoryId: string;
-    keyEpoch: number; revision: number; entries: readonly ImportSealedEntry[] }) => Promise<ListingHead>;
+    keyEpoch: number; revision: number; entries: readonly ImportListingEntry[] }) => Promise<ListingHead>;
 }> {
   const device = await getDevice(access.actorAccountId);
   if (!device) throw new ImportError("replacement-unavailable", { reason: "device-unavailable", action: "fix" });

@@ -42,7 +42,7 @@ import {
   MAX_STAGING_RECORDS,
   ImportError,
 } from "./limits";
-import type { ImportReview, ImportReviewNode } from "./review";
+import type { ImportListingEntry, ImportReview, ImportReviewNode } from "./review";
 import type { ImportSourceFile } from "./source";
 
 export type ImportPlanDescriptor = {
@@ -140,15 +140,6 @@ export type ImportReplacementDocument = Pick<FileDocument,
   "revision" | "keyEpoch" | "contentKeyId" | "representationId" | "markdown" | "metadata" |
   "capability" | "capabilityKey" | "publication">;
 
-/** One sealed directory edge as it will appear in the post-Import listing head. */
-export type ImportSealedEntry = {
-  nodeId: string;
-  kind: "file" | "directory";
-  nameCiphertext: string;
-  orderCiphertext: string;
-  keyEnvelope: string;
-};
-
 export type ImportListingHead = { ciphertext: string; digest: string; signature: string };
 
 export type PrepareImportPlanOptions = {
@@ -165,7 +156,7 @@ export type PrepareImportPlanOptions = {
   /** Signs a post-Import Directory listing head with the same device key. */
   signListingHead: (input: {
     parentKey: Uint8Array; vaultId: string; directoryId: string; keyEpoch: number; revision: number;
-    entries: readonly ImportSealedEntry[];
+    entries: readonly ImportListingEntry[];
   }) => Promise<ImportListingHead>;
   newId?: () => string;
 };
@@ -190,12 +181,6 @@ function fileHeadBytes(head: FileHead): Uint8Array {
   return concat([digest, signature]);
 }
 
-function u32(value: number): Uint8Array {
-  const bytes = new Uint8Array(4);
-  new DataView(bytes.buffer).setUint32(0, value);
-  return bytes;
-}
-
 function u64(value: number): Uint8Array {
   const bytes = new Uint8Array(8);
   new DataView(bytes.buffer).setBigUint64(0, BigInt(value));
@@ -209,10 +194,7 @@ function decodeImportBytes(value: string, max: number): Uint8Array {
   return bytes;
 }
 
-/** One canonical comment-meta record: sequence u32, createdAt u64, updatedAt u64. */
-function commentMetaBytes(comment: HistoricalComment): Uint8Array {
-  return concat([u32(comment.sequence), u64(comment.createdAt), u64(comment.updatedAt)]);
-}
+/** One canonical Comment record: `comment-meta`, body, and content-key wrapper. */
 
 /**
  * Build, measure, and chunk the complete encrypted Import plan. All canonical
@@ -236,7 +218,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
     records.push({ kind, refs, offset: 0, length: bytes.length, digest: await sha256Hex(bytes), bytes });
   };
 
-  const planFile = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<ImportSealedEntry> => {
+  const planFile = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<ImportListingEntry> => {
     const source = options.files.get(node.sourcePath);
     if (!source) throw new ImportError("nothing-to-import", { item: node.sourcePath, action: "fix" });
     const nodeId = newId();
@@ -260,7 +242,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
   };
 
   const pushListing = async (directoryId: string, keyEpoch: number, revision: number, parentKey: Uint8Array,
-    entries: readonly ImportSealedEntry[]): Promise<void> => {
+    entries: readonly ImportListingEntry[]): Promise<void> => {
     const head = await options.signListingHead({ parentKey, vaultId, directoryId, keyEpoch, revision, entries });
     const ciphertext = decodeImportBytes(head.ciphertext, 524_288);
     const digest = decodeImportBytes(head.digest, 32);
@@ -288,8 +270,9 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
       const commentId = newId();
       const body = await sealCommentBody(threadKey, {
         vaultId, commentId, capabilityId: threadCapabilityId, keyEpoch: 1, revision: 1, text: comment.text,
+        meta: { createdAt: comment.createdAt, updatedAt: comment.updatedAt },
       });
-      await push("comment-meta", [threadId, commentId], commentMetaBytes(comment));
+      await push("comment-meta", [threadId, commentId], decodeImportBytes(body.metaCiphertext!, 4_096));
       await push("comment-body", [threadId, commentId], decodeImportBytes(body.bodyCiphertext, 16_384));
       await push("comment-key", [threadId, commentId], decodeImportBytes(body.contentKeyEnvelope, 16_384));
     }
@@ -325,7 +308,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
     await push("file-head", [fileId, representationId], fileHeadBytes(head));
   };
 
-  const planReplace = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array): Promise<ImportSealedEntry | null> => {
+  const planReplace = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array): Promise<string | null> => {
     const fileId = node.existingNodeId;
     const source = options.files.get(node.sourcePath);
     if (!fileId || !source) throw new ImportError("replacement-unavailable", { item: node.sourcePath, action: "fix" });
@@ -353,8 +336,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
       });
       await push("entry-key", [fileId, parentId], representation.fileContentKeyEnvelope);
       await push("representation", [fileId, representationId, contentKeyId], representation.contentEnvelope);
-      return { nodeId: fileId, kind: "file", nameCiphertext: "", orderCiphertext: "",
-        keyEnvelope: encodeBytes(representation.fileContentKeyEnvelope) };
+      return encodeBytes(representation.fileContentKeyEnvelope);
     }
     if (published) {
       const envelope = await sealPublicRepresentation({
@@ -366,13 +348,14 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
     return null;
   };
 
-  const walk = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<ImportSealedEntry[]> => {
-    const sealed: ImportSealedEntry[] = [];
+  const legacyKeyUpdates = new Map<string, string>();
+  const walk = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<ImportListingEntry[]> => {
+    const sealed: ImportListingEntry[] = [];
     for (const child of node.children) {
       if (child.blocked || (child.action !== "create" && child.action !== "replace")) continue;
       if (child.action === "replace") {
-        const replacement = await planReplace(child, parentId, parentKey);
-        if (replacement) sealed.push(replacement);
+        const keyEnvelope = await planReplace(child, parentId, parentKey);
+        if (keyEnvelope && child.existingNodeId) legacyKeyUpdates.set(child.existingNodeId, keyEnvelope);
         continue;
       }
       if (child.kind === "file") {
@@ -402,16 +385,16 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
   if (!records.length) throw new ImportError("nothing-to-import", { action: "fix" });
   // The target's listing keeps every existing edge, applies legacy Replace
   // key envelopes, and appends every created node, then advances its revision.
-  const sealed = new Map<string, ImportSealedEntry>();
+  const sealed = new Map<string, ImportListingEntry>();
   for (const entry of review.target.listing) {
     sealed.set(entry.nodeId, { nodeId: entry.nodeId, kind: entry.kind,
       nameCiphertext: entry.nameCiphertext, orderCiphertext: entry.orderCiphertext, keyEnvelope: entry.keyEnvelope });
   }
-  for (const entry of created) {
-    if (entry.nameCiphertext) { sealed.set(entry.nodeId, entry); continue; }
-    const previous = sealed.get(entry.nodeId);
-    if (!previous) throw new ImportError("replacement-unavailable", { item: entry.nodeId, action: "fix" });
-    sealed.set(entry.nodeId, { ...previous, keyEnvelope: entry.keyEnvelope });
+  for (const entry of created) sealed.set(entry.nodeId, entry);
+  for (const [nodeId, keyEnvelope] of legacyKeyUpdates) {
+    const previous = sealed.get(nodeId);
+    if (!previous) throw new ImportError("replacement-unavailable", { item: nodeId, action: "fix" });
+    sealed.set(nodeId, { ...previous, keyEnvelope });
   }
   await pushListing(targetId, targetKeyEpoch, review.target.entriesRevision + 1, options.targetKey,
     [...sealed.values()]);

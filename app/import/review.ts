@@ -336,7 +336,9 @@ export function reviewImport(source: ImportSource, target: ImportTarget, choices
     maxDepth: source.maxDepth,
     compressedBytes: source.compressedBytes,
     expandedBytes: source.expandedBytes,
-    comments: source.commentCount,
+    // Only comments attached to Files this review will create are imported;
+    // skipped or replaced candidates contribute none.
+    comments: 0,
   };
   const generatedNames: string[] = [];
   const blocked: ImportReviewNode[] = [];
@@ -346,7 +348,7 @@ export function reviewImport(source: ImportSource, target: ImportTarget, choices
     if (node.action === "skip") { counts.skips += 1; continue; }
     if (node.blocked) { blocked.push(node); continue; }
     if (node.action === "replace") counts.replaces += 1;
-    else if (node.kind === "file") counts.createFiles += 1;
+    else if (node.kind === "file") { counts.createFiles += 1; counts.comments += source.comments.get(node.sourcePath)?.length ?? 0; }
     else counts.createDirectories += 1;
     if (node.generated) generatedNames.push(node.displayPath.join("/"));
   }

@@ -39,9 +39,9 @@ export type ImportRefKind = "uuid" | "opaque";
 /**
  * The canonical record kinds one Import may stage. `min`/`max` are the decoded
  * binary payload bounds from the locked import envelope; the Worker and D1
- * enforce the same numbers. `header` says which structural envelope shape (if
- * any) the payload must be; `metadata` names the typed routing fields the
- * Worker extracts from an authenticated-after-open header.
+ * enforce the same numbers. `envelope` says which structural envelope shape (if
+ * any) the payload must be, and `purpose` the envelope purpose the Worker
+ * checks without decrypting.
  */
 export const IMPORT_RECORD_KINDS = {
   "node-directory": { id: 1, refs: ["uuid", "uuid"], min: 0, max: 0, envelope: null },
@@ -57,7 +57,7 @@ export const IMPORT_RECORD_KINDS = {
   replace: { id: 11, refs: ["uuid", "uuid"], min: 8, max: 8, envelope: null },
   "public-representation": { id: 12, refs: ["opaque", "opaque", "opaque"], min: 1, max: 524_288, envelope: "hpke", purpose: "public-representation" },
   "comment-thread": { id: 13, refs: ["uuid", "uuid", "uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "private-comment-thread" },
-  "comment-meta": { id: 14, refs: ["uuid", "uuid"], min: 20, max: 20, envelope: null },
+  "comment-meta": { id: 14, refs: ["uuid", "uuid"], min: 1, max: 4_096, envelope: "symmetric", purpose: "comment-content" },
   "comment-body": { id: 15, refs: ["uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "comment-content" },
   "comment-key": { id: 16, refs: ["uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "comment-content" },
   "comment-attribution": { id: 17, refs: ["uuid", "uuid"], min: 1, max: 4_096, envelope: "symmetric", purpose: "attribution" },
@@ -75,10 +75,6 @@ export type StagingRecordKind = keyof typeof IMPORT_RECORD_KINDS;
 export const STAGING_RECORD_BY_ID: Readonly<Record<number, StagingRecordKind>> = Object.fromEntries(
   Object.entries(IMPORT_RECORD_KINDS).map(([kind, schema]) => [schema.id, kind]),
 ) as Record<number, StagingRecordKind>;
-
-export function isStagingRecordKind(value: unknown): value is StagingRecordKind {
-  return typeof value === "string" && Object.hasOwn(IMPORT_RECORD_KINDS, value);
-}
 
 export type ImportSessionKindCount = { kind: StagingRecordKind; count: number };
 
@@ -151,22 +147,6 @@ export async function envelopeDigestHex(envelope: Uint8Array): Promise<string> {
   return sha256HexBytes(envelope);
 }
 
-export function descriptorKindRefBytes(kind: StagingRecordKind): number {
-  return IMPORT_RECORD_KINDS[kind].refs.reduce((total, ref) =>
-    total + (ref === "uuid" ? IMPORT_REF_UUID_BYTES : IMPORT_REF_OPAQUE_BYTES), 0);
-}
-
-/** One descriptor's exact encoded size: kind + refs + offset + length + digest. */
-export function descriptorEncodedBytes(kind: StagingRecordKind): number {
-  return 1 + descriptorKindRefBytes(kind) + 8 + 8 + 32;
-}
-
-/** The largest chunk body a `maxDescriptors` chunk of one kind distribution can produce. */
-export function maxChunkBodyBytes(descriptorKinds: readonly StagingRecordKind[]): number {
-  return CHUNK_PREFIX.length + 1 +
-    descriptorKinds.reduce((total, kind) => total + descriptorEncodedBytes(kind), 0) +
-    MAX_STAGING_CHUNK_BYTES;
-}
 
 export type DecodedDescriptor = {
   kind: StagingRecordKind;
@@ -316,7 +296,7 @@ function encodeIdentifier(value: string, pattern: RegExp): Uint8Array {
 export type DecodedSessionBody = { metadata: ImportSessionMetadata; manifest: Uint8Array };
 
 /** Decode the session body exactly; the manifest is the trailing bytes. */
-export function decodeImportSessionBody(bytes: Uint8Array, maxBytes = MAX_STAGING_MANIFEST_BYTES + 256): DecodedSessionBody {
+export function decodeImportSessionBody(bytes: Uint8Array, maxBytes: number = MAX_IMPORT_SESSION_BODY_BYTES): DecodedSessionBody {
   if (!(bytes instanceof Uint8Array)) throw new StagingError("malformed");
   if (bytes.length > maxBytes) throw new StagingError("too-large");
   const fixed = SESSION_PREFIX.length + IMPORT_REF_OPAQUE_BYTES + IMPORT_REF_UUID_BYTES + 8 * 5 + 4 + 32 + 32 + 4;
@@ -378,15 +358,6 @@ export function decodeImportSessionBody(bytes: Uint8Array, maxBytes = MAX_STAGIN
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-
-export const STAGING_BOUNDS = {
-  chunkBytes: MAX_STAGING_CHUNK_BYTES,
-  chunkRecords: MAX_STAGING_CHUNK_RECORDS,
-  chunks: MAX_STAGING_CHUNKS,
-  payloadBytes: MAX_STAGING_PAYLOAD_BYTES,
-  records: MAX_STAGING_RECORDS,
-  manifestBytes: MAX_STAGING_MANIFEST_BYTES,
-} as const;
 
 /** The largest session-creation body: fixed routing header plus the 128 KiB manifest. */
 export const MAX_IMPORT_SESSION_BODY_BYTES = SESSION_PREFIX.length + IMPORT_REF_OPAQUE_BYTES + IMPORT_REF_UUID_BYTES +

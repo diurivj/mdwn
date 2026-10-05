@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "42f5280b-2dc2-4522-bd70-10990180183f",
+  "id": "b3fc83e1-941e-4787-9065-407dfa5bd439",
   "prevId": "7f20279b-dbb8-41d1-8f41-3c0f361fa47a",
   "tables": {
     "account_encryption_identities": {
@@ -2486,6 +2486,85 @@
         }
       }
     },
+    "import_comment_meta": {
+      "name": "import_comment_meta",
+      "columns": {
+        "comment_id": {
+          "name": "comment_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "thread_id": {
+          "name": "thread_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "blob",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "import_comment_meta_thread_idx": {
+          "name": "import_comment_meta_thread_idx",
+          "columns": [
+            "thread_id",
+            "comment_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "import_comment_meta_comment_id_comments_id_fk": {
+          "name": "import_comment_meta_comment_id_comments_id_fk",
+          "tableFrom": "import_comment_meta",
+          "tableTo": "comments",
+          "columnsFrom": [
+            "comment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "import_comment_meta_owner_id_accounts_id_fk": {
+          "name": "import_comment_meta_owner_id_accounts_id_fk",
+          "tableFrom": "import_comment_meta",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "owner_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "import_comment_meta_bounded": {
+          "name": "import_comment_meta_bounded",
+          "value": "length(\"import_comment_meta\".\"ciphertext\") BETWEEN 1 AND 4096"
+        }
+      }
+    },
     "import_commits": {
       "name": "import_commits",
       "columns": {
@@ -2666,27 +2745,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "display_sequence": {
-          "name": "display_sequence",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "timestamp_created": {
-          "name": "timestamp_created",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "timestamp_updated": {
-          "name": "timestamp_updated",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "head_device_id": {
           "name": "head_device_id",
           "type": "text",
@@ -2754,7 +2812,7 @@
         },
         "import_records_payload_bounded": {
           "name": "import_records_payload_bounded",
-          "value": "\n      (\"import_records\".\"kind\" IN ('node-directory', 'node-file') AND length(\"import_records\".\"payload\") = 0)\n      OR (\"import_records\".\"kind\" IN ('entry-name', 'entry-order', 'comment-attribution') AND length(\"import_records\".\"payload\") BETWEEN 1 AND 4096)\n      OR (\"import_records\".\"kind\" IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',\n        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key') AND length(\"import_records\".\"payload\") BETWEEN 1 AND 16384)\n      OR (\"import_records\".\"kind\" IN ('representation', 'public-representation', 'listing-ciphertext') AND length(\"import_records\".\"payload\") BETWEEN 1 AND 524288)\n      OR (\"import_records\".\"kind\" = 'file-head' AND length(\"import_records\".\"payload\") = 96)\n      OR (\"import_records\".\"kind\" = 'replace' AND length(\"import_records\".\"payload\") = 8)\n      OR (\"import_records\".\"kind\" = 'comment-meta' AND length(\"import_records\".\"payload\") = 20)\n      OR (\"import_records\".\"kind\" = 'listing-digest' AND length(\"import_records\".\"payload\") = 32)\n      OR (\"import_records\".\"kind\" = 'listing-signature' AND length(\"import_records\".\"payload\") = 64)"
+          "value": "\n      (\"import_records\".\"kind\" IN ('node-directory', 'node-file') AND length(\"import_records\".\"payload\") = 0)\n      OR (\"import_records\".\"kind\" IN ('entry-name', 'entry-order', 'comment-attribution') AND length(\"import_records\".\"payload\") BETWEEN 1 AND 4096)\n      OR (\"import_records\".\"kind\" IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',\n        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')\n        AND length(\"import_records\".\"payload\") BETWEEN 1 AND 16384)\n      OR (\"import_records\".\"kind\" IN ('representation', 'public-representation', 'listing-ciphertext') AND length(\"import_records\".\"payload\") BETWEEN 1 AND 524288)\n      OR (\"import_records\".\"kind\" = 'file-head' AND length(\"import_records\".\"payload\") = 96)\n      OR (\"import_records\".\"kind\" = 'replace' AND length(\"import_records\".\"payload\") = 8)\n      OR (\"import_records\".\"kind\" = 'listing-digest' AND length(\"import_records\".\"payload\") = 32)\n      OR (\"import_records\".\"kind\" = 'listing-signature' AND length(\"import_records\".\"payload\") = 64)"
         },
         "import_records_refs_bounded": {
           "name": "import_records_refs_bounded",
@@ -2766,15 +2824,11 @@
         },
         "import_records_header_fields": {
           "name": "import_records_header_fields",
-          "value": "\n      (\"import_records\".\"kind\" IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',\n        'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',\n        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext')\n        AND \"import_records\".\"header_key_id\" IS NOT NULL AND \"import_records\".\"header_key_epoch\" IS NOT NULL AND \"import_records\".\"header_key_epoch\" >= 1\n        AND \"import_records\".\"header_revision\" IS NOT NULL AND \"import_records\".\"header_revision\" >= 1)\n      OR (\"import_records\".\"kind\" NOT IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',\n        'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',\n        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext')\n        AND \"import_records\".\"header_key_id\" IS NULL AND \"import_records\".\"header_key_epoch\" IS NULL AND \"import_records\".\"header_revision\" IS NULL)"
+          "value": "\n      (\"import_records\".\"kind\" IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',\n        'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',\n        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')\n        AND \"import_records\".\"header_key_id\" IS NOT NULL AND \"import_records\".\"header_key_epoch\" IS NOT NULL AND \"import_records\".\"header_key_epoch\" >= 1\n        AND \"import_records\".\"header_revision\" IS NOT NULL AND \"import_records\".\"header_revision\" >= 1)\n      OR (\"import_records\".\"kind\" NOT IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',\n        'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',\n        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')\n        AND \"import_records\".\"header_key_id\" IS NULL AND \"import_records\".\"header_key_epoch\" IS NULL AND \"import_records\".\"header_revision\" IS NULL)"
         },
         "import_records_expected_revision": {
           "name": "import_records_expected_revision",
           "value": "(\"import_records\".\"kind\" = 'replace' AND \"import_records\".\"expected_revision\" >= 1)\n      OR (\"import_records\".\"kind\" != 'replace' AND \"import_records\".\"expected_revision\" IS NULL)"
-        },
-        "import_records_comment_meta": {
-          "name": "import_records_comment_meta",
-          "value": "\n      (\"import_records\".\"kind\" = 'comment-meta' AND \"import_records\".\"display_sequence\" >= 1\n        AND \"import_records\".\"timestamp_created\" >= 0 AND \"import_records\".\"timestamp_updated\" >= \"import_records\".\"timestamp_created\")\n      OR (\"import_records\".\"kind\" != 'comment-meta' AND \"import_records\".\"display_sequence\" IS NULL\n        AND \"import_records\".\"timestamp_created\" IS NULL AND \"import_records\".\"timestamp_updated\" IS NULL)"
         },
         "import_records_file_head": {
           "name": "import_records_file_head",

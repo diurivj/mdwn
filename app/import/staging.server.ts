@@ -19,7 +19,7 @@ import { hasEmptyBody } from "~/auth/request.server";
 import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
 import { SYMMETRIC_SUITE, HPKE_SUITE } from "~/crypto/enc-v1/format";
 import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
-import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, type AuthorizedDevice } from "~/device/proof.server";
+import { authorizePrivateRequest, commitPrivateBatch, type AuthorizedDevice } from "~/device/proof.server";
 import { accessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
 import { verifyFileHead } from "~/tree/file-head";
 import { verifyListingSignature } from "~/tree/listing";
@@ -87,9 +87,6 @@ type RecordRow = {
   header_key_epoch: number | null;
   header_revision: number | null;
   expected_revision: number | null;
-  display_sequence: number | null;
-  timestamp_created: number | null;
-  timestamp_updated: number | null;
   head_device_id: string | null;
   signer_device_id: string | null;
 };
@@ -166,9 +163,6 @@ type UploadRecord = {
   headerKeyEpoch: number | null;
   headerRevision: number | null;
   expectedRevision: number | null;
-  displaySequence: number | null;
-  timestampCreated: number | null;
-  timestampUpdated: number | null;
   headDeviceId: string | null;
   signerDeviceId: string | null;
 };
@@ -190,7 +184,7 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
   };
   const structural = (): UploadRecord => ({
     ...base, headerKeyId: null, headerKeyEpoch: null, headerRevision: null, expectedRevision: null,
-    displaySequence: null, timestampCreated: null, timestampUpdated: null, headDeviceId: null, signerDeviceId: null,
+    headDeviceId: null, signerDeviceId: null,
   });
   if (descriptor.kind === "node-directory" || descriptor.kind === "node-file") {
     if (payload.length) throw new Error("node record payload");
@@ -202,15 +196,6 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
     const expected = Number(view.getBigUint64(0));
     if (!Number.isSafeInteger(expected) || expected < 1) throw new Error("replace revision");
     return { ...structural(), expectedRevision: expected };
-  }
-  if (descriptor.kind === "comment-meta") {
-    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-    const sequence = view.getUint32(0);
-    const createdAt = Number(view.getBigUint64(4));
-    const updatedAt = Number(view.getBigUint64(12));
-    if (!Number.isSafeInteger(sequence) || sequence < 1 || !Number.isSafeInteger(createdAt) || createdAt < 0 ||
-        !Number.isSafeInteger(updatedAt) || updatedAt < createdAt) throw new Error("comment meta");
-    return { ...structural(), displaySequence: sequence, timestampCreated: createdAt, timestampUpdated: updatedAt };
   }
   if (descriptor.kind === "listing-digest") {
     if (payload.length !== 32) throw new Error("listing digest");
@@ -244,7 +229,7 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
         return context.publicationId === ref1 && context.keyId === ref2;
       case "comment-thread":
         return context.objectId === ref2 && context.keyId === ref4 && context.keyEpoch === 1 && context.revision === 1;
-      case "comment-body": case "comment-attribution":
+      case "comment-body": case "comment-attribution": case "comment-meta":
         return context.objectId === ref2 && context.keyId === ref2 && context.keyEpoch === 1 && context.revision === 1;
       case "comment-key": case "comment-attribution-key":
         return context.objectId === ref2 && context.keyEpoch === 1 && context.revision === 1;
@@ -256,13 +241,12 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
   };
   if (!sameIdentity() || context.keyEpoch < 1 || context.revision < 1) throw new Error("envelope identity");
   return { ...base, headerKeyId: context.keyId, headerKeyEpoch: context.keyEpoch,
-    headerRevision: context.revision, expectedRevision: null, displaySequence: null,
-    timestampCreated: null, timestampUpdated: null, headDeviceId: null, signerDeviceId: null };
+    headerRevision: context.revision, expectedRevision: null, headDeviceId: null, signerDeviceId: null };
 }
 
 const RECORD_COLUMNS = `import_id, chunk_sequence, ordinal, kind, ref1, ref2, ref3, ref4, payload, digest,
-  header_key_id, header_key_epoch, header_revision, expected_revision, display_sequence,
-  timestamp_created, timestamp_updated, head_device_id, signer_device_id`;
+  header_key_id, header_key_epoch, header_revision, expected_revision,
+  head_device_id, signer_device_id`;
 
 /** Multi-row record inserts stay under D1's 100-bound-parameter ceiling. */
 function recordInsertStatements(importId: string, sequence: number, records: readonly UploadRecord[]): SQL[] {
@@ -272,8 +256,7 @@ function recordInsertStatements(importId: string, sequence: number, records: rea
       ${importId}, ${sequence}, ${record.ordinal}, ${record.kind},
       ${record.refs[0] ?? null}, ${record.refs[1] ?? null}, ${record.refs[2] ?? null}, ${record.refs[3] ?? null},
       ${record.payload}, ${record.digest}, ${record.headerKeyId}, ${record.headerKeyEpoch}, ${record.headerRevision},
-      ${record.expectedRevision}, ${record.displaySequence}, ${record.timestampCreated}, ${record.timestampUpdated},
-      ${record.headDeviceId}, ${record.signerDeviceId})`);
+      ${record.expectedRevision}, ${record.headDeviceId}, ${record.signerDeviceId})`);
     statements.push(sql`INSERT INTO import_records (${sql.raw(RECORD_COLUMNS)}) VALUES ${sql.join(rows, sql`, `)}`);
   }
   return statements;
@@ -327,7 +310,17 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
   catch { return invalid(); }
   const session = await sessionRow(env, importId);
   if (!session || session.account_id !== auth.accountId) return notFound();
+  const now = Date.now();
   const bodyDigest = await sha256(body);
+  if (session.state === "committed") {
+    const committedChunk = await chunkRow(env, importId, sequence);
+    return committedChunk && equalBytes(bytesOf(committedChunk.body_digest), bodyDigest)
+      ? Response.json({ sequence, received: committedChunk.descriptor_count, retried: true }, { headers })
+      : changed();
+  }
+  if (session.state !== "open") return changed();
+  if (session.expires_at <= now) { await purgeSession(env, session); return expired(); }
+  if (sequence < 0 || sequence >= session.expected_chunk_count) return invalid();
   const existing = await chunkRow(env, importId, sequence);
   if (existing) {
     if (equalBytes(bytesOf(existing.body_digest), bodyDigest)) {
@@ -336,10 +329,6 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
     await failSession(env, auth, importId);
     return changed();
   }
-  const now = Date.now();
-  if (session.state !== "open") return changed();
-  if (session.expires_at <= now) { await purgeSession(env, session); return expired(); }
-  if (sequence < 0 || sequence >= session.expected_chunk_count) return invalid();
   const payloadDigest = await verifyChunkDigests(chunk);
   if (!payloadDigest) return invalid();
   let records: UploadRecord[];
@@ -372,11 +361,17 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
   return changed();
 }
 
-/** Permanently fail a session whose accepted sequence was replayed with different bytes. */
+/** Permanently fail a session whose accepted sequence was replayed with different
+ * bytes, deleting its staged rows in the same proof-guarded batch. */
 async function failSession(env: Env, auth: AuthorizedDevice, importId: string): Promise<void> {
-  await commitPrivateMutation(env, auth, (guard) => sql`
+  await commitPrivateBatch(env, auth, (guard) => sql`
     UPDATE import_sessions SET state = 'failed'
-    WHERE id = ${importId} AND account_id = ${auth.accountId} AND state = 'open' AND ${guard}`);
+    WHERE id = ${importId} AND account_id = ${auth.accountId} AND state = 'open' AND ${guard}`,
+    (marker) => [
+      sql`DELETE FROM import_records WHERE import_id = ${importId} AND ${marker}`,
+      sql`DELETE FROM import_chunks WHERE import_id = ${importId} AND ${marker}`,
+      sql`DELETE FROM import_session_kinds WHERE import_id = ${importId} AND ${marker}`,
+    ]);
 }
 
 /* ------------------------------------------------------------------ commit */
@@ -414,7 +409,6 @@ function validateCompletePlan(records: readonly RecordRow[]): void {
       throw new Error("listing records");
     }
     if (listing && (listing.header_key_epoch !== 1 || listing.header_revision !== 2)) throw new Error("listing head");
-    if (plan.of("node-file").some((file) => file.ref1 === nodeId && children > 0)) throw new Error("file children");
   }
   for (const file of plan.of("node-file")) {
     const fileId = file.ref1!;
@@ -433,23 +427,19 @@ function validateCompletePlan(records: readonly RecordRow[]): void {
     if (representationKey && !plan.one("file-head", fileId)) throw new Error("replace head");
     if (representationKey && representation.ref2 !== representationKey.ref2) throw new Error("replace pairing");
   }
-  for (const published of plan.of("public-representation")) {
-    if (!plan.of("replace").length) throw new Error("publication without replace");
-    void published;
+  if (plan.of("public-representation").length && !plan.of("replace").length) {
+    throw new Error("publication without replace");
   }
   for (const thread of plan.of("comment-thread")) {
     const threadId = thread.ref2!;
     const bodies = plan.of("comment-body").filter((record) => record.ref1 === threadId);
-    const sequences: number[] = [];
     for (const body of bodies) {
       const meta = plan.one("comment-meta", threadId, body.ref2!);
       const key = plan.one("comment-key", threadId, body.ref2!);
-      if (!meta || !key || key.header_key_id !== thread.ref4 || meta.display_sequence === null) {
+      if (!meta || !key || key.header_key_id !== thread.ref4 || meta.header_key_id !== body.ref2) {
         throw new Error("comment records");
       }
-      sequences.push(meta.display_sequence);
     }
-    if (new Set(sequences).size !== sequences.length) throw new Error("comment order");
     for (const attribution of plan.of("comment-attribution").filter((record) => record.ref1 === threadId)) {
       const key = plan.one("comment-attribution-key", threadId, attribution.ref2!);
       if (!key || key.header_key_id !== thread.ref4) throw new Error("attribution records");
@@ -477,6 +467,7 @@ type PublicationCheck = {
   state: string;
   current_link_id: string | null;
   current_representation_id: string | null;
+  current_revision: number;
   file_id: string;
 };
 
@@ -560,16 +551,17 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
         replace.current_representation_id !== replace.ref2) return changed();
   }
   const publications = await createDb(env.DB).all<PublicationCheck>(sql`
-    SELECT r.ref1, r.ref2, r.header_revision, p.state, p.current_link_id, p.current_representation_id, p.file_id
+    SELECT r.ref1, r.ref2, r.header_revision, p.state, p.current_link_id, p.current_representation_id, p.file_id,
+      pr.revision AS current_revision
     FROM import_records r JOIN publications p ON p.id = r.ref1
+    LEFT JOIN public_representations pr ON pr.id = p.current_representation_id
     WHERE r.import_id = ${importId} AND r.kind = 'public-representation'`);
   if (publications.length !== plan.of("public-representation").length) return incomplete();
   for (const publication of publications) {
     if (publication.state !== "active" || publication.current_link_id !== publication.ref2 ||
-        publication.current_representation_id === null) return changed();
-    const revision = await createDb(env.DB).get<{ revision: number }>(sql`
-      SELECT revision FROM public_representations WHERE id = ${publication.current_representation_id}`);
-    if (!revision || revision.revision + 1 !== publication.header_revision) return changed();
+        publication.current_representation_id === null || publication.current_revision + 1 !== publication.header_revision) {
+      return changed();
+    }
     if (!replaces.some((replace) => replace.ref1 === publication.file_id)) return incomplete();
   }
 
@@ -729,7 +721,7 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
       sql`INSERT INTO comment_threads (id, owner_id, file_id, purpose, publication_id, current_epoch_id,
           next_sequence, created_at)
         SELECT t.ref2, ${session.target_owner_id}, t.ref1, 'private', NULL, t.ref3,
-          COALESCE((SELECT max(m.display_sequence) + 1 FROM import_records m
+          COALESCE((SELECT count(*) + 1 FROM import_records m
             WHERE m.import_id = t.import_id AND m.kind = 'comment-meta' AND m.ref1 = t.ref2), 1), ${nowMs}
         FROM import_records t WHERE t.import_id = ${importId} AND t.kind = 'comment-thread' AND ${marker}`,
       sql`INSERT INTO sharing_comment_capabilities (object_id, owner_id, file_id, thread_id, purpose,
@@ -741,13 +733,17 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
         FROM import_records WHERE import_id = ${importId} AND kind = 'comment-thread' AND ${marker}`,
       sql`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision, body_ciphertext,
           body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
-        SELECT b.ref2, b.ref1, t.ref3, ${auth.accountId}, m.display_sequence, 1, b.payload, length(b.payload),
-          k.payload, 1, m.timestamp_created, m.timestamp_updated
+        SELECT b.ref2, b.ref1, t.ref3, ${auth.accountId},
+          ROW_NUMBER() OVER (PARTITION BY b.ref1 ORDER BY b.chunk_sequence, b.ordinal), 1,
+          b.payload, length(b.payload), k.payload, 1, ${nowMs}, ${nowMs}
         FROM import_records b
         JOIN import_records t ON t.import_id = b.import_id AND t.kind = 'comment-thread' AND t.ref2 = b.ref1
         JOIN import_records m ON m.import_id = b.import_id AND m.kind = 'comment-meta' AND m.ref1 = b.ref1 AND m.ref2 = b.ref2
         JOIN import_records k ON k.import_id = b.import_id AND k.kind = 'comment-key' AND k.ref1 = b.ref1 AND k.ref2 = b.ref2
         WHERE b.import_id = ${importId} AND b.kind = 'comment-body' AND ${marker}`,
+      sql`INSERT INTO import_comment_meta (comment_id, thread_id, owner_id, ciphertext)
+        SELECT ref2, ref1, ${session.target_owner_id}, payload
+        FROM import_records WHERE import_id = ${importId} AND kind = 'comment-meta' AND ${marker}`,
       sql`INSERT INTO thread_attributions (id, thread_id, author_id, epoch_id, revision, ciphertext,
           content_key_envelope, content_key_epoch, created_at, updated_at)
         SELECT a.ref2, a.ref1, ${auth.accountId}, t.ref3, 1, a.payload, k.payload, 1, ${nowMs}, ${nowMs}
@@ -805,7 +801,7 @@ async function purgeExpiredSessions(env: Env, accountId: string): Promise<void> 
     UNION ALL
     SELECT id, state FROM import_sessions
     WHERE account_id = ${accountId} AND state = 'committed' AND expires_at <= ${now}
-      AND NOT EXISTS (SELECT 1 FROM import_records WHERE import_id = import_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM import_chunks WHERE import_id = import_sessions.id)
     LIMIT ${PURGE_BATCH}`);
   if (!rows.length) return;
   await atomicSqlBatch(env.DB, rows.flatMap((row) => deleteStatements(row.id, row.state !== "committed")));

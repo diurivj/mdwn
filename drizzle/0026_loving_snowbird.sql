@@ -27,6 +27,17 @@ CREATE TABLE `import_comment_envelopes` (
 );
 --> statement-breakpoint
 CREATE INDEX `import_comment_envelopes_file_idx` ON `import_comment_envelopes` (`file_id`,`thread_id`);--> statement-breakpoint
+CREATE TABLE `import_comment_meta` (
+	`comment_id` text PRIMARY KEY NOT NULL,
+	`thread_id` text NOT NULL,
+	`owner_id` text NOT NULL,
+	`ciphertext` blob NOT NULL,
+	FOREIGN KEY (`comment_id`) REFERENCES `comments`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`owner_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "import_comment_meta_bounded" CHECK(length("import_comment_meta"."ciphertext") BETWEEN 1 AND 4096)
+);
+--> statement-breakpoint
+CREATE INDEX `import_comment_meta_thread_idx` ON `import_comment_meta` (`thread_id`,`comment_id`);--> statement-breakpoint
 CREATE TABLE `import_commits` (
 	`import_id` text PRIMARY KEY NOT NULL,
 	`account_id` text NOT NULL,
@@ -53,9 +64,6 @@ CREATE TABLE `import_records` (
 	`header_key_epoch` integer,
 	`header_revision` integer,
 	`expected_revision` integer,
-	`display_sequence` integer,
-	`timestamp_created` integer,
-	`timestamp_updated` integer,
 	`head_device_id` text,
 	`signer_device_id` text,
 	PRIMARY KEY(`import_id`, `chunk_sequence`, `ordinal`),
@@ -71,11 +79,11 @@ CREATE TABLE `import_records` (
       ("import_records"."kind" IN ('node-directory', 'node-file') AND length("import_records"."payload") = 0)
       OR ("import_records"."kind" IN ('entry-name', 'entry-order', 'comment-attribution') AND length("import_records"."payload") BETWEEN 1 AND 4096)
       OR ("import_records"."kind" IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',
-        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key') AND length("import_records"."payload") BETWEEN 1 AND 16384)
+        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')
+        AND length("import_records"."payload") BETWEEN 1 AND 16384)
       OR ("import_records"."kind" IN ('representation', 'public-representation', 'listing-ciphertext') AND length("import_records"."payload") BETWEEN 1 AND 524288)
       OR ("import_records"."kind" = 'file-head' AND length("import_records"."payload") = 96)
       OR ("import_records"."kind" = 'replace' AND length("import_records"."payload") = 8)
-      OR ("import_records"."kind" = 'comment-meta' AND length("import_records"."payload") = 20)
       OR ("import_records"."kind" = 'listing-digest' AND length("import_records"."payload") = 32)
       OR ("import_records"."kind" = 'listing-signature' AND length("import_records"."payload") = 64)),
 	CONSTRAINT "import_records_refs_bounded" CHECK(
@@ -97,20 +105,15 @@ CREATE TABLE `import_records` (
 	CONSTRAINT "import_records_header_fields" CHECK(
       ("import_records"."kind" IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',
         'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',
-        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext')
+        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')
         AND "import_records"."header_key_id" IS NOT NULL AND "import_records"."header_key_epoch" IS NOT NULL AND "import_records"."header_key_epoch" >= 1
         AND "import_records"."header_revision" IS NOT NULL AND "import_records"."header_revision" >= 1)
       OR ("import_records"."kind" NOT IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',
         'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',
-        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext')
+        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')
         AND "import_records"."header_key_id" IS NULL AND "import_records"."header_key_epoch" IS NULL AND "import_records"."header_revision" IS NULL)),
 	CONSTRAINT "import_records_expected_revision" CHECK(("import_records"."kind" = 'replace' AND "import_records"."expected_revision" >= 1)
       OR ("import_records"."kind" != 'replace' AND "import_records"."expected_revision" IS NULL)),
-	CONSTRAINT "import_records_comment_meta" CHECK(
-      ("import_records"."kind" = 'comment-meta' AND "import_records"."display_sequence" >= 1
-        AND "import_records"."timestamp_created" >= 0 AND "import_records"."timestamp_updated" >= "import_records"."timestamp_created")
-      OR ("import_records"."kind" != 'comment-meta' AND "import_records"."display_sequence" IS NULL
-        AND "import_records"."timestamp_created" IS NULL AND "import_records"."timestamp_updated" IS NULL)),
 	CONSTRAINT "import_records_file_head" CHECK(
       ("import_records"."kind" = 'file-head' AND "import_records"."head_device_id" IS NOT NULL AND "import_records"."signer_device_id" IS NULL)
       OR ("import_records"."kind" = 'listing-signature' AND "import_records"."signer_device_id" IS NOT NULL AND "import_records"."head_device_id" IS NULL)

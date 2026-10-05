@@ -75,7 +75,7 @@ export type ImportErrorCode =
   | "plan-too-large"
   | "staging-upload-failed"
   | "staging-changed"
-  | "import-committed";
+  | "import-expired";
 
 export type ImportProblemAction = "remove" | "fix" | "re-export" | "split";
 
@@ -113,9 +113,9 @@ export function importProblemMessage(error: ImportError): string {
     case "historical-comments-replace": return `${name} carries Historical Comments, but you chose Replace. mdwn cannot merge historical Comments into an existing thread. Choose Keep both or Skip instead.`;
     case "plan-record-too-large": return `${name} exceeds its encrypted ${formatBytes(error.detail?.limit ?? 0)} field limit. Remove, fix, or split it.`;
     case "plan-too-large": return "The encrypted import plan exceeds the bounded staging envelope. Remove files or split the selection and retry.";
-    case "staging-upload-failed": return "The upload was interrupted. Nothing became visible; you can retry this Import safely.";
+    case "staging-upload-failed": return "The upload was interrupted before the final step. Check the folder; if the import is not visible, you can retry it safely.";
     case "staging-changed": return "This Import changed on the server, so it was not committed. Refresh the folder, review again, and retry.";
-    case "import-committed": return "This Import was already committed.";
+    case "import-expired": return "This Import session expired before it committed. Nothing became visible; review and retry.";
   }
 }
 

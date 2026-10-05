@@ -559,6 +559,9 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})`, committed),
       deletedPseudonymItems("thread", sql`SELECT id FROM thread_attributions WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})`, committed),
+      sql`DELETE FROM import_comment_meta WHERE comment_id IN
+        (SELECT id FROM comments WHERE thread_id IN
+          (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})) AND ${committed}`,
       sql`DELETE FROM comments WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM thread_attributions WHERE thread_id IN

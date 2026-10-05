@@ -21,7 +21,7 @@ type CommitResponse = { importId?: unknown; committed?: unknown; alreadyCommitte
 
 function asImportError(response: Response, body: { error?: unknown }): ImportError {
   if (response.status === 409) return new ImportError("staging-changed");
-  if (response.status === 410) return new ImportError("staging-changed");
+  if (response.status === 410) return new ImportError("import-expired");
   return new ImportError("staging-upload-failed", { reason: typeof body.error === "string" ? body.error : undefined });
 }
 
@@ -45,8 +45,10 @@ export async function uploadImportChunks(
   onProgress?.({ chunksSent: 0, chunksTotal: plan.chunks.length });
   for (const chunk of plan.chunks) {
     const body = encodeImportChunkBody(chunk.descriptors, chunk.payload);
-    const response = await privateRequest(`/api/private/imports/${importId}/chunks/${chunk.sequence}`,
-      { method: "PUT", body, signal });
+    const path = `/api/private/imports/${importId}/chunks/${chunk.sequence}`;
+    // A lost response leaves the chunk stored under the same exact bytes, so
+    // one silent retry is safe and never creates a second record.
+    const response = await retryOnce(() => privateRequest(path, { method: "PUT", body, signal }));
     if (!response.ok) {
       const parsed = await response.json().catch(() => ({})) as { error?: unknown };
       throw asImportError(response, parsed);
@@ -55,9 +57,18 @@ export async function uploadImportChunks(
   }
 }
 
-/** Confirmation step 3: the atomic visibility commit. */
+async function retryOnce(request: () => Promise<Response>): Promise<Response> {
+  try { return await request(); }
+  catch (error) {
+    if (error instanceof ImportError) throw error;
+    return await request();
+  }
+}
+
+/** Confirmation step 3: the atomic visibility commit (idempotent for a session). */
 export async function commitImport(importId: string, signal?: AbortSignal): Promise<{ entriesRevision?: number }> {
-  const response = await privateRequest(`/api/private/imports/${importId}/commit`, { method: "POST", signal });
+  const response = await retryOnce(() =>
+    privateRequest(`/api/private/imports/${importId}/commit`, { method: "POST", signal }));
   const parsed = await response.json().catch(() => ({})) as CommitResponse;
   if (!response.ok) throw asImportError(response, parsed);
   if (parsed.committed !== true) throw new ImportError("staging-upload-failed");
