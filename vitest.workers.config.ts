@@ -2,6 +2,8 @@ import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { reactRouter } from "@react-router/dev/vite";
 import { defineConfig } from "vitest/config";
 
+import { SUPPORT_ADDRESS_FIXTURES } from "./tests/support/donation-fixtures.ts";
+
 export default defineConfig({
   plugins: [
     reactRouter(),
@@ -13,6 +15,9 @@ export default defineConfig({
           HEALTHZ_TOKEN: "mdwn-worker-test-health-probe-not-a-deployment-secret",
           SESSION_COOKIE_SECRET: "mdwn-worker-tests-only-not-a-deployment-secret",
           ABUSE_HMAC_SECRET: "mdwn-worker-abuse-tests-only-not-a-deployment-secret",
+          SUPPORT_MONERO_ADDRESS: SUPPORT_ADDRESS_FIXTURES.monero,
+          SUPPORT_BITCOIN_ADDRESS: SUPPORT_ADDRESS_FIXTURES.bitcoin,
+          SUPPORT_LIGHTNING_ADDRESS: SUPPORT_ADDRESS_FIXTURES.lightning,
         },
       },
     })),

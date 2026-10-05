@@ -10,3 +10,10 @@
 # HEALTHZ_TOKEN=local-development-only-token
 # SESSION_COOKIE_SECRET=replace-with-a-32-character-minimum-local-secret
 # ABUSE_HMAC_SECRET=replace-with-a-different-32-character-random-secret
+#
+# Optional public donation addresses for the anonymous /support page. These are
+# public page content, never secrets; leave one out to hide that asset. Preview
+# and production set them in wrangler.jsonc instead.
+# SUPPORT_MONERO_ADDRESS=
+# SUPPORT_BITCOIN_ADDRESS=
+# SUPPORT_LIGHTNING_ADDRESS=

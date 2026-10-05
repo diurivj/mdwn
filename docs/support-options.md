@@ -68,3 +68,13 @@ Whatever option is chosen, the implementation must respect section 1.2 and the s
 ## Recommendation
 
 Launch with a static support page: a Monero address, a Bitcoin address, and a Lightning address, with locally generated QR codes. This meets all three goals at zero cost and with no third-party dependency. Add BTCPay Server later only if a hosted, self-custodial, zero-fee multi-asset page is wanted, or NOWPayments if minimal operations matter more than privacy.
+
+## Implementation
+
+The page is `GET /support` (`app/routes/support.tsx`), linked from the home footer.
+
+- Addresses are operator-published Worker `vars` — `SUPPORT_MONERO_ADDRESS`, `SUPPORT_BITCOIN_ADDRESS`, `SUPPORT_LIGHTNING_ADDRESS` — set per environment in `wrangler.jsonc`, or locally in `.dev.vars`. They are public page content, not secrets. An unset or empty value hides that asset; the page never shows a placeholder or an invented address.
+- QR codes are generated locally on the server from the exact displayed address string with the vendored `qrcode` package (`app/support/qr.server.ts`). No third-party QR service, remote image, script, widget, tracker, or analytics is involved, and the page makes no external request.
+- The route reads no Session and no cookie, writes no D1 row or operational record, and returns the same page to every visitor. It carries the global strict CSP plus `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow, noarchive`.
+- Donations grant nothing: there is no entitlement state, and the copy states plainly that mdwn runs identically without them and that capacity exhaustion fails closed rather than triggering paid spend.
+- Tests: `tests/support-options.test.ts` (parsing/filtering), `tests/worker/support-page.test.ts` (request boundary, no cookie, no D1 write, hardening headers), and `e2e/support.spec.ts` (footer link, rendered addresses and inline QR SVGs, strict CSP, zero external requests across Chromium, Firefox, and WebKit).

@@ -4,6 +4,7 @@ export default [
   index("routes/home.tsx"),
   route("sign-in", "routes/sign-in.tsx"),
   route("sign-up", "routes/sign-up.tsx"),
+  route("support", "routes/support.tsx"),
   route("recover", "routes/recover.tsx"),
   route("recover-files", "routes/recover-files.tsx"),
   route("enroll-device", "routes/enroll-device.tsx"),
