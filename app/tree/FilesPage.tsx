@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/comments/comments-client";
 import { ExportControl } from "~/export/ExportControl";
+import { ImportControl, type ImportControlHandle } from "~/import/ImportControl";
 import { declarePublicationAuthor, type PreparedPublicLink } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/PublishPanel";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
@@ -59,6 +60,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   // Complete links stay only in browser memory, never in persistent storage.
   const [publicLinks, setPublicLinks] = useState<ReadonlyMap<string, PreparedPublicLink>>(() => new Map());
   const [submitting, setSubmitting] = useState(false);
+  const importControl = useRef<ImportControlHandle | null>(null);
   const submission = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -347,7 +349,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         <Link to="/account/key-rotations" className="mt-2 block text-sm underline">Secure access updates</Link>
       </>}
     </aside>
-    <section className="min-w-0 p-4 md:p-6">
+    <section className="min-w-0 p-4 md:p-6"
+      onDragOver={(event) => { if (importControl.current?.canAcceptDrop()) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
+      onDrop={(event) => { if (!importControl.current?.canAcceptDrop()) return; event.preventDefault(); importControl.current.acceptDrop(event.dataTransfer); }}>
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={() => setDrawer(true)} className="rounded border px-2 py-1 lg:hidden">Tree</button>
         <nav aria-label="Breadcrumbs" className="flex min-w-0 flex-wrap gap-2 text-sm">
@@ -366,7 +370,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           onClick={() => setPublishOpen((open) => !open)} className="rounded border px-2 py-1">
           {snapshot.access.actorAccountId === snapshot.access.vaultId ? "Publish" : "Request publication"}</button>}
       </div>
-      <div className="mt-3"><ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} /></div>
+      <div className="mt-3 flex flex-wrap items-start gap-2"><ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} />
+        <ImportControl ref={importControl} snapshot={snapshot} nodeId={nodeId} kind={kind} disabled={busy || recoveryPending} /></div>
       {kind === "file" && snapshot.file && publishOpen && <PublishPanel fileId={nodeId} snapshot={snapshot}
         fileReady={fileReady && !busy} links={publicLinks}
         onPrepared={(link) => setPublicLinks((previous) => {
