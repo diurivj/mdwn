@@ -2,17 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import { eligibleImportTargets, preferredImportTarget, type ImportScopeSnapshot } from "../app/import/targets";
 
+function withSealed(entries: readonly { nodeId: string; kind: "file" | "directory"; name: string }[]) {
+  return entries.map((entry) => ({ ...entry, nameCiphertext: "bmFtZQ", orderCiphertext: "b3JkZXI", keyEnvelope: "a2V5" }));
+}
+
 function snapshot(overrides: Partial<ImportScopeSnapshot> = {}): ImportScopeSnapshot {
   const key = new Uint8Array(32).fill(1);
   return {
     access: { rootId: "root", rootKind: "directory", vaultId: "owner", actorAccountId: "owner" },
     keys: { root: key, writable: new Uint8Array(32).fill(2), readonly: new Uint8Array(32).fill(3), direct: key },
     listings: {
-      root: { directoryId: "root", entriesRevision: 2, canCreate: true, entries: [
+      root: { directoryId: "root", entriesRevision: 2, canCreate: true, entries: withSealed([
         { nodeId: "writable", kind: "directory", name: "notes" },
         { nodeId: "readonly", kind: "directory", name: "shared-read" },
         { nodeId: "file1", kind: "file", name: "Draft.md" },
-      ] },
+      ]) },
       writable: { directoryId: "writable", entriesRevision: 1, canCreate: true, entries: [] },
       readonly: { directoryId: "readonly", entriesRevision: 1, canCreate: false, entries: [] },
     },

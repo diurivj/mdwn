@@ -9,6 +9,7 @@ import {
   normalizeCommentText,
   openAttribution,
   openCommentBody,
+  openCommentRecord,
   sealAttribution,
   sealCommentBody,
   validCommentText,
@@ -22,6 +23,19 @@ const threadKey = new Uint8Array(32).fill(7);
 const otherKey = new Uint8Array(32).fill(8);
 
 describe("private comment content", () => {
+  it("round-trips encrypted historical display metadata under the same content key", async () => {
+    const sealed = await sealCommentBody(threadKey, { vaultId, commentId, capabilityId,
+      keyEpoch: 1, revision: 1, text: "historical", meta: { createdAt: 1_700_000_000_000, updatedAt: 1_700_000_001_000 } });
+    expect(sealed.metaCiphertext).toBeTruthy();
+    const opened = await openCommentRecord(threadKey, { vaultId, commentId, revision: 1, capabilityId,
+      keyEpoch: 1, bodyCiphertext: sealed.bodyCiphertext, contentKeyEnvelope: sealed.contentKeyEnvelope,
+      metaCiphertext: sealed.metaCiphertext });
+    expect(opened.text).toBe("historical");
+    expect(opened.meta).toEqual({ createdAt: 1_700_000_000_000, updatedAt: 1_700_000_001_000 });
+    await expect(sealCommentBody(threadKey, { vaultId, commentId, capabilityId, keyEpoch: 1, revision: 1,
+      text: "bad", meta: { createdAt: 2, updatedAt: 1 } })).rejects.toThrow();
+  });
+
   it("round-trips plain text and normalizes CRLF and lone CR line breaks", async () => {
     const sealed = await sealCommentBody(threadKey, { vaultId, commentId, capabilityId,
       keyEpoch: 1, revision: 1, text: "First\r\nSecond\rThird" });

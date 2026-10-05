@@ -59,7 +59,7 @@ type RegistryState = {
  */
 export async function privateRequest(
   path: string,
-  options: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: string; signal?: AbortSignal },
+  options: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: string | Uint8Array; signal?: AbortSignal },
 ): Promise<Response> {
   const url = new URL(path, location.origin);
   if (url.origin !== location.origin || !url.pathname.startsWith("/api/") || url.hash ||
@@ -112,10 +112,13 @@ export async function privateRequest(
   }
   try {
     const response = await fetch(url.href, {
-      method: options.method, body: options.body, signal: options.signal,
+      method: options.method,
+      body: options.body === undefined ? undefined : options.body as BodyInit,
+      signal: options.signal,
       headers: {
         "X-Mdwn-Device-Proof": JSON.stringify(proof),
-        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(options.body === undefined ? {}
+          : { "Content-Type": typeof options.body === "string" ? "application/json" : "application/octet-stream" }),
       },
       cache: "no-store", redirect: "error",
     });

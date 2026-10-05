@@ -44,7 +44,7 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
 
   const reload = useCallback(async (signal: AbortSignal) => {
     try {
-      const next = await loadPrivateComments(accessRef.current, fileId, signal);
+      const next = await loadPrivateComments(accessRef.current, fileId, signal, snapshot.file?.capabilityKey ?? null);
       if (!signal.aborted) setPanel(next);
       return next;
     } catch (error) {

@@ -1183,3 +1183,240 @@ export type Publication = typeof publications.$inferSelect;
 export type PublicationLink = typeof publicationLinks.$inferSelect;
 export type PublicRepresentation = typeof publicRepresentations.$inferSelect;
 export type PublicationTeardown = typeof publicationTeardowns.$inferSelect;
+
+/**
+ * Import staging (ticket 30).
+ *
+ * A confirmed Import stages every canonical record in these tables only; no
+ * canonical tree/File/Comment row exists before the one `import_commits`
+ * marker transaction materializes them. So the visibility rule ("a normal
+ * query sees either a non-Import record or a matching commit marker") holds by
+ * construction, `vault_nodes.import_id` records provenance on committed
+ * nodes, and cancelled/expired/failed sessions are unreachable and deletable
+ * without touching canonical tables.
+ */
+export const importSessions = sqliteTable(
+  "import_sessions",
+  {
+    /** Unguessable 256-bit base64url session ID. */
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+    sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "restrict" }),
+    deviceId: text("device_id").notNull().references(() => encryptionDevices.id, { onDelete: "restrict" }),
+    targetDirectoryId: text("target_directory_id").notNull(),
+    targetOwnerId: text("target_owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+    reviewedEntryRevision: integer("reviewed_entry_revision").notNull(),
+    /** One binary encrypted `import-staging-manifest` envelope, at most 128 KiB. */
+    manifestCiphertext: blob("manifest_ciphertext").notNull(),
+    manifestDigest: blob("manifest_digest").notNull(),
+    expectedRecordCount: integer("expected_record_count").notNull(),
+    expectedChunkCount: integer("expected_chunk_count").notNull(),
+    expectedPayloadBytes: integer("expected_payload_bytes").notNull(),
+    expectedCommentCount: integer("expected_comment_count").notNull(),
+    /** SHA-256 over the sequence-ordered chunk body digests. */
+    aggregateDigest: blob("aggregate_digest").notNull(),
+    state: text("state").notNull(),
+    /** Server-maintained aggregate counters; never trusted from the client. */
+    uploadedChunks: integer("uploaded_chunks").notNull().default(0),
+    uploadedRecords: integer("uploaded_records").notNull().default(0),
+    uploadedBytes: integer("uploaded_bytes").notNull().default(0),
+    createdAt: integer("created_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    committedAt: integer("committed_at"),
+  },
+  (table) => [
+    index("import_sessions_account_state_idx").on(table.accountId, table.state, table.expiresAt),
+    index("import_sessions_expiry_idx").on(table.expiresAt, table.id),
+    check("import_sessions_state_valid", sql`${table.state} IN ('open', 'committed', 'failed')`),
+    check("import_sessions_revision_positive", sql`${table.reviewedEntryRevision} >= 1`),
+    check("import_sessions_manifest_bounded", sql`length(${table.manifestCiphertext}) BETWEEN 1 AND 131072`),
+    check("import_sessions_manifest_digest", sql`length(${table.manifestDigest}) = 32 AND length(${table.aggregateDigest}) = 32`),
+    check("import_sessions_expected_bounded", sql`${table.expectedRecordCount} BETWEEN 1 AND 2000
+      AND ${table.expectedChunkCount} BETWEEN 1 AND 40
+      AND ${table.expectedPayloadBytes} BETWEEN 1 AND 20971520
+      AND ${table.expectedCommentCount} BETWEEN 0 AND 1000`),
+    check("import_sessions_uploaded_bounded", sql`${table.uploadedChunks} BETWEEN 0 AND ${table.expectedChunkCount}
+      AND ${table.uploadedRecords} BETWEEN 0 AND ${table.expectedRecordCount}
+      AND ${table.uploadedBytes} BETWEEN 0 AND ${table.expectedPayloadBytes}`),
+    check("import_sessions_expiry_bounded", sql`${table.expiresAt} > ${table.createdAt}
+      AND ${table.expiresAt} <= ${table.createdAt} + 86400000`),
+    check("import_sessions_commit_state", sql`(${table.state} = 'committed' AND ${table.committedAt} IS NOT NULL)
+      OR (${table.state} != 'committed' AND ${table.committedAt} IS NULL)`),
+    check("import_sessions_id_opaque", sql`length(${table.id}) = 43 AND ${table.id} NOT GLOB '*[^A-Za-z0-9_-]*'`),
+  ],
+);
+
+/** Per-kind expected record counts; the commit compares these with what arrived. */
+export const importSessionKinds = sqliteTable(
+  "import_session_kinds",
+  {
+    importId: text("import_id").notNull().references(() => importSessions.id, { onDelete: "restrict" }),
+    kind: text("kind").notNull(),
+    expectedCount: integer("expected_count").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.importId, table.kind] }),
+    check("import_session_kinds_count_bounded", sql`${table.expectedCount} BETWEEN 1 AND 2000`),
+  ],
+);
+
+/** One raw binary encrypted chunk: `(import_id, sequence)` identifies it, `digest` the bytes. */
+export const importChunks = sqliteTable(
+  "import_chunks",
+  {
+    importId: text("import_id").notNull().references(() => importSessions.id, { onDelete: "restrict" }),
+    sequence: integer("sequence").notNull(),
+    payload: blob("payload").notNull(),
+    /** SHA-256 of the whole uploaded chunk body; the exact-retry identity. */
+    digest: blob("digest").notNull(),
+    descriptorCount: integer("descriptor_count").notNull(),
+    receivedAt: integer("received_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.importId, table.sequence] }),
+    check("import_chunks_sequence_bounded", sql`${table.sequence} BETWEEN 0 AND 39`),
+    check("import_chunks_payload_bounded", sql`length(${table.payload}) BETWEEN 1 AND 524288`),
+    check("import_chunks_digest", sql`length(${table.digest}) = 32`),
+    check("import_chunks_descriptors_bounded", sql`${table.descriptorCount} BETWEEN 1 AND 50`),
+  ],
+);
+
+/** One typed canonical staged record. Refs are opaque IDs; every bound mirrors the locked envelope. */
+export const importRecords = sqliteTable(
+  "import_records",
+  {
+    importId: text("import_id").notNull().references(() => importSessions.id, { onDelete: "restrict" }),
+    chunkSequence: integer("chunk_sequence").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    kind: text("kind").notNull(),
+    ref1: text("ref1"),
+    ref2: text("ref2"),
+    ref3: text("ref3"),
+    ref4: text("ref4"),
+    /** Byte range inside the chunk payload; the bytes live only in `import_chunks`. */
+    offset: integer("offset").notNull(),
+    length: integer("length").notNull(),
+    digest: blob("digest").notNull(),
+    /** Typed header/routing fields extracted from an inspected (not opened) envelope. */
+    headerKeyId: text("header_key_id"),
+    headerKeyEpoch: integer("header_key_epoch"),
+    headerRevision: integer("header_revision"),
+    /** `replace`: the current File revision the plan reviewed. */
+    expectedRevision: integer("expected_revision"),
+    /** `file-head`: the verified signing device. */
+    headDeviceId: text("head_device_id"),
+    /** `listing-signature`: the device whose signature this listing head carries. */
+    signerDeviceId: text("signer_device_id"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.importId, table.chunkSequence, table.ordinal] }),
+    index("import_records_kind_idx").on(table.importId, table.kind, table.ref1),
+    check("import_records_kind_valid", sql`${table.kind} IN (
+      'node-directory', 'node-file', 'entry-name', 'entry-order', 'directory-capability', 'file-capability',
+      'entry-key', 'representation-key', 'representation', 'file-head', 'replace', 'public-representation',
+      'comment-thread', 'comment-meta', 'comment-body', 'comment-key', 'comment-attribution', 'comment-attribution-key',
+      'listing-ciphertext', 'listing-digest', 'listing-signature')`),
+    check("import_records_ordinal_bounded", sql`${table.ordinal} BETWEEN 0 AND 49`),
+    check("import_records_digest", sql`length(${table.digest}) = 32`),
+    check("import_records_range_bounded", sql`${table.offset} >= 0 AND ${table.length} >= 0
+      AND ${table.offset} + ${table.length} <= 524288`),
+    // Every canonical payload ceiling from the locked import envelope.
+    check("import_records_payload_bounded", sql`
+      (${table.kind} IN ('node-directory', 'node-file') AND ${table.length} = 0)
+      OR (${table.kind} IN ('entry-name', 'entry-order', 'comment-attribution') AND ${table.length} BETWEEN 1 AND 4096)
+      OR (${table.kind} IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',
+        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')
+        AND ${table.length} BETWEEN 1 AND 16384)
+      OR (${table.kind} IN ('representation', 'public-representation', 'listing-ciphertext') AND ${table.length} BETWEEN 1 AND 524288)
+      OR (${table.kind} = 'file-head' AND ${table.length} = 96)
+      OR (${table.kind} = 'replace' AND ${table.length} = 8)
+      OR (${table.kind} = 'listing-digest' AND ${table.length} = 32)
+      OR (${table.kind} = 'listing-signature' AND ${table.length} = 64)`),
+    check("import_records_refs_bounded", sql`
+      (${table.ref1} IS NULL OR length(${table.ref1}) BETWEEN 1 AND 43)
+      AND (${table.ref2} IS NULL OR length(${table.ref2}) BETWEEN 1 AND 43)
+      AND (${table.ref3} IS NULL OR length(${table.ref3}) BETWEEN 1 AND 43)
+      AND (${table.ref4} IS NULL OR length(${table.ref4}) BETWEEN 1 AND 43)`),
+    check("import_records_shape", sql`
+      (${table.kind} IN ('listing-ciphertext', 'listing-digest', 'listing-signature')
+        AND ${table.ref1} IS NOT NULL AND ${table.ref2} IS NULL AND ${table.ref3} IS NULL AND ${table.ref4} IS NULL)
+      OR (${table.kind} IN ('node-directory', 'node-file', 'entry-name', 'entry-order', 'directory-capability',
+        'entry-key', 'file-head', 'replace', 'comment-meta', 'comment-body', 'comment-key',
+        'comment-attribution', 'comment-attribution-key')
+        AND ${table.ref1} IS NOT NULL AND ${table.ref2} IS NOT NULL AND ${table.ref3} IS NULL AND ${table.ref4} IS NULL)
+      OR (${table.kind} IN ('file-capability', 'representation-key', 'representation', 'public-representation')
+        AND ${table.ref1} IS NOT NULL AND ${table.ref2} IS NOT NULL AND ${table.ref3} IS NOT NULL AND ${table.ref4} IS NULL)
+      OR (${table.kind} = 'comment-thread'
+        AND ${table.ref1} IS NOT NULL AND ${table.ref2} IS NOT NULL AND ${table.ref3} IS NOT NULL AND ${table.ref4} IS NOT NULL)`),
+    check("import_records_header_fields", sql`
+      (${table.kind} IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',
+        'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',
+        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')
+        AND ${table.headerKeyId} IS NOT NULL AND ${table.headerKeyEpoch} IS NOT NULL AND ${table.headerKeyEpoch} >= 1
+        AND ${table.headerRevision} IS NOT NULL AND ${table.headerRevision} >= 1)
+      OR (${table.kind} NOT IN ('entry-name', 'entry-order', 'directory-capability', 'file-capability', 'entry-key',
+        'representation-key', 'representation', 'public-representation', 'comment-thread', 'comment-body',
+        'comment-key', 'comment-attribution', 'comment-attribution-key', 'listing-ciphertext', 'comment-meta')
+        AND ${table.headerKeyId} IS NULL AND ${table.headerKeyEpoch} IS NULL AND ${table.headerRevision} IS NULL)`),
+    check("import_records_expected_revision", sql`(${table.kind} = 'replace' AND ${table.expectedRevision} >= 1)
+      OR (${table.kind} != 'replace' AND ${table.expectedRevision} IS NULL)`),
+    check("import_records_file_head", sql`
+      (${table.kind} = 'file-head' AND ${table.headDeviceId} IS NOT NULL AND ${table.signerDeviceId} IS NULL)
+      OR (${table.kind} = 'listing-signature' AND ${table.signerDeviceId} IS NOT NULL AND ${table.headDeviceId} IS NULL)
+      OR (${table.kind} NOT IN ('file-head', 'listing-signature')
+        AND ${table.headDeviceId} IS NULL AND ${table.signerDeviceId} IS NULL)`),
+  ],
+);
+
+/** The immutable commit marker. A committed Import materializes canonical rows in this transaction. */
+export const importCommits = sqliteTable(
+  "import_commits",
+  {
+    importId: text("import_id").primaryKey().references(() => importSessions.id, { onDelete: "restrict" }),
+    accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+    targetDirectoryId: text("target_directory_id").notNull(),
+    committedAt: integer("committed_at").notNull(),
+  },
+  (table) => [
+    index("import_commits_account_idx").on(table.accountId, table.committedAt),
+    check("import_commits_target_opaque", sql`length(${table.targetDirectoryId}) = 36`),
+  ],
+);
+
+/** Thread-capability envelope wrapped under the imported File capability key;
+ * served only to a reader with live File-read access, so the fresh Historical
+ * thread follows current File access and restores no former authority. */
+export const importCommentEnvelopes = sqliteTable(
+  "import_comment_envelopes",
+  {
+    threadId: text("thread_id").primaryKey().references(() => commentThreads.id, { onDelete: "restrict" }),
+    fileId: text("file_id").notNull(),
+    capabilityId: text("capability_id").notNull(),
+    capabilityEpoch: integer("capability_epoch").notNull(),
+    keyEpoch: integer("key_epoch").notNull(),
+    ciphertext: blob("ciphertext").notNull(),
+  },
+  (table) => [
+    index("import_comment_envelopes_file_idx").on(table.fileId, table.threadId),
+    check("import_comment_envelopes_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 16384
+      AND ${table.capabilityEpoch} >= 1 AND ${table.keyEpoch} >= 1`),
+  ],
+);
+
+/** Encrypted historical display metadata (order-adjacent timestamps) for an
+ * imported Comment. It is sealed under the Comment's own content key, so a
+ * thread-capability rotation rewraps the wrapper and this ciphertext stays
+ * valid without any plaintext user-authored timestamp at rest. */
+export const importCommentMeta = sqliteTable(
+  "import_comment_meta",
+  {
+    commentId: text("comment_id").primaryKey().references(() => comments.id, { onDelete: "restrict" }),
+    threadId: text("thread_id").notNull(),
+    ownerId: text("owner_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+    ciphertext: blob("ciphertext").notNull(),
+  },
+  (table) => [
+    index("import_comment_meta_thread_idx").on(table.threadId, table.commentId),
+    check("import_comment_meta_bounded", sql`length(${table.ciphertext}) BETWEEN 1 AND 4096`),
+  ],
+);

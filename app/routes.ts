@@ -23,6 +23,8 @@ export default [
   route("api/private/recovery-provision/*", "routes/api/recovery-provision.ts"),
   route("api/private/devices/*", "routes/api/private-devices.ts"),
   route("api/private/tree/*", "routes/api/private-tree.ts"),
+  route("api/private/imports", "routes/api/private-imports.ts", { id: "api-private-imports" }),
+  route("api/private/imports/*", "routes/api/private-imports.ts", { id: "api-private-imports-splat" }),
   route("api/private/shares/*", "routes/api/private-sharing.ts"),
   route("api/private/grants/*", "routes/api/private-grants.ts"),
   route("api/private/key-rotations/*", "routes/api/key-rotations.ts"),

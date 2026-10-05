@@ -371,7 +371,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           {snapshot.access.actorAccountId === snapshot.access.vaultId ? "Publish" : "Request publication"}</button>}
       </div>
       <div className="mt-3 flex flex-wrap items-start gap-2"><ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} />
-        <ImportControl ref={importControl} snapshot={snapshot} nodeId={nodeId} kind={kind} disabled={busy || recoveryPending} /></div>
+        <ImportControl ref={importControl} snapshot={snapshot} nodeId={nodeId} kind={kind} disabled={busy || recoveryPending}
+          onImported={() => void revalidator.revalidate()} /></div>
       {kind === "file" && snapshot.file && publishOpen && <PublishPanel fileId={nodeId} snapshot={snapshot}
         fileReady={fileReady && !busy} links={publicLinks}
         onPrepared={(link) => setPublicLinks((previous) => {

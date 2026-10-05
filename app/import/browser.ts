@@ -9,9 +9,11 @@
 
 import { getDevice } from "~/device/store";
 import { createFileHead, type FileHead, type FileHeadIdentity } from "~/tree/file-head";
+import { createListingHead, type ListingHead } from "~/tree/listing";
 import { loadFile, type RootAccess } from "~/tree/client";
 import { IMPORT_LIMITS, ImportError } from "./limits";
 import type { ImportReplacementDocument } from "./plan";
+import type { ImportListingEntry } from "./review";
 import type { ImportReview } from "./review";
 import type { RawImportInput } from "./source";
 
@@ -82,11 +84,21 @@ export async function inputsFromDataTransfer(dataTransfer: DataTransfer): Promis
   return inputsFromFiles(Array.from(dataTransfer.files));
 }
 
-/** The importing browser's device assertion signer for new File heads. */
-export async function signFileHeadFor(access: RootAccess): Promise<(identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>> {
+/** The importing browser's device signer for new File and Directory listing heads. */
+export async function importSigners(access: RootAccess): Promise<{
+  signFileHead: (identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>;
+  signListingHead: (input: { parentKey: Uint8Array; vaultId: string; directoryId: string;
+    keyEpoch: number; revision: number; entries: readonly ImportListingEntry[] }) => Promise<ListingHead>;
+}> {
   const device = await getDevice(access.actorAccountId);
   if (!device) throw new ImportError("replacement-unavailable", { reason: "device-unavailable", action: "fix" });
-  return (identity) => createFileHead(device.assertionKeyPair.privateKey, { ...identity, deviceId: device.deviceId });
+  return {
+    signFileHead: (identity) => createFileHead(device.assertionKeyPair.privateKey, { ...identity, deviceId: device.deviceId }),
+    signListingHead: (input) => createListingHead(input.parentKey, device.assertionKeyPair.privateKey, {
+      vaultId: input.vaultId, directoryId: input.directoryId, deviceId: device.deviceId,
+      keyEpoch: input.keyEpoch, revision: input.revision, entries: input.entries,
+    }),
+  };
 }
 
 /**

@@ -14,6 +14,7 @@ import { encodeTreeBytes } from "~/tree/wire";
 
 export type CommentEnvelope =
   | { mode: "owned"; keyEpoch: number; ciphertext: ArrayBuffer }
+  | { mode: "import"; keyEpoch: number; ciphertext: ArrayBuffer }
   | {
     mode: "grant"; grantId: string; ownerId: string; recipientId: string; targetId: string; targetKind: string;
     ownerRegistryEpoch: number; recipientRegistryEpoch: number; grantKeyEpoch: number;
@@ -37,8 +38,17 @@ export async function readCommentEnvelope(
       WHERE account_id = ${ownerId} AND purpose = 'vault-recovery' AND object_id = ${objectId}
         AND recipient_id = 'vault-root' AND key_epoch = ${capabilityEpoch} AND superseded_at IS NULL
         AND ${authority}`);
-    return row ? { mode: "owned", keyEpoch: capabilityEpoch, ciphertext: row.ciphertext } : null;
+    if (row) return { mode: "owned", keyEpoch: capabilityEpoch, ciphertext: row.ciphertext };
   }
+  // A fresh Historical thread is wrapped under the imported File capability
+  // key; it follows current File-read access and needs no recovery or Grant
+  // envelope. Staged threads only exist after their Import commit.
+  const imported = await db.get<{ ciphertext: ArrayBuffer; key_epoch: number }>(sql`
+    SELECT ciphertext, key_epoch FROM import_comment_envelopes
+    WHERE thread_id = ${objectId} AND capability_id = ${capabilityId} AND capability_epoch = ${capabilityEpoch}
+      AND ${authority} LIMIT 1`);
+  if (imported) return { mode: "import", keyEpoch: imported.key_epoch, ciphertext: imported.ciphertext };
+  if (ownerId === auth.accountId) return null;
   const row = await db.get<{
     grant_id: string; owner_id: string; recipient_id: string; target_id: string;
     target_kind: string; owner_registry_epoch: number; recipient_registry_epoch: number;
@@ -71,8 +81,8 @@ export function commentEnvelopeWire(envelope: CommentEnvelope, context: {
   fileId: string; threadId: string; objectId: string; publicationId: string | null;
   capabilityId: string; capabilityEpoch: number; deviceId: string;
 }) {
-  if (envelope.mode === "owned") {
-    return { mode: "owned" as const, keyEpoch: envelope.keyEpoch,
+  if (envelope.mode === "owned" || envelope.mode === "import") {
+    return { mode: envelope.mode, keyEpoch: envelope.keyEpoch,
       ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)) };
   }
   return { mode: "grant" as const, purpose: context.purpose, fileId: context.fileId,

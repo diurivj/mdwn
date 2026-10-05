@@ -54,11 +54,22 @@ function accessQuery(accountId: string, nodeId: string | SQL, guard: SQL): SQL {
       n.parent_node_id IS NOT NULL AND (n.owner_id = ${accountId} OR EXISTS (SELECT 1 FROM matching
         WHERE target_kind = 'directory' AND permission = 'read_write' AND depth > 0)) AS can_change_structure
     FROM vault_nodes n WHERE n.id = ${nodeId}
+      AND ${committedNodeVisible(sql`n`)}
       AND (n.owner_id = ${accountId} OR EXISTS (SELECT 1 FROM lineage WHERE parent_node_id IS NULL))
       AND ${guard}
   ) SELECT *, kind = 'file' AND permission_rank > 0 AS can_read_private_comments,
     kind = 'file' AND permission_rank > 0 AS can_read_collaborators_public_comments
     FROM authority WHERE permission_rank > 0`;
+}
+
+/**
+ * Normal-read gate for ticket 30's visible-atomic Imports: a node that names
+ * an Import is readable only once its immutable commit marker exists. Import
+ * staging materializes canonical rows inside the marker transaction, so this
+ * predicate is defense in depth for the literal read invariant.
+ */
+export function committedNodeVisible(alias: SQL): SQL {
+  return sql`(${alias}.import_id IS NULL OR EXISTS (SELECT 1 FROM import_commits c WHERE c.import_id = ${alias}.import_id))`;
 }
 
 export async function effectiveAccess(env: Env, auth: AuthorizedDevice, nodeId: string): Promise<EffectiveAccess | null> {

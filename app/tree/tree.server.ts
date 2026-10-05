@@ -8,7 +8,7 @@ import { authorizePrivateRequest, commitDirectoryMutation, commitPrivateBatch, c
 import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./listing";
 import { verifyFileHead, type FileHead, type FileHeadIdentity } from "./file-head";
-import { accessPredicate, effectiveAccessQuery, exitsSharedScope, moveAccessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
+import { accessPredicate, committedNodeVisible, effectiveAccessQuery, exitsSharedScope, moveAccessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
 import { retireDeletedScopeNeeds } from "~/sharing/provisioning-needs.server";
 import {
   deletedFilePublications, filePublicationColumns, filePublicationJoins, filePublicationView,
@@ -44,7 +44,7 @@ async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: stri
     JOIN (${effectiveAccessQuery(auth, directoryId)}) a ON a.node_id = d.node_id AND a.owner_id = d.owner_id
     LEFT JOIN encryption_devices signer ON signer.id = d.listing_device_id
     LEFT JOIN directory_entries e ON e.parent_node_id = d.node_id AND e.owner_id = d.owner_id
-    LEFT JOIN vault_nodes n ON n.id = e.child_node_id AND n.owner_id = d.owner_id
+    LEFT JOIN vault_nodes n ON n.id = e.child_node_id AND n.owner_id = d.owner_id AND ${committedNodeVisible(sql`n`)}
     LEFT JOIN directories child_directory ON child_directory.node_id = n.id AND child_directory.owner_id = n.owner_id
     WHERE d.node_id = ${directoryId}
     ORDER BY e.child_node_id`);
@@ -77,10 +77,12 @@ async function ancestors(env: Env, auth: AuthorizedDevice, nodeId: string): Prom
   const rows = await createDb(env.DB).all<{ id: string; depth: number }>(sql`
     WITH RECURSIVE access AS (${effectiveAccessQuery(auth, nodeId)}), lineage(id, parent_node_id, depth) AS (
       SELECT n.id, n.parent_node_id, 0 FROM vault_nodes n JOIN access a ON a.node_id = n.id
+        WHERE ${committedNodeVisible(sql`n`)}
       UNION ALL
       SELECT parent.id, parent.parent_node_id, child.depth + 1
       FROM vault_nodes parent JOIN lineage child ON child.parent_node_id = parent.id
       JOIN access a ON a.owner_id = parent.owner_id WHERE child.depth < 100
+        AND ${committedNodeVisible(sql`parent`)}
     )
     SELECT l.id, l.depth FROM lineage l CROSS JOIN access a
     WHERE (a.permission_rank = 3 OR l.depth = 0 OR EXISTS (
@@ -464,6 +466,7 @@ function deletionIds(nodeId: string) {
   return sql`WITH RECURSIVE subtree(id) AS (
     SELECT ${nodeId} UNION
     SELECT n.id FROM vault_nodes n JOIN subtree parent ON n.parent_node_id = parent.id
+    WHERE ${committedNodeVisible(sql`n`)}
     LIMIT ${MAX_DELETE_NODES + 1}
   ) SELECT id FROM subtree`;
 }
@@ -556,6 +559,9 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})`, committed),
       deletedPseudonymItems("thread", sql`SELECT id FROM thread_attributions WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})`, committed),
+      sql`DELETE FROM import_comment_meta WHERE comment_id IN
+        (SELECT id FROM comments WHERE thread_id IN
+          (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})) AND ${committed}`,
       sql`DELETE FROM comments WHERE thread_id IN
         (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
       sql`DELETE FROM thread_attributions WHERE thread_id IN
