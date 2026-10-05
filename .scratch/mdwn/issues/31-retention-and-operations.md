@@ -6,10 +6,15 @@
 
 **Status:** ready-for-agent
 
-- [ ] One-use challenges live at most 10 minutes; expired sessions, challenges, routine and recovery enrollments, Import sessions, counters, and Security events are purged; Security events are retained at most 30 days.
-- [ ] The purge is covered by a scheduled integration test or documented operational verification, and it removes only expired rows — never live authority, current envelopes, or active records.
-- [ ] D1 foreign-key checks are enabled and verified in the deployed environment.
-- [ ] Child traversal indexes begin with `parent_node_id`; active-Grant lookup supports exact target and recipient plus ancestor-recursive access checks; the Publication path lookup is unique and reveals no retired link state.
-- [ ] Covering indexes exist and are exercised for current representation, current epoch, pending Share and Publication request, active-or-deleting Publication, current Recovery capsule and Device registry, unexpired session/challenge/enrollment/Import, consumed mutation proof, outstanding provisioning need, and counter-window lookups.
-- [ ] Representative tree and access queries are validated with reviewed `EXPLAIN QUERY PLAN` output; recursive traversal and deletion are explicitly bounded.
-- [ ] Migration rollback posture is rehearsed on non-production data using D1 Time Travel plus a pre-change export.
+- [x] One-use challenges live at most 10 minutes; expired sessions, challenges, routine and recovery enrollments, Import sessions, counters, and Security events are purged; Security events are retained at most 30 days.
+- [x] The purge is covered by a scheduled integration test or documented operational verification, and it removes only expired rows — never live authority, current envelopes, or active records.
+- [x] D1 foreign-key checks are enabled and verified in the deployed environment.
+- [x] Child traversal indexes begin with `parent_node_id`; active-Grant lookup supports exact target and recipient plus ancestor-recursive access checks; the Publication path lookup is unique and reveals no retired link state.
+- [x] Covering indexes exist and are exercised for current representation, current epoch, pending Share and Publication request, active-or-deleting Publication, current Recovery capsule and Device registry, unexpired session/challenge/enrollment/Import, consumed mutation proof, outstanding provisioning need, and counter-window lookups.
+- [x] Representative tree and access queries are validated with reviewed `EXPLAIN QUERY PLAN` output; recursive traversal and deletion are explicitly bounded.
+- [x] Migration rollback posture is rehearsed on non-production data using D1 Time Travel plus a pre-change export.
+
+## Comments
+
+- Follow-ups requested by the maintainer: [37: TypeScript runtime project boundaries](37-typescript-runtime-project-boundaries.md) replaces the per-file Node project exceptions; [38: D1 export-based database restoration](38-d1-export-database-restoration.md) addresses the unresolved general restore path. Time Travel was successful; the small reordered export fixture is not a production-sized restore fix. Ticket 33 links both for acceptance/readiness follow-through.
+- 2026-10-05: Implemented on `issue/31-retention-and-operations`. Scheduled cleanup now drains expired/revoked Session dependents and bounded Import staging in FK order without deleting committed markers/content or current cryptographic authority. Migrations 0027–0029 detach durable markers from staging, enforce ten-minute challenge/enrollment lifetimes, and add parent-leading/covering indexes. `db:operations` is read-only remotely; deployment verifies plans/FKs after migrations. Reviewed selected plans and separately labelled covering probes are in `docs/operations/query-plans.md`. The production deletion cursor bounds actual successor generation (not only recursive output), with 2,000-child D1 coverage and supplemental SQLite probe counting. Non-production Time Travel restored pre-change schema/data; the pre-change export restored offline and, after a synthetic-only ordering adjustment, in fresh local D1. Read-only production FK checks passed. See `docs/operations.md` for exact remote evidence, deleted disposable targets, the unproven production-sized export-import limitation, and the required observation of new deployed Cron delivery after merge. Merge still requires the local verification gate at the PR's current clean head.

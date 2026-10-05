@@ -60,7 +60,8 @@ describe("migrated authentication schema", () => {
        VALUES (?, ?, ?, ?, ?, 'https://mdwn.test', 'mdwn.test', ?, 1)`,
     ).bind(crypto.randomUUID(), value, purpose, id, session, expiry).run();
     await expect(challenge(crypto.randomUUID(), "unknown", 2, null)).rejects.toThrow(/CHECK constraint/);
-    await expect(challenge(crypto.randomUUID(), "sign_in", 1, null)).rejects.toThrow(/CHECK constraint/);
+    // The lifetime trigger now rejects this before the table's expiry CHECK.
+    await expect(challenge(crypto.randomUUID(), "sign_in", 1, null)).rejects.toThrow(/SQLITE_CONSTRAINT/);
     await expect(challenge(crypto.randomUUID(), "fresh_assertion", 2, crypto.randomUUID())).rejects.toThrow(/FOREIGN KEY/);
     const value = crypto.randomUUID();
     await challenge(value, "fresh_assertion", 2, sessionId);

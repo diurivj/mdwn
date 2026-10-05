@@ -81,6 +81,7 @@ jobs:
           DEPLOYED_VERSION_ID: ${{ steps.deploy_preview.outputs.version_id }}
         run: |
           npm run db:smoke -- --remote preview
+          npm run db:operations -- --remote preview --output /tmp/mdwn-preview-query-plans.md
           npm run check:secrets
           node scripts/check-worker-ready.mjs preview
 
@@ -112,5 +113,6 @@ jobs:
           DEPLOYED_VERSION_ID: ${{ steps.deploy_production.outputs.version_id }}
         run: |
           npm run db:smoke -- --remote production
+          npm run db:operations -- --remote production --output /tmp/mdwn-production-query-plans.md
           npm run check:secrets
           node scripts/check-worker-ready.mjs production

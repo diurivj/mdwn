@@ -104,6 +104,11 @@ export const sessions = sqliteTable(
       table.absoluteExpiresAt,
     ),
     index("sessions_authenticated_passkey_idx").on(table.authenticatedPasskeyId),
+    index("sessions_authority_idx").on(table.id, table.accountId, table.purpose, table.authenticatedPasskeyId,
+      table.freshAssertedAt, table.deviceId, table.revokedAt, table.idleExpiresAt, table.absoluteExpiresAt, table.createdAt),
+    index("sessions_expiry_idx").on(table.idleExpiresAt, table.id),
+    index("sessions_revoked_idx").on(table.revokedAt, table.id).where(sql`${table.revokedAt} IS NOT NULL`),
+    index("sessions_recovery_idx").on(table.createdAt, table.id).where(sql`${table.purpose} = 'recovery'`),
     check("sessions_purpose_valid", sql`${table.purpose} IN ('normal', 'recovery')`),
     check("sessions_absolute_after_created", sql`${table.absoluteExpiresAt} > ${table.createdAt}`),
     check(
@@ -139,6 +144,8 @@ export const webauthnChallenges = sqliteTable(
   (table) => [
     index("webauthn_challenges_expiry_idx").on(table.expiresAt),
     index("webauthn_challenges_session_idx").on(table.sessionId),
+    index("webauthn_challenges_live_idx").on(table.id, table.expiresAt, table.purpose, table.accountId,
+      table.sessionId, table.origin, table.rpId, table.challenge),
     check(
       "webauthn_challenges_purpose_valid",
       sql`${table.purpose} IN ('sign_in', 'fresh_assertion', 'passkey_registration', 'signup')`,
@@ -176,6 +183,8 @@ export const rateLimitCounters = sqliteTable(
       columns: [table.purpose, table.scopeType, table.scopeId, table.windowMs, table.timeEpoch],
     }),
     index("rate_limit_counters_expiry_idx").on(table.expiresAt),
+    index("rate_limit_counters_window_idx").on(table.purpose, table.scopeType, table.scopeId,
+      table.windowMs, table.timeEpoch, table.expiresAt, table.count),
     check(
       "rate_limit_counters_purpose_valid",
       sql`${table.purpose} IN ('registration.challenge', 'registration.success', 'webauthn.sign_in', 'recovery.attempt', 'vault_recovery.start', 'session.refresh', 'public_comment.mutate', 'public_comment.report', 'publication.mutate')`,
@@ -394,7 +403,10 @@ export const registrationChallenges = sqliteTable("registration_challenges", {
   origin: text("origin").notNull(),
   expiresAt: integer("expires_at").notNull(),
   createdAt: integer("created_at").notNull(),
-}, (table) => [index("registration_challenges_expiry_idx").on(table.expiresAt)]);
+}, (table) => [
+  index("registration_challenges_expiry_idx").on(table.expiresAt),
+  index("registration_challenges_live_idx").on(table.id, table.expiresAt, table.origin, table.challenge),
+]);
 
 /**
  * One encryption identity, hidden root Directory and current registry epoch per Account.
@@ -406,7 +418,10 @@ export const accountEncryptionIdentities = sqliteTable("account_encryption_ident
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "restrict" }),
   rootDirectoryId: text("root_directory_id").notNull().unique(),
   registryEpoch: integer("registry_epoch").notNull(),
-}, (table) => [check("account_encryption_epoch_positive", sql`${table.registryEpoch} >= 1`)]);
+}, (table) => [
+  index("account_encryption_identities_epoch_idx").on(table.accountId, table.registryEpoch),
+  check("account_encryption_epoch_positive", sql`${table.registryEpoch} >= 1`),
+]);
 
 /** Public device keys only; private CryptoKeys never cross the browser boundary. */
 export const encryptionDevices = sqliteTable("encryption_devices", {
@@ -449,7 +464,10 @@ export const recoveryCapsules = sqliteTable("recovery_capsules", {
   recoverySalt: blob("recovery_salt").notNull(),
   ciphertext: blob("ciphertext").notNull(),
   verificationPublicKey: blob("verification_public_key").notNull(),
-}, (table) => [check("recovery_capsules_generation_positive", sql`${table.generation} >= 1`)]);
+}, (table) => [
+  index("recovery_capsules_generation_idx").on(table.accountId, table.generation),
+  check("recovery_capsules_generation_positive", sql`${table.generation} >= 1`),
+]);
 
 /** One-use recovery enrollment. Candidate public keys remain invisible to the registry until commit. */
 export const recoveryEnrollments = sqliteTable("recovery_enrollments", {
@@ -470,6 +488,10 @@ export const recoveryEnrollments = sqliteTable("recovery_enrollments", {
   expiresAt: integer("expires_at").notNull(),
 }, (table) => [
   index("recovery_enrollments_account_idx").on(table.accountId, table.expiresAt),
+  index("recovery_enrollments_live_idx").on(table.id, table.accountId, table.sessionId, table.expiresAt,
+    table.state, table.generation, table.registryEpoch),
+  index("recovery_enrollments_expiry_idx").on(table.expiresAt, table.id),
+  index("recovery_enrollments_session_idx").on(table.sessionId, table.id),
   check("recovery_enrollments_state_valid", sql`${table.state} IN ('started', 'challenged')`),
   check("recovery_enrollments_expiry_valid", sql`${table.expiresAt} > ${table.createdAt}`),
   check("recovery_enrollments_generation_positive", sql`${table.generation} >= 1`),
@@ -503,6 +525,9 @@ export const deviceEnrollments = sqliteTable("device_enrollments", {
 }, (table) => [
   index("device_enrollments_candidate_idx").on(table.candidateSessionId, table.expiresAt),
   index("device_enrollments_account_idx").on(table.accountId, table.expiresAt),
+  index("device_enrollments_live_idx").on(table.id, table.accountId, table.candidateSessionId, table.expiresAt,
+    table.state, table.registryEpoch, table.candidateDeviceId),
+  index("device_enrollments_expiry_idx").on(table.expiresAt, table.id),
   check("device_enrollments_state_valid", sql`${table.state} IN ('pending', 'challenged', 'consumed')`),
   check("device_enrollments_expiry_valid", sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + 600000`),
   check("device_enrollments_epoch_positive", sql`${table.registryEpoch} >= 1`),
@@ -596,6 +621,7 @@ export const deviceProofUses = sqliteTable("device_proof_uses", {
 }, (table) => [
   primaryKey({ columns: [table.accountId, table.proofId] }),
   index("device_proof_uses_expiry_idx").on(table.expiresAt),
+  index("device_proof_uses_commit_idx").on(table.accountId, table.proofId, table.commitToken),
 ]);
 
 /** Opaque owned tree. Non-root nodes must have exactly one agreeing encrypted edge. */
@@ -613,7 +639,7 @@ export const vaultNodes = sqliteTable("vault_nodes", {
   check("vault_nodes_no_self_parent", sql`${table.parentNodeId} IS NULL OR ${table.parentNodeId} != ${table.id}`),
   uniqueIndex("vault_nodes_one_root_idx").on(table.ownerId).where(sql`${table.parentNodeId} IS NULL`),
   uniqueIndex("vault_nodes_owner_edge_idx").on(table.ownerId, table.id, table.parentNodeId),
-  index("vault_nodes_parent_idx").on(table.parentNodeId),
+  index("vault_nodes_parent_idx").on(table.parentNodeId, table.id, table.ownerId, table.kind, table.importId),
   uniqueIndex("vault_nodes_owner_target_idx").on(table.ownerId, table.id, table.kind),
   // The reciprocal, deferred FKs to directories and directory_entries are in
   // the reviewed migration: Drizzle cannot express this circular relationship.
@@ -633,6 +659,7 @@ export const directories = sqliteTable("directories", {
   listingDeviceId: text("listing_device_id").references(() => encryptionDevices.id, { onDelete: "restrict" }),
 }, (table) => [
   uniqueIndex("directories_owner_node_idx").on(table.ownerId, table.nodeId),
+  index("directories_current_idx").on(table.nodeId, table.ownerId, table.entriesRevision, table.keyEpoch),
   index("directories_listing_device_idx").on(table.listingDeviceId),
   check("directories_revision_positive", sql`${table.entriesRevision} >= 1`),
   check("directories_epoch_positive", sql`${table.keyEpoch} >= 1`),
@@ -649,6 +676,8 @@ export const files = sqliteTable("files", {
   capabilityEpoch: integer("capability_epoch"),
 }, (table) => [
   uniqueIndex("files_owner_node_idx").on(table.ownerId, table.nodeId),
+  index("files_current_idx").on(table.nodeId, table.ownerId, table.currentRepresentationId,
+    table.currentRevision, table.capabilityId, table.capabilityEpoch),
   check("files_revision_positive", sql`${table.currentRevision} >= 1`),
   check("files_capability_pair", sql`(${table.capabilityId} IS NULL AND ${table.capabilityEpoch} IS NULL)
     OR (${table.capabilityId} IS NOT NULL AND ${table.capabilityEpoch} IS NOT NULL AND ${table.capabilityEpoch} >= 1)`),
@@ -665,7 +694,7 @@ export const directoryEntries = sqliteTable("directory_entries", {
   keyEnvelope: blob("key_envelope").notNull(),
 }, (table) => [
   uniqueIndex("directory_entries_owner_edge_idx").on(table.ownerId, table.childNodeId, table.parentNodeId),
-  index("directory_entries_parent_idx").on(table.ownerId, table.parentNodeId),
+  index("directory_entries_parent_idx").on(table.parentNodeId, table.ownerId, table.childNodeId),
   check("directory_entries_ciphertext_bounded", sql`length(${table.nameCiphertext}) BETWEEN 1 AND 4096
     AND length(${table.orderCiphertext}) BETWEEN 1 AND 4096
     AND length(${table.keyEnvelope}) BETWEEN 1 AND 16384`),
@@ -716,7 +745,8 @@ export const shares = sqliteTable("shares", {
   createdAt: integer("created_at").notNull(),
 }, (table) => [
   uniqueIndex("shares_relationship_idx").on(table.ownerId, table.recipientId, table.targetId),
-  index("shares_recipient_idx").on(table.recipientId, table.id),
+  index("shares_recipient_idx").on(table.recipientId, table.id, table.ownerId, table.targetId,
+    table.targetKind, table.permission, table.createdAt),
   index("shares_owner_idx").on(table.ownerId, table.id),
   index("shares_target_idx").on(table.targetId),
   foreignKey({ columns: [table.ownerId, table.targetId, table.targetKind],
@@ -837,7 +867,7 @@ export const provisioningNeeds = sqliteTable("provisioning_needs", {
   grantKeyEpoch: integer("grant_key_epoch").notNull(),
 }, (table) => [
   primaryKey({ columns: [table.grantId, table.deviceId] }),
-  index("provisioning_needs_device_idx").on(table.deviceId),
+  index("provisioning_needs_device_idx").on(table.deviceId, table.grantId, table.grantKeyEpoch),
   check("provisioning_needs_epoch", sql`${table.grantKeyEpoch} >= 1`),
 ]);
 
@@ -938,6 +968,8 @@ export const commentThreadEpochs = sqliteTable("comment_thread_epochs", {
   createdAt: integer("created_at").notNull(),
 }, (table) => [
   uniqueIndex("comment_thread_epochs_current_idx").on(table.threadId).where(sql`${table.state} = 'active'`),
+  index("comment_thread_epochs_head_idx").on(table.threadId, table.id, table.keyEpoch, table.audience)
+    .where(sql`${table.state} = 'active'`),
   uniqueIndex("comment_thread_epochs_ordinal_idx").on(table.threadId, table.ordinal),
   uniqueIndex("comment_thread_epochs_identity_idx").on(table.id, table.threadId),
   check("comment_thread_epochs_audience_valid",
@@ -1073,6 +1105,8 @@ export const publications = sqliteTable("publications", {
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [
   uniqueIndex("publications_file_idx").on(table.fileId).where(sql`${table.state} IN ('active', 'deleting')`),
+  index("publications_current_idx").on(table.fileId, table.state, table.id, table.currentLinkId, table.currentRepresentationId)
+    .where(sql`${table.state} IN ('active', 'deleting')`),
   foreignKey({ columns: [table.ownerId, table.fileId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
   check("publications_id_opaque", opaquePublicationIdentifier(table.id)),
   check("publications_state_valid", sql`${table.state} IN ('active', 'deleting')`),
@@ -1134,6 +1168,7 @@ export const publicationRequests = sqliteTable("publication_requests", {
   createdAt: integer("created_at").notNull(),
 }, (table) => [
   uniqueIndex("publication_requests_requester_idx").on(table.fileId, table.requesterId),
+  index("publication_requests_file_idx").on(table.fileId, table.ownerId, table.id, table.requesterId, table.createdAt),
   foreignKey({ columns: [table.ownerId, table.fileId], foreignColumns: [files.ownerId, files.nodeId] }).onDelete("restrict"),
   check("publication_requests_not_owner", sql`${table.requesterId} != ${table.ownerId}`),
 ]);
@@ -1227,6 +1262,9 @@ export const importSessions = sqliteTable(
   (table) => [
     index("import_sessions_account_state_idx").on(table.accountId, table.state, table.expiresAt),
     index("import_sessions_expiry_idx").on(table.expiresAt, table.id),
+    index("import_sessions_live_idx").on(table.id, table.accountId, table.sessionId, table.expiresAt,
+      table.state, table.targetDirectoryId, table.targetOwnerId),
+    index("import_sessions_session_idx").on(table.sessionId, table.id),
     check("import_sessions_state_valid", sql`${table.state} IN ('open', 'committed', 'failed')`),
     check("import_sessions_revision_positive", sql`${table.reviewedEntryRevision} >= 1`),
     check("import_sessions_manifest_bounded", sql`length(${table.manifestCiphertext}) BETWEEN 1 AND 131072`),
@@ -1372,7 +1410,9 @@ export const importRecords = sqliteTable(
 export const importCommits = sqliteTable(
   "import_commits",
   {
-    importId: text("import_id").primaryKey().references(() => importSessions.id, { onDelete: "restrict" }),
+    // Durable visibility metadata outlives short-lived staging. The reviewed
+    // migration validates the originating Session with an INSERT trigger.
+    importId: text("import_id").primaryKey(),
     accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
     targetDirectoryId: text("target_directory_id").notNull(),
     committedAt: integer("committed_at").notNull(),

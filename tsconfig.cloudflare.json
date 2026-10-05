@@ -9,6 +9,7 @@
     "tests/worker/**/*",
     "tests/support/**/*",
     "tests/fixtures/*.json",
+    "scripts/lib/d1-query-plans.mjs",
     "worker-configuration.d.ts"
   ],
   "compilerOptions": {
