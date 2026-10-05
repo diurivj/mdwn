@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * Local merge gate while the GitHub `ci` workflow is paused (AGENTS.md,
- * "Merge discipline"). Runs every check from .github/workflows/ci.yml, in the
- * same order, against the checked-out commit, and stops at the first failure:
+ * Local preflight for the GitHub `CI` workflow (AGENTS.md, "Merge discipline").
+ * Green CI at the PR's current head remains the merge gate. Runs every check
+ * from .github/workflows/ci.yml in the same order against the checked-out
+ * commit, and stops at the first failure:
  *
  *   typecheck → namespace drift → Node + Workers tests → production build →
  *   fresh-D1 migration smoke → bundle secret check → Chromium/Firefox/WebKit
@@ -12,11 +13,11 @@
  * passes --forbid-only, and has no retry, so a flake fails here instead of
  * passing on a second attempt.
  *
- * The result only counts for a merge when the tree is clean and HEAD contains
- * origin/main: GitHub tested the PR merged with main, so a branch behind main
+ * A verified local result requires a clean tree and HEAD containing
+ * origin/main: GitHub tests the PR merged with main, so a branch behind main
  * is not what would land. Both are checked before anything runs.
  *
- *   npm run verify           # the merge gate
+ *   npm run verify           # local preflight at a clean, current commit
  *   npm run verify -- --wip  # same checks on a dirty or stale tree; not a gate
  */
 import { spawnSync } from "node:child_process";

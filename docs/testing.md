@@ -6,7 +6,7 @@ fast layers:
 ```sh
 npm test             # Node unit tests, then Workers-runtime tests
 npm run test:all     # npm test, a production Worker build, and all browser engines
-npm run verify       # the local merge gate: every CI check, then all browser engines
+npm run verify      # local preflight: every CI check, then all browser engines
 ```
 
 ## Workers runtime
@@ -55,6 +55,21 @@ browser binaries once on a development machine:
 npx playwright install chromium firefox webkit
 npm run test:e2e
 ```
+
+With Node 24 / Playwright 1.63, a cold install can fail after about five seconds
+while reporting a 30-second timeout: Playwright's IPv6-first fallback delay
+races Node's default global-agent timeout before the connection is established.
+CI preloads `scripts/playwright-download-network.mjs` only for browser installation,
+matching the agent's connection budget to Playwright's 30-second default. TLS
+verification, address-family selection, and browser tests remain unchanged.
+If affected locally, use the same download-only workaround from the repo root:
+
+```sh
+NODE_OPTIONS='--import=./scripts/playwright-download-network.mjs' npx playwright install chromium firefox webkit
+```
+
+Remove the workaround after an upstream fix is verified with an empty browser
+cache on the runner's network, not just an install that reuses cached binaries.
 
 The configured Playwright projects are named `chromium`, `firefox`, and
 `webkit`. To focus on one engine:
@@ -138,9 +153,10 @@ purpose of a test is storage isolation.
 
 ## CI output
 
-The `ci` workflow is paused while GitHub Actions minutes are exhausted;
-`npm run verify` is the merge gate meanwhile (see AGENTS.md). This section
-describes CI when it runs.
+The `CI` workflow runs on the repository-scoped Mac mini. All CI jobs must
+pass at the current PR head before merging (see AGENTS.md). The persistent
+runner keeps npm's cache locally; CI disables `setup-node`'s GitHub cache
+restore/upload, which would otherwise transfer the account's entire npm cache.
 
 The `browser` CI job runs a non-fail-fast matrix with one job for each engine.
 Each job uses one Playwright worker; the local worker default stays automatic.

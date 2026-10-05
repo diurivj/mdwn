@@ -24,4 +24,6 @@ After every code review, load `.agents/skills/rr8-post-review/SKILL.md` and run 
 
 The team is just the maintainer and agents, and `main` is a private Free repo with no enforceable branch protection — so the review gate is a convention, not a rule. At ticket completion, commit the reviewed and verified work on its issue branch, push the branch, and open or update a pull request to `main`. Report the commit and PR URL. The `deploy` workflow applies reviewed migrations and releases the Worker on merge.
 
-The `ci` workflow is paused (disabled on GitHub since 2026-10-04, when Actions minutes ran out), so the local gate replaces it. Merge only after `npm run verify` passes at the PR's current head, and post its final `Local verification gate passed at <sha>` line as a PR comment; re-run it after any push. It refuses a dirty tree or a branch behind `origin/main`. Run `npm ci` first when `package-lock.json` changed. To resume CI, run `gh workflow enable ci.yml` and restore the green-`ci` merge rule here.
+Merge only after every job in the `CI` workflow passes at the PR's current head; re-check after any push. Queued, skipped, or cancelled jobs are not a pass. CI uses the repository's self-hosted Mac mini; keep it awake and its runner online (see README.md, "CI"). Deployment stays on GitHub-hosted Linux.
+
+Use `npm run verify` for local preflight, not as a replacement for green CI. It refuses a dirty tree or a branch behind `origin/main`. Run `npm ci` first when `package-lock.json` changed.
