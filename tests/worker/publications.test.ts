@@ -940,7 +940,7 @@ describe("fragment privacy and hard deletion", () => {
 });
 
 describe("query plans", () => {
-  it("resolves a Public path and a File's Publication through their unique indexes", async () => {
+  it("resolves a Public path uniquely and a File's Publication through persistent point indexes", async () => {
     const plan = async (query: string, ...values: unknown[]) => (await env.DB.prepare(`EXPLAIN QUERY PLAN ${query}`).bind(...values)
       .all<{ detail: string }>()).results.map((row) => row.detail).join("\n");
     const path = await plan(`SELECT 1 FROM publication_links l
@@ -948,7 +948,7 @@ describe("query plans", () => {
     expect(path).toMatch(/SEARCH l USING (?:INDEX sqlite_autoindex_publication_links_1|PRIMARY KEY) \(id=\?\)/);
     expect(path).not.toMatch(/SCAN/);
     const byFile = await plan(`SELECT 1 FROM publications p WHERE p.file_id = ? AND p.state IN ('active', 'deleting')`, "x");
-    expect(byFile).toContain("publications_file_idx");
+    expect(byFile).toMatch(/SEARCH p USING (?:COVERING )?INDEX publications_(?:file|current)_idx \(file_id=\?/);
     expect(byFile).not.toMatch(/SCAN/);
   });
 });
