@@ -5,6 +5,7 @@ import { digestEnvelope, openSymmetric } from "../app/crypto/enc-v1";
 import { encodeTreeBytes } from "../app/tree/wire";
 import { IMPORT_LIMITS, ImportError } from "../app/import/limits";
 import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../app/import/plan";
+import { encodeImportChunkBody } from "../app/import/staging";
 import { reviewImport, type ImportChoice, type ImportCollisionSibling, type ImportTarget } from "../app/import/review";
 import { analyzeImportSelection, type ImportSource, type ImportSourceFile } from "../app/import/source";
 import type { HistoricalComment } from "../app/archive/format";
@@ -12,8 +13,11 @@ import type { HistoricalComment } from "../app/archive/format";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+const TARGET_ID = "0198c0de-0000-7000-8000-0000000000aa";
+const EXISTING_FILE_ID = "0198c0de-0000-7000-8000-0000000000bb";
+
 function target(siblings: readonly ImportCollisionSibling[] = []): ImportTarget {
-  return { directoryId: "target-id", keyEpoch: 1, entriesRevision: 2, ownerAccountId: "owner-id",
+  return { directoryId: TARGET_ID, keyEpoch: 1, entriesRevision: 2, ownerAccountId: "owner-id",
     actorAccountId: "owner-id", label: "Files", siblings, listing: [] };
 }
 
@@ -64,7 +68,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 async function readManifest(plan: ImportPlan, targetKey: Uint8Array) {
   const bytes = await openSymmetric(plan.manifest.envelope, targetKey, { context: {
     purpose: "import-staging-manifest", vaultId: "owner-id", objectId: plan.importId,
-    keyId: "target-id", keyEpoch: 1, revision: 1,
+    keyId: TARGET_ID, keyEpoch: 1, revision: 1,
   }, manifestDigest: await digestEnvelope(plan.manifest.envelope) });
   return JSON.parse(decoder.decode(bytes)) as {
     counts: Record<string, number>; bytes: { payload: number }; chunks: { sequence: number; digest: string; records: number; bytes: number }[];
@@ -92,11 +96,11 @@ describe("import plan: complete encrypted record and chunk plan", () => {
         offset += descriptor.length;
       }
       expect(offset).toBe(chunk.payload.length);
-      expect(chunk.digest).toBe(await sha256Hex(chunk.payload));
+      expect(chunk.digest).toBe(await sha256Hex(encodeImportChunkBody(chunk.descriptors, chunk.payload)));
     }
-    const concatenated = new Uint8Array(plan.chunks.reduce((total, chunk) => total + chunk.payload.length, 0));
-    let offset = 0;
-    for (const chunk of plan.chunks) { concatenated.set(chunk.payload, offset); offset += chunk.payload.length; }
+    const concatenated = new Uint8Array(plan.chunks.length * 32);
+    plan.chunks.forEach((chunk, index) => concatenated.set(
+      Uint8Array.from(chunk.digest.match(/../g)!.map((byte) => Number.parseInt(byte, 16))), index * 32));
     expect(plan.manifest.metadata.aggregateDigest).toBe(await sha256Hex(concatenated));
     expect(plan.manifest.metadata.chunkCount).toBe(plan.chunks.length);
     expect(plan.manifest.metadata.recordCount).toBe(plan.records.length);
@@ -182,36 +186,36 @@ describe("import plan: complete encrypted record and chunk plan", () => {
 
   it("plans a File Replace as a new representation while preserving identity", async () => {
     const document: ImportReplacementDocument = {
-      revision: 3, keyEpoch: 2, contentKeyId: "content-key", representationId: "old-representation",
-      markdown: "old", metadata: new Uint8Array(), capability: { id: "capability-id", epoch: 1 },
+      revision: 3, keyEpoch: 2, contentKeyId: "0198c0de-0000-7000-8000-0000000000cc", representationId: "0198c0de-0000-7000-8000-0000000000dd",
+      markdown: "old", metadata: new Uint8Array(), capability: { id: "0198c0de-0000-7000-8000-0000000000ee", epoch: 1 },
       capabilityKey: crypto.getRandomValues(new Uint8Array(32)), publication: null,
     };
     const { plan } = await makePlan(["draft.md"], {
-      siblings: [{ nodeId: "file-1", kind: "file", name: "draft.md" }],
+      siblings: [{ nodeId: EXISTING_FILE_ID, kind: "file", name: "draft.md" }],
       choices: { "draft.md": { action: "replace" } },
-      replacements: new Map([["file-1", document]]),
+      replacements: new Map([[EXISTING_FILE_ID, document]]),
       markdowns: { "draft.md": "replacement" },
     });
     expect(plan.records.map((record) => record.kind)).toEqual([
       "replace", "representation-key", "representation", "file-head",
       "listing-ciphertext", "listing-digest", "listing-signature",
     ]);
-    expect(plan.review.nodes[0]!.existingNodeId).toBe("file-1");
+    expect(plan.review.nodes[0]!.existingNodeId).toBe(EXISTING_FILE_ID);
   });
 
   it("pairs an active Publication on Replace", async () => {
     const { publicKey } = await createPublicationKeyPair();
     const document: ImportReplacementDocument = {
-      revision: 1, keyEpoch: 1, contentKeyId: "content-key", representationId: "old-representation",
-      markdown: "old", metadata: new Uint8Array(), capability: { id: "capability-id", epoch: 1 },
+      revision: 1, keyEpoch: 1, contentKeyId: "0198c0de-0000-7000-8000-0000000000cc", representationId: "0198c0de-0000-7000-8000-0000000000dd",
+      markdown: "old", metadata: new Uint8Array(), capability: { id: "0198c0de-0000-7000-8000-0000000000ee", epoch: 1 },
       capabilityKey: crypto.getRandomValues(new Uint8Array(32)),
       publication: { publicationId: newPublicationIdentifier(), linkId: newPublicationIdentifier(),
         publicKey, revision: 1, declaration: null },
     };
     const { plan } = await makePlan(["draft.md"], {
-      siblings: [{ nodeId: "file-1", kind: "file", name: "draft.md" }],
+      siblings: [{ nodeId: EXISTING_FILE_ID, kind: "file", name: "draft.md" }],
       choices: { "draft.md": { action: "replace" } },
-      replacements: new Map([["file-1", document]]),
+      replacements: new Map([[EXISTING_FILE_ID, document]]),
     });
     expect(plan.records.map((record) => record.kind)).toEqual([
       "replace", "representation-key", "representation", "file-head", "public-representation",
@@ -221,19 +225,19 @@ describe("import plan: complete encrypted record and chunk plan", () => {
 
   it("fails closed for a Replace the plan cannot represent", async () => {
     const publishedLegacy: ImportReplacementDocument = {
-      revision: 1, keyEpoch: 1, contentKeyId: "content-key", representationId: "old-representation",
+      revision: 1, keyEpoch: 1, contentKeyId: "0198c0de-0000-7000-8000-0000000000cc", representationId: "0198c0de-0000-7000-8000-0000000000dd",
       markdown: "old", metadata: new Uint8Array(), capability: null, capabilityKey: null,
       publication: { publicationId: newPublicationIdentifier(), linkId: newPublicationIdentifier(),
         publicKey: (await createPublicationKeyPair()).publicKey, revision: 1, declaration: null },
     };
     await expect(makePlan(["draft.md"], {
-      siblings: [{ nodeId: "file-1", kind: "file", name: "draft.md" }],
+      siblings: [{ nodeId: EXISTING_FILE_ID, kind: "file", name: "draft.md" }],
       choices: { "draft.md": { action: "replace" } },
       replacements: new Map([["file-1", publishedLegacy]]),
     })).rejects.toMatchObject({ code: "replacement-unavailable" });
 
     await expect(makePlan(["draft.md"], {
-      siblings: [{ nodeId: "file-1", kind: "file", name: "draft.md" }],
+      siblings: [{ nodeId: EXISTING_FILE_ID, kind: "file", name: "draft.md" }],
       choices: { "draft.md": { action: "replace" } },
     })).rejects.toBeInstanceOf(ImportError);
   });

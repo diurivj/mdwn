@@ -30,8 +30,8 @@ import type { HistoricalComment } from "~/archive/format";
 import type { FileHead, FileHeadIdentity } from "~/tree/file-head";
 import type { FileDocument } from "~/tree/file-client";
 import {
-  IMPORT_RECORD_KINDS, envelopeDigestHex, newStagingId, type ImportSessionMetadata,
-  type ImportSessionKindCount, type StagingRecordKind,
+  IMPORT_RECORD_KINDS, encodeImportChunkBody, envelopeDigestHex, newStagingId,
+  type ImportSessionMetadata, type ImportSessionKindCount, type StagingRecordKind,
 } from "./staging";
 import {
   MAX_STAGING_CHUNK_BYTES,
@@ -62,7 +62,7 @@ export type ImportPlanChunk = {
   /** 0-based, below 40. */
   sequence: number;
   payload: Uint8Array;
-  /** Lowercase hex SHA-256 of the raw payload. */
+  /** Lowercase hex SHA-256 of the encoded chunk body (framing + payload). */
   digest: string;
   descriptors: readonly ImportPlanDescriptor[];
 };
@@ -121,6 +121,14 @@ async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function decodeHexBytes(value: string): Uint8Array {
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index++) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -343,7 +351,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
         publicationId: published.publicationId, linkId: published.linkId, publicKey: published.publicKey,
         revision: published.revision! + 1,
       }, publicPresentation(source.markdown));
-      await push("public-representation", [published.publicationId, published.linkId, newId()], envelope);
+      await push("public-representation", [published.publicationId, published.linkId, newStagingId()], envelope);
     }
     return null;
   };
@@ -404,7 +412,9 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
 
   const chunks = await packChunks(records);
   const payloadBytes = chunks.reduce((total, chunk) => total + chunk.payload.length, 0);
-  const aggregateDigest = await sha256Hex(concat(chunks.map((chunk) => chunk.payload)));
+  // Aggregate over the sequence-ordered chunk body digests: it transitively
+  // binds every payload byte while keeping the commit recheck tiny.
+  const aggregateDigest = await sha256Hex(concat(chunks.map((chunk) => decodeHexBytes(chunk.digest))));
   const importId = newStagingId();
   const kindCounts: ImportSessionKindCount[] = [];
   for (const kind of Object.keys(IMPORT_RECORD_KINDS) as StagingRecordKind[]) {
@@ -498,7 +508,8 @@ async function packChunks(records: readonly ImportPlanRecord[]): Promise<ImportP
       throw new ImportError("plan-too-large", { limit: MAX_STAGING_CHUNKS, measured: chunks.length + 1, action: "split" });
     }
     const payload = concat(payloads);
-    chunks.push({ sequence: chunks.length, payload, digest: await sha256Hex(payload), descriptors });
+    const body = encodeImportChunkBody(descriptors, payload);
+    chunks.push({ sequence: chunks.length, payload, digest: await sha256Hex(body), descriptors });
     payloads = [];
     descriptors = [];
     bytes = 0;

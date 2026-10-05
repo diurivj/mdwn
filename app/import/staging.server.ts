@@ -67,10 +67,9 @@ type SessionRow = {
 
 type ChunkRow = {
   sequence: number;
-  payload: ArrayBuffer;
   digest: ArrayBuffer;
   descriptor_count: number;
-  body_digest: ArrayBuffer;
+  bytes: number;
 };
 
 type RecordRow = {
@@ -81,6 +80,9 @@ type RecordRow = {
   ref2: string | null;
   ref3: string | null;
   ref4: string | null;
+  offset: number;
+  length: number;
+  /** Record bytes reconstructed from its chunk payload by `import_record_payloads`. */
   payload: ArrayBuffer;
   digest: ArrayBuffer;
   header_key_id: string | null;
@@ -142,13 +144,24 @@ function parseProof(value: string | null): unknown {
   catch { return null; }
 }
 
+/** After proof verification the recorded body digest is the body's SHA-256. */
+function proofBodyDigest(proof: unknown): Uint8Array | null {
+  const value = (proof as { bodyDigest?: unknown } | null)?.bodyDigest;
+  if (typeof value !== "string" || value.length > 64) return null;
+  try {
+    const bytes = Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/") +
+      "=".repeat((4 - value.length % 4) % 4)), (character) => character.charCodeAt(0));
+    return bytes.length === 32 ? bytes : null;
+  } catch { return null; }
+}
+
 async function sessionRow(env: Env, importId: string): Promise<SessionRow | null> {
   return (await createDb(env.DB).get<SessionRow>(sql`SELECT * FROM import_sessions WHERE id = ${importId}`)) ?? null;
 }
 
 async function chunkRow(env: Env, importId: string, sequence: number): Promise<ChunkRow | null> {
   return (await createDb(env.DB).get<ChunkRow>(sql`
-    SELECT sequence, payload, digest, descriptor_count, body_digest FROM import_chunks
+    SELECT sequence, digest, descriptor_count, length(payload) AS bytes FROM import_chunks
     WHERE import_id = ${importId} AND sequence = ${sequence}`)) ?? null;
 }
 
@@ -157,7 +170,8 @@ type UploadRecord = {
   ordinal: number;
   kind: StagingRecordKind;
   refs: readonly (string | null)[];
-  payload: Uint8Array;
+  offset: number;
+  length: number;
   digest: Uint8Array;
   headerKeyId: string | null;
   headerKeyEpoch: number | null;
@@ -180,7 +194,7 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
   }
   const base = {
     ordinal, kind: descriptor.kind, refs: [...descriptor.refs] as (string | null)[],
-    payload, digest: descriptor.digest,
+    offset: descriptor.offset, length: descriptor.length, digest: descriptor.digest,
   };
   const structural = (): UploadRecord => ({
     ...base, headerKeyId: null, headerKeyEpoch: null, headerRevision: null, expectedRevision: null,
@@ -244,7 +258,7 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
     headerRevision: context.revision, expectedRevision: null, headDeviceId: null, signerDeviceId: null };
 }
 
-const RECORD_COLUMNS = `import_id, chunk_sequence, ordinal, kind, ref1, ref2, ref3, ref4, payload, digest,
+const RECORD_COLUMNS = `import_id, chunk_sequence, ordinal, kind, ref1, ref2, ref3, ref4, offset, length, digest,
   header_key_id, header_key_epoch, header_revision, expected_revision,
   head_device_id, signer_device_id`;
 
@@ -255,7 +269,7 @@ function recordInsertStatements(importId: string, sequence: number, records: rea
     const rows = records.slice(start, start + 5).map((record) => sql`(
       ${importId}, ${sequence}, ${record.ordinal}, ${record.kind},
       ${record.refs[0] ?? null}, ${record.refs[1] ?? null}, ${record.refs[2] ?? null}, ${record.refs[3] ?? null},
-      ${record.payload}, ${record.digest}, ${record.headerKeyId}, ${record.headerKeyEpoch}, ${record.headerRevision},
+      ${record.offset}, ${record.length}, ${record.digest}, ${record.headerKeyId}, ${record.headerKeyEpoch}, ${record.headerRevision},
       ${record.expectedRevision}, ${record.headDeviceId}, ${record.signerDeviceId})`);
     statements.push(sql`INSERT INTO import_records (${sql.raw(RECORD_COLUMNS)}) VALUES ${sql.join(rows, sql`, `)}`);
   }
@@ -304,17 +318,17 @@ async function createSession(env: Env, auth: AuthorizedDevice, body: Uint8Array)
 }
 
 /** Upload one raw binary encrypted chunk; the exact body bytes are the retry identity. */
-async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, sequence: number, body: Uint8Array): Promise<Response> {
+async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, sequence: number,
+  body: Uint8Array, bodyDigest: Uint8Array): Promise<Response> {
   let chunk;
   try { chunk = decodeImportChunkBody(body, MAX_IMPORT_CHUNK_BODY_BYTES); }
   catch { return invalid(); }
   const session = await sessionRow(env, importId);
   if (!session || session.account_id !== auth.accountId) return notFound();
   const now = Date.now();
-  const bodyDigest = await sha256(body);
   if (session.state === "committed") {
     const committedChunk = await chunkRow(env, importId, sequence);
-    return committedChunk && equalBytes(bytesOf(committedChunk.body_digest), bodyDigest)
+    return committedChunk && equalBytes(bytesOf(committedChunk.digest), bodyDigest)
       ? Response.json({ sequence, received: committedChunk.descriptor_count, retried: true }, { headers })
       : changed();
   }
@@ -323,14 +337,13 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
   if (sequence < 0 || sequence >= session.expected_chunk_count) return invalid();
   const existing = await chunkRow(env, importId, sequence);
   if (existing) {
-    if (equalBytes(bytesOf(existing.body_digest), bodyDigest)) {
+    if (equalBytes(bytesOf(existing.digest), bodyDigest)) {
       return Response.json({ sequence, received: existing.descriptor_count, retried: true }, { headers });
     }
     await failSession(env, auth, importId);
     return changed();
   }
-  const payloadDigest = await verifyChunkDigests(chunk);
-  if (!payloadDigest) return invalid();
+  if (!await verifyChunkDigests(chunk)) return invalid();
   let records: UploadRecord[];
   try {
     records = chunk.descriptors.map((descriptor, ordinal) => validateUploadRecord(session.target_owner_id,
@@ -348,14 +361,14 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
       AND NOT EXISTS (SELECT 1 FROM import_chunks WHERE import_id = ${importId} AND sequence = ${sequence})
       AND ${guard}`,
     (marker) => [
-      sql`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
-        SELECT ${importId}, ${sequence}, ${chunk.payload}, ${payloadDigest}, ${descriptorCount}, ${bodyDigest}, ${now}
+      sql`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, received_at)
+        SELECT ${importId}, ${sequence}, ${chunk.payload}, ${bodyDigest}, ${descriptorCount}, ${now}
         WHERE ${marker}`,
       ...recordInsertStatements(importId, sequence, records),
     ]);
   if (committed) return Response.json({ sequence, received: descriptorCount, bytes: payloadBytes }, { status: 201, headers });
   const raced = await chunkRow(env, importId, sequence);
-  if (raced && equalBytes(bytesOf(raced.body_digest), bodyDigest)) {
+  if (raced && equalBytes(bytesOf(raced.digest), bodyDigest)) {
     return Response.json({ sequence, received: raced.descriptor_count, retried: true }, { headers });
   }
   return changed();
@@ -491,25 +504,18 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
   const now = Date.now();
   if (session.expires_at <= now) { await purgeSession(env, session); return expired(); }
   const chunks = await createDb(env.DB).all<ChunkRow>(sql`
-    SELECT sequence, payload, digest, descriptor_count, body_digest FROM import_chunks
+    SELECT sequence, digest, descriptor_count, length(payload) AS bytes FROM import_chunks
     WHERE import_id = ${importId} ORDER BY sequence`);
   if (chunks.length !== session.expected_chunk_count || chunks.some((chunk, index) => chunk.sequence !== index)) {
     return incomplete();
   }
-  const payloads: Uint8Array[] = [];
-  for (const chunk of chunks) {
-    const payload = bytesOf(chunk.payload);
-    if (!equalBytes(await sha256(payload), bytesOf(chunk.digest))) return incomplete();
-    payloads.push(payload);
-  }
-  const totalBytes = payloads.reduce((total, payload) => total + payload.length, 0);
+  const totalBytes = chunks.reduce((total, chunk) => total + chunk.bytes, 0);
   if (totalBytes !== session.expected_payload_bytes) return incomplete();
-  const ordered = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const payload of payloads) { ordered.set(payload, offset); offset += payload.length; }
+  const ordered = new Uint8Array(chunks.length * 32);
+  chunks.forEach((chunk, index) => ordered.set(bytesOf(chunk.digest), index * 32));
   if (!equalBytes(await sha256(ordered), bytesOf(session.aggregate_digest))) return incomplete();
   const kindRows = await createDb(env.DB).all<{ kind: StagingRecordKind; actual: number }>(sql`
-    SELECT kind, count(*) AS actual FROM import_records WHERE import_id = ${importId} GROUP BY kind`);
+    SELECT kind, count(*) AS actual FROM import_record_payloads WHERE import_id = ${importId} GROUP BY kind`);
   const expectedKinds = await createDb(env.DB).all<{ kind: StagingRecordKind; expected_count: number }>(sql`
     SELECT kind, expected_count FROM import_session_kinds WHERE import_id = ${importId}`);
   const actualKinds = new Map(kindRows.map((row) => [row.kind, row.actual]));
@@ -518,7 +524,7 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
     if ((actualKinds.get(expected.kind) ?? 0) !== expected.expected_count) return incomplete();
   }
   const records = await createDb(env.DB).all<RecordRow>(sql`
-    SELECT * FROM import_records WHERE import_id = ${importId} ORDER BY chunk_sequence, ordinal`);
+    SELECT * FROM import_record_payloads WHERE import_id = ${importId} ORDER BY chunk_sequence, ordinal`);
   try { validateCompletePlan(records); }
   catch { return incomplete(); }
   const plan = indexRecords(records);
@@ -542,7 +548,7 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
   const replaces = await createDb(env.DB).all<StagedFileCheck>(sql`
     SELECT r.ref1, r.ref2, r.expected_revision, f.current_revision, f.current_representation_id,
       f.capability_id, f.capability_epoch, f.owner_id, n.parent_node_id, n.import_id
-    FROM import_records r JOIN files f ON f.node_id = r.ref1 JOIN vault_nodes n ON n.id = f.node_id
+    FROM import_record_payloads r JOIN files f ON f.node_id = r.ref1 JOIN vault_nodes n ON n.id = f.node_id
     WHERE r.import_id = ${importId} AND r.kind = 'replace'`);
   if (replaces.length !== plan.of("replace").length) return incomplete();
   for (const replace of replaces) {
@@ -553,7 +559,7 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
   const publications = await createDb(env.DB).all<PublicationCheck>(sql`
     SELECT r.ref1, r.ref2, r.header_revision, p.state, p.current_link_id, p.current_representation_id, p.file_id,
       pr.revision AS current_revision
-    FROM import_records r JOIN publications p ON p.id = r.ref1
+    FROM import_record_payloads r JOIN publications p ON p.id = r.ref1
     LEFT JOIN public_representations pr ON pr.id = p.current_representation_id
     WHERE r.import_id = ${importId} AND r.kind = 'public-representation'`);
   if (publications.length !== plan.of("public-representation").length) return incomplete();
@@ -624,13 +630,13 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
       AND EXISTS (SELECT 1 FROM directories d JOIN vault_nodes n ON n.id = d.node_id AND n.owner_id = d.owner_id
         WHERE d.node_id = ${session.target_directory_id} AND d.owner_id = ${session.target_owner_id}
           AND d.entries_revision = ${session.reviewed_entry_revision})
-      AND NOT EXISTS (SELECT 1 FROM import_records r JOIN files f ON f.node_id = r.ref1
+      AND NOT EXISTS (SELECT 1 FROM import_record_payloads r JOIN files f ON f.node_id = r.ref1
         JOIN vault_nodes n ON n.id = f.node_id
         WHERE r.import_id = ${importId} AND r.kind = 'replace'
           AND (f.current_revision != r.expected_revision OR f.current_representation_id != r.ref2
             OR f.owner_id != ${session.target_owner_id} OR n.parent_node_id != ${session.target_directory_id}
             OR n.import_id IS NOT NULL))
-      AND NOT EXISTS (SELECT 1 FROM import_records r JOIN publications p ON p.id = r.ref1
+      AND NOT EXISTS (SELECT 1 FROM import_record_payloads r JOIN publications p ON p.id = r.ref1
         WHERE r.import_id = ${importId} AND r.kind = 'public-representation'
           AND (p.state != 'active' OR p.current_link_id != r.ref2 OR p.current_representation_id IS NULL
             OR (SELECT pr.revision FROM public_representations pr
@@ -642,35 +648,35 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
       sql`INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, import_id, created_at, updated_at)
         SELECT ref1, CASE kind WHEN 'node-directory' THEN 'directory' ELSE 'file' END,
           ${session.target_owner_id}, ref2, ${importId}, ${nowMs}, ${nowMs}
-        FROM import_records WHERE import_id = ${importId} AND kind IN ('node-directory', 'node-file') AND ${marker}`,
+        FROM import_record_payloads WHERE import_id = ${importId} AND kind IN ('node-directory', 'node-file') AND ${marker}`,
       sql`INSERT INTO directories (node_id, owner_id, entries_revision, key_epoch)
         SELECT n.ref1, ${session.target_owner_id}, 1, 1
-        FROM import_records n
+        FROM import_record_payloads n
         WHERE n.import_id = ${importId} AND n.kind = 'node-directory' AND ${marker}`,
       sql`UPDATE directories SET entries_revision = 2,
-          listing_ciphertext = (SELECT payload FROM import_records WHERE import_id = ${importId}
+          listing_ciphertext = (SELECT payload FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-ciphertext' AND ref1 = directories.node_id),
-          listing_digest = (SELECT payload FROM import_records WHERE import_id = ${importId}
+          listing_digest = (SELECT payload FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-digest' AND ref1 = directories.node_id),
-          listing_signature = (SELECT payload FROM import_records WHERE import_id = ${importId}
+          listing_signature = (SELECT payload FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-signature' AND ref1 = directories.node_id),
-          listing_device_id = (SELECT signer_device_id FROM import_records WHERE import_id = ${importId}
+          listing_device_id = (SELECT signer_device_id FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-signature' AND ref1 = directories.node_id)
-        WHERE node_id IN (SELECT ref1 FROM import_records WHERE import_id = ${importId} AND kind = 'listing-ciphertext')
+        WHERE node_id IN (SELECT ref1 FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'listing-ciphertext')
           AND owner_id = ${session.target_owner_id} AND entries_revision = 1 AND ${marker}`,
       sql`INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id,
           name_ciphertext, order_ciphertext, key_envelope)
         SELECT n.ref1, ${session.target_owner_id}, n.ref2, en.payload, eo.payload, COALESCE(ec.payload, ek.payload)
-        FROM import_records n
-        JOIN import_records en ON en.import_id = n.import_id AND en.kind = 'entry-name' AND en.ref1 = n.ref1
-        JOIN import_records eo ON eo.import_id = n.import_id AND eo.kind = 'entry-order' AND eo.ref1 = n.ref1
-        LEFT JOIN import_records ec ON ec.import_id = n.import_id AND ec.kind = 'directory-capability' AND ec.ref1 = n.ref1
-        LEFT JOIN import_records ek ON ek.import_id = n.import_id AND ek.kind = 'file-capability' AND ek.ref1 = n.ref1
+        FROM import_record_payloads n
+        JOIN import_record_payloads en ON en.import_id = n.import_id AND en.kind = 'entry-name' AND en.ref1 = n.ref1
+        JOIN import_record_payloads eo ON eo.import_id = n.import_id AND eo.kind = 'entry-order' AND eo.ref1 = n.ref1
+        LEFT JOIN import_record_payloads ec ON ec.import_id = n.import_id AND ec.kind = 'directory-capability' AND ec.ref1 = n.ref1
+        LEFT JOIN import_record_payloads ek ON ek.import_id = n.import_id AND ek.kind = 'file-capability' AND ek.ref1 = n.ref1
         WHERE n.import_id = ${importId} AND n.kind IN ('node-directory', 'node-file') AND ${marker}`,
       sql`INSERT INTO files (node_id, owner_id, current_representation_id, current_revision, capability_id, capability_epoch)
         SELECT fc.ref1, ${session.target_owner_id}, rk.ref2, 1, fc.ref3, 1
-        FROM import_records fc
-        JOIN import_records rk ON rk.import_id = fc.import_id AND rk.kind = 'representation-key' AND rk.ref1 = fc.ref1
+        FROM import_record_payloads fc
+        JOIN import_record_payloads rk ON rk.import_id = fc.import_id AND rk.kind = 'representation-key' AND rk.ref1 = fc.ref1
         WHERE fc.import_id = ${importId} AND fc.kind = 'file-capability' AND ${marker}`,
       sql`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id, key_epoch,
           ciphertext, ciphertext_size, created_at, key_envelope, head_digest, head_signature, head_device_id)
@@ -680,91 +686,91 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
           CASE WHEN head.payload IS NULL THEN NULL ELSE substr(head.payload, 1, 32) END,
           CASE WHEN head.payload IS NULL THEN NULL ELSE substr(head.payload, 33, 64) END,
           head.head_device_id
-        FROM import_records rep
-        LEFT JOIN import_records rk ON rk.import_id = rep.import_id AND rk.kind = 'representation-key'
+        FROM import_record_payloads rep
+        LEFT JOIN import_record_payloads rk ON rk.import_id = rep.import_id AND rk.kind = 'representation-key'
           AND rk.ref1 = rep.ref1 AND rk.ref2 = rep.ref2
-        LEFT JOIN import_records head ON head.import_id = rep.import_id AND head.kind = 'file-head'
+        LEFT JOIN import_record_payloads head ON head.import_id = rep.import_id AND head.kind = 'file-head'
           AND head.ref1 = rep.ref1 AND head.ref2 = rep.ref2
-        LEFT JOIN import_records rep0 ON rep0.import_id = rep.import_id AND rep0.kind = 'replace' AND rep0.ref1 = rep.ref1
+        LEFT JOIN import_record_payloads rep0 ON rep0.import_id = rep.import_id AND rep0.kind = 'replace' AND rep0.ref1 = rep.ref1
         WHERE rep.import_id = ${importId} AND rep.kind = 'representation' AND (rk.ref1 IS NOT NULL OR rep0.ref1 IS NOT NULL)
           AND ${marker}`,
       sql`UPDATE files SET
-          current_representation_id = (SELECT rep.ref2 FROM import_records rep
-            JOIN import_records rep0 ON rep0.import_id = rep.import_id AND rep0.kind = 'replace' AND rep0.ref1 = rep.ref1
+          current_representation_id = (SELECT rep.ref2 FROM import_record_payloads rep
+            JOIN import_record_payloads rep0 ON rep0.import_id = rep.import_id AND rep0.kind = 'replace' AND rep0.ref1 = rep.ref1
             WHERE rep.import_id = ${importId} AND rep.kind = 'representation' AND rep.ref1 = files.node_id LIMIT 1),
-          current_revision = (SELECT rep0.expected_revision + 1 FROM import_records rep0
+          current_revision = (SELECT rep0.expected_revision + 1 FROM import_record_payloads rep0
             WHERE rep0.import_id = ${importId} AND rep0.kind = 'replace' AND rep0.ref1 = files.node_id)
-        WHERE files.node_id IN (SELECT ref1 FROM import_records WHERE import_id = ${importId} AND kind = 'replace')
+        WHERE files.node_id IN (SELECT ref1 FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'replace')
           AND files.owner_id = ${session.target_owner_id} AND ${marker}`,
       sql`DELETE FROM file_representations
-        WHERE file_node_id IN (SELECT ref1 FROM import_records WHERE import_id = ${importId} AND kind = 'replace')
-          AND id IN (SELECT ref2 FROM import_records WHERE import_id = ${importId} AND kind = 'replace')
+        WHERE file_node_id IN (SELECT ref1 FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'replace')
+          AND id IN (SELECT ref2 FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'replace')
           AND NOT EXISTS (SELECT 1 FROM files WHERE current_representation_id = file_representations.id)
           AND ${marker}`,
       sql`INSERT INTO public_representations (id, publication_id, link_id, revision, file_revision,
           ciphertext, ciphertext_size, created_at)
         SELECT r.ref3, r.ref1, r.ref2, r.header_revision, rep0.expected_revision + 1,
           r.payload, length(r.payload), ${nowMs}
-        FROM import_records r
+        FROM import_record_payloads r
         JOIN publications p ON p.id = r.ref1
-        JOIN import_records rep0 ON rep0.import_id = r.import_id AND rep0.kind = 'replace' AND rep0.ref1 = p.file_id
+        JOIN import_record_payloads rep0 ON rep0.import_id = r.import_id AND rep0.kind = 'replace' AND rep0.ref1 = p.file_id
         WHERE r.import_id = ${importId} AND r.kind = 'public-representation' AND ${marker}`,
       sql`UPDATE publications SET
-          current_representation_id = (SELECT r.ref3 FROM import_records r
+          current_representation_id = (SELECT r.ref3 FROM import_record_payloads r
             WHERE r.import_id = ${importId} AND r.kind = 'public-representation' AND r.ref1 = publications.id),
           updated_at = ${nowMs}
-        WHERE id IN (SELECT ref1 FROM import_records WHERE import_id = ${importId} AND kind = 'public-representation')
+        WHERE id IN (SELECT ref1 FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'public-representation')
           AND ${marker}`,
       sql`INSERT INTO comment_thread_epochs (id, thread_id, audience, key_epoch, ordinal, state, created_at)
         SELECT ref3, ref2, NULL, 1, 1, 'active', ${nowMs}
-        FROM import_records WHERE import_id = ${importId} AND kind = 'comment-thread' AND ${marker}`,
+        FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'comment-thread' AND ${marker}`,
       sql`INSERT INTO comment_threads (id, owner_id, file_id, purpose, publication_id, current_epoch_id,
           next_sequence, created_at)
         SELECT t.ref2, ${session.target_owner_id}, t.ref1, 'private', NULL, t.ref3,
-          COALESCE((SELECT count(*) + 1 FROM import_records m
+          COALESCE((SELECT count(*) + 1 FROM import_record_payloads m
             WHERE m.import_id = t.import_id AND m.kind = 'comment-meta' AND m.ref1 = t.ref2), 1), ${nowMs}
-        FROM import_records t WHERE t.import_id = ${importId} AND t.kind = 'comment-thread' AND ${marker}`,
+        FROM import_record_payloads t WHERE t.import_id = ${importId} AND t.kind = 'comment-thread' AND ${marker}`,
       sql`INSERT INTO sharing_comment_capabilities (object_id, owner_id, file_id, thread_id, purpose,
           publication_id, capability_id, capability_epoch)
         SELECT t.ref2, ${session.target_owner_id}, t.ref1, t.ref2, 'private-comment-thread', NULL, t.ref4, 1
-        FROM import_records t WHERE t.import_id = ${importId} AND t.kind = 'comment-thread' AND ${marker}`,
+        FROM import_record_payloads t WHERE t.import_id = ${importId} AND t.kind = 'comment-thread' AND ${marker}`,
       sql`INSERT INTO import_comment_envelopes (thread_id, file_id, capability_id, capability_epoch, key_epoch, ciphertext)
         SELECT ref2, ref1, ref4, 1, 1, payload
-        FROM import_records WHERE import_id = ${importId} AND kind = 'comment-thread' AND ${marker}`,
+        FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'comment-thread' AND ${marker}`,
       sql`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision, body_ciphertext,
           body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
         SELECT b.ref2, b.ref1, t.ref3, ${auth.accountId},
           ROW_NUMBER() OVER (PARTITION BY b.ref1 ORDER BY b.chunk_sequence, b.ordinal), 1,
           b.payload, length(b.payload), k.payload, 1, ${nowMs}, ${nowMs}
-        FROM import_records b
-        JOIN import_records t ON t.import_id = b.import_id AND t.kind = 'comment-thread' AND t.ref2 = b.ref1
-        JOIN import_records m ON m.import_id = b.import_id AND m.kind = 'comment-meta' AND m.ref1 = b.ref1 AND m.ref2 = b.ref2
-        JOIN import_records k ON k.import_id = b.import_id AND k.kind = 'comment-key' AND k.ref1 = b.ref1 AND k.ref2 = b.ref2
+        FROM import_record_payloads b
+        JOIN import_record_payloads t ON t.import_id = b.import_id AND t.kind = 'comment-thread' AND t.ref2 = b.ref1
+        JOIN import_record_payloads m ON m.import_id = b.import_id AND m.kind = 'comment-meta' AND m.ref1 = b.ref1 AND m.ref2 = b.ref2
+        JOIN import_record_payloads k ON k.import_id = b.import_id AND k.kind = 'comment-key' AND k.ref1 = b.ref1 AND k.ref2 = b.ref2
         WHERE b.import_id = ${importId} AND b.kind = 'comment-body' AND ${marker}`,
       sql`INSERT INTO import_comment_meta (comment_id, thread_id, owner_id, ciphertext)
         SELECT ref2, ref1, ${session.target_owner_id}, payload
-        FROM import_records WHERE import_id = ${importId} AND kind = 'comment-meta' AND ${marker}`,
+        FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'comment-meta' AND ${marker}`,
       sql`INSERT INTO thread_attributions (id, thread_id, author_id, epoch_id, revision, ciphertext,
           content_key_envelope, content_key_epoch, created_at, updated_at)
         SELECT a.ref2, a.ref1, ${auth.accountId}, t.ref3, 1, a.payload, k.payload, 1, ${nowMs}, ${nowMs}
-        FROM import_records a
-        JOIN import_records t ON t.import_id = a.import_id AND t.kind = 'comment-thread' AND t.ref2 = a.ref1
-        JOIN import_records k ON k.import_id = a.import_id AND k.kind = 'comment-attribution-key'
+        FROM import_record_payloads a
+        JOIN import_record_payloads t ON t.import_id = a.import_id AND t.kind = 'comment-thread' AND t.ref2 = a.ref1
+        JOIN import_record_payloads k ON k.import_id = a.import_id AND k.kind = 'comment-attribution-key'
           AND k.ref1 = a.ref1 AND k.ref2 = a.ref2
         WHERE a.import_id = ${importId} AND a.kind = 'comment-attribution' AND ${marker}`,
-      sql`UPDATE directory_entries SET key_envelope = (SELECT k.payload FROM import_records k
+      sql`UPDATE directory_entries SET key_envelope = (SELECT k.payload FROM import_record_payloads k
             WHERE k.import_id = ${importId} AND k.kind = 'entry-key' AND k.ref1 = directory_entries.child_node_id)
-        WHERE child_node_id IN (SELECT ref1 FROM import_records WHERE import_id = ${importId} AND kind = 'entry-key')
+        WHERE child_node_id IN (SELECT ref1 FROM import_record_payloads WHERE import_id = ${importId} AND kind = 'entry-key')
           AND owner_id = ${session.target_owner_id} AND parent_node_id = ${session.target_directory_id}
           AND ${marker}`,
       sql`UPDATE directories SET entries_revision = ${session.reviewed_entry_revision + 1},
-          listing_ciphertext = (SELECT payload FROM import_records WHERE import_id = ${importId}
+          listing_ciphertext = (SELECT payload FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-ciphertext' AND ref1 = ${session.target_directory_id}),
-          listing_digest = (SELECT payload FROM import_records WHERE import_id = ${importId}
+          listing_digest = (SELECT payload FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-digest' AND ref1 = ${session.target_directory_id}),
-          listing_signature = (SELECT payload FROM import_records WHERE import_id = ${importId}
+          listing_signature = (SELECT payload FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-signature' AND ref1 = ${session.target_directory_id}),
-          listing_device_id = (SELECT signer_device_id FROM import_records WHERE import_id = ${importId}
+          listing_device_id = (SELECT signer_device_id FROM import_record_payloads WHERE import_id = ${importId}
             AND kind = 'listing-signature' AND ref1 = ${session.target_directory_id})
         WHERE node_id = ${session.target_directory_id} AND owner_id = ${session.target_owner_id}
           AND entries_revision = ${session.reviewed_entry_revision} AND ${marker}`,
@@ -841,8 +847,11 @@ export async function importAction(request: Request, env: Env): Promise<Response
   }
   const body = await readBinaryBody(request, collection ? MAX_IMPORT_SESSION_BODY_BYTES : MAX_IMPORT_CHUNK_BODY_BYTES);
   if (!body || !body.length) return invalid();
-  const auth = await authorizePrivateRequest(request, env, parseProof(request.headers.get("X-Mdwn-Device-Proof")), body);
+  const proof = parseProof(request.headers.get("X-Mdwn-Device-Proof"));
+  const auth = await authorizePrivateRequest(request, env, proof, body);
   if (!auth) return denied();
   if (collection) return await createSession(env, auth, body);
-  return await uploadChunk(env, auth, chunk![1]!, Number(chunk![2]), body);
+  const bodyDigest = proofBodyDigest(proof);
+  if (!bodyDigest) return denied();
+  return await uploadChunk(env, auth, chunk![1]!, Number(chunk![2]), body, bodyDigest);
 }

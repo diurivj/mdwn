@@ -80,11 +80,11 @@ describe("import staging wire format", () => {
     expect(decoded.descriptors.map((item) => item.kind)).toEqual(["entry-name", "representation"]);
     expect(decoded.descriptors.map((item) => item.refs)).toEqual(descriptors.map((item) => item.refs));
     expect(decoded.payload).toEqual(payload);
-    expect(await verifyChunkDigests(decoded)).not.toBeNull();
+    expect(await verifyChunkDigests(decoded)).toBe(true);
 
     const tampered = new Uint8Array(decoded.payload);
     tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff;
-    expect(await verifyChunkDigests({ ...decoded, payload: tampered })).toBeNull();
+    expect(await verifyChunkDigests({ ...decoded, payload: tampered })).toBe(false);
   });
 
   it("rejects a 51st descriptor, an uncovered byte, and a wrong reference shape", () => {

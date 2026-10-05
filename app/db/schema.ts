@@ -1213,7 +1213,7 @@ export const importSessions = sqliteTable(
     expectedChunkCount: integer("expected_chunk_count").notNull(),
     expectedPayloadBytes: integer("expected_payload_bytes").notNull(),
     expectedCommentCount: integer("expected_comment_count").notNull(),
-    /** SHA-256 over the sequence-ordered raw chunk payloads. */
+    /** SHA-256 over the sequence-ordered chunk body digests. */
     aggregateDigest: blob("aggregate_digest").notNull(),
     state: text("state").notNull(),
     /** Server-maintained aggregate counters; never trusted from the client. */
@@ -1267,9 +1267,8 @@ export const importChunks = sqliteTable(
     importId: text("import_id").notNull().references(() => importSessions.id, { onDelete: "restrict" }),
     sequence: integer("sequence").notNull(),
     payload: blob("payload").notNull(),
-    digest: blob("digest").notNull(),
     /** SHA-256 of the whole uploaded chunk body; the exact-retry identity. */
-    bodyDigest: blob("body_digest").notNull(),
+    digest: blob("digest").notNull(),
     descriptorCount: integer("descriptor_count").notNull(),
     receivedAt: integer("received_at").notNull(),
   },
@@ -1277,7 +1276,7 @@ export const importChunks = sqliteTable(
     primaryKey({ columns: [table.importId, table.sequence] }),
     check("import_chunks_sequence_bounded", sql`${table.sequence} BETWEEN 0 AND 39`),
     check("import_chunks_payload_bounded", sql`length(${table.payload}) BETWEEN 1 AND 524288`),
-    check("import_chunks_digest", sql`length(${table.digest}) = 32 AND length(${table.bodyDigest}) = 32`),
+    check("import_chunks_digest", sql`length(${table.digest}) = 32`),
     check("import_chunks_descriptors_bounded", sql`${table.descriptorCount} BETWEEN 1 AND 50`),
   ],
 );
@@ -1294,7 +1293,9 @@ export const importRecords = sqliteTable(
     ref2: text("ref2"),
     ref3: text("ref3"),
     ref4: text("ref4"),
-    payload: blob("payload").notNull(),
+    /** Byte range inside the chunk payload; the bytes live only in `import_chunks`. */
+    offset: integer("offset").notNull(),
+    length: integer("length").notNull(),
     digest: blob("digest").notNull(),
     /** Typed header/routing fields extracted from an inspected (not opened) envelope. */
     headerKeyId: text("header_key_id"),
@@ -1317,18 +1318,20 @@ export const importRecords = sqliteTable(
       'listing-ciphertext', 'listing-digest', 'listing-signature')`),
     check("import_records_ordinal_bounded", sql`${table.ordinal} BETWEEN 0 AND 49`),
     check("import_records_digest", sql`length(${table.digest}) = 32`),
+    check("import_records_range_bounded", sql`${table.offset} >= 0 AND ${table.length} >= 0
+      AND ${table.offset} + ${table.length} <= 524288`),
     // Every canonical payload ceiling from the locked import envelope.
     check("import_records_payload_bounded", sql`
-      (${table.kind} IN ('node-directory', 'node-file') AND length(${table.payload}) = 0)
-      OR (${table.kind} IN ('entry-name', 'entry-order', 'comment-attribution') AND length(${table.payload}) BETWEEN 1 AND 4096)
+      (${table.kind} IN ('node-directory', 'node-file') AND ${table.length} = 0)
+      OR (${table.kind} IN ('entry-name', 'entry-order', 'comment-attribution') AND ${table.length} BETWEEN 1 AND 4096)
       OR (${table.kind} IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',
         'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')
-        AND length(${table.payload}) BETWEEN 1 AND 16384)
-      OR (${table.kind} IN ('representation', 'public-representation', 'listing-ciphertext') AND length(${table.payload}) BETWEEN 1 AND 524288)
-      OR (${table.kind} = 'file-head' AND length(${table.payload}) = 96)
-      OR (${table.kind} = 'replace' AND length(${table.payload}) = 8)
-      OR (${table.kind} = 'listing-digest' AND length(${table.payload}) = 32)
-      OR (${table.kind} = 'listing-signature' AND length(${table.payload}) = 64)`),
+        AND ${table.length} BETWEEN 1 AND 16384)
+      OR (${table.kind} IN ('representation', 'public-representation', 'listing-ciphertext') AND ${table.length} BETWEEN 1 AND 524288)
+      OR (${table.kind} = 'file-head' AND ${table.length} = 96)
+      OR (${table.kind} = 'replace' AND ${table.length} = 8)
+      OR (${table.kind} = 'listing-digest' AND ${table.length} = 32)
+      OR (${table.kind} = 'listing-signature' AND ${table.length} = 64)`),
     check("import_records_refs_bounded", sql`
       (${table.ref1} IS NULL OR length(${table.ref1}) BETWEEN 1 AND 43)
       AND (${table.ref2} IS NULL OR length(${table.ref2}) BETWEEN 1 AND 43)

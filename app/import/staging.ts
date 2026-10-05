@@ -170,7 +170,7 @@ export function encodeImportChunkBody(descriptors: readonly ImportPlanDescriptor
     if (descriptor.refs.length !== schema.refs.length ||
         descriptor.refs.some((ref, index) => !isValidImportRef(schema.refs[index]!, ref)) ||
         descriptor.offset !== expectedOffset || descriptor.length < schema.min || descriptor.length > schema.max) {
-      throw new StagingError("wrong-shape");
+      throw new StagingError("wrong-shape", descriptor.kind);
     }
     const digest = decodeHex(descriptor.digest, 32);
     parts.push(Uint8Array.of(schema.id));
@@ -243,14 +243,24 @@ export function decodeImportChunkBody(bytes: Uint8Array, maxBodyBytes?: number):
   return { descriptors, payload };
 }
 
-/** Verify each descriptor digest; returns the computed payload SHA-256, or `null` on mismatch. */
-export async function verifyChunkDigests(chunk: DecodedChunk): Promise<Uint8Array | null> {
+/**
+ * Verify every descriptor's record digest. The chunk body digest is already
+ * authenticated by the device proof and covers framing plus payload, so this
+ * hashes only the records and reuses one cached digest for empty records.
+ */
+export async function verifyChunkDigests(chunk: DecodedChunk): Promise<boolean> {
+  let empty: Uint8Array | null = null;
   for (const descriptor of chunk.descriptors) {
     const record = chunk.payload.subarray(descriptor.offset, descriptor.offset + descriptor.length);
+    if (!record.length) {
+      empty ??= new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array()));
+      if (!empty.every((byte, index) => byte === descriptor.digest[index])) return false;
+      continue;
+    }
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(record)));
-    if (!digest.every((byte, index) => byte === descriptor.digest[index])) return null;
+    if (!digest.every((byte, index) => byte === descriptor.digest[index])) return false;
   }
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(chunk.payload)));
+  return true;
 }
 
 /**

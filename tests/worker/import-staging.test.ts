@@ -196,12 +196,12 @@ describe("import staging session, chunks, and visible-atomic commit", () => {
     const bind = (sql: string, ...values: unknown[]) => env.DB.prepare(sql).bind(...values as never[]);
     // One unit over a 512 KiB chunk payload, a 51st descriptor, sequence 40,
     // and a 128 KiB+1 manifest are all rejected by the schema itself.
-    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
-      VALUES (?, 0, ?, zeroblob(32), 1, zeroblob(32), 0)`, importId, new Uint8Array(524_289)).run()).rejects.toThrow();
-    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
-      VALUES (?, 0, zeroblob(1), zeroblob(32), 51, zeroblob(32), 0)`, importId).run()).rejects.toThrow();
-    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, body_digest, received_at)
-      VALUES (?, 40, zeroblob(1), zeroblob(32), 1, zeroblob(32), 0)`, importId).run()).rejects.toThrow();
+    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, received_at)
+      VALUES (?, 0, ?, zeroblob(32), 1, 0)`, importId, new Uint8Array(524_289)).run()).rejects.toThrow();
+    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, received_at)
+      VALUES (?, 0, zeroblob(1), zeroblob(32), 51, 0)`, importId).run()).rejects.toThrow();
+    await expect(bind(`INSERT INTO import_chunks (import_id, sequence, payload, digest, descriptor_count, received_at)
+      VALUES (?, 40, zeroblob(1), zeroblob(32), 1, 0)`, importId).run()).rejects.toThrow();
     await expect(bind(`UPDATE import_sessions SET manifest_ciphertext = zeroblob(131073) WHERE id = ?`, importId).run())
       .rejects.toThrow();
     expect((await env.DB.prepare(`SELECT length(manifest_ciphertext) AS n FROM import_sessions WHERE id = ?`)

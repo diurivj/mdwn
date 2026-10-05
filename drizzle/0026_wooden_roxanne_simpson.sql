@@ -3,14 +3,13 @@ CREATE TABLE `import_chunks` (
 	`sequence` integer NOT NULL,
 	`payload` blob NOT NULL,
 	`digest` blob NOT NULL,
-	`body_digest` blob NOT NULL,
 	`descriptor_count` integer NOT NULL,
 	`received_at` integer NOT NULL,
 	PRIMARY KEY(`import_id`, `sequence`),
 	FOREIGN KEY (`import_id`) REFERENCES `import_sessions`(`id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "import_chunks_sequence_bounded" CHECK("import_chunks"."sequence" BETWEEN 0 AND 39),
 	CONSTRAINT "import_chunks_payload_bounded" CHECK(length("import_chunks"."payload") BETWEEN 1 AND 524288),
-	CONSTRAINT "import_chunks_digest" CHECK(length("import_chunks"."digest") = 32 AND length("import_chunks"."body_digest") = 32),
+	CONSTRAINT "import_chunks_digest" CHECK(length("import_chunks"."digest") = 32),
 	CONSTRAINT "import_chunks_descriptors_bounded" CHECK("import_chunks"."descriptor_count" BETWEEN 1 AND 50)
 );
 --> statement-breakpoint
@@ -58,7 +57,8 @@ CREATE TABLE `import_records` (
 	`ref2` text,
 	`ref3` text,
 	`ref4` text,
-	`payload` blob NOT NULL,
+	`offset` integer NOT NULL,
+	`length` integer NOT NULL,
 	`digest` blob NOT NULL,
 	`header_key_id` text,
 	`header_key_epoch` integer,
@@ -75,17 +75,19 @@ CREATE TABLE `import_records` (
       'listing-ciphertext', 'listing-digest', 'listing-signature')),
 	CONSTRAINT "import_records_ordinal_bounded" CHECK("import_records"."ordinal" BETWEEN 0 AND 49),
 	CONSTRAINT "import_records_digest" CHECK(length("import_records"."digest") = 32),
+	CONSTRAINT "import_records_range_bounded" CHECK("import_records"."offset" >= 0 AND "import_records"."length" >= 0
+      AND "import_records"."offset" + "import_records"."length" <= 524288),
 	CONSTRAINT "import_records_payload_bounded" CHECK(
-      ("import_records"."kind" IN ('node-directory', 'node-file') AND length("import_records"."payload") = 0)
-      OR ("import_records"."kind" IN ('entry-name', 'entry-order', 'comment-attribution') AND length("import_records"."payload") BETWEEN 1 AND 4096)
+      ("import_records"."kind" IN ('node-directory', 'node-file') AND "import_records"."length" = 0)
+      OR ("import_records"."kind" IN ('entry-name', 'entry-order', 'comment-attribution') AND "import_records"."length" BETWEEN 1 AND 4096)
       OR ("import_records"."kind" IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',
         'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')
-        AND length("import_records"."payload") BETWEEN 1 AND 16384)
-      OR ("import_records"."kind" IN ('representation', 'public-representation', 'listing-ciphertext') AND length("import_records"."payload") BETWEEN 1 AND 524288)
-      OR ("import_records"."kind" = 'file-head' AND length("import_records"."payload") = 96)
-      OR ("import_records"."kind" = 'replace' AND length("import_records"."payload") = 8)
-      OR ("import_records"."kind" = 'listing-digest' AND length("import_records"."payload") = 32)
-      OR ("import_records"."kind" = 'listing-signature' AND length("import_records"."payload") = 64)),
+        AND "import_records"."length" BETWEEN 1 AND 16384)
+      OR ("import_records"."kind" IN ('representation', 'public-representation', 'listing-ciphertext') AND "import_records"."length" BETWEEN 1 AND 524288)
+      OR ("import_records"."kind" = 'file-head' AND "import_records"."length" = 96)
+      OR ("import_records"."kind" = 'replace' AND "import_records"."length" = 8)
+      OR ("import_records"."kind" = 'listing-digest' AND "import_records"."length" = 32)
+      OR ("import_records"."kind" = 'listing-signature' AND "import_records"."length" = 64)),
 	CONSTRAINT "import_records_refs_bounded" CHECK(
       ("import_records"."ref1" IS NULL OR length("import_records"."ref1") BETWEEN 1 AND 43)
       AND ("import_records"."ref2" IS NULL OR length("import_records"."ref2") BETWEEN 1 AND 43)
@@ -177,5 +179,15 @@ CREATE TABLE `import_sessions` (
 --> statement-breakpoint
 CREATE INDEX `import_sessions_account_state_idx` ON `import_sessions` (`account_id`,`state`,`expires_at`);--> statement-breakpoint
 CREATE INDEX `import_sessions_expiry_idx` ON `import_sessions` (`expires_at`,`id`);--> statement-breakpoint
+-- Record bytes live once, in the chunk payload; this view exposes each
+-- record's chunk-relative slice with the same columns as `import_records`.
+CREATE VIEW import_record_payloads AS
+SELECT r.import_id, r.chunk_sequence, r.ordinal, r.kind, r.ref1, r.ref2, r.ref3, r.ref4,
+  r.offset, r.length, r.digest, r.header_key_id, r.header_key_epoch, r.header_revision,
+  r.expected_revision, r.head_device_id, r.signer_device_id,
+  substr(c.payload, r.offset + 1, r.length) AS payload
+FROM import_records r
+JOIN import_chunks c ON c.import_id = r.import_id AND c.sequence = r.chunk_sequence;
+--> statement-breakpoint
 CREATE TRIGGER import_commits_immutable BEFORE UPDATE ON import_commits
 BEGIN SELECT RAISE(ABORT, 'import commit immutable'); END;

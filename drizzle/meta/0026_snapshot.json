@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b3fc83e1-941e-4787-9065-407dfa5bd439",
+  "id": "0729e26d-5ac9-4e1f-bf4b-f2faf5ffe4be",
   "prevId": "7f20279b-dbb8-41d1-8f41-3c0f361fa47a",
   "tables": {
     "account_encryption_identities": {
@@ -2339,13 +2339,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "body_digest": {
-          "name": "body_digest",
-          "type": "blob",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "descriptor_count": {
           "name": "descriptor_count",
           "type": "integer",
@@ -2398,7 +2391,7 @@
         },
         "import_chunks_digest": {
           "name": "import_chunks_digest",
-          "value": "length(\"import_chunks\".\"digest\") = 32 AND length(\"import_chunks\".\"body_digest\") = 32"
+          "value": "length(\"import_chunks\".\"digest\") = 32"
         },
         "import_chunks_descriptors_bounded": {
           "name": "import_chunks_descriptors_bounded",
@@ -2703,9 +2696,16 @@
           "notNull": false,
           "autoincrement": false
         },
-        "payload": {
-          "name": "payload",
-          "type": "blob",
+        "offset": {
+          "name": "offset",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "length": {
+          "name": "length",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -2810,9 +2810,13 @@
           "name": "import_records_digest",
           "value": "length(\"import_records\".\"digest\") = 32"
         },
+        "import_records_range_bounded": {
+          "name": "import_records_range_bounded",
+          "value": "\"import_records\".\"offset\" >= 0 AND \"import_records\".\"length\" >= 0\n      AND \"import_records\".\"offset\" + \"import_records\".\"length\" <= 524288"
+        },
         "import_records_payload_bounded": {
           "name": "import_records_payload_bounded",
-          "value": "\n      (\"import_records\".\"kind\" IN ('node-directory', 'node-file') AND length(\"import_records\".\"payload\") = 0)\n      OR (\"import_records\".\"kind\" IN ('entry-name', 'entry-order', 'comment-attribution') AND length(\"import_records\".\"payload\") BETWEEN 1 AND 4096)\n      OR (\"import_records\".\"kind\" IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',\n        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')\n        AND length(\"import_records\".\"payload\") BETWEEN 1 AND 16384)\n      OR (\"import_records\".\"kind\" IN ('representation', 'public-representation', 'listing-ciphertext') AND length(\"import_records\".\"payload\") BETWEEN 1 AND 524288)\n      OR (\"import_records\".\"kind\" = 'file-head' AND length(\"import_records\".\"payload\") = 96)\n      OR (\"import_records\".\"kind\" = 'replace' AND length(\"import_records\".\"payload\") = 8)\n      OR (\"import_records\".\"kind\" = 'listing-digest' AND length(\"import_records\".\"payload\") = 32)\n      OR (\"import_records\".\"kind\" = 'listing-signature' AND length(\"import_records\".\"payload\") = 64)"
+          "value": "\n      (\"import_records\".\"kind\" IN ('node-directory', 'node-file') AND \"import_records\".\"length\" = 0)\n      OR (\"import_records\".\"kind\" IN ('entry-name', 'entry-order', 'comment-attribution') AND \"import_records\".\"length\" BETWEEN 1 AND 4096)\n      OR (\"import_records\".\"kind\" IN ('directory-capability', 'file-capability', 'entry-key', 'representation-key',\n        'comment-thread', 'comment-body', 'comment-key', 'comment-attribution-key', 'comment-meta')\n        AND \"import_records\".\"length\" BETWEEN 1 AND 16384)\n      OR (\"import_records\".\"kind\" IN ('representation', 'public-representation', 'listing-ciphertext') AND \"import_records\".\"length\" BETWEEN 1 AND 524288)\n      OR (\"import_records\".\"kind\" = 'file-head' AND \"import_records\".\"length\" = 96)\n      OR (\"import_records\".\"kind\" = 'replace' AND \"import_records\".\"length\" = 8)\n      OR (\"import_records\".\"kind\" = 'listing-digest' AND \"import_records\".\"length\" = 32)\n      OR (\"import_records\".\"kind\" = 'listing-signature' AND \"import_records\".\"length\" = 64)"
         },
         "import_records_refs_bounded": {
           "name": "import_records_refs_bounded",
