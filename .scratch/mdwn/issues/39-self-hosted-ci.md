@@ -24,3 +24,5 @@ No runner installation, host configuration, deployment, application-code, schema
 ## First-run diagnosis
 
 Run `37273523158` reached `Diegos-Mac-mini`. All verification commands passed, but the job was cancelled during upload of a 5,775,513,703-byte npm cache. All three browser jobs failed in `playwright install` with CDN connection timeouts; no browser tests executed. Disable GitHub npm-cache transfers and investigate the runner's download path without weakening test coverage or reporting the run as green.
+
+Run `37274663431` confirmed the cache fix: verification succeeded. Bounded probes showed successful curl and raw Node HTTPS downloads on the mini, with no proxy environment configured, while Playwright still failed. A cold Chromium install reproduced the failure locally; changing only the HTTP(S) global-agent timeout from Node's 5-second default to Playwright's 30-second budget allowed the complete download to succeed. Scope this preload to browser installation, preserve TLS and address-family selection, and remove the temporary probes. Verify the final head on the mini before merging.

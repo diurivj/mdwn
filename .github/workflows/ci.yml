@@ -65,12 +65,11 @@ jobs:
           package-manager-cache: false
       - name: Install
         run: npm ci
-      - name: Diagnose runner downloads (temporary)
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 3
-        run: node scripts/diagnose-runner-network.mjs
       - name: Install ${{ matrix.browser }}
         run: npx playwright install ${{ matrix.browser }}
+        env:
+          # Scope the Node/Playwright connection-timeout workaround to downloads.
+          NODE_OPTIONS: --import="${{ github.workspace }}/scripts/playwright-download-network.mjs"
       - name: Browser tests (${{ matrix.browser }})
         run: npm run test:e2e -- --project=${{ matrix.browser }}
       - name: Upload ${{ matrix.browser }} diagnostics

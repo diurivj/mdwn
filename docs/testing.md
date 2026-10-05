@@ -56,6 +56,21 @@ npx playwright install chromium firefox webkit
 npm run test:e2e
 ```
 
+With Node 24 / Playwright 1.63, a cold install can fail after about five seconds
+while reporting a 30-second timeout: Playwright's IPv6-first fallback delay
+races Node's default global-agent timeout before the connection is established.
+CI preloads `scripts/playwright-download-network.mjs` only for browser installation,
+matching the agent's connection budget to Playwright's 30-second default. TLS
+verification, address-family selection, and browser tests remain unchanged.
+If affected locally, use the same download-only workaround from the repo root:
+
+```sh
+NODE_OPTIONS='--import=./scripts/playwright-download-network.mjs' npx playwright install chromium firefox webkit
+```
+
+Remove the workaround after an upstream fix is verified with an empty browser
+cache on the runner's network, not just an install that reuses cached binaries.
+
 The configured Playwright projects are named `chromium`, `firefox`, and
 `webkit`. To focus on one engine:
 
