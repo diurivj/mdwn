@@ -7,6 +7,13 @@ test("home footer links to the anonymous support page", async ({ page }) => {
   const link = page.getByRole("link", { name: "Support mdwn" });
   await expect(link).toBeVisible();
   await expect(link).toHaveAttribute("href", "/support");
+
+  // Router client-side navigation must resolve the same loader data, not an
+  // effect-driven request: the addresses and QR codes appear without a reload.
+  await link.click();
+  await expect(page).toHaveURL(/\/support$/);
+  await expect(page.getByRole("heading", { name: "Support mdwn" })).toBeVisible();
+  await expect(page.locator("svg[shape-rendering='crispEdges']")).toHaveCount(3);
 });
 
 test("support page serves static addresses and locally generated QR codes privately", async ({
