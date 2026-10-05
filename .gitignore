@@ -10,6 +10,7 @@
 # Cloudflare
 .mf
 .wrangler
+wrangler.proof.jsonc
 .dev.vars*
 worker-configuration.d.ts
 

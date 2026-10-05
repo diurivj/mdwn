@@ -121,9 +121,12 @@ bound already governs every ordinary create/rename/reorder. The listing digest
 
 Chunks are greedy complete-record ranges: at most 524,288 raw payload bytes and
 50 descriptors each, 1–40 chunks per session, at most 20 MiB payload and 2,000
-descriptors in aggregate, and a staging manifest of at most 131,072 bytes. The
-manifest's canonical digest (`digestEnvelope`, the SHA-256 of the whole
-envelope) and the sequence-ordered aggregate payload digest are recorded in
+descriptors in aggregate, and a staging manifest of at most 131,072 bytes. Each
+chunk's 32-byte digest is the SHA-256 of its encoded body (framing plus
+payload); the plan's aggregate digest is the SHA-256 over the sequence-ordered
+chunk digests, which transitively binds every payload byte while keeping the
+commit recheck tiny. The manifest's canonical digest (`digestEnvelope`, the
+SHA-256 of the whole envelope) and that aggregate are recorded in
 server-visible routing metadata (`ImportSessionMetadata`).
 
 Any bound violation throws an `ImportError` naming the local issue and limit
@@ -146,12 +149,17 @@ binary protocol in `staging.ts`:
    `magic || descriptorCount || descriptors || payload`. Descriptors are typed
    (kind, opaque fixed-size references, offset, length, digest) and every byte
    of the body is covered by exactly one descriptor range. The Worker streams
-   and counts the body, verifies every digest, inspects envelope headers
-   (purpose, vault, identity refs, suite) without decrypting, parses the fixed
-   structural records, and inserts `import_chunks` plus one typed
-   `import_records` row per descriptor under server-maintained aggregate
-   counters. Exact retries return the original success; a different body for an
-   accepted `(import_id, sequence)` permanently fails the session.
+   and counts the body, reuses the device proof's authenticated body digest as
+   the chunk identity, verifies every record digest (one cached digest for
+   empty records), inspects envelope headers (purpose, vault, identity refs,
+   suite) without decrypting, parses the fixed structural records, and inserts
+   `import_chunks` plus one typed `import_records` row per descriptor under
+   server-maintained aggregate counters. Record bytes are stored once, in the
+   chunk payload: `import_records` carries only the chunk-relative
+   `offset`/`length`, and the `import_record_payloads` view reassembles a
+   record's bytes for commit-time structural checks. Exact retries return the
+   original success; a different body for an accepted `(import_id, sequence)`
+   permanently fails the session.
 3. **Commit** (`POST /api/private/imports/:id/commit`): rechecks initiator,
    target Owner, live target authority and reviewed `entries_revision`, expiry,
    every expected sequence/digest/count, per-kind counts, plan completeness,
@@ -241,10 +249,36 @@ manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk,
 every canonical ciphertext cap, 1,000 Historical Comments), retries and
 mismatches, expiry/failure/stale-authority, no-visible-partial-tree, and that
 every worst-case upload and commit fits the 50-statement D1 Free invocation
-limit. The local Worker suite and the browser end-to-end test exercise the
-protocol, exact/mismatched retries, key bounds, stale authority, cleanup, and
-the visible-atomic flow on workerd with real migrations; they do not replace
-the deployed-D1 boundary matrix or the 50-statement observation. The remote run
-remains a release gate because the agent environment has no Cloudflare
-credentials. If it fails, reduce the bounded plan or make the commit more
-efficient — never require a paid plan.
+limit.
+
+Run it with a Cloudflare login:
+
+```sh
+npx wrangler login
+node scripts/import-proof.mjs          # provision, prove, tear down
+node scripts/import-proof.mjs --keep   # keep the deployment for inspection
+```
+
+`scripts/import-proof.mjs` creates a throwaway `mdwn-import-proof` Worker and
+`mdwn-import-proof-db` D1, applies the committed migrations, seeds one
+device-bound Session directly through `wrangler d1 execute` (no test-only
+production endpoints), and runs `tests/proof/import-proof.test.ts` through
+`vitest.proof.config.ts` against the deployed URL. The proof exercises the
+100-node commit, the exact 20 MiB/40-chunk/50-record/512 KiB envelope and its
+one-over rejections, the 128 KiB manifest boundary, every per-kind ciphertext
+cap at its exact size and one byte over, exact/mismatched retries, cancel and
+expiry, stale revision and Owner, no-visible-partial-tree reads, and direct
+deployed-`CHECK` one-over rows. Because D1 Free hard-fails an invocation above
+50 queries and Workers Free reports `exceededCpu` for over-budget invocations,
+a clean pass on a Free account is the budget evidence.
+
+Executed 2026-10-05 on a Workers Free account: the first run exposed two
+`exceededCpu` 503s on the largest invocations, so staging was made more
+efficient (record bytes stored once and range-sliced from the chunk payload,
+the proof's authenticated body digest reused as the chunk identity, the
+aggregate taken over chunk digests, and empty-record digests cached). Two
+subsequent full runs passed 10/10 with zero failed invocations across 91
+observed requests, including the worst-case upload and commit, then deleted
+the disposable Worker and D1. Re-run it after any change to the staging
+schema, bounds, or commit path; if it fails, reduce the bounded plan or make
+the commit more efficient — never require a paid plan.
