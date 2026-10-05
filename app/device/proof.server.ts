@@ -46,14 +46,14 @@ export async function verifySignInDevice(
 
 /** No persistent read-proof consumption: identical read requests cannot mutate anything. */
 export async function authorizePrivateRequest(
-  request: Request, env: Env, proof: unknown, body = "",
+  request: Request, env: Env, proof: unknown, body: string | Uint8Array = "",
 ): Promise<AuthorizedDevice | null> {
   const session = await getActiveSession(request, env);
   return session ? authorizeDeviceForSession(env, session, request, proof, body) : null;
 }
 
 export async function authorizeDeviceForSession(
-  env: Env, session: ActiveSession, request: Request, proof: unknown, body = "",
+  env: Env, session: ActiveSession, request: Request, proof: unknown, body: string | Uint8Array = "",
 ): Promise<AuthorizedDevice | null> {
   if (session.purpose !== "normal" || !session.deviceId) return null;
   const device = await activeDevice(env, session.accountId, session.deviceId);

@@ -50,7 +50,7 @@ function createSource(access: RootAccess): ExportSource<TreeEntry> {
       const file = await loadFile(access, fileId, parentKey, signal);
       let loaded: Awaited<ReturnType<typeof loadAllPrivateComments>>;
       try {
-        loaded = await loadAllPrivateComments(access, fileId, signal);
+        loaded = await loadAllPrivateComments(access, fileId, signal, file.capabilityKey);
       } catch (error) {
         if (signal.aborted) throw error;
         // Comment history must not block exporting the File's exact source.

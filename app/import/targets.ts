@@ -8,7 +8,7 @@
  * browser snapshot — never by inferring a parent from a direct File Grant.
  */
 
-import type { ImportCollisionSibling, ImportTarget } from "./review";
+import type { ImportCollisionSibling, ImportListingEntry, ImportTarget } from "./review";
 
 /** The subset of the decrypted Files snapshot that target eligibility reads. */
 export type ImportScopeSnapshot = {
@@ -23,7 +23,8 @@ export type ImportScopeSnapshot = {
     keyEpoch?: number;
     entriesRevision: number;
     canCreate?: boolean;
-    entries: readonly { nodeId: string; kind: "file" | "directory"; name: string }[];
+    entries: readonly { nodeId: string; kind: "file" | "directory"; name: string;
+      nameCiphertext: string; orderCiphertext: string; keyEnvelope: string }[];
   }>;
   keys: Record<string, Uint8Array>;
   file?: { parentId: string | null } | null;
@@ -74,6 +75,11 @@ export function eligibleImportTargets(snapshot: ImportScopeSnapshot): EligibleIm
       label: labelsById.get(directoryId) ?? directoryId,
       siblings: listing.entries.map((entry): ImportCollisionSibling => ({
         nodeId: entry.nodeId, kind: entry.kind, name: entry.name,
+      })),
+      listing: listing.entries.map((entry): ImportListingEntry => ({
+        nodeId: entry.nodeId, kind: entry.kind,
+        nameCiphertext: entry.nameCiphertext, orderCiphertext: entry.orderCiphertext,
+        keyEnvelope: entry.keyEnvelope,
       })),
       key,
     });

@@ -20,6 +20,7 @@ function target(siblings: readonly ImportCollisionSibling[] = [], overrides: Par
     actorAccountId: "owner-id",
     label: "Files",
     siblings,
+    listing: [],
     ...overrides,
   };
 }

@@ -1,24 +1,28 @@
-# Import preflight and review
+# Import preflight, staging, and visible-atomic commit
 
-Ticket 29 adds the browser-local half of mdwn Import: the **Import** command in
-the Files chrome, drag-and-drop and file/folder selection, the bounded source
-preflight, the collision review with deterministic **Keep-both** names, target
-eligibility, and the measured encrypted record/chunk plan. It creates no Import
-session and uploads nothing; staging upload, the atomic Import commit marker,
-and Historical Comment records are ticket 30's work.
+Ticket 29 adds the browser-local half of mdwn Import, and ticket 30 adds the
+private staging protocol and the visible-atomic commit. Together they mean a
+person either sees the whole imported tree or sees nothing: confirmation
+creates an Import session, the browser uploads encrypted chunks, and one final
+commit transaction materializes the complete hierarchy and any authorized
+Replace at once.
 
-All modules live in `app/import/` and are browser-only except where a test
-target imports the pure pieces directly:
+All modules live in `app/import/`; `staging.ts` is shared by the browser and
+the Worker, `staging.server.ts` is Worker-only, and the rest are browser-only
+except where a test target imports the pure pieces directly:
 
 | Module | Role |
 | --- | --- |
 | `limits.ts` | Settled local bounds, staging envelope bounds, safe `ImportError` codes/messages |
+| `staging.ts` | Binary session/chunk wire format, record-kind table, structural validation |
+| `staging.server.ts` | Session, chunk, commit, cancel; completeness checks; atomic materialization |
+| `staging-client.ts` | Browser session/chunk/commit/cancel calls over the private client |
 | `source.ts` | Normalizes a loose selection or recognized archive into a bounded tree |
 | `review.ts` | Pure collision allocation and review model |
-| `plan.ts` | Encrypted record/chunk plan and `import-staging-manifest` measurement |
+| `plan.ts` | Encrypted record/chunk plan, Directory listing heads, Historical Comments, `import-staging-manifest` |
 | `targets.ts` | Eligible Import-target derivation from the decrypted snapshot |
-| `browser.ts` | File/DataTransfer inputs, Replace document reads, File-head signer |
-| `ImportControl.tsx` | Files-chrome command, hidden inputs, drop handling, review dialog |
+| `browser.ts` | File/DataTransfer inputs, Replace document reads, File/listing head signers |
+| `ImportControl.tsx` | Files-chrome command, hidden inputs, drop handling, review dialog, upload/commit progress |
 
 ## Accepted input and bounds
 
@@ -93,30 +97,84 @@ resolved choice before **Import** is enabled.
 After a conforming review, confirmation measures the complete plan locally:
 canonical `mdwn/enc-v1` envelopes for Directory entry names/order, Directory
 capabilities, File capabilities, representation keys, representations, signed
-File heads, legacy entry keys, and paired Public representations; plus one
-encrypted `import-staging-manifest` binding the reviewed plan digest, chunk
-digests, counts, and aggregate digest. Every canonical field is checked against
-its settled ceiling before chunking:
+File heads, legacy entry keys, and paired Public representations; one signed
+Directory listing head for the Import target and for every created Directory
+with children; typed structural records (`node-directory`, `node-file`,
+`replace`, `comment-meta`); Historical Comment records (fresh thread capability
+wrapped under the File capability key, body, content-key wrapper, attribution,
+attribution-key); plus one encrypted `import-staging-manifest` binding the
+reviewed plan digest, chunk digests, counts, and aggregate digest. Every
+canonical field is checked against its settled ceiling before chunking:
 
 - File representation / Public representation: 524,288 bytes
 - Directory-entry name/order ciphertext: 4,096 bytes each
-- Key envelopes (Directory/File capability, representation key, entry key): 16,384 bytes
-- File head: 4,096 bytes
+- Key envelopes (Directory/File capability, representation key, entry key, comment key/attribution key): 16,384 bytes
+- Historical Comment body ciphertext: 16,384 bytes; attribution/displayed-pseudonym ciphertext: 4,096 bytes
+- File head: 96 canonical bytes; listing ciphertext: 524,288 bytes
 
 Chunks are greedy complete-record ranges: at most 524,288 raw payload bytes and
 50 descriptors each, 1–40 chunks per session, at most 20 MiB payload and 2,000
 descriptors in aggregate, and a staging manifest of at most 131,072 bytes. The
 manifest's canonical digest (`digestEnvelope`, the SHA-256 of the whole
 envelope) and the sequence-ordered aggregate payload digest are recorded in
-server-visible routing metadata (`ImportStagingMetadata`).
+server-visible routing metadata (`ImportSessionMetadata`).
+
 Any bound violation throws an `ImportError` naming the local issue and limit
 with remove/fix, re-export, or split-and-retry guidance; no session exists yet
 and nothing is uploaded.
 
-Ticket 30 extends this plan with Historical Comment records and binds the
-chunks to an Import session and commit marker. Until then, the review's
-terminal state is the measured plan; the UI says explicitly that no content has
-been uploaded.
+## Staging and visible-atomic commit (ticket 30)
+
+Confirmation performs three steps, all device-proof guarded and all over the
+binary protocol in `staging.ts`:
+
+1. **Session** (`POST /api/private/imports`): the body is the browser-minted
+   256-bit Import ID, target ID, reviewed revision, expected
+   record/chunk/byte/comment counts, aggregate and manifest digests, per-kind
+   record counts, and the encrypted manifest. The Worker verifies the manifest
+   digest, the target Directory authority and Owner, rejects an excessive
+   declared length, and stores `import_sessions` + `import_session_kinds`.
+   Sessions expire after 24 hours.
+2. **Chunks** (`PUT /api/private/imports/:id/chunks/:sequence`): each body is
+   `magic || descriptorCount || descriptors || payload`. Descriptors are typed
+   (kind, opaque fixed-size references, offset, length, digest) and every byte
+   of the body is covered by exactly one descriptor range. The Worker streams
+   and counts the body, verifies every digest, inspects envelope headers
+   (purpose, vault, identity refs, suite) without decrypting, parses the fixed
+   structural records, and inserts `import_chunks` plus one typed
+   `import_records` row per descriptor under server-maintained aggregate
+   counters. Exact retries return the original success; a different body for an
+   accepted `(import_id, sequence)` permanently fails the session.
+3. **Commit** (`POST /api/private/imports/:id/commit`): rechecks initiator,
+   target Owner, live target authority and reviewed `entries_revision`, expiry,
+   every expected sequence/digest/count, per-kind counts, plan completeness,
+   Replace pairing against the current File revision/representation, Publication
+   link/revision pairing, and the File/listing head signatures. The final
+   transaction writes the immutable `import_commits` marker and, in the same
+   transaction, materializes `vault_nodes` (each carrying the immutable
+   `import_id`), `directories`, `directory_entries`, `files`,
+   `file_representations`, `public_representations`, Replace pointer updates,
+   and the fresh Historical Comment thread rows; the target listing head and
+   revision advance together. Commit is idempotent for an already-committed
+   session.
+
+No canonical tree/File/Comment row exists before that transaction, so every
+normal tree, File, direct-read, Share, export, count, and background query
+naturally sees either a non-Import record or a committed one;
+`committedNodeVisible` in `app/sharing/access.server.ts` adds the literal
+commit-marker predicate to the shared access query as defense in depth. A
+cancelled (`DELETE /api/private/imports/:id`), expired, failed, or mismatched
+session stays unreachable, and lazy bounded cleanup deletes its staged rows; a
+committed session keeps its marker and loses only its staging records.
+
+Historical Comments are the local sidecar, parsed per record and never
+uploaded as a sidecar. They start one fresh Private thread per imported File
+whose thread key is wrapped under the File capability key, so the thread
+follows current File-read access and restores no former author authority; the
+read path serves its envelope as a distinct `import` mode. Historical comments
+all belong to the importing Account, so one thread attribution keeps the
+sidecar's displayed pseudonym; the row's display timestamps come from the
+sidecar and the body stays encrypted.
 
 ## Failure behavior
 
@@ -124,7 +182,8 @@ been uploaded.
 value, configured limit — never file content. `importProblemMessage` maps each
 code to a concrete next step. Unsupported, invalid, ambiguous, or over-limit
 input fails before review; a blocked collision keeps the review open until the
-person resolves it.
+person resolves it; upload failure cancels the session and says nothing became
+visible.
 
 ## Verification seams
 
@@ -135,16 +194,36 @@ person resolves it.
   suffixes, folded/Unicode collisions, Skip/Replace/Rename, over-limit
   generated names, duplicate-source-path rejection, counts, empty plans.
 - `tests/import-plan.test.ts` — record kinds, descriptor offsets/digests,
-  chunk bounds for a 100-node selection, manifest contents, Replace and
-  Publication pairing, fail-closed Replace cases.
+  chunk bounds, manifest contents, Replace and Publication pairing, listing
+  heads, fail-closed Replace cases.
 - `tests/import-targets.test.ts` — owned/read-write/read-only/direct-File
   eligibility and ownership.
 - `tests/import-browser.test.ts` — File and DataTransfer input reading,
   empty-folder preservation, fallback to `DataTransfer.files`, expanded guard.
+- `tests/worker/import-staging.test.ts` — full session → chunks → commit flow,
+  tree visibility, exact-retry idempotency, mismatched-retry permanent
+  failure, malformed/over-count framing, D1 `CHECK` bounds (including the
+  visible-atomic node guard), stale target revision, cancel and expiry
+  cleanup, Historical Comment thread read, manifest-digest rejection.
 - `e2e/import-preflight.spec.ts` — the Files-chrome command (including a
   `.zip` selection), loose files, folder selection, archive recognition,
-  synthetic drop, unsupported input, deterministic Keep-both names, measured
-  plan, and zero Import or tree writes across Chromium, Firefox, and WebKit.
-  The synthetic drop is skipped in WebKit because its constructed
+  synthetic drop, unsupported input, deterministic Keep-both names, and a
+  complete browser Import (session, chunks, commit) across Chromium, Firefox,
+  and WebKit. The synthetic drop is skipped in WebKit because its constructed
   `FileSystemEntry` cannot produce a File; the `DataTransfer.files` fallback is
   covered in unit tests.
+
+## Release gate: disposable remote proof
+
+Ticket 26 requires a disposable remote Workers Free + D1 proof before release
+whenever encryption-persistence schema changes and for release candidates. It
+must cover exact-boundary acceptance and one-unit-over rejection (128 KiB
+manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk,
+every canonical ciphertext cap, 1,000 Historical Comments), retries and
+mismatches, expiry/failure/stale-authority, no-visible-partial-tree, and that
+every worst-case upload and commit fits the 50-statement D1 Free invocation
+limit. The local Worker suite and the browser end-to-end test exercise the same
+matrix on workerd with real migrations; the deployed-D1 run remains a release
+gate because the agent environment has no Cloudflare credentials. If it fails,
+reduce the bounded plan or make the commit more efficient — never require a
+paid plan.

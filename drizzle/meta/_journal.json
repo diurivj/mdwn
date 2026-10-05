@@ -183,6 +183,13 @@
       "when": 1791121942395,
       "tag": "0025_furry_moonstone",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1791168399062,
+      "tag": "0026_freezing_bloodstorm",
+      "breakpoints": true
     }
   ]
 }

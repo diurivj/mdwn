@@ -14,9 +14,10 @@ import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "reac
 import { isSignupRecoveryConfirmationPending } from "~/signup/recovery-gate";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import type { TreeKind } from "~/tree/client";
-import { inputsFromDataTransfer, inputsFromFiles, loadReplacementDocuments, signFileHeadFor } from "./browser";
+import { importSigners, inputsFromDataTransfer, inputsFromFiles, loadReplacementDocuments } from "./browser";
 import { IMPORT_LIMITS, ImportError, formatBytes, importProblemMessage } from "./limits";
 import { prepareImportPlan, type ImportPlan } from "./plan";
+import { cancelImport, commitImport, openImportSession, uploadImportChunks, type ImportUploadProgress } from "./staging-client";
 import {
   canReplace, reviewImport, type ImportChoice, type ImportReview, type ImportReviewNode,
 } from "./review";
@@ -34,6 +35,8 @@ type ImportControlProps = {
   kind: TreeKind;
   /** Busy or recovery-confirmation-pending; Import must stay closed. */
   disabled: boolean;
+  /** Called once an Import commit becomes visible, so the page refreshes. */
+  onImported?: () => void;
 };
 
 type Phase =
@@ -41,7 +44,8 @@ type Phase =
   | { status: "choosing"; inputs: RawImportInput[]; message: string }
   | { status: "preparing"; label: string }
   | { status: "review"; inputs: RawImportInput[]; source: ImportSource; choices: Record<string, ImportChoice>; targetId: string }
-  | { status: "plan"; plan: ImportPlan }
+  | { status: "uploading"; plan: ImportPlan; progress: ImportUploadProgress }
+  | { status: "done"; created: number; comments: number; entriesRevision?: number }
   | { status: "error"; message: string; inputs: RawImportInput[] | null };
 
 function collectSourceFiles(children: readonly ImportSourceChild[], files: Map<string, ImportSourceFile>): void {
@@ -69,11 +73,12 @@ function failureMessage(error: unknown): string {
 }
 
 export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>(function ImportControl(
-  { snapshot, nodeId, kind, disabled }, ref,
+  { snapshot, nodeId, kind, disabled, onImported }, ref,
 ) {
   const [phase, setPhase] = useState<Phase>({ status: "idle" });
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
+  const importAbort = useRef<AbortController | null>(null);
   const targets = useMemo(() => eligibleImportTargets(snapshot), [snapshot]);
   const targetsById = useMemo(() => new Map(targets.map((target) => [target.directoryId, target])), [targets]);
   const recoveryPending = isSignupRecoveryConfirmationPending();
@@ -121,6 +126,34 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
     acceptDrop: (dataTransfer: DataTransfer) => { void beginDataTransfer(dataTransfer); },
   }), [disabled, recoveryPending, phase.status]);
 
+  async function runImport(plan: ImportPlan): Promise<void> {
+    const controller = new AbortController();
+    importAbort.current = controller;
+    setPhase({ status: "uploading", plan, progress: { chunksSent: 0, chunksTotal: plan.chunks.length } });
+    let importId: string | null = null;
+    try {
+      importId = await openImportSession(plan, controller.signal);
+      await uploadImportChunks(plan, importId, (progress) => setPhase((previous) =>
+        previous.status === "uploading" ? { ...previous, progress } : previous), controller.signal);
+      const result = await commitImport(importId, controller.signal);
+      importId = null;
+      setPhase({ status: "done",
+        created: plan.review.counts.createFiles + plan.review.counts.createDirectories + plan.review.counts.replaces,
+        comments: plan.review.counts.comments, entriesRevision: result.entriesRevision });
+      onImported?.();
+    } catch (error) {
+      if (importId) await cancelImport(importId);
+      if (controller.signal.aborted) { setPhase({ status: "idle" }); return; }
+      setPhase({ status: "error", message: failureMessage(error), inputs: null });
+    } finally {
+      importAbort.current = null;
+    }
+  }
+
+  function cancelUpload(): void {
+    importAbort.current?.abort();
+  }
+
   async function confirm(current: ImportReview, source: ImportSource): Promise<void> {
     const target = targetsById.get(current.target.directoryId);
     if (!target || !current.canConfirm) return;
@@ -129,15 +162,16 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
       const files = new Map<string, ImportSourceFile>();
       collectSourceFiles(source.roots, files);
       const replacements = await loadReplacementDocuments(snapshot.access, target.key, current);
-      const signFileHead = await signFileHeadFor(snapshot.access);
+      const signers = await importSigners(snapshot.access);
       const plan = await prepareImportPlan({
         review: current,
         files,
+        comments: source.comments,
         targetKey: target.key,
         replacements,
-        signFileHead,
+        ...signers,
       });
-      setPhase({ status: "plan", plan });
+      await runImport(plan);
     } catch (error) {
       setPhase({ status: "error", message: failureMessage(error), inputs: null });
     }
@@ -214,7 +248,27 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             </button>
           </div>
         </>}
-        {phase.status === "plan" && <PlanSummary plan={phase.plan} onClose={reset} />}
+        {phase.status === "uploading" && <>
+          <h2 className="text-lg font-semibold">Importing</h2>
+          <p className="mt-2 text-sm" role="status" data-testid="import-uploading">
+            Uploading encrypted chunks {phase.progress.chunksSent} of {phase.progress.chunksTotal}… Nothing is visible until the final commit.
+          </p>
+          <div className="mt-5 flex justify-end">
+            <button type="button" className="rounded border px-3 py-1" onClick={cancelUpload}
+              data-testid="import-cancel-upload">Cancel Import</button>
+          </div>
+        </>}
+        {phase.status === "done" && <>
+          <h2 className="text-lg font-semibold">Import complete</h2>
+          <p className="mt-2 text-sm" role="status" data-testid="import-complete">
+            Added {phase.created} {phase.created === 1 ? "item" : "items"}{phase.comments > 0
+              ? ` with ${phase.comments} Historical ${phase.comments === 1 ? "Comment" : "Comments"}` : ""}. The folder now shows the whole import.
+          </p>
+          <div className="mt-5 flex justify-end">
+            <button type="button" className="rounded border px-3 py-1" onClick={reset}
+              data-testid="import-done">Close</button>
+          </div>
+        </>}
       </div>
     </div>}
   </>;
@@ -291,15 +345,3 @@ function CollisionChoices({ review, onChoose }: {
   </section>;
 }
 
-function PlanSummary({ plan, onClose }: { plan: ImportPlan; onClose: () => void }) {
-  const { metadata } = plan.manifest;
-  return <>
-    <h2 className="text-lg font-semibold">Preflight complete</h2>
-    <p className="mt-2 text-sm" role="status" data-testid="import-plan-ready">
-      The encrypted plan measured {metadata.recordCount} {metadata.recordCount === 1 ? "record" : "records"} in{" "}
-      {metadata.chunkCount} {metadata.chunkCount === 1 ? "chunk" : "chunks"} ({formatBytes(metadata.payloadBytes)}). No content has been uploaded by this review.
-    </p>
-    <p className="mt-2 text-xs text-stone-500">Staging upload and the atomic Import commit continue from this measured plan.</p>
-    <div className="mt-5 flex justify-end"><button type="button" className="rounded border px-3 py-1" onClick={onClose}>Close</button></div>
-  </>;
-}

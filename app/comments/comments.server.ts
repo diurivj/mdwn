@@ -17,7 +17,7 @@ import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { isPublicationIdentifier } from "~/publications/capability";
 import { createDb, sql } from "~/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { accessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
+import { accessPredicate, committedNodeVisible, sharingWriteBlocked } from "~/sharing/access.server";
 import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
 
 const headers = { "Cache-Control": "no-store" };
@@ -65,6 +65,7 @@ function threadAuthority(auth: AuthorizedDevice, fileId: string, threadId: strin
 async function fileAccess(env: Env, auth: AuthorizedDevice, fileId: string) {
   return createDb(env.DB).get<{ is_owner: number }>(sql`SELECT n.owner_id = ${auth.accountId} AS is_owner
     FROM vault_nodes n WHERE n.id = ${fileId} AND n.kind = 'file' AND ${privateReadGuard(auth)}
+      AND ${committedNodeVisible(sql`n`)}
       AND (n.owner_id = ${auth.accountId} OR ${accessPredicate(auth, fileId, "read")})`);
 }
 
@@ -145,7 +146,7 @@ async function readComments(env: Env, auth: AuthorizedDevice, fileId: string, cu
 
 async function existingThread(env: Env, auth: AuthorizedDevice, fileId: string) {
   return createDb(env.DB).get<{ thread_id: string }>(sql`SELECT t.id AS thread_id FROM comment_threads t
-    JOIN vault_nodes n ON n.id = t.file_id AND n.owner_id = t.owner_id
+    JOIN vault_nodes n ON n.id = t.file_id AND n.owner_id = t.owner_id AND ${committedNodeVisible(sql`n`)}
     WHERE t.file_id = ${fileId} AND t.purpose = 'private' AND n.owner_id = ${auth.accountId}
       AND ${privateReadGuard(auth)}`);
 }

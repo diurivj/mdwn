@@ -16,7 +16,7 @@ function trackedWrites(page: Page) {
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (!url.pathname.startsWith("/api/")) return;
-    if (request.method() === "GET" || request.postData() === null) return;
+    if (request.method() === "GET") return;
     writes.push({ method: request.method(), path: url.pathname, body: request.postData() });
   });
   return writes;
@@ -44,13 +44,15 @@ test.describe("Import preflight and review", () => {
     await expect(page.getByTestId("import-generated-names")).toContainText("Draft (3).md");
     await expect(page.getByTestId("import-generated-names")).not.toContainText("Draft (2).md");
     await expect(page.getByTestId("import-no-upload")).toBeVisible();
+    // Preflight and review are browser-local: no request left the page yet.
+    expect(writes).toEqual([]);
 
     await page.getByTestId("import-confirm").click();
-    await expect(page.getByTestId("import-plan-ready")).toContainText("18 records", { timeout: 30_000 });
-    await expect(page.getByTestId("import-plan-ready")).toContainText("1 chunk");
-    // Preflight is browser-local: no Import endpoint exists and no tree write ran.
-    expect(writes.filter((write) => write.path.includes("/import"))).toEqual([]);
-    expect(writes.filter((write) => write.path.startsWith("/api/private/tree"))).toEqual([]);
+    await expect(page.getByTestId("import-complete")).toContainText("Added 3 items", { timeout: 30_000 });
+    // Confirmation staged the encrypted chunks and committed them atomically.
+    expect(writes.some((write) => write.method === "POST" && write.path === "/api/private/imports")).toBe(true);
+    expect(writes.some((write) => write.method === "PUT" && /\/chunks\/\d+$/.test(write.path))).toBe(true);
+    await page.getByTestId("import-done").click();
   });
 
   test("a valid drop opens the same review flow", async ({ page, workspace, browserName }) => {
@@ -102,7 +104,7 @@ test.describe("Import preflight and review", () => {
     await expect(page.getByTestId("import-summary-sources")).toHaveText("3");
     await expect(page.getByTestId("import-summary-create")).toHaveText("2 Files, 1 folder");
     await page.getByTestId("import-confirm").click();
-    await expect(page.getByTestId("import-plan-ready")).toContainText("chunk", { timeout: 30_000 });
+    await expect(page.getByTestId("import-complete")).toContainText("Added 3 items", { timeout: 30_000 });
   });
 
   test("unsupported input fails before review and uploads nothing", async ({ page, workspace }) => {

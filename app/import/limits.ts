@@ -70,8 +70,12 @@ export type ImportErrorCode =
   | "generated-name-invalid"
   | "nothing-to-import"
   | "replacement-unavailable"
+  | "historical-comments-replace"
   | "plan-record-too-large"
-  | "plan-too-large";
+  | "plan-too-large"
+  | "staging-upload-failed"
+  | "staging-changed"
+  | "import-committed";
 
 export type ImportProblemAction = "remove" | "fix" | "re-export" | "split";
 
@@ -106,8 +110,12 @@ export function importProblemMessage(error: ImportError): string {
     case "generated-name-invalid": return `${name} cannot take a Keep-both suffix within the 255-byte name limit. Rename it, Skip it, or Replace an existing File.`;
     case "nothing-to-import": return "Every item is skipped. Nothing would be created.";
     case "replacement-unavailable": return `${name} changed since the review, so Replace is no longer available. Refresh and try again.`;
+    case "historical-comments-replace": return `${name} carries Historical Comments, but you chose Replace. mdwn cannot merge historical Comments into an existing thread. Choose Keep both or Skip instead.`;
     case "plan-record-too-large": return `${name} exceeds its encrypted ${formatBytes(error.detail?.limit ?? 0)} field limit. Remove, fix, or split it.`;
     case "plan-too-large": return "The encrypted import plan exceeds the bounded staging envelope. Remove files or split the selection and retry.";
+    case "staging-upload-failed": return "The upload was interrupted. Nothing became visible; you can retry this Import safely.";
+    case "staging-changed": return "This Import changed on the server, so it was not committed. Refresh the folder, review again, and retry.";
+    case "import-committed": return "This Import was already committed.";
   }
 }
 

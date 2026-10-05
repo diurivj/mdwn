@@ -44,7 +44,7 @@
     "app/sharing/provisioning-client.ts",
     "app/sharing/rotation-wire.ts"
   ],
-  "exclude": ["tests/worker/**/*"],
+  "exclude": ["tests/worker/**/*", "app/import/*.server.ts"],
   "compilerOptions": {
     "composite": true,
     "paths": { "~/*": ["./app/*"] },

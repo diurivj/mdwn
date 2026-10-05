@@ -1,29 +1,38 @@
 /**
- * Import encrypted record and chunk plan (ticket 29).
+ * Import encrypted record and chunk plan (tickets 29–30).
  *
  * After a conforming review, the browser constructs the complete encrypted
  * record plan before any Import session exists: canonical `mdwn/enc-v1`
- * envelopes for every new Directory entry, Directory capability, File
- * capability, representation key, representation, signed File head, and
- * replacement payload; an encrypted `import-staging-manifest` that binds the
- * reviewed plan, chunk digests, and aggregate digests; and the bounded import
- * chunks the staging protocol will upload (ticket 30).
+ * envelopes and typed structural records for every new Directory/File,
+ * capability, representation, signed File head, replacement, paired Public
+ * representation, and Historical Comment thread; an encrypted
+ * `import-staging-manifest` that binds the reviewed plan, chunk digests, and
+ * aggregate digests; and the bounded import chunks the staging protocol
+ * uploads.
  *
  * Nothing here performs network I/O. A plan that would violate any canonical
  * field, descriptor, chunk, manifest, or aggregate bound throws an
  * `ImportError` and the caller creates no session and uploads nothing.
  *
- * Historical Comment records are ticket 30's extension of this plan; the
- * preflight still validates the settled 1,000-Comment bound.
+ * A descriptor carries only a typed record kind, opaque fixed-size references,
+ * the exact byte range inside the chunk payload, and the record's SHA-256
+ * digest. Structural records (`node-*`, `file-head`, `replace`,
+ * `comment-meta`) carry only fixed canonical bytes; every other record is one
+ * complete encrypted envelope occupying exactly one descriptor range.
  */
 
-import { digestEnvelope, createSymmetricWriter, type EnvelopeContext } from "~/crypto/enc-v1";
+import { createSymmetricWriter, type EnvelopeContext } from "~/crypto/enc-v1";
+import { sealAttribution, sealCommentBody } from "~/comments/content";
 import { createChildDirectoryCapability, createFileRepresentation } from "~/crypto/vault";
 import { newOpaqueId } from "~/opaque-id";
 import { publicPresentation, sealPublicRepresentation } from "~/publications/content";
+import type { HistoricalComment } from "~/archive/format";
 import type { FileHead, FileHeadIdentity } from "~/tree/file-head";
 import type { FileDocument } from "~/tree/file-client";
-import { decodeTreeBytes, encodeTreeBytes } from "~/tree/wire";
+import {
+  IMPORT_RECORD_KINDS, envelopeDigestHex, newStagingId, type ImportSessionMetadata,
+  type ImportSessionKindCount, type StagingRecordKind,
+} from "./staging";
 import {
   MAX_STAGING_CHUNK_BYTES,
   MAX_STAGING_CHUNK_RECORDS,
@@ -36,31 +45,8 @@ import {
 import type { ImportReview, ImportReviewNode } from "./review";
 import type { ImportSourceFile } from "./source";
 
-export type ImportRecordKind =
-  | "entry-name"
-  | "entry-order"
-  | "entry-key"
-  | "directory-capability"
-  | "file-capability"
-  | "representation-key"
-  | "representation"
-  | "file-head"
-  | "public-representation";
-
-export const IMPORT_RECORD_LIMITS: Readonly<Record<ImportRecordKind, number>> = {
-  "entry-name": 4_096,
-  "entry-order": 4_096,
-  "entry-key": 16_384,
-  "directory-capability": 16_384,
-  "file-capability": 16_384,
-  "representation-key": 16_384,
-  representation: 524_288,
-  "public-representation": 524_288,
-  "file-head": 4_096,
-};
-
 export type ImportPlanDescriptor = {
-  kind: ImportRecordKind;
+  kind: StagingRecordKind;
   /** Opaque fixed-size IDs/references only; never a display name or capability. */
   refs: readonly string[];
   /** Byte offset of this complete record inside its chunk payload. */
@@ -81,20 +67,11 @@ export type ImportPlanChunk = {
   descriptors: readonly ImportPlanDescriptor[];
 };
 
-export type ImportStagingMetadata = {
+export type ImportStagingMetadata = ImportSessionMetadata & {
   importId: string;
   vaultId: string;
-  targetDirectoryId: string;
+  targetOwnerId: string;
   actorAccountId: string;
-  reviewedEntryRevision: number;
-  recordCount: number;
-  chunkCount: number;
-  payloadBytes: number;
-  commentCount: number;
-  /** SHA-256 over the sequence-ordered raw chunk payloads. */
-  aggregateDigest: string;
-  /** SHA-256 of the whole canonical staging-manifest envelope. */
-  manifestDigest: string;
 };
 
 export type StagingManifest = {
@@ -117,6 +94,7 @@ export type StagingManifest = {
   };
   bytes: { payload: number };
   chunks: readonly { sequence: number; digest: string; records: number; bytes: number }[];
+  kinds: readonly ImportSessionKindCount[];
   aggregateDigest: string;
   /** SHA-256 of the private review structure; binds this exact reviewed plan. */
   planDigest: string;
@@ -162,15 +140,33 @@ export type ImportReplacementDocument = Pick<FileDocument,
   "revision" | "keyEpoch" | "contentKeyId" | "representationId" | "markdown" | "metadata" |
   "capability" | "capabilityKey" | "publication">;
 
+/** One sealed directory edge as it will appear in the post-Import listing head. */
+export type ImportSealedEntry = {
+  nodeId: string;
+  kind: "file" | "directory";
+  nameCiphertext: string;
+  orderCiphertext: string;
+  keyEnvelope: string;
+};
+
+export type ImportListingHead = { ciphertext: string; digest: string; signature: string };
+
 export type PrepareImportPlanOptions = {
   review: ImportReview;
   /** File sources keyed by canonical source path. */
   files: ReadonlyMap<string, ImportSourceFile>;
+  /** Sidecar Historical Comments keyed by canonical source path. */
+  comments?: ReadonlyMap<string, readonly HistoricalComment[]>;
   targetKey: Uint8Array;
   /** Current File documents for every Replace candidate, keyed by File node ID. */
   replacements: ReadonlyMap<string, ImportReplacementDocument>;
   /** Signs a File head with the importing browser's device assertion key. */
   signFileHead: (identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>;
+  /** Signs a post-Import Directory listing head with the same device key. */
+  signListingHead: (input: {
+    parentKey: Uint8Array; vaultId: string; directoryId: string; keyEpoch: number; revision: number;
+    entries: readonly ImportSealedEntry[];
+  }) => Promise<ImportListingHead>;
   newId?: () => string;
 };
 
@@ -189,7 +185,33 @@ async function entryRecords(parentKey: Uint8Array, vaultId: string, parentId: st
 }
 
 function fileHeadBytes(head: FileHead): Uint8Array {
-  return concat([decodeTreeBytes(head.digest, 32), decodeTreeBytes(head.signature, 64)]);
+  const digest = decodeImportBytes(head.digest, 32), signature = decodeImportBytes(head.signature, 64);
+  if (digest.length !== 32 || signature.length !== 64) throw new ImportError("plan-record-too-large", { action: "fix" });
+  return concat([digest, signature]);
+}
+
+function u32(value: number): Uint8Array {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, value);
+  return bytes;
+}
+
+function u64(value: number): Uint8Array {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, BigInt(value));
+  return bytes;
+}
+
+function decodeImportBytes(value: string, max: number): Uint8Array {
+  const binary = atob(value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4));
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  if (bytes.length < 1 || bytes.length > max) throw new ImportError("plan-record-too-large", { action: "fix" });
+  return bytes;
+}
+
+/** One canonical comment-meta record: sequence u32, createdAt u64, updatedAt u64. */
+function commentMetaBytes(comment: HistoricalComment): Uint8Array {
+  return concat([u32(comment.sequence), u64(comment.createdAt), u64(comment.updatedAt)]);
 }
 
 /**
@@ -199,24 +221,27 @@ function fileHeadBytes(head: FileHead): Uint8Array {
  */
 export async function prepareImportPlan(options: PrepareImportPlanOptions): Promise<ImportPlan> {
   const review = options.review;
+  const comments = options.comments ?? new Map();
   const vaultId = review.target.ownerAccountId;
   const targetId = review.target.directoryId;
   const newId = options.newId ?? newOpaqueId;
   const records: ImportPlanRecord[] = [];
+  let commentRecords = 0;
 
-  const push = async (kind: ImportRecordKind, refs: readonly string[], bytes: Uint8Array): Promise<void> => {
-    const limit = IMPORT_RECORD_LIMITS[kind];
-    if (bytes.length > limit) {
+  const push = async (kind: StagingRecordKind, refs: readonly string[], bytes: Uint8Array): Promise<void> => {
+    const limit = IMPORT_RECORD_KINDS[kind].max;
+    if (bytes.length < IMPORT_RECORD_KINDS[kind].min || bytes.length > limit) {
       throw new ImportError("plan-record-too-large", { item: refs.join("/"), limit, measured: bytes.length, action: "split" });
     }
     records.push({ kind, refs, offset: 0, length: bytes.length, digest: await sha256Hex(bytes), bytes });
   };
 
-  const planFile = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<void> => {
+  const planFile = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<ImportSealedEntry> => {
     const source = options.files.get(node.sourcePath);
     if (!source) throw new ImportError("nothing-to-import", { item: node.sourcePath, action: "fix" });
     const nodeId = newId();
     const order = newId();
+    await push("node-file", [nodeId, parentId], new Uint8Array());
     const entry = await entryRecords(parentKey, vaultId, parentId, nodeId, keyEpoch, node.displayName, order);
     await push("entry-name", [nodeId, parentId], entry.name);
     await push("entry-order", [nodeId, parentId], entry.order);
@@ -225,10 +250,59 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
     const capabilityEnvelope = await (await createSymmetricWriter(parentKey)).seal(scopeKey, {
       purpose: "file-capability", vaultId, objectId: nodeId, keyId: capability.id, keyEpoch: 1, revision: 1,
     });
-    await push("file-capability", [nodeId, parentId], capabilityEnvelope);
+    await push("file-capability", [nodeId, parentId, capability.id], capabilityEnvelope);
     await pushRepresentation(scopeKey, nodeId, source.markdown, new Uint8Array(), {
       capabilityId: capability.id, capabilityEpoch: 1,
     });
+    await planComments(node, nodeId, scopeKey);
+    return { nodeId, kind: "file", nameCiphertext: encodeBytes(entry.name),
+      orderCiphertext: encodeBytes(entry.order), keyEnvelope: encodeBytes(capabilityEnvelope) };
+  };
+
+  const pushListing = async (directoryId: string, keyEpoch: number, revision: number, parentKey: Uint8Array,
+    entries: readonly ImportSealedEntry[]): Promise<void> => {
+    const head = await options.signListingHead({ parentKey, vaultId, directoryId, keyEpoch, revision, entries });
+    const ciphertext = decodeImportBytes(head.ciphertext, 524_288);
+    const digest = decodeImportBytes(head.digest, 32);
+    const signature = decodeImportBytes(head.signature, 64);
+    if (digest.length !== 32 || signature.length !== 64) throw new ImportError("plan-record-too-large", { action: "fix" });
+    await push("listing-ciphertext", [directoryId], ciphertext);
+    await push("listing-digest", [directoryId], digest);
+    await push("listing-signature", [directoryId], signature);
+  };
+
+  const planComments = async (node: ImportReviewNode, fileId: string, fileCapabilityKey: Uint8Array): Promise<void> => {
+    const history = comments.get(node.sourcePath);
+    if (!history?.length) return;
+    const threadId = newId(), epochId = newId(), threadCapabilityId = newId();
+    const threadKey = crypto.getRandomValues(new Uint8Array(32));
+    const threadEnvelope = await (await createSymmetricWriter(fileCapabilityKey)).seal(threadKey, {
+      purpose: "private-comment-thread", vaultId, objectId: threadId, keyId: threadCapabilityId, keyEpoch: 1, revision: 1,
+    });
+    await push("comment-thread", [fileId, threadId, epochId, threadCapabilityId], threadEnvelope);
+    for (const comment of history) {
+      if (commentRecords >= 1_000) {
+        throw new ImportError("too-many-comments", { limit: 1_000, measured: commentRecords + 1, action: "split" });
+      }
+      commentRecords += 1;
+      const commentId = newId();
+      const body = await sealCommentBody(threadKey, {
+        vaultId, commentId, capabilityId: threadCapabilityId, keyEpoch: 1, revision: 1, text: comment.text,
+      });
+      await push("comment-meta", [threadId, commentId], commentMetaBytes(comment));
+      await push("comment-body", [threadId, commentId], decodeImportBytes(body.bodyCiphertext, 16_384));
+      await push("comment-key", [threadId, commentId], decodeImportBytes(body.contentKeyEnvelope, 16_384));
+    }
+    // Historical comments all belong to the importing Account, so one thread
+    // attribution preserves the sidecar's displayed pseudonym for the history.
+    const attributionId = newId();
+    const sealed = await sealAttribution(threadKey, {
+      vaultId, attributionId, pseudonym: history[0]!.pseudonym,
+      capabilityId: threadCapabilityId, keyEpoch: 1,
+    });
+    await push("comment-attribution", [threadId, attributionId], decodeImportBytes(sealed.ciphertext, 4_096));
+    await push("comment-attribution-key", [threadId, attributionId],
+      decodeImportBytes(sealed.contentKeyEnvelope, 16_384));
   };
 
   const pushRepresentation = async (wrappingKey: Uint8Array, fileId: string, markdown: string, metadata: Uint8Array,
@@ -241,20 +315,23 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
       vaultId, fileId, keyId: contentKeyId, keyEpoch, revision,
     });
     await push("representation-key", [fileId, representationId, contentKeyId], representation.fileContentKeyEnvelope);
-    await push("representation", [fileId, representationId], representation.contentEnvelope);
+    await push("representation", [fileId, representationId, contentKeyId], representation.contentEnvelope);
     const head = await options.signFileHead({
       vaultId, fileId, capabilityId: capability.capabilityId, capabilityEpoch: capability.capabilityEpoch,
       representationId, contentKeyId, keyEpoch, revision,
-      ciphertext: encodeTreeBytes(representation.contentEnvelope),
-      keyEnvelope: encodeTreeBytes(representation.fileContentKeyEnvelope),
+      ciphertext: encodeBytes(representation.contentEnvelope),
+      keyEnvelope: encodeBytes(representation.fileContentKeyEnvelope),
     });
     await push("file-head", [fileId, representationId], fileHeadBytes(head));
   };
 
-  const planReplace = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array): Promise<void> => {
+  const planReplace = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array): Promise<ImportSealedEntry | null> => {
     const fileId = node.existingNodeId;
     const source = options.files.get(node.sourcePath);
     if (!fileId || !source) throw new ImportError("replacement-unavailable", { item: node.sourcePath, action: "fix" });
+    if (comments.get(node.sourcePath)?.length) {
+      throw new ImportError("historical-comments-replace", { item: node.sourcePath, action: "fix" });
+    }
     const document = options.replacements.get(fileId);
     if (!document) throw new ImportError("replacement-unavailable", { item: node.sourcePath, action: "fix" });
     const revision = document.revision + 1;
@@ -263,6 +340,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
     if (published && !document.capability) {
       throw new ImportError("replacement-unavailable", { item: node.sourcePath, reason: "published-legacy", action: "fix" });
     }
+    await push("replace", [fileId, document.representationId], u64(document.revision));
     if (document.capability) {
       if (!document.capabilityKey) throw new ImportError("replacement-unavailable", { item: node.sourcePath, action: "fix" });
       await pushRepresentation(document.capabilityKey, fileId, source.markdown, document.metadata,
@@ -274,30 +352,36 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
         vaultId, fileId, keyId: contentKeyId, keyEpoch, revision,
       });
       await push("entry-key", [fileId, parentId], representation.fileContentKeyEnvelope);
-      await push("representation", [fileId, representationId], representation.contentEnvelope);
+      await push("representation", [fileId, representationId, contentKeyId], representation.contentEnvelope);
+      return { nodeId: fileId, kind: "file", nameCiphertext: "", orderCiphertext: "",
+        keyEnvelope: encodeBytes(representation.fileContentKeyEnvelope) };
     }
     if (published) {
       const envelope = await sealPublicRepresentation({
         publicationId: published.publicationId, linkId: published.linkId, publicKey: published.publicKey,
         revision: published.revision! + 1,
       }, publicPresentation(source.markdown));
-      await push("public-representation", [published.publicationId], envelope);
+      await push("public-representation", [published.publicationId, published.linkId, newId()], envelope);
     }
+    return null;
   };
 
-  const walk = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<void> => {
+  const walk = async (node: ImportReviewNode, parentId: string, parentKey: Uint8Array, keyEpoch: number): Promise<ImportSealedEntry[]> => {
+    const sealed: ImportSealedEntry[] = [];
     for (const child of node.children) {
       if (child.blocked || (child.action !== "create" && child.action !== "replace")) continue;
       if (child.action === "replace") {
-        await planReplace(child, parentId, parentKey);
+        const replacement = await planReplace(child, parentId, parentKey);
+        if (replacement) sealed.push(replacement);
         continue;
       }
       if (child.kind === "file") {
-        await planFile(child, parentId, parentKey, keyEpoch);
+        sealed.push(await planFile(child, parentId, parentKey, keyEpoch));
         continue;
       }
       const nodeId = newId();
       const order = newId();
+      await push("node-directory", [nodeId, parentId], new Uint8Array());
       const entry = await entryRecords(parentKey, vaultId, parentId, nodeId, keyEpoch, child.displayName, order);
       await push("entry-name", [nodeId, parentId], entry.name);
       await push("entry-order", [nodeId, parentId], entry.order);
@@ -305,18 +389,45 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
         vaultId, parentDirectoryId: parentId, childDirectoryId: nodeId,
       });
       await push("directory-capability", [nodeId, parentId], capability.envelope);
-      await walk(child, nodeId, capability.capabilityKey, 1);
+      const children = await walk(child, nodeId, capability.capabilityKey, 1);
+      if (children.length) await pushListing(nodeId, 1, 2, capability.capabilityKey, children);
+      sealed.push({ nodeId, kind: "directory", nameCiphertext: encodeBytes(entry.name),
+        orderCiphertext: encodeBytes(entry.order), keyEnvelope: encodeBytes(capability.envelope) });
     }
+    return sealed;
   };
 
   const targetKeyEpoch = review.target.keyEpoch;
-  await walk(review.tree, targetId, options.targetKey, targetKeyEpoch);
+  const created = await walk(review.tree, targetId, options.targetKey, targetKeyEpoch);
   if (!records.length) throw new ImportError("nothing-to-import", { action: "fix" });
+  // The target's listing keeps every existing edge, applies legacy Replace
+  // key envelopes, and appends every created node, then advances its revision.
+  const sealed = new Map<string, ImportSealedEntry>();
+  for (const entry of review.target.listing) {
+    sealed.set(entry.nodeId, { nodeId: entry.nodeId, kind: entry.kind,
+      nameCiphertext: entry.nameCiphertext, orderCiphertext: entry.orderCiphertext, keyEnvelope: entry.keyEnvelope });
+  }
+  for (const entry of created) {
+    if (entry.nameCiphertext) { sealed.set(entry.nodeId, entry); continue; }
+    const previous = sealed.get(entry.nodeId);
+    if (!previous) throw new ImportError("replacement-unavailable", { item: entry.nodeId, action: "fix" });
+    sealed.set(entry.nodeId, { ...previous, keyEnvelope: entry.keyEnvelope });
+  }
+  await pushListing(targetId, targetKeyEpoch, review.target.entriesRevision + 1, options.targetKey,
+    [...sealed.values()]);
+  if (commentRecords !== review.counts.comments) {
+    throw new ImportError("too-many-comments", { limit: review.counts.comments, measured: commentRecords, action: "split" });
+  }
 
   const chunks = await packChunks(records);
   const payloadBytes = chunks.reduce((total, chunk) => total + chunk.payload.length, 0);
   const aggregateDigest = await sha256Hex(concat(chunks.map((chunk) => chunk.payload)));
-  const importId = newId();
+  const importId = newStagingId();
+  const kindCounts: ImportSessionKindCount[] = [];
+  for (const kind of Object.keys(IMPORT_RECORD_KINDS) as StagingRecordKind[]) {
+    const count = records.reduce((total, record) => total + (record.kind === kind ? 1 : 0), 0);
+    if (count) kindCounts.push({ kind, count });
+  }
   const manifest: StagingManifest = {
     format: "mdwn-import-staging",
     version: 1,
@@ -338,6 +449,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
     bytes: { payload: payloadBytes },
     chunks: chunks.map((chunk) => ({ sequence: chunk.sequence, digest: chunk.digest,
       records: chunk.descriptors.length, bytes: chunk.payload.length })),
+    kinds: kindCounts,
     aggregateDigest,
     planDigest: await sha256Hex(encoder.encode(canonicalPlanJson(review))),
   };
@@ -349,7 +461,7 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
   if (envelope.length > MAX_STAGING_MANIFEST_BYTES) {
     throw new ImportError("plan-too-large", { limit: MAX_STAGING_MANIFEST_BYTES, measured: envelope.length, action: "split" });
   }
-  const manifestDigest = hex(await digestEnvelope(envelope));
+  const manifestDigest = await envelopeDigestHex(envelope);
   return {
     importId,
     review,
@@ -359,13 +471,21 @@ export async function prepareImportPlan(options: PrepareImportPlanOptions): Prom
       envelope,
       manifest,
       metadata: {
-        importId, vaultId, targetDirectoryId: targetId, actorAccountId: review.target.actorAccountId,
-        reviewedEntryRevision: review.target.entriesRevision, recordCount: records.length,
-        chunkCount: chunks.length, payloadBytes, commentCount: review.counts.comments,
-        aggregateDigest, manifestDigest,
+        importId, vaultId, targetOwnerId: vaultId, actorAccountId: review.target.actorAccountId,
+        targetDirectoryId: targetId, reviewedEntryRevision: review.target.entriesRevision,
+        recordCount: records.length, chunkCount: chunks.length, payloadBytes, commentCount: commentRecords,
+        aggregateDigest, manifestDigest, kindCounts,
       },
     },
   };
+}
+
+function encodeBytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /** Canonical private plan binding; hashed into the manifest, never uploaded. */

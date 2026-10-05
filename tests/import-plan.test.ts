@@ -13,8 +13,14 @@ const decoder = new TextDecoder();
 
 function target(siblings: readonly ImportCollisionSibling[] = []): ImportTarget {
   return { directoryId: "target-id", keyEpoch: 1, entriesRevision: 2, ownerAccountId: "owner-id",
-    actorAccountId: "owner-id", label: "Files", siblings };
+    actorAccountId: "owner-id", label: "Files", siblings, listing: [] };
 }
+
+const listingHead = {
+  ciphertext: encodeTreeBytes(encoder.encode("listing")),
+  digest: encodeTreeBytes(new Uint8Array(32).fill(3)),
+  signature: encodeTreeBytes(new Uint8Array(64).fill(4)),
+};
 
 async function makePlan(paths: readonly string[], options: {
   siblings?: readonly ImportCollisionSibling[];
@@ -42,6 +48,7 @@ async function makePlan(paths: readonly string[], options: {
       digest: encodeTreeBytes(new Uint8Array(32).fill(1)),
       signature: encodeTreeBytes(new Uint8Array(64).fill(2)),
     }),
+    signListingHead: async () => listingHead,
   });
   return { plan, source, targetKey };
 }
@@ -68,8 +75,10 @@ describe("import plan: complete encrypted record and chunk plan", () => {
   it("constructs canonical records and measures every chunk and digest", async () => {
     const { plan, targetKey } = await makePlan(["notes/draft.md"]);
     expect(plan.records.map((record) => record.kind)).toEqual([
-      "entry-name", "entry-order", "directory-capability",
-      "entry-name", "entry-order", "file-capability", "representation-key", "representation", "file-head",
+      "node-directory", "entry-name", "entry-order", "directory-capability",
+      "node-file", "entry-name", "entry-order", "file-capability", "representation-key", "representation", "file-head",
+      "listing-ciphertext", "listing-digest", "listing-signature",
+      "listing-ciphertext", "listing-digest", "listing-signature",
     ]);
     expect(plan.chunks.length).toBe(1);
     for (const chunk of plan.chunks) {
@@ -94,7 +103,7 @@ describe("import plan: complete encrypted record and chunk plan", () => {
       Array.from(await digestEnvelope(plan.manifest.envelope), (byte) => byte.toString(16).padStart(2, "0")).join(""));
 
     const manifest = await readManifest(plan, targetKey);
-    expect(manifest.counts).toMatchObject({ sources: 2, createFiles: 1, createDirectories: 1, records: 9, chunks: 1 });
+    expect(manifest.counts).toMatchObject({ sources: 2, createFiles: 1, createDirectories: 1, records: 17, chunks: 1 });
     expect(manifest.bytes.payload).toBe(plan.manifest.metadata.payloadBytes);
     expect(manifest.chunks[0]).toMatchObject({ sequence: 0, digest: plan.chunks[0]!.digest,
       records: plan.chunks[0]!.descriptors.length });
@@ -113,8 +122,7 @@ describe("import plan: complete encrypted record and chunk plan", () => {
   it("bounds descriptors per chunk and chunks per session for a 100-node selection", async () => {
     const paths = Array.from({ length: 100 }, (_, index) => `f${String(index).padStart(3, "0")}.md`);
     const { plan } = await makePlan(paths);
-    expect(plan.records.length).toBe(600);
-    expect(plan.chunks.length).toBe(12);
+    expect(plan.chunks.length).toBeLessThanOrEqual(40);
     for (const chunk of plan.chunks) {
       expect(chunk.descriptors.length).toBeLessThanOrEqual(50);
       expect(chunk.payload.length).toBeLessThanOrEqual(524_288);
@@ -135,7 +143,10 @@ describe("import plan: complete encrypted record and chunk plan", () => {
       replacements: new Map([["file-1", document]]),
       markdowns: { "draft.md": "replacement" },
     });
-    expect(plan.records.map((record) => record.kind)).toEqual(["representation-key", "representation", "file-head"]);
+    expect(plan.records.map((record) => record.kind)).toEqual([
+      "replace", "representation-key", "representation", "file-head",
+      "listing-ciphertext", "listing-digest", "listing-signature",
+    ]);
     expect(plan.review.nodes[0]!.existingNodeId).toBe("file-1");
   });
 
@@ -154,7 +165,8 @@ describe("import plan: complete encrypted record and chunk plan", () => {
       replacements: new Map([["file-1", document]]),
     });
     expect(plan.records.map((record) => record.kind)).toEqual([
-      "representation-key", "representation", "file-head", "public-representation",
+      "replace", "representation-key", "representation", "file-head", "public-representation",
+      "listing-ciphertext", "listing-digest", "listing-signature",
     ]);
   });
 

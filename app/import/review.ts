@@ -19,6 +19,15 @@ import { compareUtf8, foldedToken, type ImportSource, type ImportSourceChild } f
 
 export type ImportCollisionSibling = { nodeId: string; kind: "file" | "directory"; name: string };
 
+/** One current sealed sibling edge, exactly as the decrypted listing returned it. */
+export type ImportListingEntry = {
+  nodeId: string;
+  kind: "file" | "directory";
+  nameCiphertext: string;
+  orderCiphertext: string;
+  keyEnvelope: string;
+};
+
 export type ImportTarget = {
   directoryId: string;
   keyEpoch: number;
@@ -31,6 +40,8 @@ export type ImportTarget = {
   label: string;
   /** Decrypted current siblings, exactly as the target listing returned them. */
   siblings: readonly ImportCollisionSibling[];
+  /** The same siblings' sealed edges, needed to sign the post-Import listing head. */
+  listing: readonly ImportListingEntry[];
 };
 
 export type ImportChoice =

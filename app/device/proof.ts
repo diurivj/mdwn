@@ -19,8 +19,9 @@ export type DeviceProof = {
 
 type UnsignedProof = Omit<DeviceProof, "signature">;
 
-export async function digestBody(body: string): Promise<string> {
-  return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(body))));
+export async function digestBody(body: string | Uint8Array): Promise<string> {
+  const bytes = typeof body === "string" ? encoder.encode(body) : body;
+  return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))));
 }
 
 export async function sessionBindingDigest(sessionId: string): Promise<string> {
@@ -51,7 +52,7 @@ export async function signDeviceProof(
     registryEpoch: number;
     method: string;
     url: string;
-    body?: string;
+    body?: string | Uint8Array;
     now?: number;
   },
 ): Promise<DeviceProof> {
@@ -82,7 +83,7 @@ export async function verifyDeviceProof(
     registryEpoch: number;
     method: string;
     url: string;
-    body?: string;
+    body?: string | Uint8Array;
     now?: number;
   },
 ): Promise<boolean> {
