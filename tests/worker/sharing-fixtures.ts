@@ -125,12 +125,13 @@ export async function treeChild(actor: SharingAccount, parentId: string, kind: "
   return nodeId;
 }
 
-export async function renamePayload(actor: SharingAccount, ownerId: string, nodeId: string, parentId: string) {
+export async function renamePayload(actor: SharingAccount, ownerId: string, nodeId: string, parentId: string,
+  name = "renamed.md") {
   const listing = await treeListing(actor, parentId);
   const writer = await createSymmetricWriter(actor.keys.get(parentId)!);
   const context = { purpose: "directory-metadata" as const, vaultId: ownerId, objectId: nodeId,
     keyId: parentId, keyEpoch: 1, revision: 1 };
-  const nameCiphertext = encodeTreeBytes(await writer.seal(new TextEncoder().encode("renamed.md"), context));
+  const nameCiphertext = encodeTreeBytes(await writer.seal(new TextEncoder().encode(name), context));
   const orderCiphertext = encodeTreeBytes(await writer.seal(new TextEncoder().encode("last"), context));
   return { parentId, expectedRevision: listing.entriesRevision, nameCiphertext, orderCiphertext,
     listingHead: await createListingHead(actor.keys.get(parentId)!, actor.assertion.privateKey, {
@@ -164,7 +165,8 @@ export async function movePayload(actor: SharingAccount, ownerId: string, nodeId
     }) };
 }
 
-export async function savePayload(actor: SharingAccount, ownerId: string, fileId: string, parentId: string) {
+export async function savePayload(actor: SharingAccount, ownerId: string, fileId: string, parentId: string,
+  markdown = "# saved by Collaborator") {
   const response = await sharingRequest(actor, `/api/private/tree/files/${fileId}`);
   const current = await response.json() as { revision: number; keyEpoch: number; representationId: string;
     keyEnvelope?: string; capability?: { id: string; epoch: number } };
@@ -174,7 +176,7 @@ export async function savePayload(actor: SharingAccount, ownerId: string, fileId
         keyId: current.capability.id, keyEpoch: current.capability.epoch, revision: 1 },
     });
     const contentKeyId = opaqueId(), id = opaqueId(), keyEpoch = current.keyEpoch + 1, revision = current.revision + 1;
-    const file = await createFileRepresentation(key, { markdown: "# saved by Collaborator", metadata: new Uint8Array() },
+    const file = await createFileRepresentation(key, { markdown, metadata: new Uint8Array() },
       { vaultId: ownerId, fileId, keyId: contentKeyId, keyEpoch, revision });
     const ciphertext = encodeTreeBytes(file.contentEnvelope), keyEnvelope = encodeTreeBytes(file.fileContentKeyEnvelope);
     const fileHead = await createFileHead(actor.assertion.privateKey, { vaultId: ownerId, fileId,
@@ -186,7 +188,7 @@ export async function savePayload(actor: SharingAccount, ownerId: string, fileId
   const listing = await treeListing(actor, parentId);
   const contentKeyId = opaqueId();
   const file = await createFileRepresentation(actor.keys.get(parentId)!, {
-    markdown: "# saved by Collaborator", metadata: new Uint8Array(),
+    markdown, metadata: new Uint8Array(),
   }, { vaultId: ownerId, fileId, keyId: contentKeyId, keyEpoch: current.keyEpoch + 1, revision: current.revision + 1 });
   const keyEnvelope = encodeTreeBytes(file.fileContentKeyEnvelope);
   return { expectedRevision: current.revision, expectedParentRevision: listing.entriesRevision, keyEnvelope,

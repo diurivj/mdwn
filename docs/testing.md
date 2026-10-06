@@ -171,3 +171,30 @@ contain page and application details; keep them within the repository's CI
 retention/access policy and never put real credentials in browser fixtures.
 
 The auth fixture installs Playwright’s virtual WebAuthn authenticator. Linux WebKit can lack the native `PublicKeyCredential` constructor, with Playwright supplying an object placeholder; the fixture replaces a non-function value with a constructor so SimpleWebAuthn reaches the virtual authenticator. This shim is confined to the test BrowserContext; application feature detection and Worker verification remain unchanged.
+
+## Acceptance suite (ticket 33)
+
+[`docs/acceptance.md`](acceptance.md) maps every buildable-spec §12 criterion
+to its evidence and defines the release-candidate gate. Three suites were added
+for criteria the per-feature tests left implicit:
+
+- `tests/worker/acceptance-privacy.test.ts` seals a unique sentinel into a
+  private name, Markdown/front matter, Comment body, and displayed pseudonym,
+  opens the stored ciphertext with browser-held capabilities, then sweeps every
+  D1 table and every private/anonymous response for the sentinels. It also
+  pins the passkey/content-envelope separation.
+- `tests/worker/import-shared-target.test.ts` drives the full Import protocol
+  from a read/write Directory Collaborator's own device-bound Session, proving
+  target-Owner assignment, unchanged Grant authority, and pre-commit
+  invisibility to tree, direct-read, and owned-export query classes.
+- `e2e/accessibility.spec.ts` is keyboard-only in Chromium, Firefox, and
+  WebKit: it creates a File through a labelled modal, operates the narrow tree
+  drawer, and pins the accessible names/roles of the editor, preview, save
+  status, thread tabs, and Comment composer.
+
+The disposable remote Workers Free + D1 release gate is
+`node scripts/import-proof.mjs`; it covers the Import protocol plus a
+maximum-source create/save, staged Replace invisibility, one-byte-over
+rejection, active-Publication paired updates, stale-conflict preservation, and
+missing-sequence rejection. See [`docs/acceptance.md`](acceptance.md) for the
+full evidence map and known boundaries.

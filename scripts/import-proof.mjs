@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Disposable remote Workers Free + D1 proof for the Import staging protocol
- * (tickets 26 and 30).
+ * (tickets 26 and 30) and the ticket-33 release-gate criteria (exact-limit
+ * create/save/Replace, active-Publication paired updates, stale-conflict
+ * preservation, and missing-sequence rejection).
  *
  * Usage:
  *   npx wrangler login                     # once per machine
@@ -120,6 +122,25 @@ try {
   const deployOutput = capture("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretsFile]);
   const url = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(deployOutput.replace(/\u001b\[[0-9;]*m/g, ""))?.[0];
   if (!url) throw new Error("could not read the deployed workers.dev URL");
+  // A freshly created or re-created workers.dev route can take a few seconds
+  // to serve, and can flap briefly after that; require three consecutive
+  // healthy responses before running instead of turning proof requests into
+  // 404s.
+  let ready = false;
+  for (let attempt = 0; attempt < 20 && !ready; attempt += 1) {
+    let healthy = 0;
+    for (let probe = 0; probe < 3; probe += 1) {
+      try {
+        const response = await fetch(`${url}/robots.txt`, { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) break;
+        healthy += 1;
+      } catch { break; }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    ready = healthy === 3;
+    if (!ready) await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  if (!ready) throw new Error(`deployed ${url} is still not serving after 20 attempts`);
   console.log(`✓ deployed ${url}`);
 
   const accountId = id(), rootId = id(), deviceId = id(), sessionId = id();
@@ -164,7 +185,7 @@ try {
   run("npx", ["--no-install", "vitest", "run", "--config", "vitest.proof.config.ts"], {
     env: { ...process.env, ...proofEnv },
   });
-  console.log("\n✓ Workers Free + D1 import proof passed");
+  console.log("\n✓ Workers Free + D1 release proof passed");
 } finally {
   rmSync(PROOF_CONFIG, { force: true });
   rmSync(temporary, { recursive: true, force: true });
