@@ -171,41 +171,101 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
    with the compatible pre-change Worker; do not run post-0027 retention against
    the old staging FK. Recheck authority, FKs, and application reads before
    resuming traffic. A restore rolls back intervening writes, not just DDL.
-5. Exercise the saved export independently in disposable local storage. Raw
-   D1 export order is **not** a drop-in D1 restore for this circular schema:
-   forward table references fail even with deferred checks, and preinstalled
-   root-materialization triggers would duplicate restored roots. For this
-   known synthetic fixture, the following Node 24 preparation was rehearsed:
+5. Restore the saved export with the reviewed restoration tool. Raw D1 export
+   order is **not** a drop-in D1 restore for this circular schema: a row can
+   precede the table it references, composite foreign keys need their parent
+   unique index before DML, root-materialization triggers would duplicate
+   restored roots, and one max-size ciphertext INSERT exceeds D1's statement
+   limit. `scripts/restore-d1-export.mjs` handles all of those; Time Travel
+   remains the primary rollback mechanism and needs no export import.
 
-   ```js
-   import { DatabaseSync } from "node:sqlite";
-   import { readFileSync, writeFileSync } from "node:fs";
-   import assert from "node:assert/strict";
-   const input = readFileSync(process.argv[2], "utf8");
-   // FK disabling is OFFLINE SQLite only, never a D1 pragma/workaround.
-   const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
-   db.exec(input);
-   db.exec("PRAGMA foreign_keys = ON");
-   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
-   assert.equal(db.prepare("SELECT hex(ciphertext) AS value FROM file_representations").get().value, "FEED");
-   const schema = db.prepare("SELECT type, sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all();
-   const ddl = type => schema.filter(row => row.type === type).map(row => row.sql + ";");
-   // KNOWN FIXTURE ONLY: its INSERTs are single-line and its BLOBs are tiny.
-   const data = input.split("\n").filter(line => /^INSERT INTO |^DELETE FROM sqlite_sequence;/.test(line));
-   writeFileSync(process.argv[3], ["PRAGMA defer_foreign_keys = ON;",
-     ...ddl("table"), ...ddl("index"), ...data, ...ddl("view"), ...ddl("trigger")].join("\n"), { flag: "wx" });
-   db.close();
+   ```sh
+   umask 077
+   npm run db:restore -- prepare \
+     --export "$EXPORT" \
+     --source-name mdwn-db-production --source-uuid 20cbcf9f-0408-48d8-8e51-c8a7385435ef \
+     --source-schema-head 0029_public_morg.sql \
+     --out "$PREPARED" --manifest "$MANIFEST"
    ```
 
-   Import the prepared SQL with `d1 execute DB --local --config "$CONFIG"
-   --persist-to "$FRESH_LOCAL_STATE" --file "$ORDERED_FIXTURE"`, then require
-   `foreign_keys = 1`, zero FK violations, the pre-change schema and sentinel
-   bytes. **This is not a general production dump transformer.** Multiline SQL,
-   large BLOB statements, and real-data migration/import batching need their
-   own reviewed restore plan. Time Travel avoids those export-import hazards.
+   `--source-schema-head` is optional and cross-checks the export's own
+   `d1_migrations` head; the manifest always records that head, the migration
+   list, the installed Wrangler version, the export size/SHA-256, and the
+   operator-declared source name/UUID.
+
+   `prepare` is offline and needs no credentials. It parses the export with a
+   real SQL tokenizer (never line- or semicolon-splitting), emits all tables,
+   then indexes (before data: SQLite rejects a composite FK at DML time unless
+   the parent's unique index exists), then data, then triggers and views. It
+   chunks every statement over 100,000 bytes: a >100 KB hex BLOB is inserted
+   with a first chunk and completed with bounded `unhex(hex(col) || '…')`
+   appends, keeping `size = length(blob)` CHECK columns in lockstep. It builds
+   a row-level foreign-key graph and keeps each cycle inside one atomic
+   command. Before writing anything, it proves the command-batched apply equals
+   a single-transaction apply, then runs offline probes for the representation
+   immutability trigger, challenge-lifetime and Import-marker guards, FK
+   enforcement, root materialization, and all 22 reviewed query plans.
+
+   ```sh
+   # Fresh disposable local D1 (default; a private temp state directory).
+   npm run db:restore -- restore --prepared "$PREPARED" --manifest "$MANIFEST"
+
+   # A freshly created disposable remote D1.
+   npx --no-install wrangler d1 create mdwn-restore-20261006
+   npm run db:restore -- restore --prepared "$PREPARED" --manifest "$MANIFEST" \
+     --target remote --target-name mdwn-restore-20261006 --target-uuid <uuid>
+
+   # Re-run the read-only checks against an already-restored target.
+   npm run db:restore -- verify --prepared "$PREPARED" --manifest "$MANIFEST" \
+     --target remote --target-name mdwn-restore-20261006 --target-uuid <uuid>
+   ```
+
+   Remote mode resolves the name/UUID through `wrangler d1 info` and refuses
+   the committed local, preview, and production bindings, the source database,
+   any name without the `mdwn-restore-` prefix, and any nonempty target. Never
+   point this at an existing preview or production database. Replacement is a
+   delete-and-recreate of the disposable database, never an import over live
+   contents. Each command is applied through the D1 query endpoint as one
+   atomic multi-statement call. Do **not** use `d1 execute --file` for this
+   schema: the import endpoint commits in internal batches, so a deferred
+   foreign-key cycle that spans a batch fails even though the whole import is
+   rolled back. The query endpoint commits one command atomically; the
+   prepared plan never splits a cycle across commands.
+
+   Verification is read-only and mandatory: `foreign_keys = 1`, zero
+   `foreign_key_check` violations, the 222-object schema inventory, 30
+   migration records and the head, per-table row counts and content digests,
+   current/authority pointer invariants, and the 22 reviewed query plans. The
+   tool reports success only after every check passes and writes a status JSON
+   beside the manifest. Commands are individually atomic, so a failure at
+   command *k* leaves the first *k*-1 commands applied: the tool creates a
+   `_restore_incomplete` marker table before the first command and drops it
+   after the last, so an interrupted or failed restore stays visibly
+   incomplete, records `failed` with the remaining tables, and is never a
+   silent partial success. The target is disposable and bound to no Worker, so
+   it serves no application traffic. Restart by discarding the incomplete
+   local temp state with `trash <dir>`, or deleting and recreating the
+   disposable remote database, then restoring into the fresh target.
+
+   Validated limits (Workers Free): 100 KB per statement, 2 MB per row/BLOB,
+   500 MB per database, 5 GB import file, 30 s per query, and 7 days of Time
+   Travel. The tool uses no paid feature. Digest verification pages 20 rows at
+   a time, so verification cost scales with data size. `$PREPARED` and
+   `$MANIFEST` contain restored data or its digests: keep them local, never
+   commit, upload, or print them, and trash them when finished.
+
+   ```sh
+   # Full remote round-trip rehearsal on two disposable databases; deletes
+   # only the databases it created and writes sanitized evidence.
+   npm run db:restore:rehearsal -- [--keep] [--evidence /tmp/evidence.md]
+   ```
+
+   The rehearsal consumes the account's D1 Free daily row-write quota (shared
+   with production Cron writes); a quota error aborts it before any restore and
+   the disposable databases are still deleted.
 6. Delete only the disposable remote D1 by its recorded name/UUID; trash local
-   rehearsal storage. Keep sanitized evidence, not the fixture export or
-   temporary account credentials.
+   rehearsal storage. Keep sanitized evidence, not the export, prepared SQL, or
+   manifest.
 
 ### Observed evidence (2026-10-05 UTC)
 
@@ -239,6 +299,54 @@ Wrangler **4.135.0**, account's D1 Free, disposable remote
   updated production traversal, not the former output-only cap.
 - A separate **read-only production** probe reported `foreign_keys = 1`, zero
   violations, and zero writes. No production migrations or restores were run.
+
+### Observed evidence: export restoration (2026-10-06 UTC)
+
+Wrangler **4.135.0**, account's D1 Free, synthetic data only. The rehearsed
+round trip ran through the real `wrangler d1 export` and the restoration tool:
+
+- Source disposable remote D1
+  `mdwn-restore-rehearsal-source-20261006153511-7hn61w` /
+  `97062835-fb90-4707-af0e-9161044de93c` was seeded with
+  `scripts/lib/restore-rehearsal-data.mjs`: 2 accounts, 2 materialized roots,
+  2 max-size (512 KiB) file representations, Recovery capsules, current key and
+  Grant envelopes, circular node/File/representation and thread-style
+  authority pointers, and one durable Import marker whose staging session,
+  chunks, records, and kinds were deleted. The export was 2,252,335 bytes
+  (sha256 `2331ebed…`).
+- `prepare` produced 2,255,551 bytes of prepared SQL (sha256 `5e0c4e4b…`) with
+  **2 chunked statements** (the 1,048,576-character hex literals) across **25
+  atomic commands**. The command-batched offline apply matched the single-
+  transaction apply on every table digest, and all 29 offline behavior and
+  query-plan probes passed.
+- The prepared plan restored into the fresh disposable remote D1
+  `mdwn-restore-debug-1791301153` / `ce0f9fa9-4aba-44c5-95cd-fe18b97b9936` in
+  25 query-endpoint commands. Verification passed: `foreign_keys = 1`, zero
+  `foreign_key_check` violations, all 222 schema objects matched, migration
+  head `0029_public_morg.sql` with all 30 records, all 58 table row counts and
+  content digests matched, all 6 current/authority pointer invariants held,
+  and all 22 reviewed query plans matched. Both disposable databases were then
+  deleted; no Worker was deployed and no production database was touched.
+- A same-day re-run of the full orchestrated rehearsal was blocked by the
+  account's D1 Free daily row-write limit (error code `7500`, shared with
+  production Cron writes) before any restore ran; the rehearsal script deleted
+  both databases it had created. The prepared artifacts and the verified
+  status JSON from the successful run above are retained as sensitive local
+  evidence only.
+- After the Standards/Spec review, the tool creates a `_restore_incomplete`
+  marker table before the first command and drops it after the last, rejects
+  every nonempty target (replacement is delete-and-recreate, never an import
+  over live contents), requires the `mdwn-restore-` name prefix, records the
+  installed Wrangler version and an optional `--source-schema-head` check, and
+  supports a read-only `verify` subcommand. The same retained prepared
+  artifacts re-restored and verified locally through 25 atomic commands with
+  the marker created and dropped; a forced mid-command failure left the marker
+  and a `failed` status with the remaining table listed.
+- Regression coverage: `tests/sql-dump.test.ts`,
+  `tests/d1-export-restore.test.ts`, and `tests/d1-restore-rehearsal.test.ts`
+  cover the tokenizer, BLOB chunking, the raw-order failure, and a
+  production-representative committed-schema round trip (including both
+  max-size ciphertexts) without network access.
 
 The scheduled-event suite proves the new handler locally. Actual Cron execution
 on the new deployed Worker must still be observed after merge; the deploy gate

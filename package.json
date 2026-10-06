@@ -21,6 +21,8 @@
     "db:smoke:preview": "node scripts/smoke-db.mjs --remote preview",
     "db:smoke:production": "node scripts/smoke-db.mjs --remote production",
     "db:operations": "node scripts/verify-db-operations.mjs",
+    "db:restore": "node scripts/restore-d1-export.mjs",
+    "db:restore:rehearsal": "node scripts/rehearse-d1-restore.mjs",
     "participation": "node scripts/public-participation.mjs",
     "check:secrets": "node scripts/check-bundle-secrets.mjs",
     "check:namespace": "node scripts/generate-namespace-v1-data.mjs --check",
