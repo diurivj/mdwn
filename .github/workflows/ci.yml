@@ -40,6 +40,8 @@ jobs:
         run: npm run build
       - name: D1 migration smoke test (fresh local D1)
         run: npm run db:smoke
+      - name: Local D1 export/restore round trip
+        run: npm run db:restore:local
       - name: Secret-leak check on client bundle
         run: npm run check:secrets
         env:

@@ -12,7 +12,9 @@ npm run verify      # local preflight: every CI check, then all browser engines
 ## TypeScript project boundaries
 
 `npm run typecheck` builds the root `tsconfig.json` solution, which references
-two composite projects:
+two composite projects. For a script-only change, `npm run typecheck:node`
+builds just the Node tooling project and skips the Wrangler/React Router type
+regeneration:
 
 - `tsconfig.node.json` owns the Node tooling target: scripts, Node tests,
   Playwright specs, and the portable application modules under

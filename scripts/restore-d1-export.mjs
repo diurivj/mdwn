@@ -44,7 +44,7 @@ import {
   sha256,
   writeSensitive,
 } from "./lib/restore-cli-support.mjs";
-import { spawnWrangler } from "./lib/wrangler-targets.mjs";
+import { runWranglerJson, spawnWrangler } from "./lib/wrangler-targets.mjs";
 
 const LOCAL_TARGET_ID = "00000000-0000-4000-8000-000000000038";
 const DISPOSABLE_NAME_PREFIX = "mdwn-restore-";
@@ -123,11 +123,15 @@ function resolveTarget(flags, manifest) {
     );
   }
   const target = createRestoreTarget({ mode: "remote", databaseName: targetName, databaseId: targetUuid });
-  const info = spawnWrangler(["d1", "info", "DB", "--config", target.configPath, "--json"]);
-  if (info.status !== 0) {
-    throw new Error(`Target database ${targetName} is not resolvable by this account: ${(info.stderr || info.stdout).trim()}`);
+  /** @type {{ uuid?: string, database_id?: string, id?: string }} */
+  let resolved;
+  try {
+    resolved = runWranglerJson(["d1", "info", "DB", "--config", target.configPath], "d1 info");
+  } catch (error) {
+    throw new Error(
+      `Target database ${targetName} is not resolvable by this account: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  const resolved = JSON.parse(info.stdout);
   const resolvedUuid = resolved.uuid ?? resolved.database_id ?? resolved.id;
   if (resolvedUuid !== targetUuid) {
     throw new Error(`Target UUID mismatch: wrangler resolved ${resolvedUuid}, expected ${targetUuid}`);
