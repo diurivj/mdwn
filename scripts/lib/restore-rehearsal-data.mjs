@@ -67,10 +67,11 @@ export const REHEARSAL_IDS = Object.freeze({
 export const REHEARSAL_NOW = 1_700_000_000_000;
 
 /**
- * @param {{ now?: number, maxCiphertextBytes?: number }} [options]
- * @returns {{ ids: typeof REHEARSAL_IDS, statements: string[], stagingImportId: string }}
+ * @param {{ maxCiphertextBytes?: number }} [options]
+ * @returns {{ ids: typeof REHEARSAL_IDS, statements: string[] }}
  */
-export function restoreRehearsalStatements({ now = REHEARSAL_NOW, maxCiphertextBytes = APP_MAX_CIPHERTEXT_BYTES } = {}) {
+export function restoreRehearsalStatements({ maxCiphertextBytes = APP_MAX_CIPHERTEXT_BYTES } = {}) {
+  const now = REHEARSAL_NOW;
   if (maxCiphertextBytes < 1 || maxCiphertextBytes > APP_MAX_CIPHERTEXT_BYTES) {
     throw new Error(`maxCiphertextBytes must be between 1 and ${APP_MAX_CIPHERTEXT_BYTES}`);
   }
@@ -143,5 +144,5 @@ export function restoreRehearsalStatements({ now = REHEARSAL_NOW, maxCiphertextB
     `DELETE FROM import_session_kinds WHERE import_id = '${ids.importId}';`,
     `DELETE FROM import_sessions WHERE id = '${ids.importId}';`,
   ];
-  return { ids, statements, stagingImportId: ids.importId };
+  return { ids, statements };
 }

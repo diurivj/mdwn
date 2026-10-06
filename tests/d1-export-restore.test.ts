@@ -144,6 +144,27 @@ describe("prepareRestore", () => {
     }
   });
 
+  it("rejects a target left with the incomplete-restore marker", () => {
+    const prepared = prepareRestore({
+      exportSql: regressionExport(),
+      sourceName: "mdwn-restore-source",
+      sourceUuid: "00000000-0000-4000-8000-000000000001",
+      fullProbes: false,
+    });
+    const db = openOfflineDatabase();
+    try {
+      applyStatementsInTransaction(db, prepared.preparedSql);
+      // The CLI creates this marker before the first command and drops it after
+      // the last, so a failed restore stays visibly incomplete.
+      db.exec("CREATE TABLE `_restore_incomplete` (`restore_started_at` text NOT NULL);");
+      const verification = verifyRestoreTarget(createSqliteRunner(db), prepared.manifest, { checkQueryPlans: false });
+      expect(verification.ok).toBe(false);
+      expect(verification.problems.join(" ")).toMatch(/_restore_incomplete/);
+    } finally {
+      db.close();
+    }
+  });
+
   it("detects a tampered target", () => {
     const prepared = prepareRestore({
       exportSql: regressionExport(),

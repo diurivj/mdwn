@@ -11,7 +11,7 @@ import {
   tableDigests,
   verifyRestoreTarget,
 } from "../scripts/lib/d1-export-restore.mjs";
-import { restoreRehearsalStatements } from "../scripts/lib/restore-rehearsal-data.mjs";
+import { REHEARSAL_IDS, restoreRehearsalStatements } from "../scripts/lib/restore-rehearsal-data.mjs";
 
 /** Apply the committed migrations exactly as reviewed, plus Wrangler's own
  * migration journal (as any real D1 source database has). */
@@ -96,9 +96,13 @@ describe("production-representative restore rehearsal (committed schema)", () =>
       expect(db.prepare("SELECT count(*) AS n FROM import_commits").get()).toMatchObject({ n: 1 });
       expect(db.prepare("SELECT count(*) AS n FROM import_sessions").get()).toMatchObject({ n: 0 });
       expect(db.prepare("SELECT count(*) AS n FROM import_chunks").get()).toMatchObject({ n: 0 });
-      // Both max-size representations are intact.
+      // Both max-size representations are intact and belong to the expected Files.
       const sizes = db.prepare("SELECT ciphertext_size AS size FROM file_representations ORDER BY id").all();
       expect(sizes).toEqual([{ size: 524_288 }, { size: 524_288 }]);
+      expect(db.prepare("SELECT node_id AS id FROM files ORDER BY node_id").all()).toEqual([
+        { id: REHEARSAL_IDS.fileA },
+        { id: REHEARSAL_IDS.fileB },
+      ]);
       expect(db.prepare("SELECT length(ciphertext) AS bytes FROM file_representations LIMIT 1").get()).toMatchObject({ bytes: 524_288 });
     } finally {
       db.close();

@@ -15,7 +15,7 @@
  * credential, key, or payload is used; the dataset is synthetic and the
  * evidence contains identifiers and digests only.
  */
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,84 +27,26 @@ import {
   openOfflineDatabase,
   planRestoreCommands,
   prepareRestore,
+  queryRows,
   verifyRestoreTarget,
 } from "./lib/d1-export-restore.mjs";
 import { restoreRehearsalStatements } from "./lib/restore-rehearsal-data.mjs";
+import {
+  createRestoreTarget,
+  createWranglerRunner,
+  parseFlags,
+  runWranglerOrThrow,
+  SENSITIVE_FILE_MODE,
+  writeSensitive,
+} from "./lib/restore-cli-support.mjs";
 import { chunkOversizedStatements, splitMultiRowStatements } from "./lib/sql-dump.mjs";
 import { spawnWrangler } from "./lib/wrangler-targets.mjs";
-
-const PREPARED_MODE = 0o600;
-
-/** @param {string[]} argv */
-function parseFlags(argv) {
-  const flags = new Map();
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token.startsWith("--")) throw new Error(`Unexpected argument: ${token}`);
-    const [name, inline] = token.slice(2).split("=", 2);
-    if (inline !== undefined) flags.set(name, inline);
-    else if (argv[index + 1] !== undefined && !argv[index + 1].startsWith("--")) flags.set(name, argv[++index]);
-    else flags.set(name, true);
-  }
-  return flags;
-}
 
 /** @param {string} output @returns {string} */
 function parseCreatedDatabaseId(output) {
   const match = /"database_id"\s*:\s*"([0-9a-f-]{36})"/.exec(output);
   if (!match) throw new Error(`Could not parse database_id from wrangler output:\n${output}`);
   return match[1];
-}
-
-/** @param {string} directory @param {string} databaseName @param {string} databaseId */
-function writeConfig(directory, databaseName, databaseId) {
-  const path = join(directory, "wrangler.jsonc");
-  writeFileSync(
-    path,
-    `${JSON.stringify(
-      {
-        name: "mdwn-restore-rehearsal",
-        compatibility_date: "2026-09-18",
-        d1_databases: [
-          { binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: join(process.cwd(), "drizzle") },
-        ],
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: PREPARED_MODE },
-  );
-  return path;
-}
-
-/** @param {string} configPath */
-function createRunner(configPath) {
-  return {
-    /** @param {string} sql */
-    run(sql) {
-      const result = spawnWrangler(["d1", "execute", "DB", "--remote", "--config", configPath, "--json", "--command", sql]);
-      if (result.status !== 0) throw new Error(`D1 query failed: ${(result.stderr || result.stdout || "").trim()}`);
-      /** @type {Array<{ results?: Array<Record<string, unknown>> }>} */
-      const parsed = JSON.parse(result.stdout);
-      return parsed.map((entry) => ({ results: entry.results ?? [] }));
-    },
-  };
-}
-
-/** @param {string} command @param {string[]} args @param {string} label */
-function capture(command, args, label) {
-  const result = spawnWrangler([...args]);
-  if (result.status !== 0) throw new Error(`${label} failed: ${(result.stderr || result.stdout || "").trim()}`);
-  return result.stdout;
-}
-
-/** Run Wrangler and throw on failure, so the finally block can delete every
- * database this run created. `runWrangler` calls process.exit and would leak
- * the disposable databases. @param {string[]} args @param {string} label */
-function run(args, label) {
-  const result = spawnWrangler(args);
-  if (result.status !== 0) throw new Error(`${label} failed: ${(result.stderr || result.stdout || "").trim()}`);
-  return result;
 }
 
 const flags = parseFlags(process.argv.slice(2));
@@ -115,13 +57,15 @@ const sourceName = `mdwn-restore-rehearsal-source-${suffix}`;
 const targetName = `mdwn-restore-rehearsal-target-${suffix}`;
 const evidencePath = String(flags.get("evidence") ?? join(tmpdir(), `mdwn-restore-rehearsal-${suffix}.md`));
 const workDirectory = mkdtempSync(join(tmpdir(), "mdwn-restore-rehearsal-"));
+/** @type {string[]} */
+const temporaryDirectories = [workDirectory];
 /** @type {{ name: string, uuid: string }[]} */
 const created = [];
 let failure = null;
 
 /** @param {string} name */
 function createDatabase(name) {
-  const output = capture("d1 create", ["d1", "create", name], `create ${name}`);
+  const output = runWranglerOrThrow(["d1", "create", name], `create ${name}`).stdout;
   const uuid = parseCreatedDatabaseId(output);
   created.push({ name, uuid });
   console.log(`✓ created ${name} (${uuid})`);
@@ -140,16 +84,19 @@ function deleteDatabase(database) {
 }
 
 try {
-  const whoami = capture("whoami", ["whoami"], "wrangler whoami");
+  const whoami = runWranglerOrThrow(["whoami"], "wrangler whoami").stdout;
   const account = /Account ID\s*│\s*([0-9a-f]{32})/.exec(whoami)?.[1] ?? "unknown";
   console.log(`Account ${account}; rehearsal suffix ${suffix}`);
 
   const sourceUuid = createDatabase(sourceName);
   const targetUuid = createDatabase(targetName);
-  const sourceConfig = writeConfig(workDirectory, sourceName, sourceUuid);
-  const targetConfig = writeConfig(workDirectory, targetName, targetUuid);
+  const source = createRestoreTarget({ mode: "remote", databaseName: sourceName, databaseId: sourceUuid });
+  const target = createRestoreTarget({ mode: "remote", databaseName: targetName, databaseId: targetUuid });
+  temporaryDirectories.push(source.directory, target.directory);
+  const sourceConfig = source.configPath;
+  const targetConfig = target.configPath;
 
-  run(["d1", "migrations", "apply", "DB", "--remote", "--config", sourceConfig], "source migrations");
+  runWranglerOrThrow(["d1", "migrations", "apply", "DB", "--remote", "--config", sourceConfig], "source migrations");
   const { statements } = restoreRehearsalStatements({ maxCiphertextBytes: ciphertextBytes });
   // The seed reaches the source through the same 100 KB statement limit and
   // atomic-command transport as a restore, so chunk its max-size BLOBs and
@@ -189,12 +136,9 @@ try {
     seedDatabase.close();
   }
   const seedPath = join(workDirectory, "rehearsal-seed.sql");
-  writeFileSync(seedPath, `PRAGMA defer_foreign_keys=TRUE;\n${seedPlan.orderedStatements.map((statement) => `${statement};`).join("\n")}\n`, {
-    mode: PREPARED_MODE,
-  });
-  chmodSync(seedPath, PREPARED_MODE);
+  writeSensitive(seedPath, `PRAGMA defer_foreign_keys=TRUE;\n${seedPlan.orderedStatements.map((statement) => `${statement};`).join("\n")}\n`);
 
-  const sourceRunner = createRunner(sourceConfig);
+  const sourceRunner = createWranglerRunner({ mode: "remote", configPath: sourceConfig });
   // The migrated source's representation-immutability trigger rejects the
   // chunked append updates that a >100 KB ciphertext needs. Capture the exact
   // reviewed trigger, drop it only around the seed, and reinstall it before
@@ -210,22 +154,22 @@ try {
     sourceRunner.run(`${immutableTrigger};`);
   }
   console.log(`✓ source seeded through ${seedPlan.commands.length} atomic commands`);
-  const sourceCheck = sourceRunner.run(
-    `PRAGMA foreign_keys; PRAGMA foreign_key_check;
-     SELECT (SELECT count(*) FROM accounts) AS accounts,
+  if (Number(queryRows(sourceRunner, "PRAGMA foreign_keys;")[0]?.foreign_keys) !== 1
+    || queryRows(sourceRunner, "PRAGMA foreign_key_check;").length !== 0) {
+    throw new Error("source rehearsal database has broken foreign keys before export");
+  }
+  const sourceSummary = queryRows(
+    sourceRunner,
+    `SELECT (SELECT count(*) FROM accounts) AS accounts,
             (SELECT count(*) FROM vault_nodes WHERE parent_node_id IS NULL) AS roots,
             (SELECT count(*) FROM import_commits) AS markers,
             (SELECT count(*) FROM import_sessions) AS staging_sessions,
             (SELECT max(ciphertext_size) FROM file_representations) AS max_ciphertext;`,
-  );
-  if (Number(sourceCheck[0]?.results?.[0]?.foreign_keys) !== 1 || (sourceCheck[1]?.results ?? []).length !== 0) {
-    throw new Error("source rehearsal database has broken foreign keys before export");
-  }
-  const sourceSummary = sourceCheck[2]?.results?.[0] ?? {};
+  )[0] ?? {};
   console.log(`✓ source seeded: ${JSON.stringify(sourceSummary)}`);
 
   const exportPath = join(workDirectory, "rehearsal-export.sql");
-  run(["d1", "export", "DB", "--remote", "--config", sourceConfig, "--output", exportPath, "-y"], "source export");
+  runWranglerOrThrow(["d1", "export", "DB", "--remote", "--config", sourceConfig, "--output", exportPath, "-y"], "source export");
   const bookmark = (() => {
     const result = spawnWrangler(["d1", "time-travel", "info", "DB", "--config", sourceConfig, "--json"]);
     if (result.status !== 0) return null;
@@ -243,19 +187,17 @@ try {
     exportSql,
     sourceName,
     sourceUuid,
-    wranglerVersion: /wrangler\s+([\d.]+)/.exec(capture("version", ["--version"], "wrangler version"))?.[1] ?? null,
+    wranglerVersion: /wrangler\s+([\d.]+)/.exec(runWranglerOrThrow(["--version"], "wrangler version").stdout)?.[1] ?? null,
   });
   const preparedPath = join(workDirectory, "rehearsal-prepared.sql");
   const manifestPath = join(workDirectory, "rehearsal-manifest.json");
-  writeFileSync(preparedPath, prepared.preparedSql, { mode: PREPARED_MODE });
-  chmodSync(preparedPath, PREPARED_MODE);
-  writeFileSync(manifestPath, `${JSON.stringify(prepared.manifest, null, 2)}\n`, { mode: PREPARED_MODE });
-  chmodSync(manifestPath, PREPARED_MODE);
+  writeSensitive(preparedPath, prepared.preparedSql);
+  writeSensitive(manifestPath, `${JSON.stringify(prepared.manifest, null, 2)}\n`);
   console.log(
     `✓ prepared ${prepared.manifest.stats.dataStatements} data statements (${prepared.manifest.stats.chunkedStatements} chunked), head ${prepared.manifest.schema.head}`,
   );
 
-  const targetRunner = createRunner(targetConfig);
+  const targetRunner = createWranglerRunner({ mode: "remote", configPath: targetConfig });
   const restoreCommands = assembleRestoreCommands(prepared.preparedSql, prepared.manifest);
   for (const command of restoreCommands) targetRunner.run(command);
   console.log(`✓ target restored through ${restoreCommands.length} atomic commands`);
@@ -301,8 +243,7 @@ try {
       : `Both disposable databases were deleted after verification.`,
     ``,
   ].join("\n");
-  writeFileSync(evidencePath, evidence, { mode: PREPARED_MODE });
-  chmodSync(evidencePath, PREPARED_MODE);
+  writeSensitive(evidencePath, evidence, SENSITIVE_FILE_MODE);
   console.log(`✓ evidence written to ${evidencePath}`);
 } catch (error) {
   failure = error;
@@ -313,6 +254,6 @@ try {
   } else {
     for (const database of created) console.log(`Kept ${database.name} (${database.uuid}); delete with: npx wrangler d1 delete ${database.name} -y`);
   }
-  console.log(`Local rehearsal artifacts (sensitive, trash when done): ${workDirectory}`);
+  console.log(`Local rehearsal artifacts (sensitive, trash when done): ${temporaryDirectories.join(" ")}`);
   if (failure) process.exitCode = 1;
 }

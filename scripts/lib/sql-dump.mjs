@@ -359,6 +359,10 @@ function escapeRegExp(value) {
  * @param {string[]} values @param {number} blobLength
  */
 function lengthCoupledColumns(ddl, blobColumn, columns, values, blobLength) {
+  // SQLite exposes no pragma for CHECK expressions, so this reads the stored
+  // DDL text (the same text SQLite itself keeps in sqlite_schema). It is a
+  // deliberate best-effort: a value that disagrees with the BLOB length is
+  // left untouched and the target surfaces any real violation.
   if (!ddl) return [];
   // The committed Drizzle DDL qualifies names, e.g.
   // `"table"."size" = length("table"."blob")`; Wrangler's export preserves it.
@@ -418,10 +422,10 @@ export function splitMultiRowStatements(statements) {
  * - Anything else that is too large fails loudly; nothing is silently dropped.
  *
  * @param {string[]} statements
- * @param {{ maxBytes: number, primaryKeys: Map<string, string[]>, tableDdl?: Map<string, string> }} options
+ * @param {{ maxBytes: number, primaryKeys: Map<string, string[]>, tableDdl?: Map<string, string>, maxBlobBytes?: number }} options
  * @returns {{ statements: string[], units: Array<{ statements: string[] }>, chunked: number }}
  */
-export function chunkOversizedStatements(statements, { maxBytes, primaryKeys, tableDdl = new Map() }) {
+export function chunkOversizedStatements(statements, { maxBytes, primaryKeys, tableDdl = new Map(), maxBlobBytes = Number.MAX_SAFE_INTEGER }) {
   /** @type {Array<{ statements: string[] }>} */
   const units = [];
   let chunked = 0;
@@ -431,15 +435,15 @@ export function chunkOversizedStatements(statements, { maxBytes, primaryKeys, ta
       continue;
     }
     chunked += 1;
-    units.push({ statements: chunkStatement(statement, { maxBytes, primaryKeys, tableDdl }) });
+    units.push({ statements: chunkStatement(statement, { maxBytes, primaryKeys, tableDdl, maxBlobBytes }) });
   }
   return { statements: units.flatMap((unit) => unit.statements), units, chunked };
 }
 
-/** @param {string} statement @param {{ maxBytes: number, primaryKeys: Map<string, string[]>, tableDdl: Map<string, string> }} options
+/** @param {string} statement @param {{ maxBytes: number, primaryKeys: Map<string, string[]>, tableDdl: Map<string, string>, maxBlobBytes: number }} options
  * @returns {string[]}
  */
-function chunkStatement(statement, { maxBytes, primaryKeys, tableDdl }) {
+function chunkStatement(statement, { maxBytes, primaryKeys, tableDdl, maxBlobBytes }) {
   const parsed = parseInsert(statement);
   if (!parsed) {
     throw new Error(
@@ -449,7 +453,7 @@ function chunkStatement(statement, { maxBytes, primaryKeys, tableDdl }) {
   if (parsed.tuples.length > 1) {
     const singleRow = parsed.tuples.map((tuple) => buildInsert(parsed.table, parsed.columns, [tuple], parsed.suffix));
     if (singleRow.every((row) => byteLength(row) <= maxBytes)) return singleRow;
-    return singleRow.flatMap((row) => chunkStatement(row, { maxBytes, primaryKeys, tableDdl }));
+    return singleRow.flatMap((row) => chunkStatement(row, { maxBytes, primaryKeys, tableDdl, maxBlobBytes }));
   }
 
   const parsedColumns = parsed.columns;
@@ -460,12 +464,16 @@ function chunkStatement(statement, { maxBytes, primaryKeys, tableDdl }) {
   const oversizedBlobs = values.flatMap((value, index) => {
     const hex = blobLiteralHex(value);
     if (hex === null || byteLength(value) <= maxBytes) return [];
+    const totalBytes = hex.length / 2;
+    if (totalBytes > maxBlobBytes) {
+      throw new Error(`BLOB of ${totalBytes} bytes in ${parsed.table} exceeds D1's ${maxBlobBytes}-byte row limit`);
+    }
     return [{
       index,
       hex,
       column: parsedColumns[index],
-      totalBytes: hex.length / 2,
-      coupled: lengthCoupledColumns(tableDdl.get(parsed.table), parsedColumns[index], parsedColumns, values, hex.length / 2),
+      totalBytes,
+      coupled: lengthCoupledColumns(tableDdl.get(parsed.table), parsedColumns[index], parsedColumns, values, totalBytes),
     }];
   });
   if (oversizedBlobs.length === 0) {

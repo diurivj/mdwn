@@ -181,11 +181,17 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
 
    ```sh
    umask 077
-   node scripts/restore-d1-export.mjs prepare \
+   npm run db:restore -- prepare \
      --export "$EXPORT" \
      --source-name mdwn-db-production --source-uuid 20cbcf9f-0408-48d8-8e51-c8a7385435ef \
+     --source-schema-head 0029_public_morg.sql \
      --out "$PREPARED" --manifest "$MANIFEST"
    ```
+
+   `--source-schema-head` is optional and cross-checks the export's own
+   `d1_migrations` head; the manifest always records that head, the migration
+   list, the installed Wrangler version, the export size/SHA-256, and the
+   operator-declared source name/UUID.
 
    `prepare` is offline and needs no credentials. It parses the export with a
    real SQL tokenizer (never line- or semicolon-splitting), emits all tables,
@@ -202,34 +208,44 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
 
    ```sh
    # Fresh disposable local D1 (default; a private temp state directory).
-   node scripts/restore-d1-export.mjs restore --prepared "$PREPARED" --manifest "$MANIFEST"
+   npm run db:restore -- restore --prepared "$PREPARED" --manifest "$MANIFEST"
 
    # A freshly created disposable remote D1.
-   node scripts/restore-d1-export.mjs restore --prepared "$PREPARED" --manifest "$MANIFEST" \
+   npx --no-install wrangler d1 create mdwn-restore-20261006
+   npm run db:restore -- restore --prepared "$PREPARED" --manifest "$MANIFEST" \
+     --target remote --target-name mdwn-restore-20261006 --target-uuid <uuid>
+
+   # Re-run the read-only checks against an already-restored target.
+   npm run db:restore -- verify --prepared "$PREPARED" --manifest "$MANIFEST" \
      --target remote --target-name mdwn-restore-20261006 --target-uuid <uuid>
    ```
 
    Remote mode resolves the name/UUID through `wrangler d1 info` and refuses
    the committed local, preview, and production bindings, the source database,
-   and an unknown target. A nonempty target additionally requires
-   `--replace-nonempty --confirm-replace <uuid>`; never point this at an
-   existing preview or production database. Each command is applied through
-   the D1 query endpoint as one atomic multi-statement call. Do **not** use
-   `d1 execute --file` for this schema: the import endpoint commits in internal
-   batches, so a deferred foreign-key cycle that spans a batch fails even
-   though the whole import is rolled back. The query endpoint commits one
-   command atomically; the prepared plan never splits a cycle across commands.
+   any name without the `mdwn-restore-` prefix, and any nonempty target. Never
+   point this at an existing preview or production database. Replacement is a
+   delete-and-recreate of the disposable database, never an import over live
+   contents. Each command is applied through the D1 query endpoint as one
+   atomic multi-statement call. Do **not** use `d1 execute --file` for this
+   schema: the import endpoint commits in internal batches, so a deferred
+   foreign-key cycle that spans a batch fails even though the whole import is
+   rolled back. The query endpoint commits one command atomically; the
+   prepared plan never splits a cycle across commands.
 
    Verification is read-only and mandatory: `foreign_keys = 1`, zero
    `foreign_key_check` violations, the 222-object schema inventory, 30
    migration records and the head, per-table row counts and content digests,
    current/authority pointer invariants, and the 22 reviewed query plans. The
    tool reports success only after every check passes and writes a status JSON
-   beside the manifest. A failed or interrupted restore leaves the target
-   empty (or its previous contents) and records `failed`; it is never a silent
-   partial success. Discard incomplete local state with `trash <dir>`; delete
-   and recreate a failed disposable remote D1, or re-run on the same empty
-   target.
+   beside the manifest. Commands are individually atomic, so a failure at
+   command *k* leaves the first *k*-1 commands applied: the tool creates a
+   `_restore_incomplete` marker table before the first command and drops it
+   after the last, so an interrupted or failed restore stays visibly
+   incomplete, records `failed` with the remaining tables, and is never a
+   silent partial success. The target is disposable and bound to no Worker, so
+   it serves no application traffic. Restart by discarding the incomplete
+   local temp state with `trash <dir>`, or deleting and recreating the
+   disposable remote database, then restoring into the fresh target.
 
    Validated limits (Workers Free): 100 KB per statement, 2 MB per row/BLOB,
    500 MB per database, 5 GB import file, 30 s per query, and 7 days of Time
@@ -241,7 +257,7 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
    ```sh
    # Full remote round-trip rehearsal on two disposable databases; deletes
    # only the databases it created and writes sanitized evidence.
-   node scripts/rehearse-d1-restore.mjs [--keep] [--evidence /tmp/evidence.md]
+   npm run db:restore:rehearsal -- [--keep] [--evidence /tmp/evidence.md]
    ```
 
    The rehearsal consumes the account's D1 Free daily row-write quota (shared
@@ -317,6 +333,15 @@ round trip ran through the real `wrangler d1 export` and the restoration tool:
   both databases it had created. The prepared artifacts and the verified
   status JSON from the successful run above are retained as sensitive local
   evidence only.
+- After the Standards/Spec review, the tool creates a `_restore_incomplete`
+  marker table before the first command and drops it after the last, rejects
+  every nonempty target (replacement is delete-and-recreate, never an import
+  over live contents), requires the `mdwn-restore-` name prefix, records the
+  installed Wrangler version and an optional `--source-schema-head` check, and
+  supports a read-only `verify` subcommand. The same retained prepared
+  artifacts re-restored and verified locally through 25 atomic commands with
+  the marker created and dropped; a forced mid-command failure left the marker
+  and a `failed` status with the remaining table listed.
 - Regression coverage: `tests/sql-dump.test.ts`,
   `tests/d1-export-restore.test.ts`, and `tests/d1-restore-rehearsal.test.ts`
   cover the tokenizer, BLOB chunking, the raw-order failure, and a
