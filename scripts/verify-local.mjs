@@ -32,6 +32,7 @@ const STEPS = [
   { name: "Unit and Workers tests", command: "npm", args: ["test"] },
   { name: "Production build", command: "npm", args: ["run", "build"] },
   { name: "D1 migration smoke test (fresh local D1)", command: "npm", args: ["run", "db:smoke"] },
+  { name: "Local D1 export/restore round trip", command: "npm", args: ["run", "db:restore:local"] },
   { name: "Secret-leak check on client bundle", command: "npm", args: ["run", "check:secrets"] },
   {
     name: "Browser tests (chromium, firefox, webkit)",

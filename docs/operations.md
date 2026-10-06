@@ -262,7 +262,10 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
 
    The rehearsal consumes the account's D1 Free daily row-write quota (shared
    with production Cron writes); a quota error aborts it before any restore and
-   the disposable databases are still deleted.
+   the disposable databases are still deleted. Run at most one full remote
+   rehearsal per day, check current usage in the Cloudflare dashboard first,
+   and prefer the local round trip (`npm run db:restore:local`) while iterating
+   on the tooling itself.
 6. Delete only the disposable remote D1 by its recorded name/UUID; trash local
    rehearsal storage. Keep sanitized evidence, not the export, prepared SQL, or
    manifest.

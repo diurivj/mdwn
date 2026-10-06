@@ -22,6 +22,14 @@ Use kebab-case for every file we author — route modules, feature modules, comp
 
 Framework-reserved entry files (`app/root.tsx`, `app/routes.ts`, `app/entry.server.tsx`), generated files (`drizzle/`), vendored data (`vendor/`), skill entry files (`SKILL.md`), and conventional root documents (`AGENTS.md`, `CONTEXT.md`, `README.md`, `NOTES_TO_DISCUSS.md`) keep their required names.
 
+### Reference docs
+
+- `docs/testing.md`: Node/Workers/browser test layout, TypeScript project boundaries, CI output.
+- `docs/operations.md`: retention, D1 query plans, Time Travel, export restoration.
+- `docs/operations/d1-scripting.md`: verified Wrangler/D1 semantics before writing an operational script.
+- `docs/serving-and-security.md`: serving and security model.
+- `CONTEXT.md`: domain vocabulary.
+
 ### Post-review RR8 gate
 
 After every code review, load `.agents/skills/rr8-post-review/SKILL.md` and run it against the same pinned diff before finishing. Report its RR8/stack result separately from Standards and Spec, even when there are no RR8 touchpoints.
@@ -33,3 +41,5 @@ The team is just the maintainer and agents, and `main` is a private Free repo wi
 Merge only after every job in the `CI` workflow passes at the PR's current head; re-check after any push. Queued, skipped, or cancelled jobs are not a pass. CI uses the repository's self-hosted Mac mini; keep it awake and its runner online (see README.md, "CI"). Deployment stays on GitHub-hosted Linux.
 
 Use `npm run verify` for local preflight, not as a replacement for green CI. It refuses a dirty tree or a branch behind `origin/main`. Run `npm ci` first when `package-lock.json` changed.
+
+After pushing the branch or opening/updating the PR, report the commit and PR URL and stop. Check CI when the user asks, or once immediately before merging; the self-hosted runner executes the jobs sequentially, so blocking on `gh pr checks --watch` costs tens of minutes for no new information.

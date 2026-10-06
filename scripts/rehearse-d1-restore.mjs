@@ -1,21 +1,25 @@
 #!/usr/bin/env node
 /**
- * Remote round-trip rehearsal for D1 export restoration (ticket 38).
+ * Round-trip rehearsal for D1 export restoration (ticket 38).
  *
- * Creates two disposable remote D1 databases, seeds a deterministic
- * production-representative synthetic dataset into the source, captures a real
- * `wrangler d1 export`, restores it into the fresh target with
- * `scripts/restore-d1-export.mjs`, verifies source/target/manifest equality,
- * records evidence, and deletes only the two databases it created.
+ * Seeds a deterministic production-representative synthetic dataset into a
+ * source database, captures a real `wrangler d1 export`, restores it into a
+ * fresh target, verifies source/target/manifest equality, and records
+ * evidence.
  *
- *   node scripts/rehearse-d1-restore.mjs [--keep] [--evidence /tmp/evidence.md]
+ *   npm run db:restore:local    # two throwaway local D1 state directories
+ *   npm run db:restore:rehearsal -- [--keep] [--evidence /tmp/evidence.md]
  *
- * The source and target names are generated with a unique suffix and are never
- * the committed local, preview, or production bindings. No real export,
- * credential, key, or payload is used; the dataset is synthetic and the
- * evidence contains identifiers and digests only.
+ * Local mode needs no Cloudflare auth and runs in CI; it is the regression
+ * check for the real Wrangler export/restore path. Remote mode creates two
+ * disposable remote D1 databases with a unique `mdwn-restore-` prefix, deletes
+ * only the databases it created, and consumes the account's shared D1 Free
+ * daily row-write quota.
+ *
+ * No real export, credential, key, or payload is used; the dataset is
+ * synthetic and the evidence contains identifiers and digests only.
  */
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -40,7 +44,7 @@ import {
   writeSensitive,
 } from "./lib/restore-cli-support.mjs";
 import { chunkOversizedStatements, splitMultiRowStatements } from "./lib/sql-dump.mjs";
-import { spawnWrangler } from "./lib/wrangler-targets.mjs";
+import { runWranglerJson, spawnWrangler } from "./lib/wrangler-targets.mjs";
 
 /** @param {string} output @returns {string} */
 function parseCreatedDatabaseId(output) {
@@ -51,11 +55,12 @@ function parseCreatedDatabaseId(output) {
 
 const flags = parseFlags(process.argv.slice(2));
 const keep = flags.get("keep") === true;
+const local = flags.get("local") === true;
 const ciphertextBytes = Number(flags.get("max-ciphertext-bytes") ?? 512 * 1024);
 const suffix = `${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`;
-const sourceName = `mdwn-restore-rehearsal-source-${suffix}`;
-const targetName = `mdwn-restore-rehearsal-target-${suffix}`;
-const evidencePath = String(flags.get("evidence") ?? join(tmpdir(), `mdwn-restore-rehearsal-${suffix}.md`));
+const evidencePath = String(
+  flags.get("evidence") ?? join(tmpdir(), `mdwn-restore-${local ? "local-" : ""}rehearsal-${suffix}.md`),
+);
 const workDirectory = mkdtempSync(join(tmpdir(), "mdwn-restore-rehearsal-"));
 /** @type {string[]} */
 const temporaryDirectories = [workDirectory];
@@ -83,26 +88,15 @@ function deleteDatabase(database) {
   return true;
 }
 
-try {
-  const whoami = runWranglerOrThrow(["whoami"], "wrangler whoami").stdout;
-  const account = /Account ID\s*│\s*([0-9a-f]{32})/.exec(whoami)?.[1] ?? "unknown";
-  console.log(`Account ${account}; rehearsal suffix ${suffix}`);
-
-  const sourceUuid = createDatabase(sourceName);
-  const targetUuid = createDatabase(targetName);
-  const source = createRestoreTarget({ mode: "remote", databaseName: sourceName, databaseId: sourceUuid });
-  const target = createRestoreTarget({ mode: "remote", databaseName: targetName, databaseId: targetUuid });
-  temporaryDirectories.push(source.directory, target.directory);
-  const sourceConfig = source.configPath;
-  const targetConfig = target.configPath;
-
-  runWranglerOrThrow(["d1", "migrations", "apply", "DB", "--remote", "--config", sourceConfig], "source migrations");
-  const { statements } = restoreRehearsalStatements({ maxCiphertextBytes: ciphertextBytes });
-  // The seed reaches the source through the same 100 KB statement limit and
-  // atomic-command transport as a restore, so chunk its max-size BLOBs and
-  // keep each foreign-key cycle inside one command.
+/**
+ * The seed reaches the source through the same 100 KB statement limit and
+ * atomic-command transport as a restore, so chunk its max-size BLOBs and keep
+ * each foreign-key cycle inside one command.
+ * @param {number} maxCiphertextBytes
+ */
+function buildSeedPlan(maxCiphertextBytes) {
+  const { statements } = restoreRehearsalStatements({ maxCiphertextBytes });
   const seedDatabase = openOfflineDatabase();
-  let seedPlan;
   try {
     for (const file of readdirSync("drizzle").filter((name) => name.endsWith(".sql")).sort()) {
       seedDatabase.exec(readFileSync(`drizzle/${file}`, "utf8"));
@@ -118,7 +112,7 @@ try {
       primaryKeys,
       tableDdl: schema.ddl,
     });
-    seedPlan = planRestoreCommands({
+    return planRestoreCommands({
       schemaStatements: [],
       indexStatements: [],
       migrationStatements: [],
@@ -135,46 +129,60 @@ try {
   } finally {
     seedDatabase.close();
   }
-  const seedPath = join(workDirectory, "rehearsal-seed.sql");
-  writeSensitive(seedPath, `PRAGMA defer_foreign_keys=TRUE;\n${seedPlan.orderedStatements.map((statement) => `${statement};`).join("\n")}\n`);
+}
 
-  const sourceRunner = createWranglerRunner({ mode: "remote", configPath: sourceConfig });
-  // The migrated source's representation-immutability trigger rejects the
-  // chunked append updates that a >100 KB ciphertext needs. Capture the exact
-  // reviewed trigger, drop it only around the seed, and reinstall it before
-  // the export; the later manifest check proves the schema is unchanged.
-  const immutableTrigger = sourceRunner.run(
+/**
+ * The migrated source's representation-immutability trigger rejects the
+ * chunked append updates that a >100 KB ciphertext needs. Capture the exact
+ * reviewed trigger, drop it only around the seed, and reinstall it before the
+ * export; the later manifest check proves the schema is unchanged.
+ * @param {{ run: (sql: string) => Array<{ results: Record<string, unknown>[] }> }} runner
+ * @param {ReturnType<typeof buildSeedPlan>} seedPlan
+ * @param {string} workDirectory
+ */
+function seedSource(runner, seedPlan, workDirectory) {
+  writeSensitive(
+    join(workDirectory, "rehearsal-seed.sql"),
+    `PRAGMA defer_foreign_keys=TRUE;\n${seedPlan.orderedStatements.map((statement) => `${statement};`).join("\n")}\n`,
+  );
+  const immutableTrigger = queryRows(
+    runner,
     "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'tree_representation_immutable';",
-  )[0]?.results?.[0]?.sql;
+  )[0]?.sql;
   if (!immutableTrigger) throw new Error("source schema is missing tree_representation_immutable");
-  sourceRunner.run("DROP TRIGGER tree_representation_immutable;");
+  runner.run("DROP TRIGGER tree_representation_immutable;");
   try {
-    for (const command of seedPlan.commands) sourceRunner.run(command);
+    for (const command of seedPlan.commands) runner.run(command);
   } finally {
-    sourceRunner.run(`${immutableTrigger};`);
+    runner.run(`${immutableTrigger};`);
   }
   console.log(`✓ source seeded through ${seedPlan.commands.length} atomic commands`);
-  if (Number(queryRows(sourceRunner, "PRAGMA foreign_keys;")[0]?.foreign_keys) !== 1
-    || queryRows(sourceRunner, "PRAGMA foreign_key_check;").length !== 0) {
+  if (Number(queryRows(runner, "PRAGMA foreign_keys;")[0]?.foreign_keys) !== 1
+    || queryRows(runner, "PRAGMA foreign_key_check;").length !== 0) {
     throw new Error("source rehearsal database has broken foreign keys before export");
   }
-  const sourceSummary = queryRows(
-    sourceRunner,
+  const summary = queryRows(
+    runner,
     `SELECT (SELECT count(*) FROM accounts) AS accounts,
             (SELECT count(*) FROM vault_nodes WHERE parent_node_id IS NULL) AS roots,
             (SELECT count(*) FROM import_commits) AS markers,
             (SELECT count(*) FROM import_sessions) AS staging_sessions,
             (SELECT max(ciphertext_size) FROM file_representations) AS max_ciphertext;`,
   )[0] ?? {};
-  console.log(`✓ source seeded: ${JSON.stringify(sourceSummary)}`);
+  console.log(`✓ source seeded: ${JSON.stringify(summary)}`);
+}
 
+/** @param {string} mode @param {string} sourceConfig @param {string} sourceName @param {string} sourceUuid */
+function exportAndPrepare(mode, sourceConfig, sourceName, sourceUuid) {
   const exportPath = join(workDirectory, "rehearsal-export.sql");
-  runWranglerOrThrow(["d1", "export", "DB", "--remote", "--config", sourceConfig, "--output", exportPath, "-y"], "source export");
+  runWranglerOrThrow(
+    ["d1", "export", "DB", mode === "local" ? "--local" : "--remote", "--config", sourceConfig, "--output", exportPath, "-y"],
+    "source export",
+  );
   const bookmark = (() => {
-    const result = spawnWrangler(["d1", "time-travel", "info", "DB", "--config", sourceConfig, "--json"]);
-    if (result.status !== 0) return null;
+    if (mode === "local") return null;
     try {
-      const info = JSON.parse(result.stdout);
+      const info = runWranglerJson(["d1", "time-travel", "info", "DB", "--config", sourceConfig], "time-travel info");
       return info.bookmark ?? info.current_bookmark ?? null;
     } catch {
       return null;
@@ -182,46 +190,55 @@ try {
   })();
   const exportSql = readFileSync(exportPath, "utf8");
   console.log(`✓ export captured: ${Buffer.byteLength(exportSql)} bytes${bookmark ? `, bookmark ${bookmark}` : ""}`);
-
   const prepared = prepareRestore({
     exportSql,
     sourceName,
     sourceUuid,
     wranglerVersion: /wrangler\s+([\d.]+)/.exec(runWranglerOrThrow(["--version"], "wrangler version").stdout)?.[1] ?? null,
   });
-  const preparedPath = join(workDirectory, "rehearsal-prepared.sql");
-  const manifestPath = join(workDirectory, "rehearsal-manifest.json");
-  writeSensitive(preparedPath, prepared.preparedSql);
-  writeSensitive(manifestPath, `${JSON.stringify(prepared.manifest, null, 2)}\n`);
+  writeSensitive(join(workDirectory, "rehearsal-prepared.sql"), prepared.preparedSql);
+  writeSensitive(join(workDirectory, "rehearsal-manifest.json"), `${JSON.stringify(prepared.manifest, null, 2)}\n`);
   console.log(
     `✓ prepared ${prepared.manifest.stats.dataStatements} data statements (${prepared.manifest.stats.chunkedStatements} chunked), head ${prepared.manifest.schema.head}`,
   );
+  return { exportSql, prepared, bookmark };
+}
 
-  const targetRunner = createWranglerRunner({ mode: "remote", configPath: targetConfig });
-  const restoreCommands = assembleRestoreCommands(prepared.preparedSql, prepared.manifest);
-  for (const command of restoreCommands) targetRunner.run(command);
-  console.log(`✓ target restored through ${restoreCommands.length} atomic commands`);
+/**
+ * @param {{ run: (sql: string) => Array<{ results: Record<string, unknown>[] }> }} targetRunner
+ * @param {{ run: (sql: string) => Array<{ results: Record<string, unknown>[] }> }} sourceRunner
+ * @param {ReturnType<typeof prepareRestore>} prepared
+ */
+function restoreAndVerify(targetRunner, sourceRunner, prepared) {
+  const commands = assembleRestoreCommands(prepared.preparedSql, prepared.manifest);
+  for (const command of commands) targetRunner.run(command);
+  console.log(`✓ target restored through ${commands.length} atomic commands`);
   const targetCheck = verifyRestoreTarget(targetRunner, prepared.manifest);
   if (!targetCheck.ok) throw new Error(`target verification failed: ${targetCheck.problems.join("; ")}`);
   console.log("✓ target verified against the manifest");
-
   // The source must satisfy the same manifest: this proves source == target,
   // not merely target == the locally prepared file.
-  const sourceManifestCheck = verifyRestoreTarget(sourceRunner, prepared.manifest);
-  if (!sourceManifestCheck.ok) throw new Error(`source verification failed: ${sourceManifestCheck.problems.join("; ")}`);
+  const sourceCheck = verifyRestoreTarget(sourceRunner, prepared.manifest);
+  if (!sourceCheck.ok) throw new Error(`source verification failed: ${sourceCheck.problems.join("; ")}`);
   console.log("✓ source verified against the same manifest (source == target)");
+  return targetCheck;
+}
 
+/**
+ * @param {{ mode: "local" | "remote", sourceLabel: string, targetLabel: string, exportSql: string, bookmark: string | null, prepared: ReturnType<typeof prepareRestore>, targetCheck: { checks: { ok: boolean, name: string, detail: string }[] } }} options
+ */
+function writeEvidence({ mode, sourceLabel, targetLabel, exportSql, bookmark, prepared, targetCheck }) {
   const tableLines = prepared.manifest.tables
     .filter((table) => table.count > 0)
     .map((table) => `| ${table.name} | ${table.count} | ${table.digest.slice(0, 16)}… |`)
     .join("\n");
   const evidence = [
-    `# D1 export-restoration rehearsal evidence`,
+    `# D1 export-restoration ${mode} rehearsal evidence`,
     ``,
     `- Date: ${new Date().toISOString()}`,
     `- Wrangler: ${prepared.manifest.wranglerVersion ?? "unknown"}`,
-    `- Source: ${sourceName} / ${sourceUuid}${bookmark ? ` (bookmark ${bookmark})` : ""}`,
-    `- Target: ${targetName} / ${targetUuid}`,
+    `- Source: ${sourceLabel}${bookmark ? ` (bookmark ${bookmark})` : ""}`,
+    `- Target: ${targetLabel}`,
     `- Export: ${Buffer.byteLength(exportSql)} bytes, sha256 ${prepared.manifest.export.sha256}`,
     `- Prepared: ${prepared.manifest.prepared.bytes} bytes, sha256 ${prepared.manifest.prepared.sha256}, ${prepared.manifest.prepared.chunkedStatements} chunked statement(s)`,
     `- Schema head: ${prepared.manifest.schema.head}; ${prepared.manifest.schema.objects.length} schema objects; ${prepared.manifest.schema.migrations.length} migration records`,
@@ -236,24 +253,72 @@ try {
     `| --- | ---: | --- |`,
     tableLines,
     ``,
-    `## Cleanup`,
-    ``,
-    keep
-      ? `Databases kept for inspection: ${sourceName} (${sourceUuid}), ${targetName} (${targetUuid}).`
-      : `Both disposable databases were deleted after verification.`,
-    ``,
   ].join("\n");
   writeSensitive(evidencePath, evidence, SENSITIVE_FILE_MODE);
   console.log(`✓ evidence written to ${evidencePath}`);
+}
+
+function runLocalRehearsal() {
+  const source = createRestoreTarget({ mode: "local", databaseName: "mdwn-restore-local-source", databaseId: "00000000-0000-4000-8000-0000000000a1" });
+  const target = createRestoreTarget({ mode: "local", databaseName: "mdwn-restore-local-target", databaseId: "00000000-0000-4000-8000-0000000000a2" });
+  temporaryDirectories.push(source.directory, target.directory);
+  console.log(`Local rehearsal ${suffix} (no Cloudflare auth, no remote resources)`);
+  runWranglerOrThrow(["d1", "migrations", "apply", "DB", "--local", "--config", source.configPath], "source migrations");
+  const sourceRunner = createWranglerRunner({ mode: "local", configPath: source.configPath });
+  seedSource(sourceRunner, buildSeedPlan(ciphertextBytes), workDirectory);
+  const { exportSql, prepared, bookmark } = exportAndPrepare("local", source.configPath, "mdwn-restore-local-source", source.databaseId);
+  const targetRunner = createWranglerRunner({ mode: "local", configPath: target.configPath });
+  const targetCheck = restoreAndVerify(targetRunner, sourceRunner, prepared);
+  writeEvidence({
+    mode: "local",
+    sourceLabel: `disposable local state ${source.statePath}`,
+    targetLabel: `disposable local state ${target.statePath}`,
+    exportSql,
+    bookmark,
+    prepared,
+    targetCheck,
+  });
+}
+
+function runRemoteRehearsal() {
+  const whoami = runWranglerOrThrow(["whoami"], "wrangler whoami").stdout;
+  const account = /Account ID\s*│\s*([0-9a-f]{32})/.exec(whoami)?.[1] ?? "unknown";
+  const sourceName = `mdwn-restore-rehearsal-source-${suffix}`;
+  const targetName = `mdwn-restore-rehearsal-target-${suffix}`;
+  console.log(`Account ${account}; remote rehearsal suffix ${suffix}`);
+  const sourceUuid = createDatabase(sourceName);
+  const targetUuid = createDatabase(targetName);
+  const source = createRestoreTarget({ mode: "remote", databaseName: sourceName, databaseId: sourceUuid });
+  const target = createRestoreTarget({ mode: "remote", databaseName: targetName, databaseId: targetUuid });
+  temporaryDirectories.push(source.directory, target.directory);
+  runWranglerOrThrow(["d1", "migrations", "apply", "DB", "--remote", "--config", source.configPath], "source migrations");
+  const sourceRunner = createWranglerRunner({ mode: "remote", configPath: source.configPath });
+  seedSource(sourceRunner, buildSeedPlan(ciphertextBytes), workDirectory);
+  const { exportSql, prepared, bookmark } = exportAndPrepare("remote", source.configPath, sourceName, sourceUuid);
+  const targetRunner = createWranglerRunner({ mode: "remote", configPath: target.configPath });
+  const targetCheck = restoreAndVerify(targetRunner, sourceRunner, prepared);
+  writeEvidence({ mode: "remote", sourceLabel: `${sourceName} / ${sourceUuid}`, targetLabel: `${targetName} / ${targetUuid}`, exportSql, bookmark, prepared, targetCheck });
+}
+
+try {
+  if (local) runLocalRehearsal();
+  else runRemoteRehearsal();
 } catch (error) {
   failure = error;
   console.error(`✘ rehearsal failed: ${error instanceof Error ? error.message : String(error)}`);
 } finally {
-  if (!keep) {
+  if (!local && !keep) {
     for (const database of created.reverse()) deleteDatabase(database);
-  } else {
+  } else if (!local) {
     for (const database of created) console.log(`Kept ${database.name} (${database.uuid}); delete with: npx wrangler d1 delete ${database.name} -y`);
   }
-  console.log(`Local rehearsal artifacts (sensitive, trash when done): ${temporaryDirectories.join(" ")}`);
+  // A failed run keeps its temporary state for inspection; a successful local
+  // run removes it so CI leaves nothing behind.
+  if (local && !keep && !failure) {
+    for (const directory of temporaryDirectories) rmSync(directory, { recursive: true, force: true });
+    console.log(`✓ removed local rehearsal state`);
+  } else {
+    console.log(`Local rehearsal artifacts (sensitive, trash when done): ${temporaryDirectories.join(" ")}`);
+  }
   if (failure) process.exitCode = 1;
 }

@@ -56,3 +56,21 @@ export function runWrangler(args, label) {
   }
   return r;
 }
+
+/**
+ * Run Wrangler with `--json` and return the parsed stdout, throwing on a
+ * non-zero exit or non-JSON output. Scripted callers get one place that
+ * handles the banner-free output and the raised `maxBuffer`.
+ * @param {string[]} args @param {string} label @returns {any}
+ */
+export function runWranglerJson(args, label) {
+  const result = spawnWrangler([...args, "--json"]);
+  if (result.status !== 0) {
+    throw new Error(`${label} failed: ${(result.stderr || result.stdout || "").trim()}`);
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`${label} returned non-JSON output: ${result.stdout.slice(0, 200)}`);
+  }
+}

@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { spawnWrangler } from "./wrangler-targets.mjs";
+import { runWranglerJson, spawnWrangler } from "./wrangler-targets.mjs";
 
 /** Prepared SQL, manifests, status files, and evidence are sensitive. */
 export const SENSITIVE_FILE_MODE = 0o600;
@@ -86,27 +86,11 @@ export function createWranglerRunner({ mode, configPath }) {
   return {
     /** @param {string} sql */
     run(sql) {
-      const result = spawnWrangler([
-        "d1",
-        "execute",
-        "DB",
-        mode === "local" ? "--local" : "--remote",
-        "--config",
-        configPath,
-        "--json",
-        "--command",
-        sql,
-      ]);
-      if (result.status !== 0) {
-        throw new Error(`D1 query failed: ${(result.stderr || result.stdout || "").trim()}`);
-      }
       /** @type {Array<{ results?: Array<Record<string, unknown>> }>} */
-      let parsed;
-      try {
-        parsed = JSON.parse(result.stdout);
-      } catch {
-        throw new Error(`D1 query returned non-JSON output: ${result.stdout.slice(0, 200)}`);
-      }
+      const parsed = runWranglerJson(
+        ["d1", "execute", "DB", mode === "local" ? "--local" : "--remote", "--config", configPath, "--command", sql],
+        "D1 query",
+      );
       return parsed.map((entry) => ({ results: entry.results ?? [] }));
     },
   };
