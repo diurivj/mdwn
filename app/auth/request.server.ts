@@ -31,18 +31,28 @@ export async function hasEmptyBody(request: Request): Promise<boolean> {
       if (done) return true;
       if (value.byteLength) return false;
     }
-  } catch { return false; }
-  finally { await reader.cancel(); }
+  } catch {
+    return false;
+  } finally {
+    await reader.cancel();
+  }
 }
 
 /** WebAuthn JSON is bounded protocol input, never an arbitrary upload. */
-export async function readAuthJsonText(request: Request, maxBytes = 64 * 1024): Promise<{ raw: string; value: unknown }> {
+export async function readAuthJsonText(
+  request: Request,
+  maxBytes = 64 * 1024,
+): Promise<{ raw: string; value: unknown }> {
   if (!request.headers.get("content-type")?.startsWith("application/json")) {
     throw new AuthRequestError(400, "bad_request");
   }
   const declaredLength = Number(request.headers.get("content-length"));
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1536 * 1024 ||
-      (Number.isFinite(declaredLength) && declaredLength > maxBytes)) {
+  if (
+    !Number.isSafeInteger(maxBytes) ||
+    maxBytes < 1 ||
+    maxBytes > 1536 * 1024 ||
+    (Number.isFinite(declaredLength) && declaredLength > maxBytes)
+  ) {
     throw new AuthRequestError(400, "bad_request");
   }
 

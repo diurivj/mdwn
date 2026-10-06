@@ -70,24 +70,79 @@ export const cases = [
     name: "rejects the locked segment profile boundaries",
     run() {
       for (const input of [
-        "", ".", "..", "a\u0000b", "a/b", "a\\b", "a<b", "a>b", "a:b", "a\"b",
-        "a|b", "a?b", "a*b", "trailing ", "trailing.", "a\u202Eb", "CON", "con.txt",
-        "CON .txt", "PRN.md", "AUX", "NUL", "COM1", "com9.log", "LPT1", "lpt9.txt",
-        "\u007f", "\u0085", "\u009f", "a".repeat(256),
+        "",
+        ".",
+        "..",
+        "a\u0000b",
+        "a/b",
+        "a\\b",
+        "a<b",
+        "a>b",
+        "a:b",
+        'a"b',
+        "a|b",
+        "a?b",
+        "a*b",
+        "trailing ",
+        "trailing.",
+        "a\u202Eb",
+        "CON",
+        "con.txt",
+        "CON .txt",
+        "PRN.md",
+        "AUX",
+        "NUL",
+        "COM1",
+        "com9.log",
+        "LPT1",
+        "lpt9.txt",
+        "\u007f",
+        "\u0085",
+        "\u009f",
+        "a".repeat(256),
       ]) {
         const expected = input.length > 255 && !input.includes("\u0000") ? "too-long" : undefined;
         if (expected) expectNamespaceError(() => canonicalizeSegment(input), expected);
-        else expectNamespaceError(() => canonicalizeSegment(input),
-          input === "" ? "empty" :
-          input === "." || input === ".." ? "dot-segment" :
-          input.endsWith(" ") || input.endsWith(".") ? "trailing-space-or-dot" :
-          input.includes("\u202E") ? "bidi-control" :
-          ["CON", "con.txt", "CON .txt", "PRN.md", "AUX", "NUL", "COM1", "com9.log", "LPT1", "lpt9.txt"].includes(input)
-            ? "device-name" : "forbidden-character");
+        else
+          expectNamespaceError(
+            () => canonicalizeSegment(input),
+            input === ""
+              ? "empty"
+              : input === "." || input === ".."
+                ? "dot-segment"
+                : input.endsWith(" ") || input.endsWith(".")
+                  ? "trailing-space-or-dot"
+                  : input.includes("\u202E")
+                    ? "bidi-control"
+                    : [
+                          "CON",
+                          "con.txt",
+                          "CON .txt",
+                          "PRN.md",
+                          "AUX",
+                          "NUL",
+                          "COM1",
+                          "com9.log",
+                          "LPT1",
+                          "lpt9.txt",
+                        ].includes(input)
+                      ? "device-name"
+                      : "forbidden-character",
+          );
       }
       for (const input of [
-        "\u061C", "\u200E", "\u200F", "\u202A", "\u202B", "\u202C", "\u202D", "\u202E",
-        "\u2066", "\u2067", "\u2068", "\u2069",
+        "\u061C",
+        "\u200E",
+        "\u200F",
+        "\u202A",
+        "\u202B",
+        "\u202C",
+        "\u202D",
+        "\u202E",
+        "\u2066",
+        "\u2067",
+        "\u2068",
+        "\u2069",
       ]) {
         expectNamespaceError(() => canonicalizeSegment(input), "bidi-control");
       }
@@ -149,13 +204,16 @@ export const cases = [
           { sourcePath: "d/env-source", requestedName: ".env" },
         ],
       });
-      assertDeepEqual(allocated.map(({ display, generated }) => ({ display, generated })), [
-        { display: "archive.tar (2).gz", generated: true },
-        { display: "report (2).md", generated: false },
-        { display: "report (4).md", generated: true },
-        { display: "draft (2).md", generated: true },
-        { display: ".env (2)", generated: true },
-      ]);
+      assertDeepEqual(
+        allocated.map(({ display, generated }) => ({ display, generated })),
+        [
+          { display: "archive.tar (2).gz", generated: true },
+          { display: "report (2).md", generated: false },
+          { display: "report (4).md", generated: true },
+          { display: "draft (2).md", generated: true },
+          { display: ".env (2)", generated: true },
+        ],
+      );
     },
   },
   {
@@ -166,22 +224,40 @@ export const cases = [
         { sourcePath: "a/draft", requestedName: "draft.md" },
       ];
       const first = allocateKeepBothNames(["draft.md"], requests);
-      assertDeepEqual(first.map((item) => item.display), ["draft (3).md", "draft (2).md"]);
-      expectNamespaceError(() => allocateKeepBothNames(["existing"], [
-        { sourcePath: "A/file", requestedName: "one" },
-        { sourcePath: "a/FILE", requestedName: "two" },
-      ]), "duplicate-source-path");
+      assertDeepEqual(
+        first.map((item) => item.display),
+        ["draft (3).md", "draft (2).md"],
+      );
+      expectNamespaceError(
+        () =>
+          allocateKeepBothNames(
+            ["existing"],
+            [
+              { sourcePath: "A/file", requestedName: "one" },
+              { sourcePath: "a/FILE", requestedName: "two" },
+            ],
+          ),
+        "duplicate-source-path",
+      );
 
-      const forward = allocateKeepBothNames([], [
-        { sourcePath: "z/file.md", requestedName: "draft.md" },
-        { sourcePath: "a/file.md", requestedName: "draft.md" },
-      ]);
-      const reversed = allocateKeepBothNames([], [
-        { sourcePath: "a/file.md", requestedName: "draft.md" },
-        { sourcePath: "z/file.md", requestedName: "draft.md" },
-      ]);
+      const forward = allocateKeepBothNames(
+        [],
+        [
+          { sourcePath: "z/file.md", requestedName: "draft.md" },
+          { sourcePath: "a/file.md", requestedName: "draft.md" },
+        ],
+      );
+      const reversed = allocateKeepBothNames(
+        [],
+        [
+          { sourcePath: "a/file.md", requestedName: "draft.md" },
+          { sourcePath: "z/file.md", requestedName: "draft.md" },
+        ],
+      );
       const byPath = (items: readonly { sourcePath: string; display: string }[]) =>
-        items.slice().sort((a, b) => a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0)
+        items
+          .slice()
+          .sort((a, b) => (a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0))
           .map(({ sourcePath, display }) => ({ sourcePath, display }));
       assertDeepEqual(byPath(forward), byPath(reversed));
       assertDeepEqual(byPath(forward), [
@@ -194,7 +270,10 @@ export const cases = [
     name: "reports a generated candidate that exceeds the segment profile",
     run() {
       const long = "a".repeat(255);
-      expectNamespaceError(() => allocateKeepBothNames([long], [{ sourcePath: "long", requestedName: long }]), "generated-name-invalid");
+      expectNamespaceError(
+        () => allocateKeepBothNames([long], [{ sourcePath: "long", requestedName: long }]),
+        "generated-name-invalid",
+      );
     },
   },
 ] satisfies Array<{ name: string; run: () => void }>;

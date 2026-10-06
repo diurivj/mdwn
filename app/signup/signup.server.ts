@@ -1,4 +1,8 @@
-import { generateRegistrationOptions, verifyRegistrationResponse, type RegistrationResponseJSON } from "@simplewebauthn/server";
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  type RegistrationResponseJSON,
+} from "@simplewebauthn/server";
 
 import { assertSessionConfiguration, prepareBoundSession, signSessionId } from "~/auth/session.server";
 import { inspectEnvelope } from "~/shared/crypto/enc-v1";
@@ -10,7 +14,14 @@ import { honeypotFailureResponse } from "~/shared/security/honeypot";
 import { prepareRegistrationSuccess } from "~/shared/security/registration-success.server";
 import { AbuseControlUnavailableError } from "~/shared/security/abuse-control.server";
 
-import { bindingMessage, decodeBytes, encodeBytes, transcriptDigest, verifyProofOfWork, type SignupTranscript } from "../shared/signup/protocol";
+import {
+  bindingMessage,
+  decodeBytes,
+  encodeBytes,
+  transcriptDigest,
+  verifyProofOfWork,
+  type SignupTranscript,
+} from "../shared/signup/protocol";
 
 const CHALLENGE_MS = 5 * 60_000;
 const encoder = new TextEncoder();
@@ -40,7 +51,9 @@ type CeremonyRow = {
   expires_at: number;
 };
 
-function originFor(request: Request): string { return new URL(request.url).origin; }
+function originFor(request: Request): string {
+  return new URL(request.url).origin;
+}
 function failed(): Response {
   return Response.json({ error: "request_failed" }, { status: 400, headers: { "Cache-Control": "no-store" } });
 }
@@ -54,17 +67,22 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return diff === 0;
 }
 function isV7(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+  return (
+    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+  );
 }
 function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 /** No server-readable Account material exists before this rate-limited start. */
 export async function beginSignupChallenge(request: Request, env: Env): Promise<Response> {
   assertSessionConfiguration(env);
   const limit = await enforceRateLimit({
-    db: env.DB, request, action: "registration.challenge", hmacSecret: env.ABUSE_HMAC_SECRET,
+    db: env.DB,
+    request,
+    action: "registration.challenge",
+    hmacSecret: env.ABUSE_HMAC_SECRET,
   });
   if (!limit.allowed) return rateLimitResponse(limit);
   const id = crypto.randomUUID();
@@ -79,36 +97,63 @@ export async function beginSignupChallenge(request: Request, env: Env): Promise<
 
 /** Consumes a PoW submission (including an invalid nonce) before issuing WebAuthn options. */
 export async function beginSignupRegistration(
-  request: Request, env: Env, challengeId: string, nonce: string, transcript: unknown,
+  request: Request,
+  env: Env,
+  challengeId: string,
+  nonce: string,
+  transcript: unknown,
 ): Promise<Response> {
   const row = await createDb(env.DB).get<ChallengeRow>(sql`
     DELETE FROM registration_challenges WHERE id = ${challengeId} AND origin = ${originFor(request)}
     RETURNING challenge, origin, expires_at
   `);
-  if (!row || row.expires_at <= Date.now() || !await verifyProofOfWork(row.challenge, nonce)) return failed();
+  if (!row || row.expires_at <= Date.now() || !(await verifyProofOfWork(row.challenge, nonce))) return failed();
   const submitted = record(transcript);
-  if (!submitted || submitted.registrationChallenge !== row.challenge || submitted.proofNonce !== nonce ||
-      !isV7(submitted.accountId) || !isV7(submitted.rootDirectoryId) || !isV7(submitted.deviceId) ||
-      submitted.registryEpoch !== 1 || submitted.capsuleGeneration !== 1) return failed();
+  if (
+    !submitted ||
+    submitted.registrationChallenge !== row.challenge ||
+    submitted.proofNonce !== nonce ||
+    !isV7(submitted.accountId) ||
+    !isV7(submitted.rootDirectoryId) ||
+    !isV7(submitted.deviceId) ||
+    submitted.registryEpoch !== 1 ||
+    submitted.capsuleGeneration !== 1
+  )
+    return failed();
 
   try {
     const canonical = submitted as unknown as SignupTranscript;
     const challenge = await transcriptDigest(canonical);
     const transportPublicKey = await crypto.subtle.importKey(
-      "raw", decodeBytes(canonical.transportPublicKey, 65), { name: "ECDH", namedCurve: "P-256" }, true, [],
+      "raw",
+      decodeBytes(canonical.transportPublicKey, 65),
+      { name: "ECDH", namedCurve: "P-256" },
+      true,
+      [],
     );
     await crypto.subtle.importKey(
-      "raw", decodeBytes(canonical.assertionPublicKey, 65), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"],
+      "raw",
+      decodeBytes(canonical.assertionPublicKey, 65),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
     );
     const secret = crypto.getRandomValues(new Uint8Array(32));
-    const encryptedChallenge = await sealToRecipient(secret, transportPublicKey,
-      TRANSPORT_CONTEXT(canonical.accountId, canonical.deviceId));
+    const encryptedChallenge = await sealToRecipient(
+      secret,
+      transportPublicKey,
+      TRANSPORT_CONTEXT(canonical.accountId, canonical.deviceId),
+    );
     const challengeHash = new Uint8Array(await crypto.subtle.digest("SHA-256", secret));
     const rpId = new URL(request.url).hostname;
     const options = await generateRegistrationOptions({
-      rpName: "mdwn", rpID: rpId,
-      userID: encoder.encode(canonical.accountId), userName: "mdwn Account", userDisplayName: "mdwn",
-      attestationType: "none", authenticatorSelection: { residentKey: "required", userVerification: "required" },
+      rpName: "mdwn",
+      rpID: rpId,
+      userID: encoder.encode(canonical.accountId),
+      userName: "mdwn Account",
+      userDisplayName: "mdwn",
+      attestationType: "none",
+      authenticatorSelection: { residentKey: "required", userVerification: "required" },
       challenge: decodeBytes(challenge, 32),
     });
     const id = crypto.randomUUID();
@@ -119,26 +164,50 @@ export async function beginSignupRegistration(
       VALUES (${id}, ${challenge}, 'signup', NULL, NULL, ${originFor(request)}, ${rpId},
         ${now + CHALLENGE_MS}, ${now}, ${challengeHash})
     `);
-    return Response.json({
-      challengeId: id, options, transportChallenge: encodeBytes(encryptedChallenge),
-    }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json(
+      {
+        challengeId: id,
+        options,
+        transportChallenge: encodeBytes(encryptedChallenge),
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch {
     return failed();
   }
 }
 
-function checkEnvelope(input: Uint8Array, expected: {
-  purpose: string; accountId: string; objectId: string; keyId: string; recipientId?: string;
-}): boolean {
+function checkEnvelope(
+  input: Uint8Array,
+  expected: {
+    purpose: string;
+    accountId: string;
+    objectId: string;
+    keyId: string;
+    recipientId?: string;
+  },
+): boolean {
   const header = inspectEnvelope(input);
-  return header.context.purpose === expected.purpose && header.context.vaultId === expected.accountId &&
-    header.context.objectId === expected.objectId && header.context.keyId === expected.keyId &&
-    header.context.keyEpoch === 1 && header.context.revision === 1 &&
-    header.context.recipientId === expected.recipientId;
+  return (
+    header.context.purpose === expected.purpose &&
+    header.context.vaultId === expected.accountId &&
+    header.context.objectId === expected.objectId &&
+    header.context.keyId === expected.keyId &&
+    header.context.keyEpoch === 1 &&
+    header.context.revision === 1 &&
+    header.context.recipientId === expected.recipientId
+  );
 }
 
-async function verifiedMaterial(transcript: SignupTranscript, input: unknown): Promise<{
-  root: Uint8Array; enrollment: Uint8Array; capsule: Uint8Array; profile: Uint8Array; salt: Uint8Array;
+async function verifiedMaterial(
+  transcript: SignupTranscript,
+  input: unknown,
+): Promise<{
+  root: Uint8Array;
+  enrollment: Uint8Array;
+  capsule: Uint8Array;
+  profile: Uint8Array;
+  salt: Uint8Array;
 } | null> {
   const value = record(input) as SignupMaterial | null;
   if (!value) return null;
@@ -149,18 +218,52 @@ async function verifiedMaterial(transcript: SignupTranscript, input: unknown): P
     const profile = decodeBytes(value.encryptedProfile);
     if ([root, enrollment, capsule, profile].some((bytes) => bytes.length < 48 || bytes.length > 8192)) return null;
     const { accountId, rootDirectoryId, deviceId } = transcript;
-    if (!checkEnvelope(root, { purpose: "vault-recovery", accountId, objectId: rootDirectoryId, keyId: rootDirectoryId }) ||
-      !checkEnvelope(enrollment, { purpose: "device-enrollment", accountId, objectId: deviceId, keyId: deviceId, recipientId: deviceId }) ||
-      !checkEnvelope(capsule, { purpose: "recovery-capsule", accountId, objectId: "vault-recovery-capsule", keyId: "vault-recovery-capsule" }) ||
-      !checkEnvelope(profile, { purpose: "account-profile", accountId, objectId: "account-profile", keyId: "vault-root" })) return null;
+    if (
+      !checkEnvelope(root, {
+        purpose: "vault-recovery",
+        accountId,
+        objectId: rootDirectoryId,
+        keyId: rootDirectoryId,
+      }) ||
+      !checkEnvelope(enrollment, {
+        purpose: "device-enrollment",
+        accountId,
+        objectId: deviceId,
+        keyId: deviceId,
+        recipientId: deviceId,
+      }) ||
+      !checkEnvelope(capsule, {
+        purpose: "recovery-capsule",
+        accountId,
+        objectId: "vault-recovery-capsule",
+        keyId: "vault-recovery-capsule",
+      }) ||
+      !checkEnvelope(profile, {
+        purpose: "account-profile",
+        accountId,
+        objectId: "account-profile",
+        keyId: "vault-root",
+      })
+    )
+      return null;
     const salt = inspectEnvelope(capsule).salt;
     if (!salt || !bytesEqual(salt, decodeBytes(transcript.recoverySalt, 32))) return null;
-    const digests = await Promise.all([root, enrollment, capsule, profile].map(async (bytes) =>
-      encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))));
-    if (digests[0] !== transcript.rootRecoveryEnvelopeDigest || digests[1] !== transcript.enrollmentEnvelopeDigest ||
-      digests[2] !== transcript.capsuleDigest || digests[3] !== transcript.profileDigest) return null;
+    const digests = await Promise.all(
+      [root, enrollment, capsule, profile].map(async (bytes) =>
+        encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))),
+      ),
+    );
+    if (
+      digests[0] !== transcript.rootRecoveryEnvelopeDigest ||
+      digests[1] !== transcript.enrollmentEnvelopeDigest ||
+      digests[2] !== transcript.capsuleDigest ||
+      digests[3] !== transcript.profileDigest
+    )
+      return null;
     return { root, enrollment, capsule, profile, salt };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** Verify both device keys, the same canonical WebAuthn transcript, and the opaque material before insertion. */
@@ -175,31 +278,55 @@ export async function completeSignup(request: Request, env: Env, body: unknown):
     RETURNING challenge, origin, rp_id, transport_challenge_hash, expires_at
   `);
   if (!row || row.expires_at <= Date.now()) return failed();
-  if (!payload || typeof payload.honeypot !== "string" || payload.honeypot.length !== 0) return honeypotFailureResponse();
+  if (!payload || typeof payload.honeypot !== "string" || payload.honeypot.length !== 0)
+    return honeypotFailureResponse();
   let successQuota: Awaited<ReturnType<typeof prepareRegistrationSuccess>> | undefined;
   try {
     const transcript = payload.transcript as SignupTranscript;
-    if (!isV7(transcript?.accountId) || !isV7(transcript.rootDirectoryId) || !isV7(transcript.deviceId) ||
-      transcript.registryEpoch !== 1 || transcript.capsuleGeneration !== 1 ||
-      row.challenge !== await transcriptDigest(transcript)) return failed();
+    if (
+      !isV7(transcript?.accountId) ||
+      !isV7(transcript.rootDirectoryId) ||
+      !isV7(transcript.deviceId) ||
+      transcript.registryEpoch !== 1 ||
+      transcript.capsuleGeneration !== 1 ||
+      row.challenge !== (await transcriptDigest(transcript))
+    )
+      return failed();
     const material = await verifiedMaterial(transcript, payload.material);
-    if (!material || !Array.isArray(transcript.recoveryCodeHashes) || transcript.recoveryCodeHashes.length !== 10 ||
+    if (
+      !material ||
+      !Array.isArray(transcript.recoveryCodeHashes) ||
+      transcript.recoveryCodeHashes.length !== 10 ||
       new Set(transcript.recoveryCodeHashes).size !== 10 ||
-      transcript.recoveryCodeHashes.some((code) => typeof code !== "string" || decodeBytes(code, 32).length !== 32)) return failed();
+      transcript.recoveryCodeHashes.some((code) => typeof code !== "string" || decodeBytes(code, 32).length !== 32)
+    )
+      return failed();
     const transportProof = decodeBytes(payload.transportProof as string, 32);
     const transportHash = new Uint8Array(await crypto.subtle.digest("SHA-256", transportProof));
     if (!bytesEqual(transportHash, new Uint8Array(row.transport_challenge_hash))) return failed();
     const assertionPublicKey = decodeBytes(transcript.assertionPublicKey, 65);
     const assertionKey = await crypto.subtle.importKey(
-      "raw", assertionPublicKey, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"],
+      "raw",
+      assertionPublicKey,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
     );
-    if (!await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" }, assertionKey,
-      decodeBytes(payload.bindingSignature as string, 64), new Uint8Array(await bindingMessage(transcript)),
-    )) return failed();
+    if (
+      !(await crypto.subtle.verify(
+        { name: "ECDSA", hash: "SHA-256" },
+        assertionKey,
+        decodeBytes(payload.bindingSignature as string, 64),
+        new Uint8Array(await bindingMessage(transcript)),
+      ))
+    )
+      return failed();
     const response = payload.response as RegistrationResponseJSON;
     const verification = await verifyRegistrationResponse({
-      response, expectedChallenge: row.challenge, expectedOrigin: row.origin, expectedRPID: row.rp_id,
+      response,
+      expectedChallenge: row.challenge,
+      expectedOrigin: row.origin,
+      expectedRPID: row.rp_id,
       requireUserVerification: true,
     });
     if (!verification.verified || verification.registrationInfo.credential.id !== response?.id) return failed();
@@ -237,9 +364,11 @@ export async function completeSignup(request: Request, env: Env, body: unknown):
         (account_id, generation, recovery_salt, ciphertext, verification_public_key)
         VALUES (${accountId}, 1, ${material.salt}, ${material.capsule},
           ${decodeBytes(transcript.recoveryVerificationPublicKey, 65)})`,
-      ...transcript.recoveryCodeHashes.map((hash, ordinal) =>
-        sql`INSERT INTO authentication_recovery_codes (account_id, ordinal, code_hash)
-          VALUES (${accountId}, ${ordinal}, ${decodeBytes(hash, 32)})`),
+      ...transcript.recoveryCodeHashes.map(
+        (hash, ordinal) =>
+          sql`INSERT INTO authentication_recovery_codes (account_id, ordinal, code_hash)
+          VALUES (${accountId}, ${ordinal}, ${decodeBytes(hash, 32)})`,
+      ),
       prepareBoundSession(env, challengeId, accountId, credential.id, deviceId, now),
     ];
     const results = await atomicSqlBatch(env.DB, [...successQuota.statements, ...statements]);
@@ -250,9 +379,12 @@ export async function completeSignup(request: Request, env: Env, body: unknown):
     if (results.some((result, i) => result.meta.changes !== (i === identityIndex ? 3 : 1))) {
       throw new Error("incomplete signup batch");
     }
-    return Response.json({ ok: true, sessionBinding: await sessionBindingDigest(challengeId) }, {
-      headers: { "Set-Cookie": cookie, "Cache-Control": "no-store" },
-    });
+    return Response.json(
+      { ok: true, sessionBinding: await sessionBindingDigest(challengeId) },
+      {
+        headers: { "Set-Cookie": cookie, "Cache-Control": "no-store" },
+      },
+    );
   } catch (error) {
     if (error instanceof AbuseControlUnavailableError) throw error;
     // A concurrent reservation can exhaust a quota between the read and the

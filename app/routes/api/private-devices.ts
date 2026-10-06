@@ -12,7 +12,11 @@ const denied = (status = 403) => Response.json({ error: "device_proof_required" 
 /** Private data stays in an action response, never a document loader or SSR payload. */
 export async function action({ request, context }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") return denied(405);
-  try { requireSameOrigin(request); } catch { return denied(); }
+  try {
+    requireSameOrigin(request);
+  } catch {
+    return denied();
+  }
   const path = new URL(request.url).pathname;
   if (path !== "/api/private/devices/inventory" && path !== "/api/private/devices/remove") return denied(404);
   try {
@@ -20,7 +24,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     let raw = "";
     let value: Record<string, unknown> | null = null;
     if (inventory) {
-      if (!await hasEmptyBody(request)) return denied();
+      if (!(await hasEmptyBody(request))) return denied();
     } else {
       const parsed = await readAuthJsonText(request);
       raw = parsed.raw;
@@ -32,12 +36,13 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (!session || session.purpose !== "normal") return denied(401);
     const authorized = await authorizeDeviceForSession(env, session, request, proof, raw);
     if (!authorized) {
-      if (!inventory && await completedRemovalRetry(env, session, request, proof, raw, value)) {
+      if (!inventory && (await completedRemovalRetry(env, session, request, proof, raw, value))) {
         return Response.json({ ok: true, alreadyRemoved: true }, { headers: noStore });
       }
       return denied();
     }
-    return inventory ? deviceInventory(env, authorized)
-      : removeEncryptionDevice(env, session, authorized, value);
-  } catch { return denied(); }
+    return inventory ? deviceInventory(env, authorized) : removeEncryptionDevice(env, session, authorized, value);
+  } catch {
+    return denied();
+  }
 }

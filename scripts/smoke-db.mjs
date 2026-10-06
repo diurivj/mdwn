@@ -19,16 +19,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { verifyForeignKeys } from "./lib/d1-operations.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  isEnvironment,
-  spawnWrangler,
-  WRANGLER_TARGETS,
-} from "./lib/wrangler-targets.mjs";
+import { isEnvironment, spawnWrangler, WRANGLER_TARGETS } from "./lib/wrangler-targets.mjs";
 
 const isRemoteCli = process.argv.includes("--remote");
-const remoteTarget = isRemoteCli
-  ? process.argv[process.argv.indexOf("--remote") + 1]
-  : "";
+const remoteTarget = isRemoteCli ? process.argv[process.argv.indexOf("--remote") + 1] : "";
 if (isRemoteCli && !(typeof remoteTarget === "string" && isEnvironment(remoteTarget))) {
   console.error("--remote must be one of: preview | production");
   process.exit(2);
@@ -36,56 +30,337 @@ if (isRemoteCli && !(typeof remoteTarget === "string" && isEnvironment(remoteTar
 
 // The D1 binding name in wrangler.jsonc (single binding per environment).
 const BINDING = "DB";
-const COMMENT_ENVELOPE_COLUMNS = { relationship_id: "TEXT", device_id: "TEXT", capability_id: "TEXT", capability_epoch: "INTEGER",
-  grant_key_epoch: "INTEGER", owner_registry_epoch: "INTEGER", recipient_registry_epoch: "INTEGER", ciphertext: "BLOB",
-  signature: "BLOB", signer_device_id: "TEXT", object_id: "TEXT" };
+const COMMENT_ENVELOPE_COLUMNS = {
+  relationship_id: "TEXT",
+  device_id: "TEXT",
+  capability_id: "TEXT",
+  capability_epoch: "INTEGER",
+  grant_key_epoch: "INTEGER",
+  owner_registry_epoch: "INTEGER",
+  recipient_registry_epoch: "INTEGER",
+  ciphertext: "BLOB",
+  signature: "BLOB",
+  signer_device_id: "TEXT",
+  object_id: "TEXT",
+};
 
 /** @type {Record<string, Record<string, string>>} */
 const EXPECTED_COLUMNS = {
-  accounts: { id: "TEXT", share_id: "TEXT", share_handle_lookup_token: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
-  account_profiles: { account_id: "TEXT", ciphertext: "BLOB", revision: "INTEGER", epoch: "INTEGER", pseudonym_changed_at: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
-  passkeys: { credential_id: "TEXT", account_id: "TEXT", public_key: "BLOB", counter: "INTEGER", transports: "TEXT", device_type: "TEXT", backed_up: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
-  sessions: { id: "TEXT", account_id: "TEXT", purpose: "TEXT", authenticated_passkey_id: "TEXT", created_at: "INTEGER", idle_expires_at: "INTEGER", absolute_expires_at: "INTEGER", fresh_asserted_at: "INTEGER", refreshed_at: "INTEGER", revoked_at: "INTEGER", device_id: "TEXT" },
-  webauthn_challenges: { id: "TEXT", challenge: "TEXT", purpose: "TEXT", account_id: "TEXT", session_id: "TEXT", origin: "TEXT", rp_id: "TEXT", expires_at: "INTEGER", created_at: "INTEGER", transport_challenge_hash: "BLOB" },
-  registration_challenges: { id: "TEXT", challenge: "TEXT", origin: "TEXT", expires_at: "INTEGER", created_at: "INTEGER" },
+  accounts: {
+    id: "TEXT",
+    share_id: "TEXT",
+    share_handle_lookup_token: "TEXT",
+    created_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
+  account_profiles: {
+    account_id: "TEXT",
+    ciphertext: "BLOB",
+    revision: "INTEGER",
+    epoch: "INTEGER",
+    pseudonym_changed_at: "INTEGER",
+    created_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
+  passkeys: {
+    credential_id: "TEXT",
+    account_id: "TEXT",
+    public_key: "BLOB",
+    counter: "INTEGER",
+    transports: "TEXT",
+    device_type: "TEXT",
+    backed_up: "INTEGER",
+    created_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
+  sessions: {
+    id: "TEXT",
+    account_id: "TEXT",
+    purpose: "TEXT",
+    authenticated_passkey_id: "TEXT",
+    created_at: "INTEGER",
+    idle_expires_at: "INTEGER",
+    absolute_expires_at: "INTEGER",
+    fresh_asserted_at: "INTEGER",
+    refreshed_at: "INTEGER",
+    revoked_at: "INTEGER",
+    device_id: "TEXT",
+  },
+  webauthn_challenges: {
+    id: "TEXT",
+    challenge: "TEXT",
+    purpose: "TEXT",
+    account_id: "TEXT",
+    session_id: "TEXT",
+    origin: "TEXT",
+    rp_id: "TEXT",
+    expires_at: "INTEGER",
+    created_at: "INTEGER",
+    transport_challenge_hash: "BLOB",
+  },
+  registration_challenges: {
+    id: "TEXT",
+    challenge: "TEXT",
+    origin: "TEXT",
+    expires_at: "INTEGER",
+    created_at: "INTEGER",
+  },
   account_encryption_identities: { account_id: "TEXT", root_directory_id: "TEXT", registry_epoch: "INTEGER" },
-  encryption_devices: { id: "TEXT", account_id: "TEXT", transport_public_key: "BLOB", assertion_public_key: "BLOB", state: "TEXT", approval_provenance: "TEXT", registry_epoch: "INTEGER", created_at: "INTEGER", last_proof_at: "INTEGER" },
-  key_envelopes: { account_id: "TEXT", purpose: "TEXT", object_id: "TEXT", recipient_id: "TEXT", ciphertext: "BLOB", key_epoch: "INTEGER" },
-  recovery_capsules: { account_id: "TEXT", generation: "INTEGER", recovery_salt: "BLOB", ciphertext: "BLOB", verification_public_key: "BLOB" },
+  encryption_devices: {
+    id: "TEXT",
+    account_id: "TEXT",
+    transport_public_key: "BLOB",
+    assertion_public_key: "BLOB",
+    state: "TEXT",
+    approval_provenance: "TEXT",
+    registry_epoch: "INTEGER",
+    created_at: "INTEGER",
+    last_proof_at: "INTEGER",
+  },
+  key_envelopes: {
+    account_id: "TEXT",
+    purpose: "TEXT",
+    object_id: "TEXT",
+    recipient_id: "TEXT",
+    ciphertext: "BLOB",
+    key_epoch: "INTEGER",
+  },
+  recovery_capsules: {
+    account_id: "TEXT",
+    generation: "INTEGER",
+    recovery_salt: "BLOB",
+    ciphertext: "BLOB",
+    verification_public_key: "BLOB",
+  },
   authentication_recovery_codes: { account_id: "TEXT", ordinal: "INTEGER", code_hash: "BLOB" },
-  device_proof_uses: { account_id: "TEXT", proof_id: "TEXT", session_id: "TEXT", expires_at: "INTEGER", commit_token: "TEXT" },
-  device_enrollments: { id: "TEXT", account_id: "TEXT", candidate_session_id: "TEXT", state: "TEXT", created_at: "INTEGER", expires_at: "INTEGER" },
-  recovery_enrollments: { id: "TEXT", account_id: "TEXT", session_id: "TEXT", generation: "INTEGER", state: "TEXT", created_at: "INTEGER", expires_at: "INTEGER" },
-  import_sessions: { id: "TEXT", account_id: "TEXT", session_id: "TEXT", manifest_ciphertext: "BLOB", state: "TEXT", expires_at: "INTEGER", committed_at: "INTEGER" },
-  import_records: { import_id: "TEXT", chunk_sequence: "INTEGER", ordinal: "INTEGER", kind: "TEXT", offset: "INTEGER", length: "INTEGER" },
+  device_proof_uses: {
+    account_id: "TEXT",
+    proof_id: "TEXT",
+    session_id: "TEXT",
+    expires_at: "INTEGER",
+    commit_token: "TEXT",
+  },
+  device_enrollments: {
+    id: "TEXT",
+    account_id: "TEXT",
+    candidate_session_id: "TEXT",
+    state: "TEXT",
+    created_at: "INTEGER",
+    expires_at: "INTEGER",
+  },
+  recovery_enrollments: {
+    id: "TEXT",
+    account_id: "TEXT",
+    session_id: "TEXT",
+    generation: "INTEGER",
+    state: "TEXT",
+    created_at: "INTEGER",
+    expires_at: "INTEGER",
+  },
+  import_sessions: {
+    id: "TEXT",
+    account_id: "TEXT",
+    session_id: "TEXT",
+    manifest_ciphertext: "BLOB",
+    state: "TEXT",
+    expires_at: "INTEGER",
+    committed_at: "INTEGER",
+  },
+  import_records: {
+    import_id: "TEXT",
+    chunk_sequence: "INTEGER",
+    ordinal: "INTEGER",
+    kind: "TEXT",
+    offset: "INTEGER",
+    length: "INTEGER",
+  },
   import_chunks: { import_id: "TEXT", sequence: "INTEGER", payload: "BLOB", digest: "BLOB" },
   import_session_kinds: { import_id: "TEXT", kind: "TEXT", expected_count: "INTEGER" },
   import_commits: { import_id: "TEXT", account_id: "TEXT", target_directory_id: "TEXT", committed_at: "INTEGER" },
-  vault_nodes: { id: "TEXT", kind: "TEXT", owner_id: "TEXT", parent_node_id: "TEXT", import_id: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
-  directories: { node_id: "TEXT", owner_id: "TEXT", entries_revision: "INTEGER",
-    listing_ciphertext: "BLOB", listing_digest: "BLOB", listing_signature: "BLOB", listing_device_id: "TEXT" },
-  files: { node_id: "TEXT", owner_id: "TEXT", current_representation_id: "TEXT", current_revision: "INTEGER", capability_id: "TEXT", capability_epoch: "INTEGER" },
-  directory_entries: { child_node_id: "TEXT", owner_id: "TEXT", parent_node_id: "TEXT", name_ciphertext: "BLOB", order_ciphertext: "BLOB", key_envelope: "BLOB" },
-  file_representations: { id: "TEXT", file_node_id: "TEXT", owner_id: "TEXT", revision: "INTEGER", content_key_id: "TEXT", key_epoch: "INTEGER", ciphertext: "BLOB", ciphertext_size: "INTEGER", created_at: "INTEGER", key_envelope: "BLOB", head_digest: "BLOB", head_signature: "BLOB", head_device_id: "TEXT" },
-  share_key_envelopes: { relationship_id: "TEXT", device_id: "TEXT", capability_id: "TEXT", capability_epoch: "INTEGER", grant_key_epoch: "INTEGER", owner_registry_epoch: "INTEGER", recipient_registry_epoch: "INTEGER", ciphertext: "BLOB", signature: "BLOB", signer_device_id: "TEXT" },
-  grant_key_envelopes: { relationship_id: "TEXT", device_id: "TEXT", capability_id: "TEXT", capability_epoch: "INTEGER", grant_key_epoch: "INTEGER", owner_registry_epoch: "INTEGER", recipient_registry_epoch: "INTEGER", ciphertext: "BLOB", signature: "BLOB", signer_device_id: "TEXT" },
-  shares: { id: "TEXT", owner_id: "TEXT", recipient_id: "TEXT", target_id: "TEXT", target_kind: "TEXT", permission: "TEXT", created_at: "INTEGER" },
-  grants: { id: "TEXT", owner_id: "TEXT", recipient_id: "TEXT", target_id: "TEXT", target_kind: "TEXT", permission: "TEXT", revision: "INTEGER", key_epoch: "INTEGER", expires_at: "INTEGER", created_at: "INTEGER", updated_at: "INTEGER" },
+  vault_nodes: {
+    id: "TEXT",
+    kind: "TEXT",
+    owner_id: "TEXT",
+    parent_node_id: "TEXT",
+    import_id: "TEXT",
+    created_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
+  directories: {
+    node_id: "TEXT",
+    owner_id: "TEXT",
+    entries_revision: "INTEGER",
+    listing_ciphertext: "BLOB",
+    listing_digest: "BLOB",
+    listing_signature: "BLOB",
+    listing_device_id: "TEXT",
+  },
+  files: {
+    node_id: "TEXT",
+    owner_id: "TEXT",
+    current_representation_id: "TEXT",
+    current_revision: "INTEGER",
+    capability_id: "TEXT",
+    capability_epoch: "INTEGER",
+  },
+  directory_entries: {
+    child_node_id: "TEXT",
+    owner_id: "TEXT",
+    parent_node_id: "TEXT",
+    name_ciphertext: "BLOB",
+    order_ciphertext: "BLOB",
+    key_envelope: "BLOB",
+  },
+  file_representations: {
+    id: "TEXT",
+    file_node_id: "TEXT",
+    owner_id: "TEXT",
+    revision: "INTEGER",
+    content_key_id: "TEXT",
+    key_epoch: "INTEGER",
+    ciphertext: "BLOB",
+    ciphertext_size: "INTEGER",
+    created_at: "INTEGER",
+    key_envelope: "BLOB",
+    head_digest: "BLOB",
+    head_signature: "BLOB",
+    head_device_id: "TEXT",
+  },
+  share_key_envelopes: {
+    relationship_id: "TEXT",
+    device_id: "TEXT",
+    capability_id: "TEXT",
+    capability_epoch: "INTEGER",
+    grant_key_epoch: "INTEGER",
+    owner_registry_epoch: "INTEGER",
+    recipient_registry_epoch: "INTEGER",
+    ciphertext: "BLOB",
+    signature: "BLOB",
+    signer_device_id: "TEXT",
+  },
+  grant_key_envelopes: {
+    relationship_id: "TEXT",
+    device_id: "TEXT",
+    capability_id: "TEXT",
+    capability_epoch: "INTEGER",
+    grant_key_epoch: "INTEGER",
+    owner_registry_epoch: "INTEGER",
+    recipient_registry_epoch: "INTEGER",
+    ciphertext: "BLOB",
+    signature: "BLOB",
+    signer_device_id: "TEXT",
+  },
+  shares: {
+    id: "TEXT",
+    owner_id: "TEXT",
+    recipient_id: "TEXT",
+    target_id: "TEXT",
+    target_kind: "TEXT",
+    permission: "TEXT",
+    created_at: "INTEGER",
+  },
+  grants: {
+    id: "TEXT",
+    owner_id: "TEXT",
+    recipient_id: "TEXT",
+    target_id: "TEXT",
+    target_kind: "TEXT",
+    permission: "TEXT",
+    revision: "INTEGER",
+    key_epoch: "INTEGER",
+    expires_at: "INTEGER",
+    created_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
   sharing_write_blocks: { target_id: "TEXT", owner_id: "TEXT", target_kind: "TEXT", created_at: "INTEGER" },
-  sharing_comment_capabilities: { object_id: "TEXT", owner_id: "TEXT", file_id: "TEXT", thread_id: "TEXT", purpose: "TEXT", publication_id: "TEXT", capability_id: "TEXT", capability_epoch: "INTEGER" },
+  sharing_comment_capabilities: {
+    object_id: "TEXT",
+    owner_id: "TEXT",
+    file_id: "TEXT",
+    thread_id: "TEXT",
+    purpose: "TEXT",
+    publication_id: "TEXT",
+    capability_id: "TEXT",
+    capability_epoch: "INTEGER",
+  },
   share_comment_key_envelopes: COMMENT_ENVELOPE_COLUMNS,
   grant_comment_key_envelopes: COMMENT_ENVELOPE_COLUMNS,
   provisioning_needs: { grant_id: "TEXT", device_id: "TEXT", grant_key_epoch: "INTEGER" },
-  rate_limit_counters: { purpose: "TEXT", scope_type: "TEXT", scope_id: "TEXT", window_ms: "INTEGER", time_epoch: "INTEGER", count: "INTEGER", expires_at: "INTEGER" },
-  security_events: { id: "TEXT", created_at: "INTEGER", expires_at: "INTEGER", action_class: "TEXT", outcome: "TEXT", reason: "TEXT", account_id: "TEXT", publication_id: "TEXT", size_class: "TEXT", proof_state: "TEXT", counter_state: "TEXT", retry_at: "INTEGER", network_bucket: "TEXT", network_bucket_expires_at: "INTEGER" },
-  publications: { id: "TEXT", file_id: "TEXT", owner_id: "TEXT", state: "TEXT", current_link_id: "TEXT", current_representation_id: "TEXT", created_at: "INTEGER", updated_at: "INTEGER" },
+  rate_limit_counters: {
+    purpose: "TEXT",
+    scope_type: "TEXT",
+    scope_id: "TEXT",
+    window_ms: "INTEGER",
+    time_epoch: "INTEGER",
+    count: "INTEGER",
+    expires_at: "INTEGER",
+  },
+  security_events: {
+    id: "TEXT",
+    created_at: "INTEGER",
+    expires_at: "INTEGER",
+    action_class: "TEXT",
+    outcome: "TEXT",
+    reason: "TEXT",
+    account_id: "TEXT",
+    publication_id: "TEXT",
+    size_class: "TEXT",
+    proof_state: "TEXT",
+    counter_state: "TEXT",
+    retry_at: "INTEGER",
+    network_bucket: "TEXT",
+    network_bucket_expires_at: "INTEGER",
+  },
+  publications: {
+    id: "TEXT",
+    file_id: "TEXT",
+    owner_id: "TEXT",
+    state: "TEXT",
+    current_link_id: "TEXT",
+    current_representation_id: "TEXT",
+    created_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
   publication_links: { id: "TEXT", publication_id: "TEXT", public_key: "BLOB", created_at: "INTEGER" },
-  public_representations: { id: "TEXT", publication_id: "TEXT", link_id: "TEXT", revision: "INTEGER", file_revision: "INTEGER", ciphertext: "BLOB", ciphertext_size: "INTEGER", created_at: "INTEGER" },
+  public_representations: {
+    id: "TEXT",
+    publication_id: "TEXT",
+    link_id: "TEXT",
+    revision: "INTEGER",
+    file_revision: "INTEGER",
+    ciphertext: "BLOB",
+    ciphertext_size: "INTEGER",
+    created_at: "INTEGER",
+  },
   publication_requests: { id: "TEXT", file_id: "TEXT", owner_id: "TEXT", requester_id: "TEXT", created_at: "INTEGER" },
-  publication_authors: { id: "TEXT", publication_id: "TEXT", author_id: "TEXT", ordinal: "INTEGER", link_id: "TEXT", revision: "INTEGER", ciphertext: "BLOB", created_at: "INTEGER", updated_at: "INTEGER" },
+  publication_authors: {
+    id: "TEXT",
+    publication_id: "TEXT",
+    author_id: "TEXT",
+    ordinal: "INTEGER",
+    link_id: "TEXT",
+    revision: "INTEGER",
+    ciphertext: "BLOB",
+    created_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
   publication_teardowns: { publication_id: "TEXT", owner_id: "TEXT", comment_total: "INTEGER", created_at: "INTEGER" },
-  public_comment_reports: { id: "TEXT", reporter_id: "TEXT", comment_id: "TEXT", category: "TEXT", created_at: "INTEGER", expires_at: "INTEGER" },
-  public_participation_suspensions: { account_id: "TEXT", strike_count: "INTEGER", reason: "TEXT", started_at: "INTEGER", expires_at: "INTEGER", updated_at: "INTEGER" },
+  public_comment_reports: {
+    id: "TEXT",
+    reporter_id: "TEXT",
+    comment_id: "TEXT",
+    category: "TEXT",
+    created_at: "INTEGER",
+    expires_at: "INTEGER",
+  },
+  public_participation_suspensions: {
+    account_id: "TEXT",
+    strike_count: "INTEGER",
+    reason: "TEXT",
+    started_at: "INTEGER",
+    expires_at: "INTEGER",
+    updated_at: "INTEGER",
+  },
 };
 const EXPECTED_INDEXES = [
   ["accounts", "accounts_share_id_unique", 1],
@@ -249,16 +524,32 @@ const EXPECTED_FOREIGN_KEYS = [
   "public_comment_reports:comment_id:comments:id:RESTRICT",
   "public_participation_suspensions:account_id:accounts:id:RESTRICT",
 ];
-const EXPECTED_TRIGGERS = ["sharing_new_device_need", "sharing_new_comment_need",
-  "sharing_comment_context_immutable", "sharing_rotated_comment_need",
-  "publication_created_active", "publication_identity_immutable", "publication_seal_irreversible",
-  "publication_link_rotation_guard", "publication_sealed_link_guard", "publication_sealed_representation_guard",
-  "comment_thread_public_sealed_guard", "publication_teardown_guard", "publication_teardown_immutable",
-  "public_representation_immutable", "publication_author_identity_immutable",
-  "publication_request_immutable", "import_commits_immutable", "import_commits_session_guard",
-  "webauthn_challenges_lifetime_insert", "webauthn_challenges_lifetime_update",
-  "registration_challenges_lifetime_insert", "registration_challenges_lifetime_update",
-  "recovery_enrollments_lifetime_insert", "recovery_enrollments_lifetime_update"];
+const EXPECTED_TRIGGERS = [
+  "sharing_new_device_need",
+  "sharing_new_comment_need",
+  "sharing_comment_context_immutable",
+  "sharing_rotated_comment_need",
+  "publication_created_active",
+  "publication_identity_immutable",
+  "publication_seal_irreversible",
+  "publication_link_rotation_guard",
+  "publication_sealed_link_guard",
+  "publication_sealed_representation_guard",
+  "comment_thread_public_sealed_guard",
+  "publication_teardown_guard",
+  "publication_teardown_immutable",
+  "public_representation_immutable",
+  "publication_author_identity_immutable",
+  "publication_request_immutable",
+  "import_commits_immutable",
+  "import_commits_session_guard",
+  "webauthn_challenges_lifetime_insert",
+  "webauthn_challenges_lifetime_update",
+  "registration_challenges_lifetime_insert",
+  "registration_challenges_lifetime_update",
+  "recovery_enrollments_lifetime_insert",
+  "recovery_enrollments_lifetime_update",
+];
 
 /**
  * Run a wrangler command; on failure print its output and exit non-zero.
@@ -283,10 +574,7 @@ function runCmd(args, label) {
  * @returns {string[]}
  */
 function queryResults(bindArgs, sql) {
-  const r = runCmd(
-    ["d1", "execute", BINDING, ...bindArgs, "--json", "--command", sql],
-    "d1 query",
-  );
+  const r = runCmd(["d1", "execute", BINDING, ...bindArgs, "--json", "--command", sql], "d1 query");
   /** @type {Array<{ results?: Array<{ name: string }> }>} */
   const parsed = JSON.parse(r.stdout);
   return parsed.flatMap((row) => row.results ?? []).map((row) => row.name);
@@ -300,8 +588,13 @@ function queryResults(bindArgs, sql) {
 function verifySchema(bindArgs, label) {
   // One schema snapshot keeps local and remote verification inexpensive.
   // Table names below are source-controlled constants, never request input.
-  const names = Object.keys(EXPECTED_COLUMNS).map((name) => `'${name}'`).join(", ");
-  const facts = new Set(queryResults(bindArgs, `
+  const names = Object.keys(EXPECTED_COLUMNS)
+    .map((name) => `'${name}'`)
+    .join(", ");
+  const facts = new Set(
+    queryResults(
+      bindArgs,
+      `
     SELECT 'table:' || name AS name FROM sqlite_master
       WHERE type = 'table' AND name IN (${names}, 'd1_migrations')
     UNION ALL
@@ -318,7 +611,9 @@ function verifySchema(bindArgs, label) {
     SELECT 'fk:' || m.name || ':' || f."from" || ':' || f."table" || ':' || f."to" || ':' || f.on_delete
       FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f
       WHERE m.type = 'table' AND m.name IN (${names});
-  `));
+  `,
+    ),
+  );
   const required = [
     "table:d1_migrations",
     ...Object.entries(EXPECTED_COLUMNS).flatMap(([table, columns]) => [
@@ -363,10 +658,7 @@ function localSmoke() {
 
 if (isRemoteCli) {
   const { envFlag, extra } = WRANGLER_TARGETS[remoteTarget];
-  runCmd(
-    ["d1", "migrations", "apply", BINDING, ...envFlag, ...extra],
-    `${remoteTarget} migration apply`,
-  );
+  runCmd(["d1", "migrations", "apply", BINDING, ...envFlag, ...extra], `${remoteTarget} migration apply`);
   verifySchema([...envFlag, ...extra], remoteTarget);
 } else {
   localSmoke();

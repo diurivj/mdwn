@@ -28,7 +28,8 @@ function projectFiles(configPath: string): string[] {
 /** Typecheck one file under a project's own compiler options. */
 function fileDiagnostics(configPath: string, file: string): string[] {
   const program = ts.createProgram([file], parseProject(configPath).options);
-  return ts.getPreEmitDiagnostics(program)
+  return ts
+    .getPreEmitDiagnostics(program)
     .filter((diagnostic) => diagnostic.file?.fileName === file)
     .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
 }
@@ -41,7 +42,9 @@ describe("TypeScript runtime project boundaries", () => {
     writeFileSync(PROBE, 'import { sql } from "drizzle-orm";\nexport const boundaryProbe = sql`SELECT 1`;\n');
   });
 
-  afterAll(() => { rmSync(PROBE_DIR, { recursive: true, force: true }); });
+  afterAll(() => {
+    rmSync(PROBE_DIR, { recursive: true, force: true });
+  });
 
   it("discovers and typechecks a new portable SQL module from both projects", () => {
     for (const configPath of ["tsconfig.node.json", "tsconfig.cloudflare.json"]) {

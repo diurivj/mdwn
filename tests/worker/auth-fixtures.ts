@@ -24,16 +24,19 @@ export async function seedAccount(passkeyCount = 2): Promise<SeededAccount> {
   const credentialIds = Array.from({ length: passkeyCount }, () => crypto.randomUUID());
   const now = Date.now();
   await env.DB.batch([
-    env.DB
-      .prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
-      .bind(accountId, crypto.randomUUID(), now, now),
-    ...credentialIds.map((credentialId) => env.DB
-      .prepare(
+    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(
+      accountId,
+      crypto.randomUUID(),
+      now,
+      now,
+    ),
+    ...credentialIds.map((credentialId) =>
+      env.DB.prepare(
         `INSERT INTO passkeys (credential_id, account_id, public_key, counter,
           transports, device_type, backed_up, created_at, updated_at)
          VALUES (?, ?, ?, 0, '[]', 'singleDevice', 0, ?, ?)`,
-      )
-      .bind(credentialId, accountId, Uint8Array.of(1).buffer, now, now)),
+      ).bind(credentialId, accountId, Uint8Array.of(1).buffer, now, now),
+    ),
   ]);
   return { accountId, credentialIds };
 }
@@ -68,13 +71,12 @@ export async function seedNormalSession(
 export async function recoveryCookie(accountId: string): Promise<string> {
   const id = crypto.randomUUID();
   const now = Date.now();
-  await env.DB
-    .prepare(
-      `INSERT INTO sessions (
+  await env.DB.prepare(
+    `INSERT INTO sessions (
         id, account_id, purpose, authenticated_passkey_id, created_at,
         idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at
       ) VALUES (?, ?, 'recovery', NULL, ?, ?, ?, NULL, NULL, NULL)`,
-    )
+  )
     .bind(id, accountId, now, now + SESSION_ABSOLUTE_MS, now + SESSION_ABSOLUTE_MS)
     .run();
   return signedCookie(id);

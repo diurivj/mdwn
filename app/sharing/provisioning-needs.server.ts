@@ -45,16 +45,25 @@ export function retireDeletedScopeNeeds(ownerId: string, nodeId: string, marker:
 }
 
 export async function reconcileProvisioningNeeds(env: Env, auth: AuthorizedDevice, grantId: string, value: unknown) {
-  const headers = { "Cache-Control": "no-store" }, input = record(value);
-  if (!input || Object.keys(input).length) return Response.json({ error: "invalid_sharing_request" }, { status: 400, headers });
-  if (!await createDb(env.DB).get(sql`SELECT 1 FROM grants WHERE id = ${grantId} AND ${liveGrant(sql`expires_at`)}
+  const headers = { "Cache-Control": "no-store" },
+    input = record(value);
+  if (!input || Object.keys(input).length)
+    return Response.json({ error: "invalid_sharing_request" }, { status: 400, headers });
+  if (
+    !(await createDb(env.DB).get(sql`SELECT 1 FROM grants WHERE id = ${grantId} AND ${liveGrant(sql`expires_at`)}
     AND (owner_id = ${auth.accountId} OR recipient_id = ${auth.accountId}) AND ${privateReadGuard(auth)}`))
+  )
     return Response.json({ error: "not_found" }, { status: 404, headers });
-  const committed = await commitPrivateBatch(env, auth, (guard) => sql`UPDATE grants SET updated_at = updated_at
+  const committed = await commitPrivateBatch(
+    env,
+    auth,
+    (guard) => sql`UPDATE grants SET updated_at = updated_at
     WHERE id = ${grantId} AND ${liveGrant(sql`expires_at`)} AND (owner_id = ${auth.accountId} OR recipient_id = ${auth.accountId}) AND ${guard}`,
-    (marker) => reconcileGrantNeeds(grantId, marker));
-  return committed ? Response.json({ reconciled: true }, { headers }) :
-    Response.json({ error: "sharing_changed" }, { status: 409, headers });
+    (marker) => reconcileGrantNeeds(grantId, marker),
+  );
+  return committed
+    ? Response.json({ reconciled: true }, { headers })
+    : Response.json({ error: "sharing_changed" }, { status: 409, headers });
 }
 
 export async function readProvisioningNeeds(env: Env, auth: AuthorizedDevice, grantId: string, cursor: string | null) {
@@ -70,6 +79,11 @@ export async function readProvisioningNeeds(env: Env, auth: AuthorizedDevice, gr
     WHERE s.id = ${grantId} AND ${liveGrant()} AND d.account_id = s.recipient_id AND d.state = 'active' AND n.grant_key_epoch = s.key_epoch
       AND (s.owner_id = ${auth.accountId} OR s.recipient_id = ${auth.accountId} AND d.id = ${auth.deviceId})
       AND n.device_id > ${cursor ?? ""} AND ${privateReadGuard(auth)} ORDER BY n.device_id LIMIT 21`);
-  return Response.json({ needs: rows.slice(0, 20).map((row) => ({ grantId, ...row })),
-    nextCursor: rows.length > 20 ? rows[19]!.deviceId : null }, { headers });
+  return Response.json(
+    {
+      needs: rows.slice(0, 20).map((row) => ({ grantId, ...row })),
+      nextCursor: rows.length > 20 ? rows[19]!.deviceId : null,
+    },
+    { headers },
+  );
 }

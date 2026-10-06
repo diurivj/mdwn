@@ -57,26 +57,36 @@ function id() {
 
 /** @param {string} databaseId @returns {string} */
 function proofConfig(databaseId) {
-  return `${JSON.stringify({
-    $schema: "node_modules/wrangler/config-schema.json",
-    name: PROOF_WORKER,
-    compatibility_date: "2026-09-18",
-    main: "./workers/app.ts",
-    vars: { APP_ENV: "local" },
-    observability: { enabled: false },
-    version_metadata: { binding: "CF_VERSION_METADATA" },
-    upload_source_maps: true,
-    d1_databases: [{
-      binding: DB_BINDING, database_name: PROOF_DB, database_id: databaseId, migrations_dir: "./drizzle",
-    }],
-  }, null, 2)}\n`;
+  return `${JSON.stringify(
+    {
+      $schema: "node_modules/wrangler/config-schema.json",
+      name: PROOF_WORKER,
+      compatibility_date: "2026-09-18",
+      main: "./workers/app.ts",
+      vars: { APP_ENV: "local" },
+      observability: { enabled: false },
+      version_metadata: { binding: "CF_VERSION_METADATA" },
+      upload_source_maps: true,
+      d1_databases: [
+        {
+          binding: DB_BINDING,
+          database_name: PROOF_DB,
+          database_id: databaseId,
+          migrations_dir: "./drizzle",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 /** @returns {string | null} */
 function existingDatabaseId() {
   const output = capture("npx", ["--no-install", "wrangler", "d1", "list", "--json"]);
   const databases = /** @type {{ name: string, uuid: string }[]} */ (
-    JSON.parse(output.slice(output.indexOf("["), output.lastIndexOf("]") + 1)));
+    JSON.parse(output.slice(output.indexOf("["), output.lastIndexOf("]") + 1))
+  );
   return databases.find((database) => database.name === PROOF_DB)?.uuid ?? null;
 }
 
@@ -87,7 +97,10 @@ function cleanup() {
     console.log(`  npx wrangler d1 delete ${PROOF_DB} -y`);
     return;
   }
-  spawnSync("npx", ["--no-install", "wrangler", "delete", PROOF_WORKER], { stdio: ["pipe", "ignore", "ignore"], input: "y\n" });
+  spawnSync("npx", ["--no-install", "wrangler", "delete", PROOF_WORKER], {
+    stdio: ["pipe", "ignore", "ignore"],
+    input: "y\n",
+  });
   spawnSync("npx", ["--no-install", "wrangler", "d1", "delete", PROOF_DB, "-y"], { stdio: "ignore" });
   console.log(`✓ proof deployment deleted (${PROOF_WORKER}, ${PROOF_DB})`);
 }
@@ -112,13 +125,24 @@ try {
   const built = JSON.parse(readFileSync("build/server/wrangler.json", "utf8"));
   if (built.name !== PROOF_WORKER) throw new Error(`built Worker is ${built.name}, not ${PROOF_WORKER}`);
 
-  run("npx", ["--no-install", "wrangler", "d1", "migrations", "apply", DB_BINDING,
-    "--remote", "--config", PROOF_CONFIG]);
+  run("npx", [
+    "--no-install",
+    "wrangler",
+    "d1",
+    "migrations",
+    "apply",
+    DB_BINDING,
+    "--remote",
+    "--config",
+    PROOF_CONFIG,
+  ]);
 
   const sessionSecret = Buffer.from(crypto.getRandomValues(new Uint8Array(48))).toString("base64url");
   const abuseSecret = Buffer.from(crypto.getRandomValues(new Uint8Array(48))).toString("base64url");
   const secretsFile = join(temporary, "secrets.json");
-  writeFileSync(secretsFile, JSON.stringify({ SESSION_COOKIE_SECRET: sessionSecret, ABUSE_HMAC_SECRET: abuseSecret }), { mode: 0o600 });
+  writeFileSync(secretsFile, JSON.stringify({ SESSION_COOKIE_SECRET: sessionSecret, ABUSE_HMAC_SECRET: abuseSecret }), {
+    mode: 0o600,
+  });
   const deployOutput = capture("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretsFile]);
   const url = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(deployOutput.replace(/\u001b\[[0-9;]*m/g, ""))?.[0];
   if (!url) throw new Error("could not read the deployed workers.dev URL");
@@ -134,7 +158,9 @@ try {
         const response = await fetch(`${url}/robots.txt`, { signal: AbortSignal.timeout(10_000) });
         if (!response.ok) break;
         healthy += 1;
-      } catch { break; }
+      } catch {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     ready = healthy === 3;
@@ -143,8 +169,12 @@ try {
   if (!ready) throw new Error(`deployed ${url} is still not serving after 20 attempts`);
   console.log(`✓ deployed ${url}`);
 
-  const accountId = id(), rootId = id(), deviceId = id(), sessionId = id();
-  const secondAccountId = id(), credentialId = id();
+  const accountId = id(),
+    rootId = id(),
+    deviceId = id(),
+    sessionId = id();
+  const secondAccountId = id(),
+    credentialId = id();
   const keyPair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const privateJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
   const publicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey));
@@ -162,10 +192,24 @@ try {
   `;
   const seedFile = join(temporary, "seed.sql");
   writeFileSync(seedFile, seedSql);
-  run("npx", ["--no-install", "wrangler", "d1", "execute", DB_BINDING,
-    "--remote", "--config", PROOF_CONFIG, "--file", seedFile]);
+  run("npx", [
+    "--no-install",
+    "wrangler",
+    "d1",
+    "execute",
+    DB_BINDING,
+    "--remote",
+    "--config",
+    PROOF_CONFIG,
+    "--file",
+    seedFile,
+  ]);
   const cookie = await createCookie("__Host-mdwn_session", {
-    httpOnly: true, path: "/", sameSite: "lax", secure: true, secrets: [sessionSecret],
+    httpOnly: true,
+    path: "/",
+    sameSite: "lax",
+    secure: true,
+    secrets: [sessionSecret],
   }).serialize(sessionId);
   console.log(`✓ seeded a device-bound Session for ${accountId}`);
   const proofEnv = {

@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import { eligibleImportTargets, preferredImportTarget, type ImportScopeSnapshot } from "../app/shared/import/targets";
 
 function withSealed(entries: readonly { nodeId: string; kind: "file" | "directory"; name: string }[]) {
-  return entries.map((entry) => ({ ...entry, nameCiphertext: "bmFtZQ", orderCiphertext: "b3JkZXI", keyEnvelope: "a2V5" }));
+  return entries.map((entry) => ({
+    ...entry,
+    nameCiphertext: "bmFtZQ",
+    orderCiphertext: "b3JkZXI",
+    keyEnvelope: "a2V5",
+  }));
 }
 
 function snapshot(overrides: Partial<ImportScopeSnapshot> = {}): ImportScopeSnapshot {
@@ -12,11 +17,16 @@ function snapshot(overrides: Partial<ImportScopeSnapshot> = {}): ImportScopeSnap
     access: { rootId: "root", rootKind: "directory", vaultId: "owner", actorAccountId: "owner" },
     keys: { root: key, writable: new Uint8Array(32).fill(2), readonly: new Uint8Array(32).fill(3), direct: key },
     listings: {
-      root: { directoryId: "root", entriesRevision: 2, canCreate: true, entries: withSealed([
-        { nodeId: "writable", kind: "directory", name: "notes" },
-        { nodeId: "readonly", kind: "directory", name: "shared-read" },
-        { nodeId: "file1", kind: "file", name: "Draft.md" },
-      ]) },
+      root: {
+        directoryId: "root",
+        entriesRevision: 2,
+        canCreate: true,
+        entries: withSealed([
+          { nodeId: "writable", kind: "directory", name: "notes" },
+          { nodeId: "readonly", kind: "directory", name: "shared-read" },
+          { nodeId: "file1", kind: "file", name: "Draft.md" },
+        ]),
+      },
       writable: { directoryId: "writable", entriesRevision: 1, canCreate: true, entries: [] },
       readonly: { directoryId: "readonly", entriesRevision: 1, canCreate: false, entries: [] },
     },
@@ -48,13 +58,17 @@ describe("import target eligibility", () => {
     const page = snapshot();
     expect(preferredImportTarget(page, "writable", "directory")?.directoryId).toBe("writable");
     expect(preferredImportTarget(page, "readonly", "directory")).toBeNull();
-    expect(preferredImportTarget({ ...page, file: { parentId: "writable" } }, "file1", "file")?.directoryId).toBe("writable");
+    expect(preferredImportTarget({ ...page, file: { parentId: "writable" } }, "file1", "file")?.directoryId).toBe(
+      "writable",
+    );
     expect(preferredImportTarget({ ...page, file: { parentId: "readonly" } }, "file1", "file")).toBeNull();
     expect(preferredImportTarget({ ...page, file: { parentId: null } }, "direct", "file")).toBeNull();
   });
 
   it("reports the target owner separately from the acting Account", () => {
-    const granted = snapshot({ access: { rootId: "root", rootKind: "directory", vaultId: "owner", actorAccountId: "recipient" } });
+    const granted = snapshot({
+      access: { rootId: "root", rootKind: "directory", vaultId: "owner", actorAccountId: "recipient" },
+    });
     const target = eligibleImportTargets(granted)[0]!;
     expect(target.ownerAccountId).toBe("owner");
     expect(target.actorAccountId).toBe("recipient");

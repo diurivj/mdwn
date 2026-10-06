@@ -9,9 +9,13 @@ import { deployedVersionId } from "./lib/deployment-readiness.mjs";
 
 /** @param {string} command @param {string[]} args @param {boolean} [capture] */
 function run(command, args, capture = false) {
-  const result = spawnSync(command, args, capture
-    ? { encoding: "utf8", stdio: ["inherit", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 }
-    : { stdio: "inherit" });
+  const result = spawnSync(
+    command,
+    args,
+    capture
+      ? { encoding: "utf8", stdio: ["inherit", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 }
+      : { stdio: "inherit" },
+  );
   if (capture) {
     process.stdout.write(result.stdout ?? "");
     process.stderr.write(result.stderr ?? "");
@@ -23,8 +27,7 @@ function run(command, args, capture = false) {
 try {
   const target = process.argv[2];
   const dryRun = process.argv[3] === "--dry-run";
-  if ((target !== "preview" && target !== "production") ||
-      process.argv.length > (dryRun ? 4 : 3)) {
+  if ((target !== "preview" && target !== "production") || process.argv.length > (dryRun ? 4 : 3)) {
     throw new Error("Usage: deploy-worker.mjs <preview|production> [--dry-run]");
   }
   const sessionSecret = process.env.SESSION_COOKIE_SECRET;
@@ -42,8 +45,11 @@ try {
   run("npm", ["run", `build:${target}`]);
   const config = JSON.parse(readFileSync("build/server/wrangler.json", "utf8"));
   const expectedName = target === "preview" ? "mdwn-preview" : "mdwn";
-  if (config.name !== expectedName || config.vars?.APP_ENV !== target ||
-      config.version_metadata?.binding !== "CF_VERSION_METADATA") {
+  if (
+    config.name !== expectedName ||
+    config.vars?.APP_ENV !== target ||
+    config.version_metadata?.binding !== "CF_VERSION_METADATA"
+  ) {
     throw new Error("Built Worker does not match the requested deployment environment or version binding");
   }
   // Secret-named environment variables are scanned before anything is uploaded.
@@ -52,12 +58,26 @@ try {
   const temporaryDirectory = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "mdwn-deploy-"));
   const secretFile = join(temporaryDirectory, "secrets.json");
   try {
-    writeFileSync(secretFile, JSON.stringify({
-      SESSION_COOKIE_SECRET: sessionSecret,
-      ABUSE_HMAC_SECRET: abuseSecret,
-    }), { mode: 0o600 });
-    const output = run("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretFile,
-      ...(dryRun ? ["--dry-run", "--outdir", join(temporaryDirectory, "worker")] : [])], !dryRun);
+    writeFileSync(
+      secretFile,
+      JSON.stringify({
+        SESSION_COOKIE_SECRET: sessionSecret,
+        ABUSE_HMAC_SECRET: abuseSecret,
+      }),
+      { mode: 0o600 },
+    );
+    const output = run(
+      "npx",
+      [
+        "--no-install",
+        "wrangler",
+        "deploy",
+        "--secrets-file",
+        secretFile,
+        ...(dryRun ? ["--dry-run", "--outdir", join(temporaryDirectory, "worker")] : []),
+      ],
+      !dryRun,
+    );
     if (!dryRun) {
       const versionId = deployedVersionId(output);
       // GitHub Actions reads this value only after Wrangler has deployed it.

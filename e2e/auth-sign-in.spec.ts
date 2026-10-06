@@ -55,39 +55,27 @@ function accountUserHandle(accountId: string): string {
   return Buffer.from(accountId, "utf8").toString("base64url");
 }
 
-async function sessionsFor(
-  env: BrowserTestEnv,
-  accountId: string,
-): Promise<SessionRow[]> {
-  const sessions = await env.DB
-    .prepare(
-      `SELECT id, account_id, authenticated_passkey_id, purpose, revoked_at
+async function sessionsFor(env: BrowserTestEnv, accountId: string): Promise<SessionRow[]> {
+  const sessions = await env.DB.prepare(
+    `SELECT id, account_id, authenticated_passkey_id, purpose, revoked_at
        FROM sessions WHERE account_id = ? ORDER BY created_at ASC, id ASC`,
-    )
+  )
     .bind(accountId)
     .all<SessionRow>();
   return sessions.results;
 }
 
-async function passkeysFor(
-  env: BrowserTestEnv,
-  accountId: string,
-): Promise<PasskeyRow[]> {
-  const passkeys = await env.DB
-    .prepare(
-      "SELECT credential_id FROM passkeys WHERE account_id = ? ORDER BY created_at ASC, credential_id ASC",
-    )
+async function passkeysFor(env: BrowserTestEnv, accountId: string): Promise<PasskeyRow[]> {
+  const passkeys = await env.DB.prepare(
+    "SELECT credential_id FROM passkeys WHERE account_id = ? ORDER BY created_at ASC, credential_id ASC",
+  )
     .bind(accountId)
     .all<PasskeyRow>();
   return passkeys.results;
 }
 
-async function accountProfileFor(
-  env: BrowserTestEnv,
-  accountId: string,
-): Promise<AccountProfileRow> {
-  const profile = await env.DB
-    .prepare("SELECT ciphertext, epoch, revision FROM account_profiles WHERE account_id = ?")
+async function accountProfileFor(env: BrowserTestEnv, accountId: string): Promise<AccountProfileRow> {
+  const profile = await env.DB.prepare("SELECT ciphertext, epoch, revision FROM account_profiles WHERE account_id = ?")
     .bind(accountId)
     .first<AccountProfileRow>();
   if (!profile) throw new Error("expected an encrypted Account profile");
@@ -140,33 +128,28 @@ async function signInSeededAccount(
     { accountId, epoch: 1, revision: 1 },
   );
   await env.DB.batch([
-    env.DB
-      .prepare(
-        "INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      )
-      .bind(accountId, `opaque-browser-test-share-${accountId}`, now, now),
-    env.DB
-      .prepare(
-        `INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at)
+    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(
+      accountId,
+      `opaque-browser-test-share-${accountId}`,
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO account_profiles (account_id, ciphertext, revision, epoch, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(accountId, profile.ciphertext, profile.revision, profile.epoch, now, now),
-    env.DB
-      .prepare(
-        `INSERT INTO passkeys (
+    ).bind(accountId, profile.ciphertext, profile.revision, profile.epoch, now, now),
+    env.DB.prepare(
+      `INSERT INTO passkeys (
           credential_id, account_id, public_key, counter, transports,
           device_type, backed_up, created_at, updated_at
         ) VALUES (?, ?, ?, 0, '[]', 'singleDevice', 0, ?, ?)`,
-      )
-      .bind(credential.id, accountId, coseP256PublicKey(credential.publicKey), now, now),
+    ).bind(credential.id, accountId, coseP256PublicKey(credential.publicKey), now, now),
   ]);
 
   const page = await context.newPage();
   await page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
   const verificationRequest = page.waitForRequest(
-    (request) =>
-      new URL(request.url()).pathname === "/api/auth/sign-in/verify" &&
-      request.method() === "POST",
+    (request) => new URL(request.url()).pathname === "/api/auth/sign-in/verify" && request.method() === "POST",
   );
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   const verifyPayload = (await verificationRequest).postDataJSON() as VerifyPayload;
@@ -193,16 +176,20 @@ test("signs a seeded Account into a normal Session and rejects assertion replay"
   try {
     const profile = await accountProfileFor(fixture.env, fixture.accountId);
     expect(profile).toMatchObject({ epoch: 1, revision: 1 });
-    await expect(openAccountProfile(
-      new Uint8Array(profile.ciphertext),
-      fixture.profileRootKey,
-      { accountId: fixture.accountId, epoch: profile.epoch, revision: profile.revision },
-    )).resolves.toEqual({ publicPseudonym: SEEDED_PUBLIC_PSEUDONYM });
-    await expect(openAccountProfile(
-      new Uint8Array(profile.ciphertext),
-      fixture.profileRootKey,
-      { accountId: fixture.accountId, epoch: profile.epoch, revision: profile.revision + 1 },
-    )).rejects.toMatchObject({ code: "context-mismatch" });
+    await expect(
+      openAccountProfile(new Uint8Array(profile.ciphertext), fixture.profileRootKey, {
+        accountId: fixture.accountId,
+        epoch: profile.epoch,
+        revision: profile.revision,
+      }),
+    ).resolves.toEqual({ publicPseudonym: SEEDED_PUBLIC_PSEUDONYM });
+    await expect(
+      openAccountProfile(new Uint8Array(profile.ciphertext), fixture.profileRootKey, {
+        accountId: fixture.accountId,
+        epoch: profile.epoch,
+        revision: profile.revision + 1,
+      }),
+    ).rejects.toMatchObject({ code: "context-mismatch" });
 
     expect(await publicSessionState(fixture.page)).toEqual({
       status: 200,
@@ -277,7 +264,7 @@ test("adds and removes an attestation-none resident Passkey after fresh assertio
     await fixture.page.getByRole("button", { name: "Add passkey" }).click();
     const registration = await registrationOptions;
     expect(registration.status()).toBe(200);
-    const registrationBody = await registration.json() as {
+    const registrationBody = (await registration.json()) as {
       options: {
         attestation: string;
         authenticatorSelection: {
@@ -294,18 +281,14 @@ test("adds and removes an attestation-none resident Passkey after fresh assertio
       requireResidentKey: true,
       userVerification: "required",
     });
-    expect(Buffer.from(registrationBody.options.user.id, "base64url").toString("utf8")).toBe(
-      fixture.accountId,
-    );
+    expect(Buffer.from(registrationBody.options.user.id, "base64url").toString("utf8")).toBe(fixture.accountId);
     await expect(fixture.page.getByRole("status")).toHaveText("Passkey added.");
     expect(await passkeysFor(fixture.env, fixture.accountId)).toHaveLength(2);
     expect(switchedAuthenticator).toBe(true);
 
     await fixture.page.getByRole("button", { name: "Remove passkey", exact: true }).click();
     await expect(fixture.page.getByRole("status")).toHaveText("Passkey removed.");
-    expect(await passkeysFor(fixture.env, fixture.accountId)).toEqual([
-      { credential_id: fixture.credentialId },
-    ]);
+    expect(await passkeysFor(fixture.env, fixture.accountId)).toEqual([{ credential_id: fixture.credentialId }]);
     expect(freshAssertions).toBe(2);
     expect(await publicSessionState(fixture.page)).toEqual({
       status: 200,
@@ -316,11 +299,7 @@ test("adds and removes an attestation-none resident Passkey after fresh assertio
   }
 });
 
-test("consumes registration after freshness expires before its completion", async ({
-  browser,
-  server,
-  baseURL,
-}) => {
+test("consumes registration after freshness expires before its completion", async ({ browser, server, baseURL }) => {
   const fixture = await signInSeededAccount(browser, server, baseURL!);
   try {
     await fixture.page.goto(`${fixture.origin}/account/security`, { waitUntil: "commit" });
@@ -350,8 +329,7 @@ test("consumes registration after freshness expires before its completion", asyn
     const payload = await verifyReached;
     const [current] = await sessionsFor(fixture.env, fixture.accountId);
     if (!current) throw new Error("expected a current Session");
-    await fixture.env.DB
-      .prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
+    await fixture.env.DB.prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
       .bind(Date.now() - 5 * 60 * 1_000 - 1, current.id)
       .run();
 
@@ -362,17 +340,10 @@ test("consumes registration after freshness expires before its completion", asyn
     );
     releaseVerify();
     expect((await response).status()).toBe(401);
-    await expect(fixture.page.getByRole("status")).toHaveText(
-      "We could not update your Passkeys. Try again.",
-    );
-    expect(await passkeysFor(fixture.env, fixture.accountId)).toEqual([
-      { credential_id: fixture.credentialId },
-    ]);
+    await expect(fixture.page.getByRole("status")).toHaveText("We could not update your Passkeys. Try again.");
+    expect(await passkeysFor(fixture.env, fixture.accountId)).toEqual([{ credential_id: fixture.credentialId }]);
     expect(
-      await fixture.env.DB
-        .prepare("SELECT id FROM webauthn_challenges WHERE id = ?")
-        .bind(payload.challengeId)
-        .first(),
+      await fixture.env.DB.prepare("SELECT id FROM webauthn_challenges WHERE id = ?").bind(payload.challengeId).first(),
     ).toBeNull();
   } finally {
     await fixture.context.close();
@@ -388,13 +359,12 @@ test("holds mutations pending through revalidation instead of racing older lists
   try {
     const now = Date.now();
     const otherId = `peer-${fixture.accountId}`;
-    await fixture.env.DB
-      .prepare(
-        `INSERT INTO sessions (
+    await fixture.env.DB.prepare(
+      `INSERT INTO sessions (
           id, account_id, purpose, authenticated_passkey_id, created_at,
           idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at
         ) VALUES (?, ?, 'normal', ?, ?, ?, ?, ?, NULL, NULL)`,
-      )
+    )
       .bind(
         otherId,
         fixture.accountId,
@@ -444,11 +414,7 @@ test("holds mutations pending through revalidation instead of racing older lists
   }
 });
 
-test("refreshes and revokes Sessions from the account-security UI", async ({
-  browser,
-  server,
-  baseURL,
-}) => {
+test("refreshes and revokes Sessions from the account-security UI", async ({ browser, server, baseURL }) => {
   const fixture = await signInSeededAccount(browser, server, baseURL!);
   try {
     await fixture.page.goto(`${fixture.origin}/account/security`, { waitUntil: "commit" });
@@ -460,13 +426,12 @@ test("refreshes and revokes Sessions from the account-security UI", async ({
 
     const now = Date.now();
     const otherId = `other-session-${fixture.accountId}`;
-    await fixture.env.DB
-      .prepare(
-        `INSERT INTO sessions (
+    await fixture.env.DB.prepare(
+      `INSERT INTO sessions (
           id, account_id, purpose, authenticated_passkey_id, created_at,
           idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at
         ) VALUES (?, ?, 'normal', ?, ?, ?, ?, ?, NULL, NULL)`,
-      )
+    )
       .bind(
         otherId,
         fixture.accountId,
@@ -482,10 +447,11 @@ test("refreshes and revokes Sessions from the account-security UI", async ({
     await fixture.page.getByRole("button", { name: "Revoke other session" }).click();
     await expect(fixture.page.getByRole("status")).toHaveText("Session revoked.");
     expect(
-      (await fixture.env.DB
-        .prepare("SELECT revoked_at FROM sessions WHERE id = ?")
-        .bind(otherId)
-        .first<{ revoked_at: number | null }>())?.revoked_at,
+      (
+        await fixture.env.DB.prepare("SELECT revoked_at FROM sessions WHERE id = ?")
+          .bind(otherId)
+          .first<{ revoked_at: number | null }>()
+      )?.revoked_at,
     ).toEqual(expect.any(Number));
 
     await Promise.all([
@@ -525,8 +491,7 @@ test("signs out through the UI and rejects revoked, idle, and absolute cookies",
   const idle = await signInSeededAccount(browser, server, baseURL!, IDLE_ACCOUNT_ID);
   try {
     const [session] = await sessionsFor(idle.env, idle.accountId);
-    await idle.env.DB
-      .prepare("UPDATE sessions SET idle_expires_at = ? WHERE id = ?")
+    await idle.env.DB.prepare("UPDATE sessions SET idle_expires_at = ? WHERE id = ?")
       .bind(Date.now() - 1, session!.id)
       .run();
     expect(await publicSessionState(idle.page)).toEqual({
@@ -541,12 +506,11 @@ test("signs out through the UI and rejects revoked, idle, and absolute cookies",
   try {
     const [session] = await sessionsFor(absolute.env, absolute.accountId);
     const now = Date.now();
-    await absolute.env.DB
-      .prepare(
-        `UPDATE sessions
+    await absolute.env.DB.prepare(
+      `UPDATE sessions
          SET created_at = ?, idle_expires_at = ?, absolute_expires_at = ?
          WHERE id = ?`,
-      )
+    )
       .bind(now - SESSION_ABSOLUTE_MS - 2, now - 1, now - 1, session!.id)
       .run();
     expect(await publicSessionState(absolute.page)).toEqual({
@@ -560,10 +524,7 @@ test("signs out through the UI and rejects revoked, idle, and absolute cookies",
   const revoked = await signInSeededAccount(browser, server, baseURL!, REVOKED_ACCOUNT_ID);
   try {
     const [session] = await sessionsFor(revoked.env, revoked.accountId);
-    await revoked.env.DB
-      .prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?")
-      .bind(Date.now(), session!.id)
-      .run();
+    await revoked.env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?").bind(Date.now(), session!.id).run();
     expect(await publicSessionState(revoked.page)).toEqual({
       status: 200,
       body: { authenticated: false },

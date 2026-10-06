@@ -25,9 +25,14 @@ import { verifyFileHead } from "~/shared/tree/file-head";
 import { verifyListingSignature } from "~/shared/tree/listing";
 import { encodeTreeBytes } from "~/shared/tree/wire";
 import {
-  MAX_IMPORT_CHUNK_BODY_BYTES, MAX_IMPORT_SESSION_BODY_BYTES, IMPORT_RECORD_KINDS,
-  decodeImportChunkBody, decodeImportSessionBody, verifyChunkDigests,
-  type DecodedDescriptor, type StagingRecordKind,
+  MAX_IMPORT_CHUNK_BODY_BYTES,
+  MAX_IMPORT_SESSION_BODY_BYTES,
+  IMPORT_RECORD_KINDS,
+  decodeImportChunkBody,
+  decodeImportSessionBody,
+  verifyChunkDigests,
+  type DecodedDescriptor,
+  type StagingRecordKind,
 } from "../shared/import/staging";
 import { MAX_STAGING_MANIFEST_BYTES } from "../shared/import/limits";
 
@@ -127,7 +132,10 @@ async function readBinaryBody(request: Request, maxBytes: number): Promise<Uint8
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > maxBytes) { await reader.cancel(); return null; }
+      if (total > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
       parts.push(value);
     }
   } finally {
@@ -135,13 +143,19 @@ async function readBinaryBody(request: Request, maxBytes: number): Promise<Uint8
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
-  for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
   return bytes;
 }
 
 function parseProof(value: string | null): unknown {
-  try { return JSON.parse(value ?? "null"); }
-  catch { return null; }
+  try {
+    return JSON.parse(value ?? "null");
+  } catch {
+    return null;
+  }
 }
 
 /** After proof verification the recorded body digest is the body's SHA-256. */
@@ -149,10 +163,14 @@ function proofBodyDigest(proof: unknown): Uint8Array | null {
   const value = (proof as { bodyDigest?: unknown } | null)?.bodyDigest;
   if (typeof value !== "string" || value.length > 64) return null;
   try {
-    const bytes = Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/") +
-      "=".repeat((4 - value.length % 4) % 4)), (character) => character.charCodeAt(0));
+    const bytes = Uint8Array.from(
+      atob(value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (value.length % 4)) % 4)),
+      (character) => character.charCodeAt(0),
+    );
     return bytes.length === 32 ? bytes : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 async function sessionRow(env: Env, importId: string): Promise<SessionRow | null> {
@@ -160,9 +178,11 @@ async function sessionRow(env: Env, importId: string): Promise<SessionRow | null
 }
 
 async function chunkRow(env: Env, importId: string, sequence: number): Promise<ChunkRow | null> {
-  return (await createDb(env.DB).get<ChunkRow>(sql`
+  return (
+    (await createDb(env.DB).get<ChunkRow>(sql`
     SELECT sequence, digest, descriptor_count, length(payload) AS bytes FROM import_chunks
-    WHERE import_id = ${importId} AND sequence = ${sequence}`)) ?? null;
+    WHERE import_id = ${importId} AND sequence = ${sequence}`)) ?? null
+  );
 }
 
 /** Typed staged record ready for `import_records`; all fields were validated. */
@@ -186,19 +206,33 @@ type UploadRecord = {
  * inspected, never opened; the header's context must agree with the typed
  * references, the target Owner's vault, and the kind's locked purpose.
  */
-function validateUploadRecord(targetOwnerId: string, deviceId: string,
-  descriptor: DecodedDescriptor, payload: Uint8Array, ordinal: number): UploadRecord {
+function validateUploadRecord(
+  targetOwnerId: string,
+  deviceId: string,
+  descriptor: DecodedDescriptor,
+  payload: Uint8Array,
+  ordinal: number,
+): UploadRecord {
   const schema = IMPORT_RECORD_KINDS[descriptor.kind];
   if (payload.length !== descriptor.length || payload.length < schema.min || payload.length > schema.max) {
     throw new Error("record bounds");
   }
   const base = {
-    ordinal, kind: descriptor.kind, refs: [...descriptor.refs] as (string | null)[],
-    offset: descriptor.offset, length: descriptor.length, digest: descriptor.digest,
+    ordinal,
+    kind: descriptor.kind,
+    refs: [...descriptor.refs] as (string | null)[],
+    offset: descriptor.offset,
+    length: descriptor.length,
+    digest: descriptor.digest,
   };
   const structural = (): UploadRecord => ({
-    ...base, headerKeyId: null, headerKeyEpoch: null, headerRevision: null, expectedRevision: null,
-    headDeviceId: null, signerDeviceId: null,
+    ...base,
+    headerKeyId: null,
+    headerKeyEpoch: null,
+    headerRevision: null,
+    expectedRevision: null,
+    headDeviceId: null,
+    signerDeviceId: null,
   });
   if (descriptor.kind === "node-directory" || descriptor.kind === "node-file") {
     if (payload.length) throw new Error("node record payload");
@@ -223,13 +257,18 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
   const header = inspectEnvelope(payload);
   const envelopeKind = schema as { envelope: "symmetric" | "hpke"; purpose: string };
   const suite = envelopeKind.envelope === "hpke" ? HPKE_SUITE : SYMMETRIC_SUITE;
-  if (header.suite !== suite || header.context.purpose !== envelopeKind.purpose ||
-      header.context.vaultId !== targetOwnerId) throw new Error("envelope shape");
+  if (
+    header.suite !== suite ||
+    header.context.purpose !== envelopeKind.purpose ||
+    header.context.vaultId !== targetOwnerId
+  )
+    throw new Error("envelope shape");
   const context = header.context;
   const [ref1, ref2, ref3, ref4] = descriptor.refs;
   const sameIdentity = (): boolean => {
     switch (descriptor.kind) {
-      case "entry-name": case "entry-order":
+      case "entry-name":
+      case "entry-order":
         return context.objectId === ref1 && context.keyId === ref2 && context.revision === 1;
       case "directory-capability":
         return context.objectId === ref1 && context.keyId === ref1 && context.keyEpoch === 1 && context.revision === 1;
@@ -237,15 +276,19 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
         return context.objectId === ref1 && context.keyId === ref3 && context.keyEpoch === 1 && context.revision === 1;
       case "entry-key":
         return context.objectId === ref1;
-      case "representation-key": case "representation":
+      case "representation-key":
+      case "representation":
         return context.objectId === ref1 && context.keyId === ref3;
       case "public-representation":
         return context.publicationId === ref1 && context.keyId === ref2;
       case "comment-thread":
         return context.objectId === ref2 && context.keyId === ref4 && context.keyEpoch === 1 && context.revision === 1;
-      case "comment-body": case "comment-attribution": case "comment-meta":
+      case "comment-body":
+      case "comment-attribution":
+      case "comment-meta":
         return context.objectId === ref2 && context.keyId === ref2 && context.keyEpoch === 1 && context.revision === 1;
-      case "comment-key": case "comment-attribution-key":
+      case "comment-key":
+      case "comment-attribution-key":
         return context.objectId === ref2 && context.keyEpoch === 1 && context.revision === 1;
       case "listing-ciphertext":
         return context.objectId === ref1 && context.keyId === ref1;
@@ -254,8 +297,15 @@ function validateUploadRecord(targetOwnerId: string, deviceId: string,
     }
   };
   if (!sameIdentity() || context.keyEpoch < 1 || context.revision < 1) throw new Error("envelope identity");
-  return { ...base, headerKeyId: context.keyId, headerKeyEpoch: context.keyEpoch,
-    headerRevision: context.revision, expectedRevision: null, headDeviceId: null, signerDeviceId: null };
+  return {
+    ...base,
+    headerKeyId: context.keyId,
+    headerKeyEpoch: context.keyEpoch,
+    headerRevision: context.revision,
+    expectedRevision: null,
+    headDeviceId: null,
+    signerDeviceId: null,
+  };
 }
 
 const RECORD_COLUMNS = `import_id, chunk_sequence, ordinal, kind, ref1, ref2, ref3, ref4, offset, length, digest,
@@ -266,11 +316,13 @@ const RECORD_COLUMNS = `import_id, chunk_sequence, ordinal, kind, ref1, ref2, re
 function recordInsertStatements(importId: string, sequence: number, records: readonly UploadRecord[]): SQL[] {
   const statements: SQL[] = [];
   for (let start = 0; start < records.length; start += 5) {
-    const rows = records.slice(start, start + 5).map((record) => sql`(
+    const rows = records.slice(start, start + 5).map(
+      (record) => sql`(
       ${importId}, ${sequence}, ${record.ordinal}, ${record.kind},
       ${record.refs[0] ?? null}, ${record.refs[1] ?? null}, ${record.refs[2] ?? null}, ${record.refs[3] ?? null},
       ${record.offset}, ${record.length}, ${record.digest}, ${record.headerKeyId}, ${record.headerKeyEpoch}, ${record.headerRevision},
-      ${record.expectedRevision}, ${record.headDeviceId}, ${record.signerDeviceId})`);
+      ${record.expectedRevision}, ${record.headDeviceId}, ${record.signerDeviceId})`,
+    );
     statements.push(sql`INSERT INTO import_records (${sql.raw(RECORD_COLUMNS)}) VALUES ${sql.join(rows, sql`, `)}`);
   }
   return statements;
@@ -281,8 +333,11 @@ function recordInsertStatements(importId: string, sequence: number, records: rea
 /** Create the initiating-Account-bound session after the local preflight. */
 async function createSession(env: Env, auth: AuthorizedDevice, body: Uint8Array): Promise<Response> {
   let decoded;
-  try { decoded = decodeImportSessionBody(body); }
-  catch { return invalid(); }
+  try {
+    decoded = decodeImportSessionBody(body);
+  } catch {
+    return invalid();
+  }
   const { metadata, manifest } = decoded;
   if (manifest.length < 1 || manifest.length > MAX_STAGING_MANIFEST_BYTES) return invalid();
   if (!equalBytes(await sha256(manifest), fromHex(metadata.manifestDigest))) return invalid();
@@ -298,7 +353,10 @@ async function createSession(env: Env, auth: AuthorizedDevice, body: Uint8Array)
   const now = Date.now();
   const expiresAt = now + MAX_IMPORT_AGE_MS;
   const manifestDigest = await sha256(manifest);
-  const inserted = await commitPrivateBatch(env, auth, (guard) => sql`
+  const inserted = await commitPrivateBatch(
+    env,
+    auth,
+    (guard) => sql`
     INSERT INTO import_sessions (id, account_id, session_id, device_id, target_directory_id, target_owner_id,
       reviewed_entry_revision, manifest_ciphertext, manifest_digest, expected_record_count, expected_chunk_count,
       expected_payload_bytes, expected_comment_count, aggregate_digest, state, created_at, expires_at)
@@ -309,20 +367,31 @@ async function createSession(env: Env, auth: AuthorizedDevice, body: Uint8Array)
     WHERE ${accessPredicate(auth, metadata.targetDirectoryId, "create")}
       AND EXISTS (SELECT 1 FROM directories d WHERE d.node_id = ${metadata.targetDirectoryId}
         AND d.owner_id = ${target.owner_id}) AND ${guard}`,
-    (marker) => metadata.kindCounts.map((entry) => sql`
+    (marker) =>
+      metadata.kindCounts.map(
+        (entry) => sql`
       INSERT INTO import_session_kinds (import_id, kind, expected_count)
-      SELECT ${importId}, ${entry.kind}, ${entry.count} WHERE ${marker}`));
-  return inserted
-    ? Response.json({ importId, expiresAt, state: "open" }, { status: 201, headers })
-    : changed();
+      SELECT ${importId}, ${entry.kind}, ${entry.count} WHERE ${marker}`,
+      ),
+  );
+  return inserted ? Response.json({ importId, expiresAt, state: "open" }, { status: 201, headers }) : changed();
 }
 
 /** Upload one raw binary encrypted chunk; the exact body bytes are the retry identity. */
-async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, sequence: number,
-  body: Uint8Array, bodyDigest: Uint8Array): Promise<Response> {
+async function uploadChunk(
+  env: Env,
+  auth: AuthorizedDevice,
+  importId: string,
+  sequence: number,
+  body: Uint8Array,
+  bodyDigest: Uint8Array,
+): Promise<Response> {
   let chunk;
-  try { chunk = decodeImportChunkBody(body, MAX_IMPORT_CHUNK_BODY_BYTES); }
-  catch { return invalid(); }
+  try {
+    chunk = decodeImportChunkBody(body, MAX_IMPORT_CHUNK_BODY_BYTES);
+  } catch {
+    return invalid();
+  }
   const session = await sessionRow(env, importId);
   if (!session || session.account_id !== auth.accountId) return notFound();
   const now = Date.now();
@@ -333,7 +402,10 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
       : changed();
   }
   if (session.state !== "open") return changed();
-  if (session.expires_at <= now) { await purgeSession(env, session); return expired(); }
+  if (session.expires_at <= now) {
+    await purgeSession(env, session);
+    return expired();
+  }
   if (sequence < 0 || sequence >= session.expected_chunk_count) return invalid();
   const existing = await chunkRow(env, importId, sequence);
   if (existing) {
@@ -343,15 +415,27 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
     await failSession(env, auth, importId);
     return changed();
   }
-  if (!await verifyChunkDigests(chunk)) return invalid();
+  if (!(await verifyChunkDigests(chunk))) return invalid();
   let records: UploadRecord[];
   try {
-    records = chunk.descriptors.map((descriptor, ordinal) => validateUploadRecord(session.target_owner_id,
-      auth.deviceId, descriptor, chunk.payload.subarray(descriptor.offset, descriptor.offset + descriptor.length), ordinal));
-  } catch { return invalid(); }
+    records = chunk.descriptors.map((descriptor, ordinal) =>
+      validateUploadRecord(
+        session.target_owner_id,
+        auth.deviceId,
+        descriptor,
+        chunk.payload.subarray(descriptor.offset, descriptor.offset + descriptor.length),
+        ordinal,
+      ),
+    );
+  } catch {
+    return invalid();
+  }
   const payloadBytes = chunk.payload.length;
   const descriptorCount = records.length;
-  const committed = await commitPrivateBatch(env, auth, (guard) => sql`
+  const committed = await commitPrivateBatch(
+    env,
+    auth,
+    (guard) => sql`
     UPDATE import_sessions SET uploaded_chunks = uploaded_chunks + 1,
       uploaded_records = uploaded_records + ${descriptorCount}, uploaded_bytes = uploaded_bytes + ${payloadBytes}
     WHERE id = ${importId} AND account_id = ${auth.accountId} AND state = 'open' AND expires_at > ${now}
@@ -365,8 +449,10 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
         SELECT ${importId}, ${sequence}, ${chunk.payload}, ${bodyDigest}, ${descriptorCount}, ${now}
         WHERE ${marker}`,
       ...recordInsertStatements(importId, sequence, records),
-    ]);
-  if (committed) return Response.json({ sequence, received: descriptorCount, bytes: payloadBytes }, { status: 201, headers });
+    ],
+  );
+  if (committed)
+    return Response.json({ sequence, received: descriptorCount, bytes: payloadBytes }, { status: 201, headers });
   const raced = await chunkRow(env, importId, sequence);
   if (raced && equalBytes(bytesOf(raced.digest), bodyDigest)) {
     return Response.json({ sequence, received: raced.descriptor_count, retried: true }, { headers });
@@ -377,14 +463,18 @@ async function uploadChunk(env: Env, auth: AuthorizedDevice, importId: string, s
 /** Permanently fail a session whose accepted sequence was replayed with different
  * bytes, deleting its staged rows in the same proof-guarded batch. */
 async function failSession(env: Env, auth: AuthorizedDevice, importId: string): Promise<void> {
-  await commitPrivateBatch(env, auth, (guard) => sql`
+  await commitPrivateBatch(
+    env,
+    auth,
+    (guard) => sql`
     UPDATE import_sessions SET state = 'failed'
     WHERE id = ${importId} AND account_id = ${auth.accountId} AND state = 'open' AND ${guard}`,
     (marker) => [
       sql`DELETE FROM import_records WHERE import_id = ${importId} AND ${marker}`,
       sql`DELETE FROM import_chunks WHERE import_id = ${importId} AND ${marker}`,
       sql`DELETE FROM import_session_kinds WHERE import_id = ${importId} AND ${marker}`,
-    ]);
+    ],
+  );
 }
 
 /* ------------------------------------------------------------------ commit */
@@ -403,8 +493,9 @@ function indexRecords(records: readonly RecordRow[]): PlanIndex {
   }
   return {
     of: (kind) => byKind.get(kind) ?? [],
-    one: (kind, ref1, ref2) => (byKind.get(kind) ?? [])
-      .find((record) => record.ref1 === ref1 && (ref2 === undefined || record.ref2 === ref2)) ?? null,
+    one: (kind, ref1, ref2) =>
+      (byKind.get(kind) ?? []).find((record) => record.ref1 === ref1 && (ref2 === undefined || record.ref2 === ref2)) ??
+      null,
   };
 }
 
@@ -417,7 +508,7 @@ function validateCompletePlan(records: readonly RecordRow[]): void {
     if (!plan.one("entry-name", nodeId) || !plan.one("entry-order", nodeId)) throw new Error("entry records");
     const children = nodes.filter((child) => child.ref2 === nodeId).length;
     const listing = plan.one("listing-ciphertext", nodeId);
-    if ((children > 0) !== Boolean(listing)) throw new Error("listing records");
+    if (children > 0 !== Boolean(listing)) throw new Error("listing records");
     if (listing && (!plan.one("listing-digest", nodeId) || !plan.one("listing-signature", nodeId))) {
       throw new Error("listing records");
     }
@@ -425,8 +516,13 @@ function validateCompletePlan(records: readonly RecordRow[]): void {
   }
   for (const file of plan.of("node-file")) {
     const fileId = file.ref1!;
-    if (!plan.one("file-capability", fileId) || !plan.one("representation-key", fileId) ||
-        !plan.one("representation", fileId) || !plan.one("file-head", fileId)) throw new Error("file records");
+    if (
+      !plan.one("file-capability", fileId) ||
+      !plan.one("representation-key", fileId) ||
+      !plan.one("representation", fileId) ||
+      !plan.one("file-head", fileId)
+    )
+      throw new Error("file records");
   }
   const replaced = new Set<string>();
   for (const replace of plan.of("replace")) {
@@ -488,7 +584,10 @@ type PublicationCheck = {
 async function assertionKeys(env: Env, ids: readonly string[]): Promise<Map<string, Uint8Array>> {
   const unique = [...new Set(ids)];
   if (!unique.length) return new Map();
-  const list = sql.join(unique.map((id) => sql`${id}`), sql`, `);
+  const list = sql.join(
+    unique.map((id) => sql`${id}`),
+    sql`, `,
+  );
   const rows = await createDb(env.DB).all<{ id: string; assertion_public_key: ArrayBuffer }>(sql`
     SELECT id, assertion_public_key FROM encryption_devices WHERE id IN (${list})`);
   return new Map(rows.map((row) => [row.id, bytesOf(row.assertion_public_key)]));
@@ -502,7 +601,10 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
   }
   if (session.state !== "open") return changed();
   const now = Date.now();
-  if (session.expires_at <= now) { await purgeSession(env, session); return expired(); }
+  if (session.expires_at <= now) {
+    await purgeSession(env, session);
+    return expired();
+  }
   const chunks = await createDb(env.DB).all<ChunkRow>(sql`
     SELECT sequence, digest, descriptor_count, length(payload) AS bytes FROM import_chunks
     WHERE import_id = ${importId} ORDER BY sequence`);
@@ -525,8 +627,11 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
   }
   const records = await createDb(env.DB).all<RecordRow>(sql`
     SELECT * FROM import_record_payloads WHERE import_id = ${importId} ORDER BY chunk_sequence, ordinal`);
-  try { validateCompletePlan(records); }
-  catch { return incomplete(); }
+  try {
+    validateCompletePlan(records);
+  } catch {
+    return incomplete();
+  }
   const plan = indexRecords(records);
 
   // Reviewed revisions, target authority, and Replace/Publication pairing;
@@ -536,14 +641,23 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
     JOIN vault_nodes n ON n.id = d.node_id AND n.owner_id = d.owner_id
     WHERE d.node_id = ${session.target_directory_id} AND n.kind = 'directory'
       AND ${accessPredicate(auth, session.target_directory_id, "create")}`);
-  if (!target || target.owner_id !== session.target_owner_id ||
-      target.entries_revision !== session.reviewed_entry_revision) return changed();
-  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${sharingWriteBlocked(session.target_directory_id)}`)) return changed();
+  if (
+    !target ||
+    target.owner_id !== session.target_owner_id ||
+    target.entries_revision !== session.reviewed_entry_revision
+  )
+    return changed();
+  if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${sharingWriteBlocked(session.target_directory_id)}`))
+    return changed();
   const targetListing = plan.one("listing-ciphertext", session.target_directory_id);
-  if (!targetListing || targetListing.header_revision !== session.reviewed_entry_revision + 1 ||
-      targetListing.header_key_epoch !== target.key_epoch ||
-      !plan.one("listing-digest", session.target_directory_id) ||
-      !plan.one("listing-signature", session.target_directory_id)) return incomplete();
+  if (
+    !targetListing ||
+    targetListing.header_revision !== session.reviewed_entry_revision + 1 ||
+    targetListing.header_key_epoch !== target.key_epoch ||
+    !plan.one("listing-digest", session.target_directory_id) ||
+    !plan.one("listing-signature", session.target_directory_id)
+  )
+    return incomplete();
 
   const replaces = await createDb(env.DB).all<StagedFileCheck>(sql`
     SELECT r.ref1, r.ref2, r.expected_revision, f.current_revision, f.current_representation_id,
@@ -552,9 +666,14 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
     WHERE r.import_id = ${importId} AND r.kind = 'replace'`);
   if (replaces.length !== plan.of("replace").length) return incomplete();
   for (const replace of replaces) {
-    if (replace.owner_id !== session.target_owner_id || replace.parent_node_id !== session.target_directory_id ||
-        replace.import_id !== null || replace.current_revision !== replace.expected_revision ||
-        replace.current_representation_id !== replace.ref2) return changed();
+    if (
+      replace.owner_id !== session.target_owner_id ||
+      replace.parent_node_id !== session.target_directory_id ||
+      replace.import_id !== null ||
+      replace.current_revision !== replace.expected_revision ||
+      replace.current_representation_id !== replace.ref2
+    )
+      return changed();
   }
   const publications = await createDb(env.DB).all<PublicationCheck>(sql`
     SELECT r.ref1, r.ref2, r.header_revision, p.state, p.current_link_id, p.current_representation_id, p.file_id,
@@ -564,15 +683,20 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
     WHERE r.import_id = ${importId} AND r.kind = 'public-representation'`);
   if (publications.length !== plan.of("public-representation").length) return incomplete();
   for (const publication of publications) {
-    if (publication.state !== "active" || publication.current_link_id !== publication.ref2 ||
-        publication.current_representation_id === null || publication.current_revision + 1 !== publication.header_revision) {
+    if (
+      publication.state !== "active" ||
+      publication.current_link_id !== publication.ref2 ||
+      publication.current_representation_id === null ||
+      publication.current_revision + 1 !== publication.header_revision
+    ) {
       return changed();
     }
     if (!replaces.some((replace) => replace.ref1 === publication.file_id)) return incomplete();
   }
 
   // Verify every signed File and listing head against its recording device.
-  const signingIds = records.flatMap((record) => [record.head_device_id, record.signer_device_id])
+  const signingIds = records
+    .flatMap((record) => [record.head_device_id, record.signer_device_id])
     .filter((id): id is string => Boolean(id));
   const keys = await assertionKeys(env, signingIds);
   for (const record of records) {
@@ -583,14 +707,28 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
       if (!digest || !signature || record.header_revision === null) return incomplete();
       if (!equalBytes(await digestEnvelope(bytesOf(record.payload)), bytesOf(digest.payload))) return incomplete();
       const key = keys.get(signature.signer_device_id!);
-      if (!key || !await verifyListingSignature({
-        ciphertext: encodeTreeBytes(bytesOf(record.payload)), digest: encodeTreeBytes(bytesOf(digest.payload)),
-        signature: encodeTreeBytes(bytesOf(signature.payload)),
-      }, { vaultId: session.target_owner_id, directoryId, deviceId: signature.signer_device_id!,
-        revision: record.header_revision, publicKey: key })) return incomplete();
+      if (
+        !key ||
+        !(await verifyListingSignature(
+          {
+            ciphertext: encodeTreeBytes(bytesOf(record.payload)),
+            digest: encodeTreeBytes(bytesOf(digest.payload)),
+            signature: encodeTreeBytes(bytesOf(signature.payload)),
+          },
+          {
+            vaultId: session.target_owner_id,
+            directoryId,
+            deviceId: signature.signer_device_id!,
+            revision: record.header_revision,
+            publicKey: key,
+          },
+        ))
+      )
+        return incomplete();
     }
     if (record.kind === "file-head") {
-      const fileId = record.ref1!, representationId = record.ref2!;
+      const fileId = record.ref1!,
+        representationId = record.ref2!;
       const representation = plan.one("representation", fileId, representationId);
       const representationKey = plan.one("representation-key", fileId, representationId);
       if (!representation || !representationKey) return incomplete();
@@ -601,14 +739,30 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
       const capabilityEpoch = fileCapability ? 1 : current?.capability_epoch;
       if (!capabilityId || !capabilityEpoch) return incomplete();
       const key = keys.get(record.head_device_id!);
-      if (!key || !await verifyFileHead(key, {
-        vaultId: session.target_owner_id, fileId, capabilityId, capabilityEpoch, representationId,
-        contentKeyId: representationKey.ref3!, keyEpoch: representationKey.header_key_epoch!,
-        revision: replace ? replace.expected_revision! + 1 : 1, deviceId: record.head_device_id!,
-        ciphertext: encodeTreeBytes(bytesOf(representation.payload)),
-        keyEnvelope: encodeTreeBytes(bytesOf(representationKey.payload)),
-      }, { digest: encodeTreeBytes(bytesOf(record.payload).slice(0, 32)),
-        signature: encodeTreeBytes(bytesOf(record.payload).slice(32, 96)) })) return incomplete();
+      if (
+        !key ||
+        !(await verifyFileHead(
+          key,
+          {
+            vaultId: session.target_owner_id,
+            fileId,
+            capabilityId,
+            capabilityEpoch,
+            representationId,
+            contentKeyId: representationKey.ref3!,
+            keyEpoch: representationKey.header_key_epoch!,
+            revision: replace ? replace.expected_revision! + 1 : 1,
+            deviceId: record.head_device_id!,
+            ciphertext: encodeTreeBytes(bytesOf(representation.payload)),
+            keyEnvelope: encodeTreeBytes(bytesOf(representationKey.payload)),
+          },
+          {
+            digest: encodeTreeBytes(bytesOf(record.payload).slice(0, 32)),
+            signature: encodeTreeBytes(bytesOf(record.payload).slice(32, 96)),
+          },
+        ))
+      )
+        return incomplete();
     }
   }
   // Every staged parent is the target or another staged directory.
@@ -618,7 +772,10 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
   }
 
   const nowMs = Date.now();
-  const committed = await commitPrivateBatch(env, auth, (guard) => sql`
+  const committed = await commitPrivateBatch(
+    env,
+    auth,
+    (guard) => sql`
     INSERT INTO import_commits (import_id, account_id, target_directory_id, committed_at)
     SELECT ${importId}, ${auth.accountId}, ${session.target_directory_id}, ${nowMs}
     WHERE ${accessPredicate(auth, session.target_directory_id, "create")}
@@ -775,7 +932,9 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
         WHERE node_id = ${session.target_directory_id} AND owner_id = ${session.target_owner_id}
           AND entries_revision = ${session.reviewed_entry_revision} AND ${marker}`,
       sql`DELETE FROM import_records WHERE import_id = ${importId} AND ${marker}`,
-    ], { deferForeignKeys: true });
+    ],
+    { deferForeignKeys: true },
+  );
   return committed
     ? Response.json({ importId, committed: true, entriesRevision: session.reviewed_entry_revision + 1 }, { headers })
     : changed();
@@ -810,11 +969,17 @@ async function purgeExpiredSessions(env: Env, accountId: string): Promise<void> 
       AND NOT EXISTS (SELECT 1 FROM import_chunks WHERE import_id = import_sessions.id)
     LIMIT ${PURGE_BATCH}`);
   if (!rows.length) return;
-  await atomicSqlBatch(env.DB, rows.flatMap((row) => deleteStatements(row.id, row.state !== "committed")));
+  await atomicSqlBatch(
+    env.DB,
+    rows.flatMap((row) => deleteStatements(row.id, row.state !== "committed")),
+  );
 }
 
 async function cancelImport(env: Env, auth: AuthorizedDevice, importId: string): Promise<Response> {
-  const cancelled = await commitPrivateBatch(env, auth, (guard) => sql`
+  const cancelled = await commitPrivateBatch(
+    env,
+    auth,
+    (guard) => sql`
     UPDATE import_sessions SET state = 'failed'
     WHERE id = ${importId} AND account_id = ${auth.accountId} AND state = 'open' AND ${guard}`,
     (marker) => [
@@ -822,7 +987,8 @@ async function cancelImport(env: Env, auth: AuthorizedDevice, importId: string):
       sql`DELETE FROM import_chunks WHERE import_id = ${importId} AND ${marker}`,
       sql`DELETE FROM import_session_kinds WHERE import_id = ${importId} AND ${marker}`,
       sql`DELETE FROM import_sessions WHERE id = ${importId} AND state = 'failed' AND ${marker}`,
-    ]);
+    ],
+  );
   return cancelled ? Response.json({ importId, cancelled: true }, { headers }) : notFound();
 }
 
@@ -835,13 +1001,21 @@ export async function importAction(request: Request, env: Env): Promise<Response
   const commit = /^\/api\/private\/imports\/([A-Za-z0-9_-]{43})\/commit$/.exec(path);
   const session = /^\/api\/private\/imports\/([A-Za-z0-9_-]{43})$/.exec(path);
   const collection = /^\/api\/private\/imports$/.exec(path);
-  if (!(collection && request.method === "POST") &&
-      !(chunk && request.method === "PUT") &&
-      !(commit && request.method === "POST") &&
-      !(session && request.method === "DELETE")) return notFound();
+  if (
+    !(collection && request.method === "POST") &&
+    !(chunk && request.method === "PUT") &&
+    !(commit && request.method === "POST") &&
+    !(session && request.method === "DELETE")
+  )
+    return notFound();
   if (request.method === "DELETE" || commit) {
-    if (!await hasEmptyBody(request)) return denied();
-    const auth = await authorizePrivateRequest(request, env, parseProof(request.headers.get("X-Mdwn-Device-Proof")), "");
+    if (!(await hasEmptyBody(request))) return denied();
+    const auth = await authorizePrivateRequest(
+      request,
+      env,
+      parseProof(request.headers.get("X-Mdwn-Device-Proof")),
+      "",
+    );
     if (!auth) return denied();
     return commit ? await commitImport(env, auth, commit[1]!) : await cancelImport(env, auth, session![1]!);
   }

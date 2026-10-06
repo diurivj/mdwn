@@ -1,11 +1,11 @@
 import { AuthRequestError, readAuthJson, record, requireSameOrigin } from "~/auth/request.server";
 import {
-  beginAuthenticationRecovery, beginRecoveryRegistration,
-  completeRecoveryRegistration, replaceAuthenticationRecoveryCodes,
+  beginAuthenticationRecovery,
+  beginRecoveryRegistration,
+  completeRecoveryRegistration,
+  replaceAuthenticationRecoveryCodes,
 } from "~/auth/recovery.server";
-import {
-  clearSessionCookie, getActiveSession, SessionConfigurationError,
-} from "~/auth/session.server";
+import { clearSessionCookie, getActiveSession, SessionConfigurationError } from "~/auth/session.server";
 import { getEnv } from "~/context/env";
 import { AbuseControlUnavailableError, abuseControlUnavailableResponse } from "~/shared/security/abuse-control.server";
 
@@ -29,7 +29,9 @@ export async function loader({ request, context }: Route.LoaderArgs): Promise<Re
       return Response.json({ identifier: session.accountId }, { headers: noStore });
     }
     return failed(404);
-  } catch { return failed(503); }
+  } catch {
+    return failed(503);
+  }
 }
 
 export async function action({ request, context }: Route.ActionArgs): Promise<Response> {
@@ -46,7 +48,8 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (pathname === "/api/auth/recovery/rotate") {
       if (!session || session.purpose !== "normal") return failed(403);
       return (await replaceAuthenticationRecoveryCodes(env, session, body?.hashes))
-        ? Response.json({ ok: true }, { headers: noStore }) : failed();
+        ? Response.json({ ok: true }, { headers: noStore })
+        : failed();
     }
     if (!session || session.purpose !== "recovery") return failed(403);
     if (pathname === "/api/auth/recovery/options") {
@@ -55,13 +58,14 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     }
     if (pathname === "/api/auth/recovery/verify") {
       if (typeof body?.challengeId !== "string") return failed();
-      const completed = await completeRecoveryRegistration(
-        request, env, session, body.challengeId, body.response,
-      );
+      const completed = await completeRecoveryRegistration(request, env, session, body.challengeId, body.response);
       return completed
-        ? Response.json({ ok: true }, {
-          headers: { ...noStore, "Set-Cookie": await clearSessionCookie(env) },
-        })
+        ? Response.json(
+            { ok: true },
+            {
+              headers: { ...noStore, "Set-Cookie": await clearSessionCookie(env) },
+            },
+          )
         : failed();
     }
     return failed(404);

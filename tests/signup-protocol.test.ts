@@ -1,19 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  bindingMessage, decodeBytes, encodeBytes, solveProofOfWork,
-  transcriptDigest, verifyProofOfWork, type SignupTranscript,
+  bindingMessage,
+  decodeBytes,
+  encodeBytes,
+  solveProofOfWork,
+  transcriptDigest,
+  verifyProofOfWork,
+  type SignupTranscript,
 } from "../app/shared/signup/protocol";
 
 const b64 = (length: number, fill: number) => encodeBytes(new Uint8Array(length).fill(fill));
 const key = (fill: number) => encodeBytes(Uint8Array.of(4, ...new Uint8Array(64).fill(fill)));
 const transcript: SignupTranscript = {
-  accountId: "account-1", rootDirectoryId: "root-1", deviceId: "device-1",
-  transportPublicKey: key(1), assertionPublicKey: key(2), capsuleGeneration: 1,
-  capsuleDigest: b64(32, 3), recoverySalt: b64(32, 4),
-  recoveryVerificationPublicKey: key(5), rootRecoveryEnvelopeDigest: b64(32, 6),
-  enrollmentEnvelopeDigest: b64(32, 7), profileDigest: b64(32, 8),
+  accountId: "account-1",
+  rootDirectoryId: "root-1",
+  deviceId: "device-1",
+  transportPublicKey: key(1),
+  assertionPublicKey: key(2),
+  capsuleGeneration: 1,
+  capsuleDigest: b64(32, 3),
+  recoverySalt: b64(32, 4),
+  recoveryVerificationPublicKey: key(5),
+  rootRecoveryEnvelopeDigest: b64(32, 6),
+  enrollmentEnvelopeDigest: b64(32, 7),
+  profileDigest: b64(32, 8),
   recoveryCodeHashes: Array.from({ length: 10 }, (_, i) => b64(32, i + 10)),
-  registrationChallenge: b64(32, 9), proofNonce: b64(8, 10), registryEpoch: 1,
+  registrationChallenge: b64(32, 9),
+  proofNonce: b64(8, 10),
+  registryEpoch: 1,
 };
 
 describe("signup wire protocol", () => {
@@ -32,17 +46,30 @@ describe("signup wire protocol", () => {
     const binding = await bindingMessage(transcript);
     expect(new TextDecoder().decode(binding.subarray(0, -32))).toBe("mdwn/signup-device-binding/v1\0");
     expect(encodeBytes(binding.subarray(-32))).toBe(baseline);
-    expect(await transcriptDigest(Object.fromEntries(Object.entries(transcript).reverse()) as unknown as SignupTranscript)).toBe(baseline);
+    expect(
+      await transcriptDigest(Object.fromEntries(Object.entries(transcript).reverse()) as unknown as SignupTranscript),
+    ).toBe(baseline);
     for (let i = 0; i < 10; i++) {
       const hashes = [...transcript.recoveryCodeHashes];
       hashes[i] = b64(32, 99);
       expect(await transcriptDigest({ ...transcript, recoveryCodeHashes: hashes }), `hash ${i}`).not.toBe(baseline);
     }
     for (const name of Object.keys(transcript) as (keyof SignupTranscript)[]) {
-      const changed = { ...transcript, [name]: name === "capsuleGeneration" || name === "registryEpoch"
-        ? 2 : name === "recoveryCodeHashes" ? [...transcript.recoveryCodeHashes.slice(0, 9), b64(32, 99)]
-          : name.endsWith("Id") ? "different-id" : name.endsWith("PublicKey") ? key(99)
-            : name === "proofNonce" ? b64(8, 99) : b64(32, 99) } as SignupTranscript;
+      const changed = {
+        ...transcript,
+        [name]:
+          name === "capsuleGeneration" || name === "registryEpoch"
+            ? 2
+            : name === "recoveryCodeHashes"
+              ? [...transcript.recoveryCodeHashes.slice(0, 9), b64(32, 99)]
+              : name.endsWith("Id")
+                ? "different-id"
+                : name.endsWith("PublicKey")
+                  ? key(99)
+                  : name === "proofNonce"
+                    ? b64(8, 99)
+                    : b64(32, 99),
+      } as SignupTranscript;
       if (name === "capsuleGeneration" || name === "registryEpoch") {
         await expect(transcriptDigest(changed)).rejects.toThrow();
         await expect(bindingMessage(changed)).rejects.toThrow();
@@ -63,7 +90,8 @@ describe("signup wire protocol", () => {
       { ...transcript, recoveryCodeHashes: transcript.recoveryCodeHashes.slice(1) },
       { ...transcript, unexpected: "ignored?" },
       { ...transcript, accountId: undefined, unexpected: "replacement" },
-    ]) await expect(transcriptDigest(changed as SignupTranscript)).rejects.toThrow();
+    ])
+      await expect(transcriptDigest(changed as SignupTranscript)).rejects.toThrow();
   });
 
   it("verifies a fixed, independently calculated SHA-256 challenge/nonce vector", async () => {
@@ -86,6 +114,8 @@ describe("signup wire protocol", () => {
     });
     try {
       expect(await solveProofOfWork(b64(32, 0))).toBe("AAAAAAACFKE");
-    } finally { random.mockRestore(); }
+    } finally {
+      random.mockRestore();
+    }
   }, 30_000);
 });

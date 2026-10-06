@@ -2,7 +2,9 @@ import { getActiveSession, SessionConfigurationError } from "~/auth/session.serv
 import { AuthRequestError, readAuthJson, record, requireSameOrigin } from "~/auth/request.server";
 import { getEnv } from "~/context/env";
 import {
-  challengeRecoveryEnrollment, commitRecoveryEnrollment, startRecoveryEnrollment,
+  challengeRecoveryEnrollment,
+  commitRecoveryEnrollment,
+  startRecoveryEnrollment,
   type RecoveryCommit,
 } from "~/recovery/enrollment.server";
 import type { RecoveryIntent } from "~/recovery/protocol";
@@ -23,12 +25,24 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (!session || session.purpose !== "normal") return failed(401);
     const path = new URL(request.url).pathname;
     if (path === "/api/files-recovery/start") return startRecoveryEnrollment(request, env, session);
-    if (!body || typeof body.enrollmentId !== "string" || !body.enrollmentId ||
-        typeof body.intent !== "object" || body.intent === null || Array.isArray(body.intent) ||
-        typeof body.intentSignature !== "string") return failed();
+    if (
+      !body ||
+      typeof body.enrollmentId !== "string" ||
+      !body.enrollmentId ||
+      typeof body.intent !== "object" ||
+      body.intent === null ||
+      Array.isArray(body.intent) ||
+      typeof body.intentSignature !== "string"
+    )
+      return failed();
     if (path === "/api/files-recovery/challenge") {
-      return challengeRecoveryEnrollment(env, session, body.enrollmentId,
-        body.intent as RecoveryIntent, body.intentSignature);
+      return challengeRecoveryEnrollment(
+        env,
+        session,
+        body.enrollmentId,
+        body.intent as RecoveryIntent,
+        body.intentSignature,
+      );
     }
     if (path === "/api/files-recovery/commit") return commitRecoveryEnrollment(env, session, body as RecoveryCommit);
     return failed(404);

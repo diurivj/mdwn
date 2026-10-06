@@ -83,7 +83,13 @@ export type ImportProblemAction = "remove" | "fix" | "re-export" | "split";
 export class ImportError extends Error {
   constructor(
     readonly code: ImportErrorCode,
-    readonly detail?: { item?: string; limit?: number; measured?: number; action?: ImportProblemAction; reason?: string },
+    readonly detail?: {
+      item?: string;
+      limit?: number;
+      measured?: number;
+      action?: ImportProblemAction;
+      reason?: string;
+    },
   ) {
     super(`mdwn/import: ${code}${detail?.item ? ` (${detail.item})` : ""}`);
     this.name = "ImportError";
@@ -94,28 +100,50 @@ export class ImportError extends Error {
 export function importProblemMessage(error: ImportError): string {
   const name = error.detail?.item ? `“${error.detail.item}”` : "This selection";
   switch (error.code) {
-    case "empty-selection": return "Choose at least one Markdown File or folder.";
-    case "unsupported-input": return `${name} is not supported. Import accepts a recognized mdwn archive, or UTF-8 .md/.markdown Files and folders. Remove it and try again.`;
-    case "not-utf8": return `${name} is not valid UTF-8 Markdown. Fix or re-encode the File, then retry.`;
-    case "invalid-path": return `${name} has a name mdwn cannot represent. Rename it and try again.`;
-    case "duplicate-source-path": return `${name} duplicates another selected path (Files treats case and equivalent Unicode spelling as the same name). Remove the duplicate and retry.`;
-    case "too-many-nodes": return `The selection has ${error.detail?.measured ?? "more"} items; one import accepts at most ${error.detail?.limit}. Split the selection and retry.`;
-    case "too-deep": return `${name} is nested deeper than ${error.detail?.limit} folders. Move some folders up a level or split the selection.`;
-    case "source-too-large": return `${name} is larger than the ${formatBytes(error.detail?.limit ?? 0)} Markdown limit. Reduce or split the File, then retry.`;
-    case "expanded-too-large": return `The selection expands to more than ${formatBytes(error.detail?.limit ?? 0)}. Split it into smaller imports.`;
-    case "archive-too-large": return `The archive is larger than the ${formatBytes(error.detail?.limit ?? 0)} compressed limit. Re-export a smaller selection or split it.`;
-    case "too-many-comments": return `The archive carries more than ${error.detail?.limit} Historical Comments. Reduce the Comment history or split the export.`;
-    case "ineligible-target": return "Choose a folder you own or one shared with you for editing.";
-    case "name-in-use": return `${name}: that name is already used in the destination folder. Choose another name.`;
-    case "generated-name-invalid": return `${name} cannot take a Keep-both suffix within the 255-byte name limit. Rename it, Skip it, or Replace an existing File.`;
-    case "nothing-to-import": return "Every item is skipped. Nothing would be created.";
-    case "replacement-unavailable": return `${name} changed since the review, so Replace is no longer available. Refresh and try again.`;
-    case "historical-comments-replace": return `${name} carries Historical Comments, but you chose Replace. mdwn cannot merge historical Comments into an existing thread. Choose Keep both or Skip instead.`;
-    case "plan-record-too-large": return `${name} exceeds its encrypted ${formatBytes(error.detail?.limit ?? 0)} field limit. Remove, fix, or split it.`;
-    case "plan-too-large": return "The encrypted import plan exceeds the bounded staging envelope. Remove files or split the selection and retry.";
-    case "staging-upload-failed": return "The upload was interrupted before the final step. Check the folder; if the import is not visible, you can retry it safely.";
-    case "staging-changed": return "This Import changed on the server, so it was not committed. Refresh the folder, review again, and retry.";
-    case "import-expired": return "This Import session expired before it committed. Nothing became visible; review and retry.";
+    case "empty-selection":
+      return "Choose at least one Markdown File or folder.";
+    case "unsupported-input":
+      return `${name} is not supported. Import accepts a recognized mdwn archive, or UTF-8 .md/.markdown Files and folders. Remove it and try again.`;
+    case "not-utf8":
+      return `${name} is not valid UTF-8 Markdown. Fix or re-encode the File, then retry.`;
+    case "invalid-path":
+      return `${name} has a name mdwn cannot represent. Rename it and try again.`;
+    case "duplicate-source-path":
+      return `${name} duplicates another selected path (Files treats case and equivalent Unicode spelling as the same name). Remove the duplicate and retry.`;
+    case "too-many-nodes":
+      return `The selection has ${error.detail?.measured ?? "more"} items; one import accepts at most ${error.detail?.limit}. Split the selection and retry.`;
+    case "too-deep":
+      return `${name} is nested deeper than ${error.detail?.limit} folders. Move some folders up a level or split the selection.`;
+    case "source-too-large":
+      return `${name} is larger than the ${formatBytes(error.detail?.limit ?? 0)} Markdown limit. Reduce or split the File, then retry.`;
+    case "expanded-too-large":
+      return `The selection expands to more than ${formatBytes(error.detail?.limit ?? 0)}. Split it into smaller imports.`;
+    case "archive-too-large":
+      return `The archive is larger than the ${formatBytes(error.detail?.limit ?? 0)} compressed limit. Re-export a smaller selection or split it.`;
+    case "too-many-comments":
+      return `The archive carries more than ${error.detail?.limit} Historical Comments. Reduce the Comment history or split the export.`;
+    case "ineligible-target":
+      return "Choose a folder you own or one shared with you for editing.";
+    case "name-in-use":
+      return `${name}: that name is already used in the destination folder. Choose another name.`;
+    case "generated-name-invalid":
+      return `${name} cannot take a Keep-both suffix within the 255-byte name limit. Rename it, Skip it, or Replace an existing File.`;
+    case "nothing-to-import":
+      return "Every item is skipped. Nothing would be created.";
+    case "replacement-unavailable":
+      return `${name} changed since the review, so Replace is no longer available. Refresh and try again.`;
+    case "historical-comments-replace":
+      return `${name} carries Historical Comments, but you chose Replace. mdwn cannot merge historical Comments into an existing thread. Choose Keep both or Skip instead.`;
+    case "plan-record-too-large":
+      return `${name} exceeds its encrypted ${formatBytes(error.detail?.limit ?? 0)} field limit. Remove, fix, or split it.`;
+    case "plan-too-large":
+      return "The encrypted import plan exceeds the bounded staging envelope. Remove files or split the selection and retry.";
+    case "staging-upload-failed":
+      return "The upload was interrupted before the final step. Check the folder; if the import is not visible, you can retry it safely.";
+    case "staging-changed":
+      return "This Import changed on the server, so it was not committed. Refresh the folder, review again, and retry.";
+    case "import-expired":
+      return "This Import session expired before it committed. Nothing became visible; review and retry.";
   }
 }
 

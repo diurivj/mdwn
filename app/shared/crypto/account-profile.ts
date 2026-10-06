@@ -1,9 +1,4 @@
-import {
-  createSymmetricWriter,
-  EnvelopeError,
-  openSymmetric,
-  type EnvelopeContext,
-} from "./enc-v1";
+import { createSymmetricWriter, EnvelopeError, openSymmetric, type EnvelopeContext } from "./enc-v1";
 
 export const ACCOUNT_PROFILE_OBJECT_ID = "account-profile";
 export const ACCOUNT_PROFILE_KEY_ID = "vault-root";
@@ -95,8 +90,13 @@ export function accountProfileContext(expected: AccountProfileExpectation): Enve
 
 /** Stable, bounded private Account-profile plaintext framing. */
 export function encodeAccountProfile(profile: AccountProfile): Uint8Array<ArrayBuffer> {
-  if (!profile || typeof profile !== "object" || Array.isArray(profile) ||
-      Object.keys(profile).length !== 1 || !("publicPseudonym" in profile)) {
+  if (
+    !profile ||
+    typeof profile !== "object" ||
+    Array.isArray(profile) ||
+    Object.keys(profile).length !== 1 ||
+    !("publicPseudonym" in profile)
+  ) {
     malformed();
   }
   const pseudonym = canonicalText(profile.publicPseudonym);
@@ -152,10 +152,8 @@ export async function openAccountProfile(
   rootKey: Uint8Array,
   expected: AccountProfileExpectation,
 ): Promise<AccountProfile> {
-  const plaintext = await openSymmetric(
-    copy(ciphertext),
-    vaultRootKey(rootKey),
-    { context: accountProfileContext(expected) },
-  );
+  const plaintext = await openSymmetric(copy(ciphertext), vaultRootKey(rootKey), {
+    context: accountProfileContext(expected),
+  });
   return decodeAccountProfile(plaintext);
 }

@@ -1,11 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import {
-  CROSS_ENGINE_ROUTE,
-  CROSS_ENGINE_VECTOR,
-  toHex,
-} from "../support/cross-engine-vector";
+import { CROSS_ENGINE_ROUTE, CROSS_ENGINE_VECTOR, toHex } from "../support/cross-engine-vector";
 
 const encoder = new TextEncoder();
 
@@ -36,8 +32,6 @@ describe("Worker cross-engine contract", () => {
   });
 
   it("performs the shared WebCrypto AES-GCM vector", async () => {
-    expect(toHex(await encryptCrossEngineVector())).toBe(
-      CROSS_ENGINE_VECTOR.ciphertext,
-    );
+    expect(toHex(await encryptCrossEngineVector())).toBe(CROSS_ENGINE_VECTOR.ciphertext);
   });
 });

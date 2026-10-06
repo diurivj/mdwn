@@ -1,9 +1,4 @@
-import {
-  applyD1Migrations,
-  createScheduledController,
-  env,
-  type D1Migration,
-} from "cloudflare:test";
+import { applyD1Migrations, createScheduledController, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { sealPublicCommentBody } from "../../app/shared/comments/public-content";
@@ -12,7 +7,11 @@ import {
   applyPublicParticipationSuspension,
   clearPublicParticipationSuspension,
 } from "../../app/shared/security/public-participation.server";
-import { FIRST_SUSPENSION_MS, REPORT_RETENTION_MS, REPEAT_SUSPENSION_MS } from "../../app/shared/security/public-participation";
+import {
+  FIRST_SUSPENSION_MS,
+  REPORT_RETENTION_MS,
+  REPEAT_SUSPENSION_MS,
+} from "../../app/shared/security/public-participation";
 import worker from "../../workers/app";
 import { mutation } from "./auth-fixtures";
 import {
@@ -25,8 +24,16 @@ import {
 } from "./publication-fixtures";
 import { opaqueId, sharingAccount, sharingRequest, treeChild, type SharingAccount } from "./sharing-fixtures";
 
-declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }
-beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      TEST_MIGRATIONS: D1Migration[];
+    }
+  }
+}
+beforeAll(async () => {
+  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+});
 beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM rate_limit_counters"),
@@ -38,14 +45,20 @@ beforeEach(async () => {
 const DAY_MS = 86_400_000;
 
 async function count(table: string, where = "1", ...values: unknown[]) {
-  return (await env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`).bind(...values).first<{ n: number }>())!.n;
+  return (await env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`)
+    .bind(...values)
+    .first<{ n: number }>())!.n;
 }
 
 /** Post a real Public Comment through the authenticated File route. */
 async function postComment(account: SharingAccount, fileId: string, publication: Publication, text: string) {
   const comment = await sealedComment(publication, text);
-  return sharingRequest(account, `/api/private/comments/files/${fileId}/public/entries`, "POST",
-    commentPayload(publication, comment));
+  return sharingRequest(
+    account,
+    `/api/private/comments/files/${fileId}/public/entries`,
+    "POST",
+    commentPayload(publication, comment),
+  );
 }
 
 function report(account: SharingAccount, commentId: string, category: string) {
@@ -54,12 +67,13 @@ function report(account: SharingAccount, commentId: string, category: string) {
 
 describe("Public Comment reports", () => {
   it("records one category-only report for a signed-in Account that never held the Comment capability", async () => {
-    const owner = await sharingAccount(), reporter = await sharingAccount();
+    const owner = await sharingAccount(),
+      reporter = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const publication = await publish(owner, fileId);
     const posted = await postComment(owner, fileId, publication, "Report me");
     expect(posted.status).toBe(201);
-    const { commentId } = await posted.json() as { commentId: string };
+    const { commentId } = (await posted.json()) as { commentId: string };
 
     // The reporter never opened the thread, holds no epoch capability and
     // receives no content: the report is opaque-ID plus fixed category only.
@@ -67,13 +81,23 @@ describe("Public Comment reports", () => {
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ reported: true });
 
-    const columns = await env.DB.prepare("PRAGMA table_info(public_comment_reports)")
-      .all<{ name: string }>();
-    expect(columns.results.map((column) => column.name)).toEqual(
-      ["id", "reporter_id", "comment_id", "category", "created_at", "expires_at"]);
+    const columns = await env.DB.prepare("PRAGMA table_info(public_comment_reports)").all<{ name: string }>();
+    expect(columns.results.map((column) => column.name)).toEqual([
+      "id",
+      "reporter_id",
+      "comment_id",
+      "category",
+      "created_at",
+      "expires_at",
+    ]);
     const stored = await env.DB.prepare(`SELECT reporter_id, comment_id, category, created_at, expires_at
-      FROM public_comment_reports`).first<{ reporter_id: string; comment_id: string; category: string;
-        created_at: number; expires_at: number }>();
+      FROM public_comment_reports`).first<{
+      reporter_id: string;
+      comment_id: string;
+      category: string;
+      created_at: number;
+      expires_at: number;
+    }>();
     expect(stored).toMatchObject({ reporter_id: reporter.accountId, comment_id: commentId, category: "spam" });
     expect(stored!.expires_at - stored!.created_at).toBe(REPORT_RETENTION_MS);
 
@@ -85,30 +109,38 @@ describe("Public Comment reports", () => {
   });
 
   it("rejects free text, unknown categories, and Comment IDs that do not exist", async () => {
-    const owner = await sharingAccount(), reporter = await sharingAccount();
+    const owner = await sharingAccount(),
+      reporter = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const publication = await publish(owner, fileId);
     const posted = await postComment(owner, fileId, publication, "Report shape");
-    const { commentId } = await posted.json() as { commentId: string };
+    const { commentId } = (await posted.json()) as { commentId: string };
 
     expect((await report(reporter, commentId, "harassment")).status).toBe(400);
-    expect((await sharingRequest(reporter, "/api/private/comments/reports", "POST",
-      { commentId, category: "spam", text: "the comment says…" })).status).toBe(400);
+    expect(
+      (
+        await sharingRequest(reporter, "/api/private/comments/reports", "POST", {
+          commentId,
+          category: "spam",
+          text: "the comment says…",
+        })
+      ).status,
+    ).toBe(400);
     expect((await report(reporter, opaqueId(), "spam")).status).toBe(404);
     expect((await report(reporter, "not-a-comment-id", "spam")).status).toBe(400);
     expect(await count("public_comment_reports")).toBe(0);
     // A well-formed unknown ID consumes the window before the lookup, so
     // Comment IDs cannot be probed for free.
-    expect(await count("rate_limit_counters",
-      "purpose = 'public_comment.report' AND scope_type = 'account'")).toBe(1);
+    expect(await count("rate_limit_counters", "purpose = 'public_comment.report' AND scope_type = 'account'")).toBe(1);
   });
 
   it("allows three reports per Account in 24 hours and answers the fourth generically", async () => {
-    const owner = await sharingAccount(), reporter = await sharingAccount();
+    const owner = await sharingAccount(),
+      reporter = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const publication = await publish(owner, fileId);
     const posted = await postComment(owner, fileId, publication, "Limited reports");
-    const { commentId } = await posted.json() as { commentId: string };
+    const { commentId } = (await posted.json()) as { commentId: string };
 
     // Every well-formed request consumes the 3/24-hour Account window,
     // including an idempotent repeat of the same report.
@@ -123,8 +155,7 @@ describe("Public Comment reports", () => {
 
     expect(await count("public_comment_reports")).toBe(1);
     // The report policy is Account-scoped only; the denial created no Network bucket.
-    expect(await count("rate_limit_counters",
-      "purpose = 'public_comment.report' AND scope_type = 'network'")).toBe(0);
+    expect(await count("rate_limit_counters", "purpose = 'public_comment.report' AND scope_type = 'network'")).toBe(0);
   });
 });
 
@@ -134,7 +165,7 @@ describe("Public-participation suspension enforcement", () => {
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const publication = await publish(owner, fileId);
     const existing = await postComment(owner, fileId, publication, "Original");
-    const { commentId } = await existing.json() as { commentId: string };
+    const { commentId } = (await existing.json()) as { commentId: string };
 
     const suspension = await applyPublicParticipationSuspension(env.DB, owner.accountId, "repeated_technical_abuse");
     expect(suspension).toMatchObject({ strikeCount: 1, reason: "repeated_technical_abuse" });
@@ -147,42 +178,83 @@ describe("Public-participation suspension enforcement", () => {
     expect(await created.json()).toEqual(denial);
     // …and on the signed-in link route.
     const linkComment = await sealedComment(publication, "Blocked on the link");
-    expect((await sharingRequest(owner, `/api/private/comments/links/${publication.linkId}/entries`, "POST",
-      commentPayload(publication, linkComment))).status).toBe(403);
+    expect(
+      (
+        await sharingRequest(
+          owner,
+          `/api/private/comments/links/${publication.linkId}/entries`,
+          "POST",
+          commentPayload(publication, linkComment),
+        )
+      ).status,
+    ).toBe(403);
     expect(await count("comments", "thread_id = ?", publication.epoch.threadId)).toBe(1);
 
     // Editing an existing Comment is blocked, but hard deletion is not.
     const sealedEdit = await sealPublicCommentBody(publication.epoch.capability, {
-      publicationId: publication.publicationId, commentId, capabilityId: publication.epoch.capabilityId,
-      keyEpoch: 1, revision: 2, text: "Edited" });
-    const edited = await sharingRequest(owner,
-      `/api/private/comments/files/${fileId}/public/entries/${commentId}`, "PATCH", {
-        threadId: publication.epoch.threadId, capabilityId: publication.epoch.capabilityId, capabilityEpoch: 1,
-        epochId: publication.epoch.epochId, expectedRevision: 1,
-        bodyCiphertext: sealedEdit.bodyCiphertext, contentKeyEnvelope: sealedEdit.contentKeyEnvelope });
+      publicationId: publication.publicationId,
+      commentId,
+      capabilityId: publication.epoch.capabilityId,
+      keyEpoch: 1,
+      revision: 2,
+      text: "Edited",
+    });
+    const edited = await sharingRequest(
+      owner,
+      `/api/private/comments/files/${fileId}/public/entries/${commentId}`,
+      "PATCH",
+      {
+        threadId: publication.epoch.threadId,
+        capabilityId: publication.epoch.capabilityId,
+        capabilityEpoch: 1,
+        epochId: publication.epoch.epochId,
+        expectedRevision: 1,
+        bodyCiphertext: sealedEdit.bodyCiphertext,
+        contentKeyEnvelope: sealedEdit.contentKeyEnvelope,
+      },
+    );
     expect(edited.status).toBe(403);
     expect(await edited.json()).toEqual(denial);
-    const deleted = await sharingRequest(owner,
-      `/api/private/comments/files/${fileId}/public/entries/${commentId}`, "DELETE", {
-        threadId: publication.epoch.threadId, capabilityId: publication.epoch.capabilityId, capabilityEpoch: 1,
-        epochId: publication.epoch.epochId, expectedRevision: 1 });
+    const deleted = await sharingRequest(
+      owner,
+      `/api/private/comments/files/${fileId}/public/entries/${commentId}`,
+      "DELETE",
+      {
+        threadId: publication.epoch.threadId,
+        capabilityId: publication.epoch.capabilityId,
+        capabilityEpoch: 1,
+        epochId: publication.epoch.epochId,
+        expectedRevision: 1,
+      },
+    );
     expect(deleted.status).toBe(200);
 
     // A fully prepared new Publication is refused before its transaction…
     const secondFile = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const creation = await publicationCreation(owner, secondFile);
-    const createResponse = await sharingRequest(owner, `/api/private/publications/files/${secondFile}`, "PUT", creation.body);
+    const createResponse = await sharingRequest(
+      owner,
+      `/api/private/publications/files/${secondFile}`,
+      "PUT",
+      creation.body,
+    );
     expect(createResponse.status).toBe(403);
     expect(await createResponse.json()).toEqual(denial);
     expect(await count("publications", "file_id = ?", secondFile)).toBe(0);
 
     // …and a fully prepared rotation is refused before its transaction.
     const rotation = await rotationPayload(owner, fileId, publication);
-    const rotateResponse = await sharingRequest(owner, `/api/private/publications/files/${fileId}/link`, "PUT", rotation);
+    const rotateResponse = await sharingRequest(
+      owner,
+      `/api/private/publications/files/${fileId}/link`,
+      "PUT",
+      rotation,
+    );
     expect(rotateResponse.status).toBe(403);
     expect(await rotateResponse.json()).toEqual(denial);
     const link = await env.DB.prepare("SELECT current_link_id AS linkId FROM publications WHERE file_id = ?")
-      .bind(fileId).first<{ linkId: string }>();
+      .bind(fileId)
+      .first<{ linkId: string }>();
     expect(link?.linkId).toBe(publication.linkId);
   });
 
@@ -206,7 +278,7 @@ describe("Public-participation suspension enforcement", () => {
     do {
       const batch = await sharingRequest(owner, `/api/private/publications/files/${fileId}/teardown`, "POST");
       expect(batch.status).toBe(200);
-      progress = await batch.json() as { done: boolean; commentsRemaining: number };
+      progress = (await batch.json()) as { done: boolean; commentsRemaining: number };
     } while (!progress.done);
     expect(await count("publications", "file_id = ?", fileId)).toBe(0);
     expect(await count("comments", "thread_id = ?", publication.epoch.threadId)).toBe(0);
@@ -215,7 +287,8 @@ describe("Public-participation suspension enforcement", () => {
     const signOut = await mutation("/api/auth/sign-out", owner.session.cookie);
     expect(signOut.status).toBe(200);
     const session = await env.DB.prepare("SELECT revoked_at FROM sessions WHERE id = ?")
-      .bind(owner.session.id).first<{ revoked_at: number | null }>();
+      .bind(owner.session.id)
+      .first<{ revoked_at: number | null }>();
     expect(session?.revoked_at).not.toBeNull();
   });
 
@@ -233,7 +306,9 @@ describe("Public-participation suspension enforcement", () => {
     // the very next request sees an expired suspension and proceeds.
     const past = Date.now() - 8 * DAY_MS;
     await env.DB.prepare(`UPDATE public_participation_suspensions SET started_at = ?, expires_at = ?
-      WHERE account_id = ?`).bind(past, past + DAY_MS, owner.accountId).run();
+      WHERE account_id = ?`)
+      .bind(past, past + DAY_MS, owner.accountId)
+      .run();
     expect((await postComment(owner, fileId, publication, "After expiry")).status).toBe(201);
   });
 
@@ -245,7 +320,12 @@ describe("Public-participation suspension enforcement", () => {
     expect(first.expiresAt - first.startedAt).toBe(FIRST_SUSPENSION_MS);
 
     const repeatAt = start + 60_000;
-    const repeat = await applyPublicParticipationSuspension(env.DB, account.accountId, "repeated_technical_abuse", repeatAt);
+    const repeat = await applyPublicParticipationSuspension(
+      env.DB,
+      account.accountId,
+      "repeated_technical_abuse",
+      repeatAt,
+    );
     expect(repeat).toMatchObject({ strikeCount: 2, reason: "repeated_technical_abuse", startedAt: repeatAt });
     expect(repeat.expiresAt - repeat.startedAt).toBe(REPEAT_SUSPENSION_MS);
     expect(await activePublicParticipationSuspension(env.DB, account.accountId, repeat.expiresAt - 1)).not.toBeNull();
@@ -255,30 +335,49 @@ describe("Public-participation suspension enforcement", () => {
     expect(await clearPublicParticipationSuspension(env.DB, account.accountId)).toBe(true);
     expect(await activePublicParticipationSuspension(env.DB, account.accountId, repeatAt)).toBeNull();
     expect(await clearPublicParticipationSuspension(env.DB, account.accountId)).toBe(false);
-    const again = await applyPublicParticipationSuspension(env.DB, account.accountId, "report_pattern", repeatAt + 60_000);
+    const again = await applyPublicParticipationSuspension(
+      env.DB,
+      account.accountId,
+      "report_pattern",
+      repeatAt + 60_000,
+    );
     expect(again.strikeCount).toBe(1);
   });
 });
 
 describe("Report retention", () => {
   it("purges only expired reports on the scheduled run", async () => {
-    const owner = await sharingAccount(), reporter = await sharingAccount();
+    const owner = await sharingAccount(),
+      reporter = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const publication = await publish(owner, fileId);
     const posted = await postComment(owner, fileId, publication, "Retained");
-    const { commentId } = await posted.json() as { commentId: string };
+    const { commentId } = (await posted.json()) as { commentId: string };
 
     const now = Date.now();
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO public_comment_reports (id, reporter_id, comment_id, category, created_at, expires_at)
-        VALUES (?, ?, ?, 'spam', ?, ?)`).bind(crypto.randomUUID(), owner.accountId, commentId, now - REPORT_RETENTION_MS, now - 1),
+        VALUES (?, ?, ?, 'spam', ?, ?)`).bind(
+        crypto.randomUUID(),
+        owner.accountId,
+        commentId,
+        now - REPORT_RETENTION_MS,
+        now - 1,
+      ),
       env.DB.prepare(`INSERT INTO public_comment_reports (id, reporter_id, comment_id, category, created_at, expires_at)
-        VALUES (?, ?, ?, 'abuse', ?, ?)`).bind(crypto.randomUUID(), reporter.accountId, commentId, now - DAY_MS, now + DAY_MS),
+        VALUES (?, ?, ?, 'abuse', ?, ?)`).bind(
+        crypto.randomUUID(),
+        reporter.accountId,
+        commentId,
+        now - DAY_MS,
+        now + DAY_MS,
+      ),
     ]);
 
     await expect(worker.scheduled(createScheduledController({ scheduledTime: now }), env)).resolves.toBeUndefined();
-    const remaining = await env.DB.prepare(`SELECT reporter_id FROM public_comment_reports`)
-      .all<{ reporter_id: string }>();
+    const remaining = await env.DB.prepare(`SELECT reporter_id FROM public_comment_reports`).all<{
+      reporter_id: string;
+    }>();
     expect(remaining.results.map((row) => row.reporter_id)).toEqual([reporter.accountId]);
   });
 });

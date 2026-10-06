@@ -19,74 +19,109 @@ async function confirmDelete(page: Page) {
 }
 
 for (const sourceKind of ["file", "directory"] as const)
-for (const pendingLoader of [false, true]) test(`a completed ${sourceKind} deletion response cannot override a newer ${pendingLoader ? "pending " : ""}Back navigation`, async ({ page, workspace }) => {
-  const deletingDirectory = sourceKind === "directory";
-  const folder = await create(page, deletingDirectory ? "Doomed folder" : "Surviving folder", "folder");
-  const sourceName = deletingDirectory ? "Doomed folder" : "Draft.md";
-  const destinationName = deletingDirectory ? "Draft.md" : "Surviving folder";
-  const destinationId = deletingDirectory ? workspace.fileId : folder;
-  const destinationUrl = `/${deletingDirectory ? "f" : "d"}/${destinationId}`;
-  if (!deletingDirectory) await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md", exact: true }).click();
-  await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeVisible();
-  const path = `/api/private/tree/nodes/${deletingDirectory ? folder : workspace.fileId}`;
-  let release: (() => void) | undefined;
-  let releaseBack: (() => void) | undefined;
-  if (pendingLoader) await page.route(`**/api/private/tree/nodes/${destinationId}/ancestors`, async (route) => {
-    const response = await route.fetch();
-    await new Promise<void>((resolve) => { releaseBack = resolve; });
-    await route.fulfill({ response }).catch(() => { /* A newer intent may cancel this loader. */ });
-  });
-  const settled = new Promise<void>((resolve) => {
-    const onSettled = (request: Request) => {
-      if (new URL(request.url()).pathname === path && request.method() === "DELETE") resolve();
-    };
-    page.on("requestfinished", onSettled);
-    page.on("requestfailed", onSettled);
-  });
-  await page.route(`**${path}`, async (route) => {
-    const response = await route.fetch();
-    expect(response.status()).toBe(200); // The database commit already happened.
-    await new Promise<void>((resolve) => { release = resolve; });
-    await route.fulfill({ response }).catch(() => { /* Navigation may abort the browser request. */ });
-  });
-  try {
-    await confirmDelete(page);
-    await expect.poll(() => Boolean(release)).toBe(true);
-    await page.goBack();
-    if (pendingLoader) {
-      await expect.poll(() => Boolean(releaseBack)).toBe(true);
+  for (const pendingLoader of [false, true])
+    test(`a completed ${sourceKind} deletion response cannot override a newer ${pendingLoader ? "pending " : ""}Back navigation`, async ({
+      page,
+      workspace,
+    }) => {
+      const deletingDirectory = sourceKind === "directory";
+      const folder = await create(page, deletingDirectory ? "Doomed folder" : "Surviving folder", "folder");
+      const sourceName = deletingDirectory ? "Doomed folder" : "Draft.md";
+      const destinationName = deletingDirectory ? "Draft.md" : "Surviving folder";
+      const destinationId = deletingDirectory ? workspace.fileId : folder;
+      const destinationUrl = `/${deletingDirectory ? "f" : "d"}/${destinationId}`;
+      if (!deletingDirectory)
+        await page
+          .getByRole("navigation", { name: "Files", exact: true })
+          .getByRole("link", { name: "Draft.md", exact: true })
+          .click();
       await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeVisible();
-    } else await expect(page.getByRole("heading", { name: destinationName, exact: true })).toBeVisible();
-    release!();
-    await settled;
-    await page.waitForTimeout(300); // Allow the held response's continuation to run.
-    await expect(page).toHaveURL(new RegExp(`${destinationUrl}$`));
-    if (pendingLoader) {
-      await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeVisible();
-      releaseBack!();
-    }
-    await expect(page.getByRole("heading", { name: destinationName, exact: true })).toBeVisible();
-  } finally { release?.(); releaseBack?.(); }
-});
+      const path = `/api/private/tree/nodes/${deletingDirectory ? folder : workspace.fileId}`;
+      let release: (() => void) | undefined;
+      let releaseBack: (() => void) | undefined;
+      if (pendingLoader)
+        await page.route(`**/api/private/tree/nodes/${destinationId}/ancestors`, async (route) => {
+          const response = await route.fetch();
+          await new Promise<void>((resolve) => {
+            releaseBack = resolve;
+          });
+          await route.fulfill({ response }).catch(() => {
+            /* A newer intent may cancel this loader. */
+          });
+        });
+      const settled = new Promise<void>((resolve) => {
+        const onSettled = (request: Request) => {
+          if (new URL(request.url()).pathname === path && request.method() === "DELETE") resolve();
+        };
+        page.on("requestfinished", onSettled);
+        page.on("requestfailed", onSettled);
+      });
+      await page.route(`**${path}`, async (route) => {
+        const response = await route.fetch();
+        expect(response.status()).toBe(200); // The database commit already happened.
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        await route.fulfill({ response }).catch(() => {
+          /* Navigation may abort the browser request. */
+        });
+      });
+      try {
+        await confirmDelete(page);
+        await expect.poll(() => Boolean(release)).toBe(true);
+        await page.goBack();
+        if (pendingLoader) {
+          await expect.poll(() => Boolean(releaseBack)).toBe(true);
+          await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeVisible();
+        } else await expect(page.getByRole("heading", { name: destinationName, exact: true })).toBeVisible();
+        release!();
+        await settled;
+        await page.waitForTimeout(300); // Allow the held response's continuation to run.
+        await expect(page).toHaveURL(new RegExp(`${destinationUrl}$`));
+        if (pendingLoader) {
+          await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeVisible();
+          releaseBack!();
+        }
+        await expect(page.getByRole("heading", { name: destinationName, exact: true })).toBeVisible();
+      } finally {
+        release?.();
+        releaseBack?.();
+      }
+    });
 
 test("selected File order survives reload", async ({ page, workspace }) => {
   await page.getByRole("button", { name: "New File", exact: true }).click();
   await page.getByRole("textbox", { name: "Name", exact: true }).fill("Second.md");
   await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Second.md", exact: true })).toBeVisible();
-  await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Files", exact: true })
+    .getByRole("link", { name: "Draft.md", exact: true })
+    .click();
   await page.getByRole("button", { name: "Move up", exact: true }).click();
-  await expect(page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link")).toHaveText(["Draft.md", "Second.md"]);
+  await expect(page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link")).toHaveText([
+    "Draft.md",
+    "Second.md",
+  ]);
   await page.reload();
-  await expect(page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link")).toHaveText(["Draft.md", "Second.md"]);
+  await expect(page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link")).toHaveText([
+    "Draft.md",
+    "Second.md",
+  ]);
   // Stay in-app: document navigation can cancel the provisioning route's lazy import.
-  await page.getByRole("complementary", { name: "Files tree", exact: true }).getByRole("link", { name: "Files", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Files tree", exact: true })
+    .getByRole("link", { name: "Files", exact: true })
+    .click();
   await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
   await expect(page.getByRole("button", { name: "Move up", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
 });
 
-test("moves a File with contents after canonical collision review, then deletes it irreversibly", async ({ page, workspace }) => {
+test("moves a File with contents after canonical collision review, then deletes it irreversibly", async ({
+  page,
+  workspace,
+}) => {
   await create(page, "Destination", "folder");
   const folder = await create(page, "Nested destination", "folder");
   await create(page, "DRAFT.md", "File");
@@ -100,7 +135,11 @@ test("moves a File with contents after canonical collision review, then deletes 
   await dialog.getByRole("button", { name: "Open destination Destination", exact: true }).click();
   await dialog.getByRole("button", { name: "Open destination Nested destination", exact: true }).click();
   await dialog.getByRole("button", { name: "Move", exact: true }).click();
-  await expect(dialog.getByText("That name is already in this folder. Choose another name; nothing was overwritten.", { exact: true })).toBeVisible();
+  await expect(
+    dialog.getByText("That name is already in this folder. Choose another name; nothing was overwritten.", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await dialog.getByRole("button", { name: "Rename", exact: true }).click();
   await dialog.getByRole("textbox", { name: "Name", exact: true }).fill("Moved.md");
   await dialog.getByRole("button", { name: "Move", exact: true }).click();
@@ -136,7 +175,13 @@ test("hard-deletes a Directory and all descendants", async ({ page, workspace })
 });
 
 for (const affected of ["source", "destination"] as const) {
-  test(`refreshes a changed move ${affected} before explicit retry and preserves the requested name`, async ({ page, context, baseURL, workspaceScript, workspace }) => {
+  test(`refreshes a changed move ${affected} before explicit retry and preserves the requested name`, async ({
+    page,
+    context,
+    baseURL,
+    workspaceScript,
+    workspace,
+  }) => {
     const folder = await create(page, "Destination", "folder");
     await page.goto(`/f/${workspace.fileId}`);
     await page.getByRole("button", { name: "Move", exact: true }).click();
@@ -146,24 +191,38 @@ for (const affected of ["source", "destination"] as const) {
     const other = await context.newPage();
     await installWorkspaceScript(other, workspaceScript, baseURL!);
     try {
-      await other.evaluate(async ({ affected, folder }) => {
-        const api = window.workspaceFixture;
-        const access = await api.openRoot();
-        const root = await api.loadDirectory(access, access.rootId, access.rootKey);
-        const entry = root.entries.find((item) => item.nodeId === folder)!;
-        const key = affected === "source" ? access.rootKey : await api.openChildDirectory(access, access.rootKey, entry);
-        const parent = affected === "source" ? root : await api.loadDirectory(access, folder, key);
-        const payload = await api.prepareTreeCreate({ vaultId: access.vaultId, parentId: parent.directoryId, parentKey: key,
-          entriesRevision: parent.entriesRevision, existingNames: parent.entries.map((item) => item.name),
-          requestedName: affected === "destination" ? "Requested.md" : "Concurrent.md", kind: "file" });
-        await api.createTreeChild(access, parent.directoryId, payload, parent, key);
-      }, { affected, folder });
+      await other.evaluate(
+        async ({ affected, folder }) => {
+          const api = window.workspaceFixture;
+          const access = await api.openRoot();
+          const root = await api.loadDirectory(access, access.rootId, access.rootKey);
+          const entry = root.entries.find((item) => item.nodeId === folder)!;
+          const key =
+            affected === "source" ? access.rootKey : await api.openChildDirectory(access, access.rootKey, entry);
+          const parent = affected === "source" ? root : await api.loadDirectory(access, folder, key);
+          const payload = await api.prepareTreeCreate({
+            vaultId: access.vaultId,
+            parentId: parent.directoryId,
+            parentKey: key,
+            entriesRevision: parent.entriesRevision,
+            existingNames: parent.entries.map((item) => item.name),
+            requestedName: affected === "destination" ? "Requested.md" : "Concurrent.md",
+            kind: "file",
+          });
+          await api.createTreeChild(access, parent.directoryId, payload, parent, key);
+        },
+        { affected, folder },
+      );
       await dialog.getByRole("button", { name: "Move", exact: true }).click();
       await expect(dialog.getByText(changed, { exact: true })).toBeVisible();
       await expect(dialog.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Requested.md");
       await dialog.getByRole("button", { name: "Refresh and retry", exact: true }).click();
       if (affected === "destination") {
-        await expect(dialog.getByText("That name is already in this folder. Choose another name; nothing was overwritten.", { exact: true })).toBeVisible();
+        await expect(
+          dialog.getByText("That name is already in this folder. Choose another name; nothing was overwritten.", {
+            exact: true,
+          }),
+        ).toBeVisible();
         await expect(dialog.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Requested.md");
         await dialog.getByRole("button", { name: "Rename", exact: true }).click();
         await dialog.getByRole("textbox", { name: "Name", exact: true }).fill("Resolved.md");
@@ -173,46 +232,117 @@ for (const affected of ["source", "destination"] as const) {
       await expect(page.getByRole("heading", { name: finalName, exact: true })).toBeVisible();
       await page.reload();
       await expect(page.getByRole("heading", { name: finalName, exact: true })).toBeVisible();
-    } finally { await other.close(); }
+    } finally {
+      await other.close();
+    }
   });
 }
 
-test("over-cap Directory deletion changes nothing and asks the user to reduce the subtree", async ({ page, workspace }) => {
+test("over-cap Directory deletion changes nothing and asks the user to reduce the subtree", async ({
+  page,
+  workspace,
+}) => {
   test.setTimeout(90_000);
   const folder = await create(page, "Large folder", "folder");
   // Seed at the real D1 boundary, using actual browser encryption and a signed Directory listing.
   await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
-  const seeded = await page.evaluate(async ({ folder }) => {
-    const api = window.workspaceFixture, access = await api.openRoot();
-    const root = await api.loadDirectory(access, access.rootId, access.rootKey);
-    const key = await api.openChildDirectory(access, access.rootKey, root.entries.find((entry) => entry.nodeId === folder)!);
-    const children = [];
-    for (let index = 0; index < 500; index++) children.push(await api.prepareTreeCreate({ vaultId: access.vaultId,
-      parentId: folder, parentKey: key, entriesRevision: 1, existingNames: [], requestedName: `Child ${index}`, kind: "directory" }));
-    const device = (await api.getDevice(access.vaultId))!;
-    const head = await api.createListingHead(key, device.assertionKeyPair.privateKey, { vaultId: access.vaultId,
-      directoryId: folder, deviceId: device.deviceId, revision: 2, entries: children.map((child) => ({ nodeId: child.nodeId,
-        kind: child.kind, nameCiphertext: child.nameCiphertext, orderCiphertext: child.orderCiphertext, keyEnvelope: child.keyEnvelope })) });
-    return { children, head, deviceId: device.deviceId };
-  }, { folder });
+  const seeded = await page.evaluate(
+    async ({ folder }) => {
+      const api = window.workspaceFixture,
+        access = await api.openRoot();
+      const root = await api.loadDirectory(access, access.rootId, access.rootKey);
+      const key = await api.openChildDirectory(
+        access,
+        access.rootKey,
+        root.entries.find((entry) => entry.nodeId === folder)!,
+      );
+      const children = [];
+      for (let index = 0; index < 500; index++)
+        children.push(
+          await api.prepareTreeCreate({
+            vaultId: access.vaultId,
+            parentId: folder,
+            parentKey: key,
+            entriesRevision: 1,
+            existingNames: [],
+            requestedName: `Child ${index}`,
+            kind: "directory",
+          }),
+        );
+      const device = (await api.getDevice(access.vaultId))!;
+      const head = await api.createListingHead(key, device.assertionKeyPair.privateKey, {
+        vaultId: access.vaultId,
+        directoryId: folder,
+        deviceId: device.deviceId,
+        revision: 2,
+        entries: children.map((child) => ({
+          nodeId: child.nodeId,
+          kind: child.kind,
+          nameCiphertext: child.nameCiphertext,
+          orderCiphertext: child.orderCiphertext,
+          keyEnvelope: child.keyEnvelope,
+        })),
+      });
+      return { children, head, deviceId: device.deviceId };
+    },
+    { folder },
+  );
   const decode = (value: string) => Uint8Array.from(Buffer.from(value, "base64url"));
-  for (let start = 0; start < seeded.children.length; start += 25) await workspace.db.batch(seeded.children.slice(start, start + 25).flatMap((child) => [
-    workspace.db.prepare("INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at) VALUES (?, 'directory', ?, ?, 1, 1)").bind(child.nodeId, workspace.accountId, folder),
-    workspace.db.prepare("INSERT INTO directories (node_id, owner_id, entries_revision) VALUES (?, ?, 1)").bind(child.nodeId, workspace.accountId),
-    workspace.db.prepare("INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext, order_ciphertext, key_envelope) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(child.nodeId, workspace.accountId, folder, decode(child.nameCiphertext), decode(child.orderCiphertext), decode(child.keyEnvelope)),
-  ]));
-  await workspace.db.prepare("UPDATE directories SET entries_revision = 2, listing_ciphertext = ?, listing_digest = ?, listing_signature = ?, listing_device_id = ? WHERE node_id = ?")
-    .bind(decode(seeded.head.ciphertext), decode(seeded.head.digest), decode(seeded.head.signature), seeded.deviceId, folder).run();
+  for (let start = 0; start < seeded.children.length; start += 25)
+    await workspace.db.batch(
+      seeded.children
+        .slice(start, start + 25)
+        .flatMap((child) => [
+          workspace.db
+            .prepare(
+              "INSERT INTO vault_nodes (id, kind, owner_id, parent_node_id, created_at, updated_at) VALUES (?, 'directory', ?, ?, 1, 1)",
+            )
+            .bind(child.nodeId, workspace.accountId, folder),
+          workspace.db
+            .prepare("INSERT INTO directories (node_id, owner_id, entries_revision) VALUES (?, ?, 1)")
+            .bind(child.nodeId, workspace.accountId),
+          workspace.db
+            .prepare(
+              "INSERT INTO directory_entries (child_node_id, owner_id, parent_node_id, name_ciphertext, order_ciphertext, key_envelope) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(
+              child.nodeId,
+              workspace.accountId,
+              folder,
+              decode(child.nameCiphertext),
+              decode(child.orderCiphertext),
+              decode(child.keyEnvelope),
+            ),
+        ]),
+    );
+  await workspace.db
+    .prepare(
+      "UPDATE directories SET entries_revision = 2, listing_ciphertext = ?, listing_digest = ?, listing_signature = ?, listing_device_id = ? WHERE node_id = ?",
+    )
+    .bind(
+      decode(seeded.head.ciphertext),
+      decode(seeded.head.digest),
+      decode(seeded.head.signature),
+      seeded.deviceId,
+      folder,
+    )
+    .run();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Large folder", exact: true })).toBeVisible();
   await confirmDelete(page);
-  await expect(page.getByRole("alert")).toHaveText("This folder contains more than 500 nodes. Reduce the subtree by moving or deleting smaller folders or Files first. Nothing was deleted.");
-  await page.getByRole("dialog", { name: "Delete permanently", exact: true }).getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "This folder contains more than 500 nodes. Reduce the subtree by moving or deleting smaller folders or Files first. Nothing was deleted.",
+  );
+  await page
+    .getByRole("dialog", { name: "Delete permanently", exact: true })
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Large folder", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Expand Large folder", exact: true }).click();
-  await expect(page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: /^Child / })).toHaveCount(500);
+  await expect(
+    page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: /^Child / }),
+  ).toHaveCount(500);
 });
 
 for (const operation of ["move", "delete"] as const) {
@@ -223,10 +353,15 @@ for (const operation of ["move", "delete"] as const) {
     await source.fill("# Saved before structure");
     await source.press("ControlOrMeta+s");
     await expect(page.getByText("Saved", { exact: true })).toBeVisible();
-    const path = operation === "move" ? `**/api/private/tree/nodes/${workspace.fileId}/parent` : `**/api/private/tree/nodes/${workspace.fileId}`;
+    const path =
+      operation === "move"
+        ? `**/api/private/tree/nodes/${workspace.fileId}/parent`
+        : `**/api/private/tree/nodes/${workspace.fileId}`;
     let release: (() => void) | undefined;
     await page.route(path, async (route) => {
-      await new Promise<void>((resolve) => { release = resolve; });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
       await route.continue();
     });
     try {
@@ -241,17 +376,24 @@ for (const operation of ["move", "delete"] as const) {
       await source.evaluate((element) => {
         const textarea = element as HTMLTextAreaElement;
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-        const data = new DataTransfer(); data.setData("text/plain", "\nThis must not become a discarded draft");
+        const data = new DataTransfer();
+        data.setData("text/plain", "\nThis must not become a discarded draft");
         const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
         Object.defineProperty(event, "clipboardData", { value: data });
         textarea.dispatchEvent(event);
       });
       await expect(source).toHaveValue("# Saved before structure");
       release!();
-      if (folder) await expect(page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Paste target", exact: true }))
-        .toHaveAttribute("href", `/d/${folder}`);
+      if (folder)
+        await expect(
+          page
+            .getByRole("navigation", { name: "Breadcrumbs" })
+            .getByRole("link", { name: "Paste target", exact: true }),
+        ).toHaveAttribute("href", `/d/${folder}`);
       else await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
-    } finally { release?.(); }
+    } finally {
+      release?.();
+    }
   });
 }
 
@@ -259,11 +401,13 @@ test("structural controls protect pending, failed, saving, and composing File dr
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   const controls = ["Rename", "Move", "Delete", "Move up", "Move down"];
   const time = new Date(Date.now() - 10_000);
-  await page.clock.install({ time }); await page.clock.pauseAt(time);
+  await page.clock.install({ time });
+  await page.clock.pauseAt(time);
   await source.fill("# Pending draft stays here");
   for (const name of controls) await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
   await page.route(`**/api/private/tree/files/${workspace.fileId}`, (route) =>
-    route.request().method() === "PATCH" ? route.abort("failed") : route.continue());
+    route.request().method() === "PATCH" ? route.abort("failed") : route.continue(),
+  );
   await source.press("ControlOrMeta+s");
   await expect(page.getByText("Couldn't save", { exact: true })).toBeVisible();
   for (const name of controls) await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
@@ -271,13 +415,17 @@ test("structural controls protect pending, failed, saving, and composing File dr
   await page.unroute(`**/api/private/tree/files/${workspace.fileId}`);
   let release: (() => void) | undefined;
   await page.route(`**/api/private/tree/files/${workspace.fileId}`, async (route) => {
-    if (route.request().method() === "PATCH") await new Promise<void>((resolve) => { release = resolve; });
+    if (route.request().method() === "PATCH")
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
     await route.continue();
   });
   await source.press("ControlOrMeta+s");
   await expect(page.getByText("Saving", { exact: true })).toBeVisible();
   for (const name of controls) await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
-  await expect.poll(() => Boolean(release)).toBe(true); release!();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  release!();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await source.dispatchEvent("compositionstart");
   for (const name of controls) await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();

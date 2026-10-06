@@ -27,9 +27,7 @@ export const FIRST_SUSPENSION_MS = 7 * 24 * 60 * 60 * 1000;
 /** Any later suspension: 30 days. */
 export const REPEAT_SUSPENSION_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type PublicParticipationSuspensionReason =
-  | "repeated_technical_abuse"
-  | "report_pattern";
+export type PublicParticipationSuspensionReason = "repeated_technical_abuse" | "report_pattern";
 
 const SUSPENSION_REASONS: readonly string[] = ["repeated_technical_abuse", "report_pattern"];
 
@@ -37,9 +35,7 @@ export function isReportCategory(value: unknown): value is ReportCategory {
   return typeof value === "string" && (REPORT_CATEGORIES as readonly string[]).includes(value);
 }
 
-export function isPublicParticipationSuspensionReason(
-  value: unknown,
-): value is PublicParticipationSuspensionReason {
+export function isPublicParticipationSuspensionReason(value: unknown): value is PublicParticipationSuspensionReason {
   return typeof value === "string" && SUSPENSION_REASONS.includes(value);
 }
 
@@ -49,8 +45,9 @@ export function isPublicParticipationSuspensionReason(
  * implies an appeal, a permanent ban, or a private-vault lockout.
  */
 export function publicParticipationSuspensionNotice(suspendedUntil: number | null): string {
-  const ends = suspendedUntil === null
-    ? "It ends automatically."
-    : `It ends automatically on ${new Date(suspendedUntil).toLocaleDateString(undefined, { dateStyle: "medium" })}.`;
+  const ends =
+    suspendedUntil === null
+      ? "It ends automatically."
+      : `It ends automatically on ${new Date(suspendedUntil).toLocaleDateString(undefined, { dateStyle: "medium" })}.`;
   return `Your account can’t post public comments or publish right now because public participation is suspended. ${ends} Private Files, sharing, export, recovery, and deletion still work.`;
 }

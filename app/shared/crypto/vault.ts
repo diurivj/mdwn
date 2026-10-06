@@ -241,7 +241,9 @@ export function recoveryPhraseToSecret(phrase: string): Bytes {
 
 export function validateRecoveryPhrase(phrase: string): boolean {
   try {
-    return typeof phrase === "string" && phrase.trim().split(/\s+/u).length === 24 && validateMnemonic(phrase, wordlist);
+    return (
+      typeof phrase === "string" && phrase.trim().split(/\s+/u).length === 24 && validateMnemonic(phrase, wordlist)
+    );
   } catch {
     return false;
   }
@@ -252,16 +254,25 @@ async function generateRecoverySigningKeys(): Promise<{
   privateKeyBytes: Bytes;
   publicKeyBytes: Bytes;
 }> {
-  const generated = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
-  ) as CryptoKeyPair;
+  const generated = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
   const privateKeyBytes = new Uint8Array(await crypto.subtle.exportKey("pkcs8", generated.privateKey));
   const publicKeyBytes = new Uint8Array(await crypto.subtle.exportKey("raw", generated.publicKey));
   const privateKey = await crypto.subtle.importKey(
-    "pkcs8", privateKeyBytes, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+    "pkcs8",
+    privateKeyBytes,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"],
   );
   const publicKey = await crypto.subtle.importKey(
-    "raw", publicKeyBytes, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"],
+    "raw",
+    publicKeyBytes,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["verify"],
   );
   return { keyPair: { privateKey, publicKey }, privateKeyBytes, publicKeyBytes };
 }
@@ -296,15 +307,19 @@ export function encodeFileRepresentation(payload: FileRepresentationPayload): By
   if (markdown.length > 262_144 || payload.metadata.length > 262_144) throw new RecoveryError("malformed");
   return concat(
     FILE_REPRESENTATION_MAGIC,
-    u32(markdown.length), markdown,
-    u32(payload.metadata.length), copy(payload.metadata),
+    u32(markdown.length),
+    markdown,
+    u32(payload.metadata.length),
+    copy(payload.metadata),
   );
 }
 
 export function decodeFileRepresentation(input: Uint8Array): FileRepresentationPayload {
   const bytes = copy(input);
-  if (bytes.length < FILE_REPRESENTATION_MAGIC.length + 8 ||
-      !equal(bytes.slice(0, FILE_REPRESENTATION_MAGIC.length), FILE_REPRESENTATION_MAGIC)) {
+  if (
+    bytes.length < FILE_REPRESENTATION_MAGIC.length + 8 ||
+    !equal(bytes.slice(0, FILE_REPRESENTATION_MAGIC.length), FILE_REPRESENTATION_MAGIC)
+  ) {
     throw new RecoveryError("malformed");
   }
   let offset = FILE_REPRESENTATION_MAGIC.length;
@@ -380,7 +395,11 @@ export async function createRecoveryMaterial(
   const phrase = generateRecoveryPhrase(recoverySecret);
   const signing = await generateRecoverySigningKeys();
   const envelope = await sealRecoveryCapsule(
-    accountId, generation, recoverySecret, vaultRootKey, signing.privateKeyBytes,
+    accountId,
+    generation,
+    recoverySecret,
+    vaultRootKey,
+    signing.privateKeyBytes,
   );
   const record = makeRecord(accountId, generation, envelope, signing.publicKeyBytes);
   return {
@@ -424,8 +443,11 @@ export async function openRecoveryCapsule(
   if (header.suite !== "AES-256-GCM/HKDF-SHA-256" || !header.salt || !equal(header.salt, salt)) {
     throw new RecoveryError("wrong-salt");
   }
-  if (header.context.purpose !== RECOVERY_CAPSULE_PURPOSE || header.context.vaultId !== record.accountId ||
-      header.context.keyEpoch !== record.generation) {
+  if (
+    header.context.purpose !== RECOVERY_CAPSULE_PURPOSE ||
+    header.context.vaultId !== record.accountId ||
+    header.context.keyEpoch !== record.generation
+  ) {
     throw new RecoveryError("malformed");
   }
   if (expectedAccountId !== header.context.vaultId) throw new RecoveryError("wrong-account");
@@ -443,7 +465,11 @@ export async function openRecoveryCapsule(
     );
     const decoded = decodeCapsulePlaintext(plaintext);
     const privateKey = await crypto.subtle.importKey(
-      "pkcs8", decoded.recoveryPrivateKey, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+      "pkcs8",
+      decoded.recoveryPrivateKey,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"],
     );
     const publicKeyBytes = record.recoveryVerificationPublicKey;
     if (!(publicKeyBytes instanceof Uint8Array) || publicKeyBytes.length !== 65 || publicKeyBytes[0] !== 4) {
@@ -451,13 +477,15 @@ export async function openRecoveryCapsule(
     }
     publicKeyAttempted = true;
     const publicKey = await crypto.subtle.importKey(
-      "raw", publicKeyBytes, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"],
+      "raw",
+      publicKeyBytes,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
     );
     const keyCheck = encoder.encode("mdwn/recovery-capsule-key-check/v1");
     const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, keyCheck);
-    const matches = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" }, publicKey, signature, keyCheck,
-    );
+    const matches = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, publicKey, signature, keyCheck);
     if (!matches) throw new RecoveryError("missing-key");
     return {
       accountId: expectedAccountId,
@@ -516,7 +544,8 @@ export async function sealVaultRecoveryEnvelope(
   idBytes(capability.objectId);
   idBytes(capability.keyId);
   if (context.purpose !== "vault-recovery") throw new RecoveryError("malformed");
-  if (context.objectId !== capability.objectId || context.keyId !== capability.keyId) throw new RecoveryError("malformed");
+  if (context.objectId !== capability.objectId || context.keyId !== capability.keyId)
+    throw new RecoveryError("malformed");
   const writer = await createSymmetricWriter(vaultRootKey);
   return writer.seal(capabilityKey, context);
 }
@@ -545,9 +574,15 @@ export async function sealOwnedDeviceEnvelope(
   recipientPublicKey: CryptoKey,
   context: EnvelopeContext,
 ): Promise<Bytes> {
-  if (!capability || capability.scope !== "owned" || capability.grantDerived === true ||
-      context.purpose !== "owned-device" || context.objectId !== capability.objectId ||
-      context.keyId !== capability.keyId || !context.recipientId) {
+  if (
+    !capability ||
+    capability.scope !== "owned" ||
+    capability.grantDerived === true ||
+    context.purpose !== "owned-device" ||
+    context.objectId !== capability.objectId ||
+    context.keyId !== capability.keyId ||
+    !context.recipientId
+  ) {
     throw new RecoveryError("grant-capability");
   }
   return sealToRecipient(checkKey(capability.key), recipientPublicKey, context);
@@ -625,7 +660,12 @@ export async function createVaultKeyHierarchy(options: {
   };
   const rootDirectoryRecoveryEnvelope = await sealVaultRecoveryEnvelope(
     vaultRootKey,
-    { key: rootDirectoryCapabilityKey, objectId: options.rootDirectoryId, keyId: options.rootDirectoryId, scope: "owned" },
+    {
+      key: rootDirectoryCapabilityKey,
+      objectId: options.rootDirectoryId,
+      keyId: options.rootDirectoryId,
+      scope: "owned",
+    },
     rootDirectoryRecoveryContext,
   );
   return {
@@ -682,9 +722,8 @@ export async function createFileRepresentation(
   },
 ): Promise<FileRepresentation> {
   checkKey(containingDirectoryCapabilityKey);
-  const encodedRepresentation = representation instanceof Uint8Array
-    ? copy(representation)
-    : encodeFileRepresentation(representation);
+  const encodedRepresentation =
+    representation instanceof Uint8Array ? copy(representation) : encodeFileRepresentation(representation);
   const fileContentKey = generateFileContentKey();
   const baseContext: EnvelopeContext = {
     purpose: "file-content-key",

@@ -60,18 +60,14 @@ export function assertSessionConfiguration(env: Env): void {
   sessionCookieSecret(env);
 }
 
-function assertStoredSessionData(
-  data: Partial<StoredSessionData>,
-): asserts data is StoredSessionData {
+function assertStoredSessionData(data: Partial<StoredSessionData>): asserts data is StoredSessionData {
   if (
     typeof data.accountId !== "string" ||
     data.accountId.length === 0 ||
     (data.purpose !== "normal" && data.purpose !== "recovery") ||
     (data.authenticatedPasskeyId !== undefined &&
-      (typeof data.authenticatedPasskeyId !== "string" ||
-        data.authenticatedPasskeyId.length === 0)) ||
-    (data.freshAssertedAt !== undefined &&
-      (!Number.isFinite(data.freshAssertedAt) || data.freshAssertedAt <= 0)) ||
+      (typeof data.authenticatedPasskeyId !== "string" || data.authenticatedPasskeyId.length === 0)) ||
+    (data.freshAssertedAt !== undefined && (!Number.isFinite(data.freshAssertedAt) || data.freshAssertedAt <= 0)) ||
     (data.purpose === "normal" && !data.authenticatedPasskeyId)
   ) {
     throw new Error("invalid server-side session data");
@@ -98,9 +94,7 @@ function sessionCookie(env: Env) {
  * React Router's D1-backed session-storage seam. The cookie only stores the
  * signed opaque D1 key; every authorization decision re-reads the D1 row.
  */
-export function createAccountSessionStorage(
-  env: Env,
-): SessionStorage<StoredSessionData> {
+export function createAccountSessionStorage(env: Env): SessionStorage<StoredSessionData> {
   return createSessionStorage<StoredSessionData>({
     cookie: sessionCookie(env),
     async createData(data) {
@@ -148,12 +142,8 @@ export function createAccountSessionStorage(
       return {
         accountId: row.account_id,
         purpose: row.purpose,
-        ...(row.authenticated_passkey_id
-          ? { authenticatedPasskeyId: row.authenticated_passkey_id }
-          : {}),
-        ...(row.fresh_asserted_at !== null
-          ? { freshAssertedAt: row.fresh_asserted_at }
-          : {}),
+        ...(row.authenticated_passkey_id ? { authenticatedPasskeyId: row.authenticated_passkey_id } : {}),
+        ...(row.fresh_asserted_at !== null ? { freshAssertedAt: row.fresh_asserted_at } : {}),
         ...(row.device_id !== null ? { deviceId: row.device_id } : {}),
       };
     },
@@ -183,10 +173,7 @@ export function createAccountSessionStorage(
 }
 
 /** Reads D1 only. Session use never extends the idle lifetime implicitly. */
-export async function getActiveSession(
-  request: Request,
-  env: Env,
-): Promise<ActiveSession | null> {
+export async function getActiveSession(request: Request, env: Env): Promise<ActiveSession | null> {
   const storage = createAccountSessionStorage(env);
   const session = await storage.getSession(request.headers.get("cookie"));
   const accountId = session.get("accountId");
@@ -214,10 +201,7 @@ export async function getActiveSession(
   };
 }
 
-export function hasFreshAssertion(
-  session: ActiveSession,
-  now = Date.now(),
-): boolean {
+export function hasFreshAssertion(session: ActiveSession, now = Date.now()): boolean {
   return (
     session.purpose === "normal" &&
     typeof session.freshAssertedAt === "number" &&
@@ -269,11 +253,7 @@ export async function createNormalSession(
 }
 
 /** Explicit refresh is the only operation that extends the idle deadline. */
-export async function refreshNormalSession(
-  env: Env,
-  session: ActiveSession,
-  now = Date.now(),
-): Promise<boolean> {
+export async function refreshNormalSession(env: Env, session: ActiveSession, now = Date.now()): Promise<boolean> {
   if (session.purpose !== "normal") return false;
   const nextIdleExpiry = now + SESSION_IDLE_MS;
   const result = await createDb(env.DB).run(sql`
@@ -390,11 +370,7 @@ export async function listActiveSessions(
   }));
 }
 
-export async function revokeAllSessionsForActor(
-  env: Env,
-  actor: ActiveSession,
-  now = Date.now(),
-): Promise<boolean> {
+export async function revokeAllSessionsForActor(env: Env, actor: ActiveSession, now = Date.now()): Promise<boolean> {
   if (actor.purpose !== "normal") return false;
   const result = await createDb(env.DB).run(sql`
     WITH authorized AS MATERIALIZED (

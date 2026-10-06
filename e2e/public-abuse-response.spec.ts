@@ -21,17 +21,25 @@ test("reports a comment by category and unpublishes while suspended", async ({ p
   await expect(section.getByText("Report this one")).toBeVisible();
 
   // Attribute it to a different Account; the UI never offers a self-report.
-  const foreign = objectId(), now = Date.now();
-  await workspace.db.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
-    .bind(foreign, objectId(), now, now).run();
-  const commentQuery = workspace.db.prepare(`SELECT c.id AS commentId FROM comments c
+  const foreign = objectId(),
+    now = Date.now();
+  await workspace.db
+    .prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
+    .bind(foreign, objectId(), now, now)
+    .run();
+  const commentQuery = workspace.db
+    .prepare(`SELECT c.id AS commentId FROM comments c
     JOIN comment_threads t ON t.id = c.thread_id
-    WHERE t.file_id = ? AND t.purpose = 'public'`).bind(workspace.fileId);
-  await expect.poll(async () => (await commentQuery.first<{ commentId: string }>())?.commentId ?? null,
-    { timeout: 10_000 }).not.toBeNull();
+    WHERE t.file_id = ? AND t.purpose = 'public'`)
+    .bind(workspace.fileId);
+  await expect
+    .poll(async () => (await commentQuery.first<{ commentId: string }>())?.commentId ?? null, { timeout: 10_000 })
+    .not.toBeNull();
   const commented = await commentQuery.first<{ commentId: string }>();
-  const renamed = await workspace.db.prepare("UPDATE comments SET author_id = ? WHERE id = ?")
-    .bind(foreign, commented!.commentId).run();
+  const renamed = await workspace.db
+    .prepare("UPDATE comments SET author_id = ? WHERE id = ?")
+    .bind(foreign, commented!.commentId)
+    .run();
   expect(renamed.meta.changes).toBe(1);
 
   await page.reload();
@@ -43,22 +51,33 @@ test("reports a comment by category and unpublishes while suspended", async ({ p
   await section.getByRole("button", { name: "Send report", exact: true }).click();
   await expect(section.getByText("Report received.")).toBeVisible();
 
-  await expect.poll(async () => (await workspace.db.prepare(
-    "SELECT reporter_id, category FROM public_comment_reports").first<{ reporter_id: string; category: string }>())
-    ?? null).toMatchObject({ reporter_id: workspace.accountId, category: "spam" });
+  await expect
+    .poll(
+      async () =>
+        (await workspace.db
+          .prepare("SELECT reporter_id, category FROM public_comment_reports")
+          .first<{ reporter_id: string; category: string }>()) ?? null,
+    )
+    .toMatchObject({ reporter_id: workspace.accountId, category: "spam" });
   // The operator applies a suspension at the fixed metadata boundary.
-  await workspace.db.prepare(`INSERT INTO public_participation_suspensions
+  await workspace.db
+    .prepare(`INSERT INTO public_participation_suspensions
       (account_id, strike_count, reason, started_at, expires_at, updated_at)
     VALUES (?, 1, 'report_pattern', ?, ?, ?)`)
-    .bind(workspace.accountId, now, now + 7 * 86_400_000, now).run();
+    .bind(workspace.accountId, now, now + 7 * 86_400_000, now)
+    .run();
 
   await section.getByLabel("Add a public comment").fill("Blocked while suspended");
   await section.getByRole("button", { name: "Comment", exact: true }).click();
   await expect(section.getByText(/public participation is suspended/i)).toBeVisible();
   await expect(section.getByText(/it ends automatically on/i)).toBeVisible();
-  expect(await workspace.db.prepare(`SELECT count(*) AS n FROM comments
+  expect(
+    await workspace.db
+      .prepare(`SELECT count(*) AS n FROM comments
     WHERE thread_id = (SELECT id FROM comment_threads WHERE file_id = ? AND purpose = 'public')`)
-    .bind(workspace.fileId).first<{ n: number }>()).toMatchObject({ n: 1 });
+      .bind(workspace.fileId)
+      .first<{ n: number }>(),
+  ).toMatchObject({ n: 1 });
 
   // Unpublish is never blocked; the seal counts the Comment and the Owner's
   // bounded teardown removes it and the report with it.
@@ -68,6 +87,11 @@ test("reports a comment by category and unpublishes while suspended", async ({ p
   // The Owner's browser drives the bounded teardown to completion and the panel
   // returns to the unpublished form; the report disappears with its Comment.
   await expect(publishPanel.getByRole("button", { name: "Publish File" })).toBeVisible();
-  await expect.poll(async () => (await workspace.db.prepare("SELECT count(*) AS n FROM public_comment_reports")
-    .first<{ n: number }>())?.n, { timeout: 10_000 }).toBe(0);
+  await expect
+    .poll(
+      async () =>
+        (await workspace.db.prepare("SELECT count(*) AS n FROM public_comment_reports").first<{ n: number }>())?.n,
+      { timeout: 10_000 },
+    )
+    .toBe(0);
 });

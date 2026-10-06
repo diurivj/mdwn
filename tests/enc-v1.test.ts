@@ -25,11 +25,17 @@ describe("mdwn/enc-v1 HPKE envelopes", () => {
   it("requires explicit recipient/Publication bindings and the pinned transport key algorithm", async () => {
     const recipient = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
     await expect(sealToRecipient(key, recipient.publicKey, context)).rejects.toMatchObject({ code: "malformed" });
-    await expect(sealToRecipient(key, recipient.publicKey, { ...context, purpose: "public-representation", recipientId: "link-1" }))
-      .rejects.toMatchObject({ code: "malformed" });
+    await expect(
+      sealToRecipient(key, recipient.publicKey, {
+        ...context,
+        purpose: "public-representation",
+        recipientId: "link-1",
+      }),
+    ).rejects.toMatchObject({ code: "malformed" });
     const signing = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
-    await expect(sealToRecipient(key, signing.publicKey, { ...context, recipientId: "device-1" }))
-      .rejects.toMatchObject({ code: "malformed" });
+    await expect(
+      sealToRecipient(key, signing.publicKey, { ...context, recipientId: "device-1" }),
+    ).rejects.toMatchObject({ code: "malformed" });
   });
 
   it("transports a Grant key to a device with a non-extractable P-256 private key", async () => {
@@ -38,11 +44,14 @@ describe("mdwn/enc-v1 HPKE envelopes", () => {
     const envelope = await sealToRecipient(key, recipient.publicKey, grantContext);
     expect(recipient.privateKey.extractable).toBe(false);
     expect(inspectEnvelope(envelope)).toMatchObject({
-      suite: "HPKE-P256/HKDF-SHA-256/AES-256-GCM", context: grantContext,
+      suite: "HPKE-P256/HKDF-SHA-256/AES-256-GCM",
+      context: grantContext,
     });
     expect(inspectEnvelope(envelope).enc?.length).toBe(65);
     expect(await openForRecipient(envelope, recipient, { context: grantContext })).toEqual(key);
-    await expect(openSymmetric(envelope, key, { context: grantContext })).rejects.toMatchObject({ code: "unsupported-suite" });
+    await expect(openSymmetric(envelope, key, { context: grantContext })).rejects.toMatchObject({
+      code: "unsupported-suite",
+    });
   });
 });
 
@@ -66,9 +75,7 @@ describe("mdwn/enc-v1 symmetric envelopes", () => {
 
   it("burns a bounded sequence of nonces under concurrency and fails closed at exhaustion", async () => {
     const writer = await createSymmetricWriter(key, { maxMessages: 2 });
-    const envelopes = await Promise.all([
-      writer.seal(plaintext, context), writer.seal(plaintext, context),
-    ]);
+    const envelopes = await Promise.all([writer.seal(plaintext, context), writer.seal(plaintext, context)]);
     const headers = envelopes.map(inspectEnvelope);
     expect(headers[0].salt).toEqual(headers[1].salt);
     expect(headers.map((item) => Array.from(item.nonce!))).toEqual([
@@ -83,8 +90,9 @@ describe("mdwn/enc-v1 symmetric envelopes", () => {
     const writer = await createSymmetricWriter(key, { maxAuthenticatedBytes: 144 });
     await writer.seal(plaintext, context);
     await expect(writer.seal(plaintext, context)).rejects.toMatchObject({ code: "nonce-exhausted" });
-    await expect(createSymmetricWriter(key, { maxAuthenticatedBytes: 2 ** 30 + 1 }))
-      .rejects.toMatchObject({ code: "malformed" });
+    await expect(createSymmetricWriter(key, { maxAuthenticatedBytes: 2 ** 30 + 1 })).rejects.toMatchObject({
+      code: "malformed",
+    });
   });
 
   it("rejects old and same-revision substituted manifests against a trusted head", async () => {
@@ -106,8 +114,13 @@ describe("mdwn/enc-v1 symmetric envelopes", () => {
 
   it("requires a trusted current revision and digest for a Directory listing envelope", async () => {
     const writer = await createSymmetricWriter(key);
-    const head: EnvelopeContext = { ...context, purpose: "directory-metadata",
-      objectId: "directory-id", keyId: "directory-id", revision: 4 };
+    const head: EnvelopeContext = {
+      ...context,
+      purpose: "directory-metadata",
+      objectId: "directory-id",
+      keyId: "directory-id",
+      revision: 4,
+    };
     const current = await writer.seal(plaintext, head);
     const old = await writer.seal(plaintext, { ...head, revision: 3 });
     const fork = await writer.seal(new TextEncoder().encode("fork"), head);
@@ -142,8 +155,9 @@ describe("mdwn/enc-v1 symmetric envelopes", () => {
       await expect(openSymmetric(input, key, { context })).rejects.toMatchObject({ code });
     }
     // Even when the caller expects the tampered revision, the header is authenticated.
-    await expect(openSymmetric(changed(29, 4), key, { context: { ...context, revision: 4 } }))
-      .rejects.toMatchObject({ code: "authentication-failed" });
+    await expect(openSymmetric(changed(29, 4), key, { context: { ...context, revision: 4 } })).rejects.toMatchObject({
+      code: "authentication-failed",
+    });
     await expect(writer.seal(new Uint8Array(512 * 1024), context)).rejects.toMatchObject({ code: "malformed" });
   });
 
@@ -152,18 +166,23 @@ describe("mdwn/enc-v1 symmetric envelopes", () => {
     const writer = await createSymmetricWriter(key);
     const envelope = await writer.seal(plaintext, protectedContext);
     for (const field of ["vaultId", "objectId", "keyId", "recipientId", "publicationId"] as const) {
-      await expect(openSymmetric(envelope, key, { context: { ...protectedContext, [field]: "substituted" } }))
-        .rejects.toMatchObject({ code: "context-mismatch" });
+      await expect(
+        openSymmetric(envelope, key, { context: { ...protectedContext, [field]: "substituted" } }),
+      ).rejects.toMatchObject({ code: "context-mismatch" });
     }
     // A stale (older) envelope is distinguishable from an impossible future epoch.
-    await expect(openSymmetric(envelope, key, { context: { ...protectedContext, keyEpoch: 3 } }))
-      .rejects.toMatchObject({ code: "stale-epoch" });
-    await expect(openSymmetric(envelope, key, { context: { ...protectedContext, keyEpoch: 1 } }))
-      .rejects.toMatchObject({ code: "unexpected-epoch" });
-    await expect(openSymmetric(envelope, key, { context: { ...protectedContext, purpose: "file-content-key" } }))
-      .rejects.toMatchObject({ code: "context-mismatch" });
-    await expect(openSymmetric(envelope, new Uint8Array(32), { context: protectedContext }))
-      .rejects.toMatchObject({ code: "authentication-failed" });
+    await expect(openSymmetric(envelope, key, { context: { ...protectedContext, keyEpoch: 3 } })).rejects.toMatchObject(
+      { code: "stale-epoch" },
+    );
+    await expect(openSymmetric(envelope, key, { context: { ...protectedContext, keyEpoch: 1 } })).rejects.toMatchObject(
+      { code: "unexpected-epoch" },
+    );
+    await expect(
+      openSymmetric(envelope, key, { context: { ...protectedContext, purpose: "file-content-key" } }),
+    ).rejects.toMatchObject({ code: "context-mismatch" });
+    await expect(openSymmetric(envelope, new Uint8Array(32), { context: protectedContext })).rejects.toMatchObject({
+      code: "authentication-failed",
+    });
   });
 
   it("never resumes a writer key domain and burns a nonce when encryption fails", async () => {
@@ -192,7 +211,14 @@ describe("mdwn/enc-v1 symmetric envelopes", () => {
     const envelope = await pending;
     const input = envelope.slice();
     const openKey = key.slice();
-    const expectedContext = { revision: 3, keyEpoch: 2, keyId: "key-1", objectId: "file-1", vaultId: "vault-1", purpose: context.purpose };
+    const expectedContext = {
+      revision: 3,
+      keyEpoch: 2,
+      keyId: "key-1",
+      objectId: "file-1",
+      vaultId: "vault-1",
+      purpose: context.purpose,
+    };
     const opening = openSymmetric(input, openKey, { context: expectedContext });
     input.fill(0);
     openKey.fill(0);

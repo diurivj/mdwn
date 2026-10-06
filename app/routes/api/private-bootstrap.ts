@@ -12,21 +12,32 @@ import type { Route } from "./+types/private-bootstrap";
  */
 export async function action({ request, context }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") return Response.json({ error: "device_proof_required" }, { status: 405 });
-  try { requireSameOrigin(request); }
-  catch { return Response.json({ error: "device_proof_required" }, { status: 403 }); }
+  try {
+    requireSameOrigin(request);
+  } catch {
+    return Response.json({ error: "device_proof_required" }, { status: 403 });
+  }
   // Browsers/Workers can expose an empty POST as a non-null stream. Inspect
   // without buffering an unbounded body, and reject any actual bytes before
   // verifying the canonical empty-body digest.
-  if (!await hasEmptyBody(request)) return Response.json({ error: "device_proof_required" }, { status: 403 });
+  if (!(await hasEmptyBody(request))) return Response.json({ error: "device_proof_required" }, { status: 403 });
   let proof: unknown;
-  try { proof = JSON.parse(request.headers.get("X-Mdwn-Device-Proof") ?? "null"); }
-  catch { return Response.json({ error: "device_proof_required" }, { status: 403 }); }
+  try {
+    proof = JSON.parse(request.headers.get("X-Mdwn-Device-Proof") ?? "null");
+  } catch {
+    return Response.json({ error: "device_proof_required" }, { status: 403 });
+  }
   const env = getEnv(context);
   const authorized = await authorizePrivateRequest(request, env, proof);
   if (!authorized) return Response.json({ error: "device_proof_required" }, { status: 403 });
   const rows = await createDb(env.DB).get<{
-    root_directory_id: string; root_key_epoch: number; root_envelope: ArrayBuffer; enrollment_envelope: ArrayBuffer;
-    capsule: ArrayBuffer; recovery_salt: ArrayBuffer; verification_public_key: ArrayBuffer;
+    root_directory_id: string;
+    root_key_epoch: number;
+    root_envelope: ArrayBuffer;
+    enrollment_envelope: ArrayBuffer;
+    capsule: ArrayBuffer;
+    recovery_salt: ArrayBuffer;
+    verification_public_key: ArrayBuffer;
     profile: ArrayBuffer;
   }>(sql`
     SELECT i.root_directory_id, root.key_epoch AS root_key_epoch, root.ciphertext AS root_envelope,
@@ -48,14 +59,17 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       AND ${privateReadGuard(authorized)}
   `);
   if (!rows) return Response.json({ error: "device_proof_required" }, { status: 403 });
-  return Response.json({
-    rootDirectoryId: rows.root_directory_id,
-    rootKeyEpoch: rows.root_key_epoch,
-    rootRecoveryEnvelope: encodeBytes(new Uint8Array(rows.root_envelope)),
-    enrollmentEnvelope: encodeBytes(new Uint8Array(rows.enrollment_envelope)),
-    capsule: encodeBytes(new Uint8Array(rows.capsule)),
-    recoverySalt: encodeBytes(new Uint8Array(rows.recovery_salt)),
-    recoveryVerificationPublicKey: encodeBytes(new Uint8Array(rows.verification_public_key)),
-    encryptedProfile: encodeBytes(new Uint8Array(rows.profile)),
-  }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json(
+    {
+      rootDirectoryId: rows.root_directory_id,
+      rootKeyEpoch: rows.root_key_epoch,
+      rootRecoveryEnvelope: encodeBytes(new Uint8Array(rows.root_envelope)),
+      enrollmentEnvelope: encodeBytes(new Uint8Array(rows.enrollment_envelope)),
+      capsule: encodeBytes(new Uint8Array(rows.capsule)),
+      recoverySalt: encodeBytes(new Uint8Array(rows.recovery_salt)),
+      recoveryVerificationPublicKey: encodeBytes(new Uint8Array(rows.verification_public_key)),
+      encryptedProfile: encodeBytes(new Uint8Array(rows.profile)),
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

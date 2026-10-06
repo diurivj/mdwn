@@ -91,10 +91,7 @@ export async function applyPublicParticipationSuspension(
 
 /** Operator correction of an evident metadata-supported mistake: the row and
  * its strike history are removed, so enforcement stops immediately. */
-export async function clearPublicParticipationSuspension(
-  db: D1Database,
-  accountId: string,
-): Promise<boolean> {
+export async function clearPublicParticipationSuspension(db: D1Database, accountId: string): Promise<boolean> {
   if (!isUuidV7(accountId)) throw new Error("invalid Account identifier");
   const result = await createDb(db).run(sql`
     DELETE FROM public_participation_suspensions WHERE account_id = ${accountId}`);
@@ -102,10 +99,7 @@ export async function clearPublicParticipationSuspension(
 }
 
 /** Bounded-report retention: category-only reports expire after 30 days. */
-export async function purgeExpiredPublicCommentReports(
-  db: D1Database,
-  now = Date.now(),
-): Promise<number> {
+export async function purgeExpiredPublicCommentReports(db: D1Database, now = Date.now()): Promise<number> {
   if (!boundedTime(now)) throw new Error("invalid purge time");
   const result = await createDb(db).run(sql`
     DELETE FROM public_comment_reports WHERE expires_at <= ${now}`);

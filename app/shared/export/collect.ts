@@ -16,13 +16,18 @@
  * the Import duplicate-path preflight.
  */
 
+import { canonicalizeSegment, keepBothCandidate, NamespaceError, utf8Bytes } from "~/shared/namespace-v1";
 import {
-  canonicalizeSegment, keepBothCandidate, NamespaceError, utf8Bytes,
-} from "~/shared/namespace-v1";
-import {
-  ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, ARCHIVE_METADATA_DIRECTORY, comparisonToken,
-  createArchiveManifest, createPrivateCommentsSidecar, serializeArchiveManifest,
-  serializePrivateCommentsSidecar, type ArchiveRoot, type HistoricalComment,
+  ARCHIVE_COMMENTS_PATH,
+  ARCHIVE_MANIFEST_PATH,
+  ARCHIVE_METADATA_DIRECTORY,
+  comparisonToken,
+  createArchiveManifest,
+  createPrivateCommentsSidecar,
+  serializeArchiveManifest,
+  serializePrivateCommentsSidecar,
+  type ArchiveRoot,
+  type HistoricalComment,
 } from "~/shared/archive/format";
 
 export class ExportError extends Error {
@@ -47,8 +52,14 @@ export type ExportSource<Entry extends ExportEntry> = {
   openDirectory(parentKey: Uint8Array, entry: Entry): Promise<Uint8Array>;
   /** `commentsComplete: false` means some Comment display data was unreadable;
    * `buildArchiveFiles` then omits that File's sidecar entry entirely. */
-  readFile(fileId: string, parentKey: Uint8Array, signal: AbortSignal): Promise<{
-    markdown: string; comments: readonly HistoricalComment[]; commentsComplete: boolean;
+  readFile(
+    fileId: string,
+    parentKey: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<{
+    markdown: string;
+    comments: readonly HistoricalComment[];
+    commentsComplete: boolean;
   }>;
 };
 
@@ -83,8 +94,11 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
 export function exportFileName(name: string): string {
   if (MD_EXTENSION.test(name)) return name;
   const candidate = `${name}.md`;
-  try { return canonicalizeSegment(candidate).display; }
-  catch { return name; }
+  try {
+    return canonicalizeSegment(candidate).display;
+  } catch {
+    return name;
+  }
 }
 
 export type ExportPathAllocation = { nodeId: string; directory: boolean; segments: string[] };
@@ -94,11 +108,15 @@ export type ExportPathAllocation = { nodeId: string; directory: boolean; segment
  * are preserved exactly; File candidates that collide with a preserved
  * Directory name or another File candidate get the locked Keep-both suffix.
  */
-export function allocateExportPaths(parent: readonly string[], children: readonly ExportEntry[]): ExportPathAllocation[] {
+export function allocateExportPaths(
+  parent: readonly string[],
+  children: readonly ExportEntry[],
+): ExportPathAllocation[] {
   const allocations = new Map<string, ExportPathAllocation>();
   const used = new Set<string>();
-  const ordered = children.slice().sort((a, b) =>
-    compareBytes(utf8Bytes(a.name), utf8Bytes(b.name)) || a.nodeId.localeCompare(b.nodeId));
+  const ordered = children
+    .slice()
+    .sort((a, b) => compareBytes(utf8Bytes(a.name), utf8Bytes(b.name)) || a.nodeId.localeCompare(b.nodeId));
   const reserve = (child: ExportEntry, directory: boolean, display: string): void => {
     used.add(comparisonToken(display));
     allocations.set(child.nodeId, { nodeId: child.nodeId, directory, segments: [...parent, display] });
@@ -106,8 +124,9 @@ export function allocateExportPaths(parent: readonly string[], children: readonl
   for (const child of ordered) {
     if (child.kind !== "directory") continue;
     let display: string;
-    try { display = canonicalizeSegment(child.name).display; }
-    catch (error) {
+    try {
+      display = canonicalizeSegment(child.name).display;
+    } catch (error) {
       if (error instanceof NamespaceError) throw new ExportError("invalid_name", child.name);
       throw error;
     }
@@ -126,18 +145,23 @@ export function allocateExportPaths(parent: readonly string[], children: readonl
   for (const child of ordered) {
     if (child.kind !== "file") continue;
     let display: string;
-    try { display = canonicalizeSegment(exportFileName(child.name)).display; }
-    catch (error) {
+    try {
+      display = canonicalizeSegment(exportFileName(child.name)).display;
+    } catch (error) {
       if (error instanceof NamespaceError) throw new ExportError("invalid_name", child.name);
       throw error;
     }
-    if (display === child.name && !used.has(comparisonToken(display))) { reserve(child, false, display); continue; }
+    if (display === child.name && !used.has(comparisonToken(display))) {
+      reserve(child, false, display);
+      continue;
+    }
     pending.push(child);
   }
   for (const child of pending) {
     let chosen: string;
-    try { chosen = canonicalizeSegment(exportFileName(child.name)).display; }
-    catch (error) {
+    try {
+      chosen = canonicalizeSegment(exportFileName(child.name)).display;
+    } catch (error) {
       if (error instanceof NamespaceError) throw new ExportError("invalid_name", child.name);
       throw error;
     }
@@ -145,9 +169,15 @@ export function allocateExportPaths(parent: readonly string[], children: readonl
       let number = 2;
       for (;;) {
         let candidate;
-        try { candidate = keepBothCandidate(chosen, number); }
-        catch { throw new ExportError("name_exhausted", child.name); }
-        if (!used.has(comparisonToken(candidate.display))) { chosen = candidate.display; break; }
+        try {
+          candidate = keepBothCandidate(chosen, number);
+        } catch {
+          throw new ExportError("name_exhausted", child.name);
+        }
+        if (!used.has(comparisonToken(candidate.display))) {
+          chosen = candidate.display;
+          break;
+        }
         number += 1;
       }
     }
@@ -181,8 +211,12 @@ async function walk<Entry extends ExportEntry>(
       await walk(source, entry.nodeId, childKey, allocation.segments, signal, collected, onProgress);
     } else {
       const file = await source.readFile(entry.nodeId, key, signal);
-      collected.files.push({ path: allocation.segments, markdown: file.markdown,
-        comments: file.comments, commentsComplete: file.commentsComplete });
+      collected.files.push({
+        path: allocation.segments,
+        markdown: file.markdown,
+        comments: file.comments,
+        commentsComplete: file.commentsComplete,
+      });
       if (!file.commentsComplete) collected.incompleteCommentFiles += 1;
       onProgress?.({ directories: collected.directories.length, files: collected.files.length });
     }
@@ -197,8 +231,11 @@ export async function collectExportTree<Entry extends ExportEntry>(
   options: { signal: AbortSignal; onProgress?: (progress: ExportProgress) => void },
 ): Promise<CollectedExport> {
   assertOwned(access);
-  if (start.includeRoot && start.path.length === 1 &&
-      comparisonToken(start.path[0]!) === comparisonToken(ARCHIVE_METADATA_DIRECTORY)) {
+  if (
+    start.includeRoot &&
+    start.path.length === 1 &&
+    comparisonToken(start.path[0]!) === comparisonToken(ARCHIVE_METADATA_DIRECTORY)
+  ) {
     throw new ExportError("reserved_name", start.path[0]);
   }
   options.signal.throwIfAborted();
@@ -220,9 +257,18 @@ export async function collectExportFile<Entry extends ExportEntry>(
   const [allocation] = allocateExportPaths([], [{ nodeId: file.fileId, kind: "file", name: file.name }]);
   const entry = await source.readFile(file.fileId, file.parentKey, options.signal);
   options.onProgress?.({ directories: 0, files: 1 });
-  return { directories: [], files: [{ path: allocation!.segments, markdown: entry.markdown,
-    comments: entry.comments, commentsComplete: entry.commentsComplete }],
-  incompleteCommentFiles: entry.commentsComplete ? 0 : 1 };
+  return {
+    directories: [],
+    files: [
+      {
+        path: allocation!.segments,
+        markdown: entry.markdown,
+        comments: entry.comments,
+        commentsComplete: entry.commentsComplete,
+      },
+    ],
+    incompleteCommentFiles: entry.commentsComplete ? 0 : 1,
+  };
 }
 
 /**
@@ -242,14 +288,25 @@ export function buildArchiveFiles(
   ];
   const commented = collected.files.filter((file) => file.commentsComplete && file.comments.length > 0);
   if (commented.length) {
-    const sidecar = createPrivateCommentsSidecar(commented.map((file) => ({
-      path: file.path.join("/"), comments: [...file.comments],
-    })));
-    files.push({ path: ARCHIVE_COMMENTS_PATH, directory: false, data: encoder.encode(serializePrivateCommentsSidecar(sidecar)) });
+    const sidecar = createPrivateCommentsSidecar(
+      commented.map((file) => ({
+        path: file.path.join("/"),
+        comments: [...file.comments],
+      })),
+    );
+    files.push({
+      path: ARCHIVE_COMMENTS_PATH,
+      directory: false,
+      data: encoder.encode(serializePrivateCommentsSidecar(sidecar)),
+    });
   }
   const content: ArchiveFile[] = [
-    ...collected.directories.map((path): ArchiveFile => ({ path: path.join("/"), directory: true, data: new Uint8Array() })),
-    ...collected.files.map((file): ArchiveFile => ({ path: file.path.join("/"), directory: false, data: encoder.encode(file.markdown) })),
+    ...collected.directories.map(
+      (path): ArchiveFile => ({ path: path.join("/"), directory: true, data: new Uint8Array() }),
+    ),
+    ...collected.files.map(
+      (file): ArchiveFile => ({ path: file.path.join("/"), directory: false, data: encoder.encode(file.markdown) }),
+    ),
   ];
   content.sort((a, b) => compareBytes(utf8Bytes(a.path), utf8Bytes(b.path)));
   return [...files, ...content];

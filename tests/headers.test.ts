@@ -80,7 +80,7 @@ describe("nonce generation", () => {
   it("drops unusable nonce values instead of emitting them", () => {
     expect(normalizeCspNonce("")).toBe("");
     expect(normalizeCspNonce("short")).toBe("");
-    expect(normalizeCspNonce("has spaces and quotes \"")).toBe("");
+    expect(normalizeCspNonce('has spaces and quotes "')).toBe("");
     expect(normalizeCspNonce("okBase64urlValue_12345")).toBe("okBase64urlValue_12345");
   });
 });

@@ -13,10 +13,11 @@ export async function loader({ request, context }: Route.LoaderArgs): Promise<Re
     return Response.json({ error: "authentication_failed" }, { status: 401 });
   }
   const requestedCandidate = new URL(request.url).searchParams.get("candidateDeviceId");
-  const candidateId = requestedCandidate && /^[0-9a-f-]{36}$/.test(requestedCandidate)
-    ? requestedCandidate : null;
+  const candidateId = requestedCandidate && /^[0-9a-f-]{36}$/.test(requestedCandidate) ? requestedCandidate : null;
   const registry = await createDb(env.DB).get<{
-    registry_epoch: number; active_device_id: string | null; candidate_device_id: string | null;
+    registry_epoch: number;
+    active_device_id: string | null;
+    candidate_device_id: string | null;
   }>(sql`
     SELECT r.registry_epoch, d.id AS active_device_id, c.id AS candidate_device_id
     FROM account_encryption_identities r
@@ -26,11 +27,14 @@ export async function loader({ request, context }: Route.LoaderArgs): Promise<Re
       AND c.account_id = r.account_id AND c.state = 'active'
     WHERE r.account_id = ${session.accountId}
   `);
-  return Response.json({
-    accountId: session.accountId,
-    sessionBinding: await sessionBindingDigest(session.id),
-    registryEpoch: registry?.registry_epoch ?? null,
-    deviceId: registry?.active_device_id ?? null,
-    candidateActive: candidateId !== null && registry?.candidate_device_id === candidateId,
-  }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json(
+    {
+      accountId: session.accountId,
+      sessionBinding: await sessionBindingDigest(session.id),
+      registryEpoch: registry?.registry_epoch ?? null,
+      deviceId: registry?.active_device_id ?? null,
+      candidateActive: candidateId !== null && registry?.candidate_device_id === candidateId,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

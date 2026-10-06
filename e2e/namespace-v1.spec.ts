@@ -9,38 +9,43 @@ declare global {
 }
 
 const test = appTest.extend<{}, { namespaceScript: string }>({
-  namespaceScript: [async ({}, use) => {
-    const result = await build({
-      configFile: false,
-      publicDir: false,
-      logLevel: "error",
-      build: {
-        write: false,
-        minify: false,
-        lib: {
-          entry: "tests/support/namespace-v1-contract.ts",
-          name: "mdwnNamespaceV1",
-          formats: ["iife"],
+  namespaceScript: [
+    async ({}, use) => {
+      const result = await build({
+        configFile: false,
+        publicDir: false,
+        logLevel: "error",
+        build: {
+          write: false,
+          minify: false,
+          lib: {
+            entry: "tests/support/namespace-v1-contract.ts",
+            name: "mdwnNamespaceV1",
+            formats: ["iife"],
+          },
         },
-      },
-    });
-    for (const output of Array.isArray(result) ? result : [result]) {
-      if (!("output" in output)) continue;
-      const script = output.output.find((item) => item.type === "chunk");
-      if (script?.type === "chunk") {
-        await use(script.code);
-        return;
+      });
+      for (const output of Array.isArray(result) ? result : [result]) {
+        if (!("output" in output)) continue;
+        const script = output.output.find((item) => item.type === "chunk");
+        if (script?.type === "chunk") {
+          await use(script.code);
+          return;
+        }
       }
-    }
-    throw new Error("Missing namespace contract bundle");
-  }, { scope: "worker" }],
+      throw new Error("Missing namespace contract bundle");
+    },
+    { scope: "worker" },
+  ],
 });
 
 async function installContract(page: import("@playwright/test").Page, script: string): Promise<void> {
-  await page.route("**/__test__/namespace-v1.js", (route) => route.fulfill({
-    contentType: "text/javascript",
-    body: script,
-  }));
+  await page.route("**/__test__/namespace-v1.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: script,
+    }),
+  );
   await page.goto("/", { waitUntil: "commit" });
   await page.addScriptTag({ url: new URL("/__test__/namespace-v1.js", page.url()).href });
   expect(await page.evaluate(() => window.isSecureContext)).toBe(true);

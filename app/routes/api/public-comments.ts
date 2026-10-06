@@ -5,6 +5,5 @@ import type { Route } from "./+types/public-comments";
 
 /** Anonymous, cookie-free page of public Comment audience epochs. */
 export async function loader({ params, request, context }: Route.LoaderArgs): Promise<Response> {
-  return readPublicCommentPageForLink(getEnv(context), params.linkId,
-    new URL(request.url).searchParams.get("cursor"));
+  return readPublicCommentPageForLink(getEnv(context), params.linkId, new URL(request.url).searchParams.get("cursor"));
 }

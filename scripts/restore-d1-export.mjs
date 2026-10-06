@@ -93,10 +93,14 @@ function prepareCommand(flags) {
     `✓ Prepared ${prepared.manifest.stats.dataStatements} data statements (${prepared.manifest.stats.chunkedStatements} chunked) in ${prepared.manifest.stats.commands} atomic commands`,
   );
   console.log(`✓ Source ${sourceName} (${sourceUuid}); schema head ${prepared.manifest.schema.head ?? "unknown"}`);
-  console.log(`✓ Prepared SQL: ${out} (${prepared.manifest.prepared.bytes} bytes, sha256 ${prepared.manifest.prepared.sha256.slice(0, 12)}…)`);
+  console.log(
+    `✓ Prepared SQL: ${out} (${prepared.manifest.prepared.bytes} bytes, sha256 ${prepared.manifest.prepared.sha256.slice(0, 12)}…)`,
+  );
   console.log(`✓ Manifest: ${manifestPath}`);
   console.log(`✓ ${prepared.probes.length} offline behavior/query-plan probes passed`);
-  console.log("! Both files contain restored data or its digests. Keep them local, never commit or upload, and trash them after use.");
+  console.log(
+    "! Both files contain restored data or its digests. Keep them local, never commit or upload, and trash them after use.",
+  );
 }
 
 /**
@@ -201,14 +205,19 @@ function restoreCommand(flags, verifyOnly) {
       writeStatus(statusPath, statusPayload("applied-unverified"));
     }
     const verification = verifyRestoreTarget(runner, manifest);
-    writeStatus(statusPath, statusPayload(verification.ok ? "verified" : "verification-failed", { checks: verification.checks }));
+    writeStatus(
+      statusPath,
+      statusPayload(verification.ok ? "verified" : "verification-failed", { checks: verification.checks }),
+    );
     for (const check of verification.checks) {
       console.log(`${check.ok ? "✓" : "✘"} ${check.name}: ${check.detail}`);
     }
     if (!verification.ok) {
       throw new Error(`Restore verification failed: ${verification.problems.join("; ")}`);
     }
-    console.log(`✓ Restored and verified ${manifest.source?.name ?? "source"} into ${target.databaseName} (${target.databaseId})`);
+    console.log(
+      `✓ Restored and verified ${manifest.source?.name ?? "source"} into ${target.databaseName} (${target.databaseId})`,
+    );
     console.log(`✓ Status: ${statusPath}`);
     if (target.mode === "local") {
       console.log(`✓ Disposable local D1 state: ${target.statePath}`);
@@ -236,7 +245,9 @@ function restoreCommand(flags, verifyOnly) {
     if (target.mode === "local") {
       console.error(`  Inspect it, then discard the incomplete local state with: trash ${target.directory}`);
     } else {
-      console.error(`  Delete and recreate the disposable database, then restore again: npx wrangler d1 delete ${target.databaseName}`);
+      console.error(
+        `  Delete and recreate the disposable database, then restore again: npx wrangler d1 delete ${target.databaseName}`,
+      );
     }
     process.exitCode = 1;
   }
@@ -250,9 +261,15 @@ try {
   else if (command === "verify") restoreCommand(flags, true);
   else {
     console.error("Usage: restore-d1-export.mjs <prepare|restore|verify> [flags]");
-    console.error("  prepare  --export <path> --source-name <name> --source-uuid <uuid> --out <path> --manifest <path>");
-    console.error("  restore  --prepared <path> --manifest <path> [--target local|remote --target-name <name> --target-uuid <uuid>]");
-    console.error("  verify   --prepared <path> --manifest <path> [--target local|remote --target-name <name> --target-uuid <uuid>]");
+    console.error(
+      "  prepare  --export <path> --source-name <name> --source-uuid <uuid> --out <path> --manifest <path>",
+    );
+    console.error(
+      "  restore  --prepared <path> --manifest <path> [--target local|remote --target-name <name> --target-uuid <uuid>]",
+    );
+    console.error(
+      "  verify   --prepared <path> --manifest <path> [--target local|remote --target-name <name> --target-uuid <uuid>]",
+    );
     process.exitCode = 2;
   }
 } catch (error) {

@@ -15,11 +15,21 @@ import { loadAllPrivateComments } from "~/shared/comments/comments-client";
 import { normalizeCommentText } from "~/shared/comments/content";
 import { canonicalizeSegment } from "~/shared/namespace-v1";
 import {
-  loadDirectory, loadFile, openChildDirectory, openRoot, type RootAccess, type TreeEntry,
+  loadDirectory,
+  loadFile,
+  openChildDirectory,
+  openRoot,
+  type RootAccess,
+  type TreeEntry,
 } from "~/shared/tree/client";
 import {
-  buildArchiveFiles, collectExportFile, collectExportTree, ExportError,
-  type CollectedExport, type ExportProgress, type ExportSource,
+  buildArchiveFiles,
+  collectExportFile,
+  collectExportTree,
+  ExportError,
+  type CollectedExport,
+  type ExportProgress,
+  type ExportSource,
 } from "../shared/export/collect";
 
 export type ExportSelection =
@@ -60,24 +70,34 @@ function createSource(access: RootAccess): ExportSource<TreeEntry> {
       for (const comment of loaded.comments) {
         const pseudonym = loaded.pseudonyms.get(comment.authorId);
         if (comment.text === null || pseudonym === undefined) continue;
-        comments.push({ sequence: comment.sequence, text: normalizeCommentText(comment.text),
-          pseudonym, createdAt: comment.createdAt, updatedAt: comment.updatedAt });
+        comments.push({
+          sequence: comment.sequence,
+          text: normalizeCommentText(comment.text),
+          pseudonym,
+          createdAt: comment.createdAt,
+          updatedAt: comment.updatedAt,
+        });
       }
-      return { markdown: file.markdown, comments,
-        commentsComplete: loaded.complete && comments.length === loaded.comments.length };
+      return {
+        markdown: file.markdown,
+        comments,
+        commentsComplete: loaded.complete && comments.length === loaded.comments.length,
+      };
     },
   };
 }
 
 function sanitizeFilename(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").replace(/[ .]+$/g, "").trim();
+  const cleaned = name
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
+    .replace(/[ .]+$/g, "")
+    .trim();
   return cleaned ? Array.from(cleaned).slice(0, 80).join("") : "export";
 }
 
 export function archiveFilename(selection: ExportSelection, at: Date): string {
   const stamp = at.toISOString().slice(0, 10);
-  return selection.kind === "all" ? `mdwn-files-${stamp}.zip`
-    : `mdwn-${sanitizeFilename(selection.name)}-${stamp}.zip`;
+  return selection.kind === "all" ? `mdwn-files-${stamp}.zip` : `mdwn-${sanitizeFilename(selection.name)}-${stamp}.zip`;
 }
 
 /**
@@ -85,12 +105,14 @@ export function archiveFilename(selection: ExportSelection, at: Date): string {
  * A selected Directory is included as a child of the archive root; "all"
  * places the account's owned contents at the archive root.
  */
-export async function exportOwnedFiles(options: {
-  selection?: ExportSelection;
-  signal?: AbortSignal;
-  onProgress?: (progress: ExportProgress) => void;
-  now?: () => Date;
-} = {}): Promise<ExportResult> {
+export async function exportOwnedFiles(
+  options: {
+    selection?: ExportSelection;
+    signal?: AbortSignal;
+    onProgress?: (progress: ExportProgress) => void;
+    now?: () => Date;
+  } = {},
+): Promise<ExportResult> {
   const signal = options.signal ?? new AbortController().signal;
   const access = await openRoot(signal);
   if (access.vaultId !== access.actorAccountId) throw new ExportError("not_owned");
@@ -100,27 +122,40 @@ export async function exportOwnedFiles(options: {
   let collected: CollectedExport;
   let roots: ArchiveRoot[];
   if (selection.kind === "all") {
-    collected = await collectExportTree(access, source,
+    collected = await collectExportTree(
+      access,
+      source,
       { directoryId: access.rootId, key: access.rootKey, path: [], includeRoot: false },
-      { signal, onProgress: options.onProgress });
+      { signal, onProgress: options.onProgress },
+    );
     roots = [{ kind: "directory", path: "" }];
   } else if (selection.kind === "directory") {
     const name = canonicalizeSegment(selection.name).display;
-    collected = await collectExportTree(access, source,
+    collected = await collectExportTree(
+      access,
+      source,
       { directoryId: selection.directoryId, key: selection.key, path: [name], includeRoot: true },
-      { signal, onProgress: options.onProgress });
+      { signal, onProgress: options.onProgress },
+    );
     roots = [{ kind: "directory", path: collected.directories[0]!.join("/") }];
   } else {
-    collected = await collectExportFile(access, source,
+    collected = await collectExportFile(
+      access,
+      source,
       { fileId: selection.fileId, parentKey: selection.parentKey, name: selection.name },
-      { signal, onProgress: options.onProgress });
+      { signal, onProgress: options.onProgress },
+    );
     roots = [{ kind: "file", path: collected.files[0]!.path.join("/") }];
   }
   const bytes = await createZip(buildArchiveFiles(collected, { createdAt: at.toISOString(), roots }), { at });
-  return { blob: new Blob([bytes.slice()], { type: "application/zip" }), filename: archiveFilename(selection, at),
-    files: collected.files.length, directories: collected.directories.length,
+  return {
+    blob: new Blob([bytes.slice()], { type: "application/zip" }),
+    filename: archiveFilename(selection, at),
+    files: collected.files.length,
+    directories: collected.directories.length,
     comments: collected.files.reduce((total, file) => total + file.comments.length, 0),
-    incompleteCommentFiles: collected.incompleteCommentFiles };
+    incompleteCommentFiles: collected.incompleteCommentFiles,
+  };
 }
 
 /** Hand one finished archive to the browser's download UI; nothing leaves the device. */

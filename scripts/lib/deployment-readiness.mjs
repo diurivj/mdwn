@@ -8,9 +8,11 @@ const ORIGINS = {
 
 /** @param {string} output Wrangler 4.135's deploy output. */
 export function deployedVersionId(output) {
-  const ids = [...stripVTControlCharacters(output).matchAll(
-    /^[ \t]*Current Version ID: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[ \t]*\r?$/gim,
-  )];
+  const ids = [
+    ...stripVTControlCharacters(output).matchAll(
+      /^[ \t]*Current Version ID: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[ \t]*\r?$/gim,
+    ),
+  ];
   if (ids.length !== 1) throw new Error("Expected exactly one Wrangler Current Version ID");
   return ids[0][1];
 }
@@ -36,17 +38,24 @@ export async function waitForDeployment({
   sleep = pause,
 }) {
   const origin = ORIGINS[target];
-  if (!origin || !VERSION_ID.test(expectedVersionId) || !token ||
-      !Number.isInteger(maxAttempts) || maxAttempts < 1 ||
-      !Number.isInteger(delayMs) || delayMs < 0) {
+  if (
+    !origin ||
+    !VERSION_ID.test(expectedVersionId) ||
+    !token ||
+    !Number.isInteger(maxAttempts) ||
+    maxAttempts < 1 ||
+    !Number.isInteger(delayMs) ||
+    delayMs < 0
+  ) {
     throw new Error("Worker readiness requires a target, deployed version ID, token, and bounded retries");
   }
 
   /** @param {string} path @param {RequestInit} [init] */
-  const request = (path, init) => fetchImpl(`${origin}${path}`, {
-    ...init,
-    signal: AbortSignal.timeout(5_000),
-  });
+  const request = (path, init) =>
+    fetchImpl(`${origin}${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(5_000),
+    });
   let lastFailure = "no response";
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {

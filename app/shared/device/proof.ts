@@ -37,11 +37,20 @@ export function canonicalPath(url: string): string {
 }
 
 function statement(proof: UnsignedProof): Uint8Array {
-  return encoder.encode(JSON.stringify([
-    "mdwn/device-proof/v1", proof.sessionBinding, proof.deviceId,
-    proof.registryEpoch, proof.method, proof.path, proof.bodyDigest,
-    proof.issuedAt, proof.expiresAt, proof.proofId,
-  ]));
+  return encoder.encode(
+    JSON.stringify([
+      "mdwn/device-proof/v1",
+      proof.sessionBinding,
+      proof.deviceId,
+      proof.registryEpoch,
+      proof.method,
+      proof.path,
+      proof.bodyDigest,
+      proof.issuedAt,
+      proof.expiresAt,
+      proof.proofId,
+    ]),
+  );
 }
 
 export async function signDeviceProof(
@@ -56,8 +65,8 @@ export async function signDeviceProof(
     now?: number;
   },
 ): Promise<DeviceProof> {
-  if (privateKey.type !== "private" || privateKey.extractable ||
-      privateKey.algorithm.name !== "ECDSA") throw new Error("device key unavailable");
+  if (privateKey.type !== "private" || privateKey.extractable || privateKey.algorithm.name !== "ECDSA")
+    throw new Error("device key unavailable");
   const issuedAt = input.now ?? Date.now();
   const proof: UnsignedProof = {
     sessionBinding: input.sessionBinding,
@@ -70,7 +79,11 @@ export async function signDeviceProof(
     expiresAt: issuedAt + MAX_PROOF_AGE_MS,
     proofId: crypto.randomUUID(),
   };
-  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, new Uint8Array(statement(proof)));
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    privateKey,
+    new Uint8Array(statement(proof)),
+  );
   return { ...proof, signature: encodeBytes(new Uint8Array(signature)) };
 }
 
@@ -90,26 +103,41 @@ export async function verifyDeviceProof(
   if (!proof || typeof proof !== "object" || Array.isArray(proof)) return false;
   const data = proof as Record<string, unknown>;
   const now = expected.now ?? Date.now();
-  if (Object.keys(data).sort().join(",") !==
-    "bodyDigest,deviceId,expiresAt,issuedAt,method,path,proofId,registryEpoch,sessionBinding,signature" ||
-    typeof data.signature !== "string" || data.signature.length > 100 ||
-    typeof data.proofId !== "string" || !/^[0-9a-f-]{36}$/.test(data.proofId) ||
-    !Number.isSafeInteger(data.issuedAt) || !Number.isSafeInteger(data.expiresAt) ||
-    (data.issuedAt as number) > now || (data.expiresAt as number) <= now ||
+  if (
+    Object.keys(data).sort().join(",") !==
+      "bodyDigest,deviceId,expiresAt,issuedAt,method,path,proofId,registryEpoch,sessionBinding,signature" ||
+    typeof data.signature !== "string" ||
+    data.signature.length > 100 ||
+    typeof data.proofId !== "string" ||
+    !/^[0-9a-f-]{36}$/.test(data.proofId) ||
+    !Number.isSafeInteger(data.issuedAt) ||
+    !Number.isSafeInteger(data.expiresAt) ||
+    (data.issuedAt as number) > now ||
+    (data.expiresAt as number) <= now ||
     (data.expiresAt as number) <= (data.issuedAt as number) ||
     (data.expiresAt as number) - (data.issuedAt as number) > MAX_PROOF_AGE_MS ||
-    data.sessionBinding !== expected.sessionBinding || data.deviceId !== expected.deviceId ||
-    data.registryEpoch !== expected.registryEpoch || data.method !== expected.method.toUpperCase() ||
-    data.path !== canonicalPath(expected.url) || data.bodyDigest !== await digestBody(expected.body ?? "")) {
+    data.sessionBinding !== expected.sessionBinding ||
+    data.deviceId !== expected.deviceId ||
+    data.registryEpoch !== expected.registryEpoch ||
+    data.method !== expected.method.toUpperCase() ||
+    data.path !== canonicalPath(expected.url) ||
+    data.bodyDigest !== (await digestBody(expected.body ?? ""))
+  ) {
     return false;
   }
   try {
     const key = await crypto.subtle.importKey(
-      "raw", new Uint8Array(publicKeyBytes), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"],
+      "raw",
+      new Uint8Array(publicKeyBytes),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
     );
     return crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" }, key,
-      decodeBytes(data.signature as string, 64), new Uint8Array(statement(data as UnsignedProof)),
+      { name: "ECDSA", hash: "SHA-256" },
+      key,
+      decodeBytes(data.signature as string, 64),
+      new Uint8Array(statement(data as UnsignedProof)),
     );
   } catch {
     return false;

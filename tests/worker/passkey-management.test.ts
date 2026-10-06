@@ -2,13 +2,7 @@ import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test"
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { FRESH_ASSERTION_MS } from "../../app/auth/session.server";
-import {
-  mutation,
-  recoveryCookie,
-  seedAccount,
-  seedNormalSession,
-  sessionState,
-} from "./auth-fixtures";
+import { mutation, recoveryCookie, seedAccount, seedNormalSession, sessionState } from "./auth-fixtures";
 
 declare global {
   namespace Cloudflare {
@@ -27,26 +21,20 @@ describe("passkey management routes", () => {
   it("rejects missing or stale fresh assertions and refuses recovery Sessions", async () => {
     const account = await seedAccount();
     const normal = await seedNormalSession(account);
-    await env.DB
-      .prepare("UPDATE sessions SET fresh_asserted_at = NULL WHERE id = ?")
-      .bind(normal.id)
-      .run();
+    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = NULL WHERE id = ?").bind(normal.id).run();
 
-    expect(
-      (await mutation("/api/auth/passkeys/registration/options", normal.cookie)).status,
-    ).toBe(401);
+    expect((await mutation("/api/auth/passkeys/registration/options", normal.cookie)).status).toBe(401);
 
-    await env.DB
-      .prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
+    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
       .bind(Date.now() - FRESH_ASSERTION_MS - 1, normal.id)
       .run();
+    expect((await mutation("/api/auth/passkeys/registration/options", normal.cookie)).status).toBe(401);
     expect(
-      (await mutation("/api/auth/passkeys/registration/options", normal.cookie)).status,
-    ).toBe(401);
-    expect(
-      (await mutation("/api/auth/passkeys/remove", normal.cookie, {
-        credentialId: account.credentialIds[1],
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/remove", normal.cookie, {
+          credentialId: account.credentialIds[1],
+        })
+      ).status,
     ).toBe(401);
     expect(
       await env.DB.prepare("SELECT credential_id FROM passkeys WHERE credential_id = ?")
@@ -63,9 +51,11 @@ describe("passkey management routes", () => {
       expect((await mutation(path, recovery, body)).status).toBe(403);
     }
     expect(
-      (await SELF.fetch("https://mdwn.test/api/auth/passkeys", {
-        headers: { cookie: recovery },
-      })).status,
+      (
+        await SELF.fetch("https://mdwn.test/api/auth/passkeys", {
+          headers: { cookie: recovery },
+        })
+      ).status,
     ).toBe(403);
   });
 
@@ -75,38 +65,38 @@ describe("passkey management routes", () => {
     const second = await seedNormalSession(account, account.credentialIds[1]);
     const start = await mutation("/api/auth/passkeys/fresh/options", first.cookie);
     expect(start.status).toBe(200);
-    const { challengeId } = await start.json() as { challengeId: string };
+    const { challengeId } = (await start.json()) as { challengeId: string };
 
     expect(
-      (await mutation("/api/auth/passkeys/fresh/verify", second.cookie, {
-        challengeId,
-        response: {},
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/fresh/verify", second.cookie, {
+          challengeId,
+          response: {},
+        })
+      ).status,
     ).toBe(401);
-    expect(
-      await env.DB
-        .prepare("SELECT id FROM webauthn_challenges WHERE id = ?")
-        .bind(challengeId)
-        .first(),
-    ).toEqual({ id: challengeId });
+    expect(await env.DB.prepare("SELECT id FROM webauthn_challenges WHERE id = ?").bind(challengeId).first()).toEqual({
+      id: challengeId,
+    });
 
     expect(
-      (await mutation("/api/auth/passkeys/fresh/verify", first.cookie, {
-        challengeId,
-        response: {},
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/fresh/verify", first.cookie, {
+          challengeId,
+          response: {},
+        })
+      ).status,
     ).toBe(401);
     expect(
-      await env.DB
-        .prepare("SELECT id FROM webauthn_challenges WHERE id = ?")
-        .bind(challengeId)
-        .first(),
+      await env.DB.prepare("SELECT id FROM webauthn_challenges WHERE id = ?").bind(challengeId).first(),
     ).toBeNull();
     expect(
-      (await mutation("/api/auth/passkeys/fresh/verify", first.cookie, {
-        challengeId,
-        response: {},
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/fresh/verify", first.cookie, {
+          challengeId,
+          response: {},
+        })
+      ).status,
     ).toBe(401);
   });
 
@@ -117,51 +107,55 @@ describe("passkey management routes", () => {
     const foreignSession = await seedNormalSession(foreign);
     const start = await mutation("/api/auth/passkeys/registration/options", normal.cookie);
     expect(start.status).toBe(200);
-    const { challengeId } = await start.json() as { challengeId: string };
+    const { challengeId } = (await start.json()) as { challengeId: string };
 
     expect(
-      (await mutation("/api/auth/passkeys/registration/verify", foreignSession.cookie, {
-        challengeId,
-        response: {},
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/registration/verify", foreignSession.cookie, {
+          challengeId,
+          response: {},
+        })
+      ).status,
     ).toBe(401);
-    expect(
-      await env.DB
-        .prepare("SELECT id FROM webauthn_challenges WHERE id = ?")
-        .bind(challengeId)
-        .first(),
-    ).toEqual({ id: challengeId });
+    expect(await env.DB.prepare("SELECT id FROM webauthn_challenges WHERE id = ?").bind(challengeId).first()).toEqual({
+      id: challengeId,
+    });
 
     expect(
-      (await mutation("/api/auth/passkeys/registration/verify", normal.cookie, {
-        challengeId,
-        response: {},
-      }, "https://other-mdwn.test")).status,
+      (
+        await mutation(
+          "/api/auth/passkeys/registration/verify",
+          normal.cookie,
+          {
+            challengeId,
+            response: {},
+          },
+          "https://other-mdwn.test",
+        )
+      ).status,
     ).toBe(401);
-    expect(
-      await env.DB
-        .prepare("SELECT id FROM webauthn_challenges WHERE id = ?")
-        .bind(challengeId)
-        .first(),
-    ).toEqual({ id: challengeId });
+    expect(await env.DB.prepare("SELECT id FROM webauthn_challenges WHERE id = ?").bind(challengeId).first()).toEqual({
+      id: challengeId,
+    });
 
     expect(
-      (await mutation("/api/auth/passkeys/registration/verify", normal.cookie, {
-        challengeId,
-        response: {},
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/registration/verify", normal.cookie, {
+          challengeId,
+          response: {},
+        })
+      ).status,
     ).toBe(401);
     expect(
-      await env.DB
-        .prepare("SELECT id FROM webauthn_challenges WHERE id = ?")
-        .bind(challengeId)
-        .first(),
+      await env.DB.prepare("SELECT id FROM webauthn_challenges WHERE id = ?").bind(challengeId).first(),
     ).toBeNull();
     expect(
-      (await mutation("/api/auth/passkeys/registration/verify", normal.cookie, {
-        challengeId,
-        response: {},
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/registration/verify", normal.cookie, {
+          challengeId,
+          response: {},
+        })
+      ).status,
     ).toBe(401);
   });
 
@@ -172,9 +166,11 @@ describe("passkey management routes", () => {
     const foreign = await seedAccount(1);
 
     expect(
-      (await mutation("/api/auth/passkeys/remove", operator.cookie, {
-        credentialId: foreign.credentialIds[0],
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/remove", operator.cookie, {
+          credentialId: foreign.credentialIds[0],
+        })
+      ).status,
     ).toBe(401);
     expect(
       await env.DB.prepare("SELECT credential_id FROM passkeys WHERE credential_id = ?")
@@ -183,9 +179,11 @@ describe("passkey management routes", () => {
     ).toEqual({ credential_id: foreign.credentialIds[0] });
 
     expect(
-      (await mutation("/api/auth/passkeys/remove", operator.cookie, {
-        credentialId: account.credentialIds[1],
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/remove", operator.cookie, {
+          credentialId: account.credentialIds[1],
+        })
+      ).status,
     ).toBe(200);
     expect(await sessionState(operator.cookie)).toEqual({ authenticated: true });
     expect(await sessionState(target.cookie)).toEqual({ authenticated: false });
@@ -196,9 +194,11 @@ describe("passkey management routes", () => {
     ).toBeNull();
 
     expect(
-      (await mutation("/api/auth/passkeys/remove", operator.cookie, {
-        credentialId: account.credentialIds[0],
-      })).status,
+      (
+        await mutation("/api/auth/passkeys/remove", operator.cookie, {
+          credentialId: account.credentialIds[0],
+        })
+      ).status,
     ).toBe(401);
     expect(
       await env.DB.prepare("SELECT credential_id FROM passkeys WHERE credential_id = ?")
@@ -236,8 +236,7 @@ describe("passkey management routes", () => {
       }),
     ]);
     expect([firstResult.status, secondResult.status].sort()).toEqual([200, 401]);
-    const remaining = await env.DB
-      .prepare("SELECT credential_id FROM passkeys WHERE account_id = ?")
+    const remaining = await env.DB.prepare("SELECT credential_id FROM passkeys WHERE account_id = ?")
       .bind(account.accountId)
       .all<{ credential_id: string }>();
     expect(remaining.results).toHaveLength(1);

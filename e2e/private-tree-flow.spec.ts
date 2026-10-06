@@ -3,7 +3,11 @@ import { completeRecoveryPresentation } from "./signup-recovery";
 
 test.setTimeout(180_000);
 
-test("creates and opens signed private Directories and Files without leaking names into SSR", async ({ browser, server, baseURL }) => {
+test("creates and opens signed private Directories and Files without leaking names into SSR", async ({
+  browser,
+  server,
+  baseURL,
+}) => {
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
   const db = (await worker.getEnv()).DB;
@@ -11,7 +15,8 @@ test("creates and opens signed private Directories and Files without leaking nam
   await context.addInitScript(() => {
     if (typeof globalThis.PublicKeyCredential !== "function") {
       Object.defineProperty(globalThis, "PublicKeyCredential", {
-        configurable: true, value: class PublicKeyCredential {},
+        configurable: true,
+        value: class PublicKeyCredential {},
       });
     }
   });
@@ -24,16 +29,21 @@ test("creates and opens signed private Directories and Files without leaking nam
       const path = new URL(response.url()).pathname;
       if (path.startsWith("/api/signup/")) signupResponses.push(`${path}: ${response.status()}`);
     });
-    const verify = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/signup/verify" &&
-      request.method() === "POST", { timeout: 120_000 });
+    const verify = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === "/api/signup/verify" && request.method() === "POST",
+      { timeout: 120_000 },
+    );
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await completeRecoveryPresentation(page);
     const signup = (await verify).postDataJSON() as { transcript: { rootDirectoryId: string } };
     await Promise.race([
       page.getByText("Your account is ready.", { exact: false }).waitFor({ timeout: 120_000 }),
-      page.getByRole("alert").waitFor({ timeout: 120_000 }).then(() => {
-        throw new Error(`Signup failed before opening Files: ${signupResponses.join(", ")}`);
-      }),
+      page
+        .getByRole("alert")
+        .waitFor({ timeout: 120_000 })
+        .then(() => {
+          throw new Error(`Signup failed before opening Files: ${signupResponses.join(", ")}`);
+        }),
     ]);
 
     await page.goto(new URL(`/d/${signup.transcript.rootDirectoryId}`, baseURL!).href);
@@ -52,10 +62,10 @@ test("creates and opens signed private Directories and Files without leaking nam
     await expect(page.getByRole("heading", { name: "Draft.md" })).toBeVisible();
     const fileId = new URL(page.url()).pathname.split("/").at(-1)!;
     await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toBeEditable();
-    await expect(page.getByRole("navigation", { name: "Files" }).getByRole("link", { name: "Draft.md" }))
-      .toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Private folder" }))
-      .toHaveAttribute("href", `/d/${folderId}`);
+    await expect(page.getByRole("navigation", { name: "Files" }).getByRole("link", { name: "Draft.md" })).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Private folder" }),
+    ).toHaveAttribute("href", `/d/${folderId}`);
 
     const document = await page.request.get(`/f/${fileId}`);
     expect(await document.text()).not.toContain("Draft.md");
@@ -64,10 +74,11 @@ test("creates and opens signed private Directories and Files without leaking nam
 
     // The same-revision head still verifies its old ciphertext; substituting
     // an entry in D1 must fail closed before its name reaches the browser.
-    await db.prepare("UPDATE directory_entries SET name_ciphertext = X'01' WHERE child_node_id = ?")
-      .bind(fileId).run();
+    await db.prepare("UPDATE directory_entries SET name_ciphertext = X'01' WHERE child_node_id = ?").bind(fileId).run();
     await page.reload();
     await expect(page.getByRole("heading", { name: "Files unavailable" })).toBeVisible();
     await expect(page.getByText("Draft.md", { exact: true })).toHaveCount(0);
-  } finally { await context.close(); }
+  } finally {
+    await context.close();
+  }
 });

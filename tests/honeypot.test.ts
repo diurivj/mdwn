@@ -16,7 +16,7 @@ describe("registration and Public Comment honeypot", () => {
     expect(markup).toContain('tabindex="-1"');
     expect(markup).toMatch(/autocomplete="off"/i);
     expect(markup).toMatch(/inputmode="none"/i);
-    expect(markup).toContain('display:none');
+    expect(markup).toContain("display:none");
     expect(markup.match(/<input/g)).toHaveLength(1);
   });
 

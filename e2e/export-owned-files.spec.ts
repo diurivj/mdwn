@@ -4,7 +4,10 @@ import { test, expect } from "./workspace-fixture";
 import { seededAccount, shareWithComments, loadFixture } from "./support/provisioning-fixtures";
 import { waitForSharedProvisioning } from "./support/navigation";
 import {
-  ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, parseArchiveManifest, parsePrivateCommentsSidecar,
+  ARCHIVE_COMMENTS_PATH,
+  ARCHIVE_MANIFEST_PATH,
+  parseArchiveManifest,
+  parsePrivateCommentsSidecar,
 } from "../app/shared/archive/format";
 import { readZip } from "../app/shared/archive/zip";
 
@@ -21,7 +24,10 @@ async function downloadEntries(download: { path(): Promise<string | null> }): Pr
   return new Map(entries.map((entry) => [entry.path, entry.data]));
 }
 
-test("the Owner exports every owned File with exact source and Private Comment history", async ({ page, workspace }) => {
+test("the Owner exports every owned File with exact source and Private Comment history", async ({
+  page,
+  workspace,
+}) => {
   await page.getByRole("button", { name: "Comments", exact: true }).click();
   const panel = page.getByRole("region", { name: "Private comments", exact: true });
   const list = panel.getByRole("list", { name: "Private comments" });
@@ -32,9 +38,11 @@ test("the Owner exports every owned File with exact source and Private Comment h
   }
   // Export must work while a Public-participation suspension is live.
   const now = Date.now();
-  await workspace.db.prepare(`INSERT INTO public_participation_suspensions
+  await workspace.db
+    .prepare(`INSERT INTO public_participation_suspensions
     (account_id, strike_count, reason, started_at, expires_at, updated_at) VALUES (?, 1, 'report_pattern', ?, ?, ?)`)
-    .bind(workspace.accountId, now, now + 86_400_000, now).run();
+    .bind(workspace.accountId, now, now + 86_400_000, now)
+    .run();
 
   const exportRequests: { method: string; path: string; body: string | null }[] = [];
   let exporting = false;
@@ -65,8 +73,10 @@ test("the Owner exports every owned File with exact source and Private Comment h
   const sidecar = parsePrivateCommentsSidecar(decoder.decode(entries.get(ARCHIVE_COMMENTS_PATH)!));
   expect(sidecar.files).toHaveLength(1);
   expect(sidecar.files[0]!.path).toBe("Draft.md");
-  expect(sidecar.files[0]!.comments.map((comment) => comment.text))
-    .toEqual(["First **comment** <b>plain</b>", "Second comment"]);
+  expect(sidecar.files[0]!.comments.map((comment) => comment.text)).toEqual([
+    "First **comment** <b>plain</b>",
+    "Second comment",
+  ]);
   expect(sidecar.files[0]!.comments.map((comment) => comment.sequence)).toEqual([1, 2]);
   for (const comment of sidecar.files[0]!.comments) {
     expect(comment.pseudonym).toBe("Member Test");
@@ -83,7 +93,10 @@ test("the Owner exports every owned File with exact source and Private Comment h
   await expect(page.getByText("It cannot remove or recall copies already downloaded elsewhere.")).toBeVisible();
 });
 
-test("mirrors a nested Directory hierarchy with UTF-8 .md files and uninterpreted front matter", async ({ page, workspace }) => {
+test("mirrors a nested Directory hierarchy with UTF-8 .md files and uninterpreted front matter", async ({
+  page,
+  workspace,
+}) => {
   expect(workspace.fileId).toBeTruthy();
   await page.getByRole("button", { name: "New folder", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create a name" });
@@ -96,8 +109,9 @@ test("mirrors a nested Directory hierarchy with UTF-8 .md files and uninterprete
   expect(folderDownloaded.suggestedFilename()).toMatch(/^mdwn-notes-\d{4}-\d{2}-\d{2}\.zip$/);
   const folderEntries = await downloadEntries(folderDownloaded);
   expect([...folderEntries.keys()].sort()).toEqual([".mdwn", ARCHIVE_MANIFEST_PATH, "notes"]);
-  expect(parseArchiveManifest(decoder.decode(folderEntries.get(ARCHIVE_MANIFEST_PATH)!)).roots)
-    .toEqual([{ kind: "directory", path: "notes" }]);
+  expect(parseArchiveManifest(decoder.decode(folderEntries.get(ARCHIVE_MANIFEST_PATH)!)).roots).toEqual([
+    { kind: "directory", path: "notes" },
+  ]);
   await page.getByRole("button", { name: "New File", exact: true }).click();
   const fileDialog = page.getByRole("dialog", { name: "Create a name" });
   await fileDialog.getByRole("textbox", { name: "Name", exact: true }).fill("child");
@@ -110,12 +124,11 @@ test("mirrors a nested Directory hierarchy with UTF-8 .md files and uninterprete
   const pending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export my Files" }).click();
   const entries = await downloadEntries(await pending);
-  expect([...entries.keys()].sort()).toEqual([
-    ".mdwn", ARCHIVE_MANIFEST_PATH, "Draft.md", "notes", "notes/child.md",
-  ]);
+  expect([...entries.keys()].sort()).toEqual([".mdwn", ARCHIVE_MANIFEST_PATH, "Draft.md", "notes", "notes/child.md"]);
   expect(decoder.decode(entries.get("notes/child.md")!)).toBe(nested);
-  expect(parseArchiveManifest(decoder.decode(entries.get(ARCHIVE_MANIFEST_PATH)!)).roots)
-    .toEqual([{ kind: "directory", path: "" }]);
+  expect(parseArchiveManifest(decoder.decode(entries.get(ARCHIVE_MANIFEST_PATH)!)).roots).toEqual([
+    { kind: "directory", path: "" },
+  ]);
 });
 
 test("a selected owned File exports at the archive root without its folder", async ({ page, workspace }) => {
@@ -132,7 +145,12 @@ test("a selected owned File exports at the archive root without its folder", asy
 });
 
 test("a Collaborator cannot export shared-only content and is never offered export for it", async ({
-  browser, page, workspace, workspaceScript, baseURL, server,
+  browser,
+  page,
+  workspace,
+  workspaceScript,
+  baseURL,
+  server,
 }) => {
   const origin = new URL(baseURL!).origin;
   const recipient = await seededAccount(browser, server, origin, workspaceScript);

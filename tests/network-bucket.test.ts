@@ -13,8 +13,7 @@ describe("privacy-preserving Network buckets", () => {
   });
 
   it("rejects malformed addresses without including them in an error", () => {
-    expect(() => normalizeEdgeIp("not-an-address"))
-      .toThrow("invalid edge address");
+    expect(() => normalizeEdgeIp("not-an-address")).toThrow("invalid edge address");
   });
 
   it("HMACs the normalized address with independent purpose and epoch domains", async () => {

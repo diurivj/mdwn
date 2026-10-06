@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, ArchiveError, checkArchiveCompressedSize,
-  createArchiveManifest, createPrivateCommentsSidecar, inspectArchive, parseArchiveManifest,
-  parsePrivateCommentsSidecar, serializeArchiveManifest, serializePrivateCommentsSidecar,
-  type ArchiveErrorCode, type HistoricalComment,
+  ARCHIVE_COMMENTS_PATH,
+  ARCHIVE_MANIFEST_PATH,
+  ArchiveError,
+  checkArchiveCompressedSize,
+  createArchiveManifest,
+  createPrivateCommentsSidecar,
+  inspectArchive,
+  parseArchiveManifest,
+  parsePrivateCommentsSidecar,
+  serializeArchiveManifest,
+  serializePrivateCommentsSidecar,
+  type ArchiveErrorCode,
+  type HistoricalComment,
 } from "../app/shared/archive/format";
 import { createZip, crc32, readZip, ZipError, type ZipEntry } from "../app/shared/archive/zip";
 
@@ -31,8 +40,13 @@ function throwsCode(run: () => unknown, code: ArchiveErrorCode): void {
   throw new Error(`expected mdwn/archive: ${code}`);
 }
 
-const comment: HistoricalComment = { sequence: 0, text: "First comment", pseudonym: "Member Quiet Pine",
-  createdAt: 1_759_000_000_000, updatedAt: 1_759_000_000_500 };
+const comment: HistoricalComment = {
+  sequence: 0,
+  text: "First comment",
+  pseudonym: "Member Quiet Pine",
+  createdAt: 1_759_000_000_000,
+  updatedAt: 1_759_000_000_500,
+};
 
 describe("mdwn/zip", () => {
   it("round-trips files, folders, empty entries, and Unicode names byte-exactly", async () => {
@@ -45,7 +59,10 @@ describe("mdwn/zip", () => {
     const bytes = await createZip(files, { at });
     const entries = await readZip(bytes);
     expect(entries.map((item) => `${item.directory ? "dir:" : "file:"}${item.path}`)).toEqual([
-      "file:Amélie/notes", "file:Amélie/empty.md", "dir:Amélie", "file:data.bin",
+      "file:Amélie/notes",
+      "file:Amélie/empty.md",
+      "dir:Amélie",
+      "file:data.bin",
     ]);
     expect(decoder.decode(entries[0]!.data)).toBe("# Héllo\n\nStraße Ａ\n");
     expect(entries[1]!.data.length).toBe(0);
@@ -67,8 +84,12 @@ describe("mdwn/zip", () => {
   });
 
   it("rejects duplicate, absolute, and traversing member paths", async () => {
-    await expect(createZip([{ path: "a.md", data: new Uint8Array() }, { path: "a.md", data: new Uint8Array() }]))
-      .rejects.toMatchObject({ code: "duplicate-path" });
+    await expect(
+      createZip([
+        { path: "a.md", data: new Uint8Array() },
+        { path: "a.md", data: new Uint8Array() },
+      ]),
+    ).rejects.toMatchObject({ code: "duplicate-path" });
     for (const path of ["/etc/passwd", "../escape.md", "a/../../b.md", "a//b.md", "a\\b.md", "C:/x.md"]) {
       await expect(createZip([{ path, data: new Uint8Array() }])).rejects.toBeInstanceOf(ZipError);
     }
@@ -105,8 +126,11 @@ describe("mdwn archive format", () => {
     expect(() => parseArchiveManifest(JSON.stringify({ ...manifest, extra: true }))).toThrow();
     expect(() => parseArchiveManifest(JSON.stringify({ ...manifest, createdAt: "not-a-date" }))).toThrow();
     expect(() => parseArchiveManifest("{}")).toThrow();
-    try { parseArchiveManifest(JSON.stringify({ ...manifest, format: "other" })); }
-    catch (error) { expect((error as ArchiveError).code).toBe("not-mdwn-archive"); }
+    try {
+      parseArchiveManifest(JSON.stringify({ ...manifest, format: "other" }));
+    } catch (error) {
+      expect((error as ArchiveError).code).toBe("not-mdwn-archive");
+    }
   });
 
   it("round-trips the Private-Comment sidecar and enforces its record bounds", () => {
@@ -121,18 +145,27 @@ describe("mdwn archive format", () => {
       [{ path: "notes.md", comments: [{ ...comment, createdAt: 1.5 }] }],
       [{ path: "notes.md", comments: [] }],
       [{ path: "notes.md", comments: [comment, { ...comment }] }],
-      [{ path: "a.md", comments: Array.from({ length: 1_000 }, (_, index) => ({ ...comment, sequence: index })) },
-        { path: "b.md", comments: [{ ...comment, sequence: 1_000 }] }],
-    ]) expect(() => parsePrivateCommentsSidecar(malformed(files))).toThrow();
+      [
+        { path: "a.md", comments: Array.from({ length: 1_000 }, (_, index) => ({ ...comment, sequence: index })) },
+        { path: "b.md", comments: [{ ...comment, sequence: 1_000 }] },
+      ],
+    ])
+      expect(() => parsePrivateCommentsSidecar(malformed(files))).toThrow();
   });
 
   it("accepts a conforming archive and resolves its roots, normalized paths, and comments", () => {
     const inspection = inspectArchive([
-      entry(".mdwn", "", true), manifestEntry([{ kind: "directory", path: "notes" }]),
-      entry("notes", "", true), entry("notes/draft.md", "# Draft\n"),
+      entry(".mdwn", "", true),
+      manifestEntry([{ kind: "directory", path: "notes" }]),
+      entry("notes", "", true),
+      entry("notes/draft.md", "# Draft\n"),
       entry("README.md", "# Readme\n"),
-      entry(ARCHIVE_COMMENTS_PATH, serializePrivateCommentsSidecar(
-        createPrivateCommentsSidecar([{ path: "notes/draft.md", comments: [comment] }]))),
+      entry(
+        ARCHIVE_COMMENTS_PATH,
+        serializePrivateCommentsSidecar(
+          createPrivateCommentsSidecar([{ path: "notes/draft.md", comments: [comment] }]),
+        ),
+      ),
     ]);
     expect(inspection.roots).toEqual([{ kind: "directory", path: "notes" }]);
     expect(inspection.entries.map((item) => item.path)).toEqual(["notes", "notes/draft.md", "README.md"]);
@@ -146,8 +179,11 @@ describe("mdwn archive format", () => {
     throwsCode(() => inspectArchive([entry("notes.md", "text")]), "not-mdwn-archive");
     throwsCode(() => inspectArchive([manifestEntry(), entry(".mdwn/extra.txt", "x")]), "unexpected-metadata");
     throwsCode(() => inspectArchive([manifestEntry(), entry(".mdwn", "x")]), "unexpected-metadata");
-    throwsCode(() => inspectArchive([manifestEntry(), entry(ARCHIVE_COMMENTS_PATH, "none", ), entry(ARCHIVE_COMMENTS_PATH, "none")]),
-      "malformed-comments");
+    throwsCode(
+      () =>
+        inspectArchive([manifestEntry(), entry(ARCHIVE_COMMENTS_PATH, "none"), entry(ARCHIVE_COMMENTS_PATH, "none")]),
+      "malformed-comments",
+    );
     expect(() => inspectArchive([manifestEntry(), entry("notes/.mdwn/hidden.md", "x")])).not.toThrow();
   });
 
@@ -166,7 +202,8 @@ describe("mdwn archive format", () => {
   });
 
   it("rejects unsafe or non-canonical namespace segments", () => {
-    const reject = (path: string) => throwsCode(() => inspectArchive([manifestEntry(), entry(path, "x")]), "invalid-path");
+    const reject = (path: string) =>
+      throwsCode(() => inspectArchive([manifestEntry(), entry(path, "x")]), "invalid-path");
     reject("../escape.md");
     reject("/absolute.md");
     reject("a//b.md");
@@ -179,30 +216,71 @@ describe("mdwn archive format", () => {
   });
 
   it("enforces node, depth, source, and expanded bounds with one-over rejection", () => {
-    expect(inspectArchive([manifestEntry(), entry("a.md", "12345678"), entry("b", "", true)],
-      { limits: { maxNodes: 2, maxDepth: 1, maxSourceBytes: 8, maxExpandedBytes: 4_096 } }).nodeCount).toBe(2);
-    throwsCode(() => inspectArchive([manifestEntry(), entry("a.md", "1"), entry("b.md", "2"), entry("c.md", "3")],
-      { limits: { maxNodes: 2, maxDepth: 99, maxSourceBytes: 1_024, maxExpandedBytes: 4_096 } }), "too-many-nodes");
-    throwsCode(() => inspectArchive([manifestEntry(), entry("a/b/c.md", "1")],
-      { limits: { maxNodes: 10, maxDepth: 1, maxSourceBytes: 1_024, maxExpandedBytes: 4_096 } }), "too-deep");
-    throwsCode(() => inspectArchive([manifestEntry(), entry("a.md", "123456789")],
-      { limits: { maxNodes: 10, maxDepth: 99, maxSourceBytes: 8, maxExpandedBytes: 4_096 } }), "source-too-large");
-    throwsCode(() => inspectArchive([manifestEntry(), entry("a.md", "x".repeat(2_000))],
-      { limits: { maxNodes: 10, maxDepth: 99, maxSourceBytes: 4_096, maxExpandedBytes: 512 } }), "expanded-too-large");
+    expect(
+      inspectArchive([manifestEntry(), entry("a.md", "12345678"), entry("b", "", true)], {
+        limits: { maxNodes: 2, maxDepth: 1, maxSourceBytes: 8, maxExpandedBytes: 4_096 },
+      }).nodeCount,
+    ).toBe(2);
+    throwsCode(
+      () =>
+        inspectArchive([manifestEntry(), entry("a.md", "1"), entry("b.md", "2"), entry("c.md", "3")], {
+          limits: { maxNodes: 2, maxDepth: 99, maxSourceBytes: 1_024, maxExpandedBytes: 4_096 },
+        }),
+      "too-many-nodes",
+    );
+    throwsCode(
+      () =>
+        inspectArchive([manifestEntry(), entry("a/b/c.md", "1")], {
+          limits: { maxNodes: 10, maxDepth: 1, maxSourceBytes: 1_024, maxExpandedBytes: 4_096 },
+        }),
+      "too-deep",
+    );
+    throwsCode(
+      () =>
+        inspectArchive([manifestEntry(), entry("a.md", "123456789")], {
+          limits: { maxNodes: 10, maxDepth: 99, maxSourceBytes: 8, maxExpandedBytes: 4_096 },
+        }),
+      "source-too-large",
+    );
+    throwsCode(
+      () =>
+        inspectArchive([manifestEntry(), entry("a.md", "x".repeat(2_000))], {
+          limits: { maxNodes: 10, maxDepth: 99, maxSourceBytes: 4_096, maxExpandedBytes: 512 },
+        }),
+      "expanded-too-large",
+    );
     // The settled defaults accept a maximum-size source and reject one byte over.
     const maxSource = new Uint8Array(262_144).fill(0x61);
-    expect(inspectArchive([manifestEntry(), { path: "a.md", directory: false, data: maxSource }]).sourceBytes).toBe(262_144);
-    throwsCode(() => inspectArchive([manifestEntry(), { path: "a.md", directory: false, data: new Uint8Array(262_145) }]),
-      "source-too-large");
+    expect(inspectArchive([manifestEntry(), { path: "a.md", directory: false, data: maxSource }]).sourceBytes).toBe(
+      262_144,
+    );
+    throwsCode(
+      () => inspectArchive([manifestEntry(), { path: "a.md", directory: false, data: new Uint8Array(262_145) }]),
+      "source-too-large",
+    );
   });
 
   it("requires manifest roots and sidecar references to name real archive entries", () => {
     throwsCode(() => inspectArchive([manifestEntry([{ kind: "directory", path: "missing" }])]), "missing-root");
-    throwsCode(() => inspectArchive([manifestEntry([{ kind: "file", path: "notes" }]), entry("notes", "", true)]), "missing-root");
-    expect(() => inspectArchive([manifestEntry([{ kind: "file", path: "notes.md" }]), entry("notes.md", "x")])).not.toThrow();
-    throwsCode(() => inspectArchive([manifestEntry(), entry("notes.md", "x"),
-      entry(ARCHIVE_COMMENTS_PATH, serializePrivateCommentsSidecar(createPrivateCommentsSidecar(
-        [{ path: "absent.md", comments: [comment] }])))]), "malformed-comments");
+    throwsCode(
+      () => inspectArchive([manifestEntry([{ kind: "file", path: "notes" }]), entry("notes", "", true)]),
+      "missing-root",
+    );
+    expect(() =>
+      inspectArchive([manifestEntry([{ kind: "file", path: "notes.md" }]), entry("notes.md", "x")]),
+    ).not.toThrow();
+    throwsCode(
+      () =>
+        inspectArchive([
+          manifestEntry(),
+          entry("notes.md", "x"),
+          entry(
+            ARCHIVE_COMMENTS_PATH,
+            serializePrivateCommentsSidecar(createPrivateCommentsSidecar([{ path: "absent.md", comments: [comment] }])),
+          ),
+        ]),
+      "malformed-comments",
+    );
   });
 
   it("enforces the recognized-archive input bound at the ZIP boundary", () => {

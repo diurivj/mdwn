@@ -5,14 +5,26 @@ import { EnvelopeError } from "./errors";
 export { EnvelopeError, type EnvelopeErrorCode } from "./errors";
 
 import {
-  concat, encodeContext, equal, header, HPKE_SUITE, MANIFEST_PURPOSES, parseEnvelope, prefix, SYMMETRIC_SUITE,
-  type EnvelopeContext, type EnvelopeExpectation,
+  concat,
+  encodeContext,
+  equal,
+  header,
+  HPKE_SUITE,
+  MANIFEST_PURPOSES,
+  parseEnvelope,
+  prefix,
+  SYMMETRIC_SUITE,
+  type EnvelopeContext,
+  type EnvelopeExpectation,
 } from "./format";
 
 export {
   inspectEnvelope,
-  type EnvelopeContext, type EnvelopeExpectation, type EnvelopeHeader,
-  type EnvelopePurpose, type EnvelopeSuite,
+  type EnvelopeContext,
+  type EnvelopeExpectation,
+  type EnvelopeHeader,
+  type EnvelopePurpose,
+  type EnvelopeSuite,
 } from "./format";
 
 const encoder = new TextEncoder();
@@ -34,7 +46,7 @@ export interface SymmetricWriterOptions {
    * Domain-separates the HKDF key derivation. The enc-v1 content label is the
    * default; callers introducing another key domain must provide an explicit
    * label and must never reuse a writer or its nonce state.
-  */
+   */
   infoLabel?: string | Uint8Array;
 }
 
@@ -54,7 +66,10 @@ async function writerKey(baseKey: Uint8Array, salt: Uint8Array, infoLabel?: stri
   const key = await crypto.subtle.importKey("raw", new Uint8Array(baseKey), "HKDF", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(salt), info: labelBytes(infoLabel) },
-    key, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+    key,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
   );
 }
 
@@ -65,14 +80,15 @@ export interface SymmetricWriter {
 /** A writer is ephemeral. Never persist or restore its derived key/nonce state. */
 export async function createSymmetricWriter(
   baseKey: Uint8Array,
-  {
-    maxMessages = 2 ** 32,
-    maxAuthenticatedBytes = MAX_AUTHENTICATED_BYTES,
-    infoLabel,
-  }: SymmetricWriterOptions = {},
+  { maxMessages = 2 ** 32, maxAuthenticatedBytes = MAX_AUTHENTICATED_BYTES, infoLabel }: SymmetricWriterOptions = {},
 ): Promise<SymmetricWriter> {
-  if (!Number.isSafeInteger(maxMessages) || maxMessages < 1 || maxMessages > 2 ** 32) throw new EnvelopeError("malformed");
-  if (!Number.isSafeInteger(maxAuthenticatedBytes) || maxAuthenticatedBytes < 1 || maxAuthenticatedBytes > MAX_AUTHENTICATED_BYTES) {
+  if (!Number.isSafeInteger(maxMessages) || maxMessages < 1 || maxMessages > 2 ** 32)
+    throw new EnvelopeError("malformed");
+  if (
+    !Number.isSafeInteger(maxAuthenticatedBytes) ||
+    maxAuthenticatedBytes < 1 ||
+    maxAuthenticatedBytes > MAX_AUTHENTICATED_BYTES
+  ) {
     throw new EnvelopeError("malformed");
   }
   // Snapshot the base key: caller mutation must not change the derived writer key.
@@ -96,7 +112,9 @@ export async function createSymmetricWriter(
       if (authenticatedBytes + cost > maxAuthenticatedBytes) throw new EnvelopeError("nonce-exhausted");
       authenticatedBytes += cost;
       const ciphertext = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 }, key, message,
+        { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 },
+        key,
+        message,
       );
       return concat(aad, new Uint8Array(ciphertext));
     },
@@ -104,15 +122,22 @@ export async function createSymmetricWriter(
 }
 
 function checkTransportKey(key: CryptoKey, type: "public" | "private") {
-  if (!key || key.type !== type || key.algorithm.name !== "ECDH" ||
-      !("namedCurve" in key.algorithm) || key.algorithm.namedCurve !== "P-256" ||
-      (type === "private" && !key.usages.includes("deriveBits"))) {
+  if (
+    !key ||
+    key.type !== type ||
+    key.algorithm.name !== "ECDH" ||
+    !("namedCurve" in key.algorithm) ||
+    key.algorithm.namedCurve !== "P-256" ||
+    (type === "private" && !key.usages.includes("deriveBits"))
+  ) {
     throw new EnvelopeError("malformed");
   }
 }
 
 export async function sealToRecipient(
-  plaintext: Uint8Array, recipientPublicKey: CryptoKey, context: EnvelopeContext,
+  plaintext: Uint8Array,
+  recipientPublicKey: CryptoKey,
+  context: EnvelopeContext,
 ): Promise<Uint8Array<ArrayBuffer>> {
   checkTransportKey(recipientPublicKey, "public");
   const info = prefix(HPKE_SUITE, context);
@@ -124,7 +149,9 @@ export async function sealToRecipient(
 }
 
 export async function openForRecipient(
-  input: Uint8Array, recipient: CryptoKeyPair, expected: EnvelopeExpectation,
+  input: Uint8Array,
+  recipient: CryptoKeyPair,
+  expected: EnvelopeExpectation,
 ): Promise<Uint8Array<ArrayBuffer>> {
   const envelope = parseEnvelope(input);
   if (envelope.suite !== HPKE_SUITE) throw new EnvelopeError("unsupported-suite");
@@ -134,10 +161,13 @@ export async function openForRecipient(
   checkTransportKey(recipientKey.publicKey, "public");
   await checkExpected(envelope, expected);
   try {
-    return new Uint8Array(await hpke.open(
-      { recipientKey, enc: envelope.enc!, info: prefix(HPKE_SUITE, envelope.context) },
-      envelope.ciphertext, envelope.aad,
-    ));
+    return new Uint8Array(
+      await hpke.open(
+        { recipientKey, enc: envelope.enc!, info: prefix(HPKE_SUITE, envelope.context) },
+        envelope.ciphertext,
+        envelope.aad,
+      ),
+    );
   } catch {
     throw new EnvelopeError("authentication-failed");
   }
@@ -151,9 +181,9 @@ async function checkExpected(envelope: ReturnType<typeof parseEnvelope>, expecte
   const expectedContext = encodeContext(expected.context);
   // A Directory listing is distinguished from an individual encrypted entry
   // by its self-addressed key ID. Entries remain independently decryptable.
-  const manifest = MANIFEST_PURPOSES.includes(envelope.context.purpose) ||
-    (envelope.context.purpose === "directory-metadata" &&
-      envelope.context.objectId === envelope.context.keyId);
+  const manifest =
+    MANIFEST_PURPOSES.includes(envelope.context.purpose) ||
+    (envelope.context.purpose === "directory-metadata" && envelope.context.objectId === envelope.context.keyId);
   // Older-than-current is ordinary staleness; newer-than-current is not something a
   // re-key can explain, so callers can fail closed instead of silently re-keying.
   if (envelope.context.keyEpoch < expected.context.keyEpoch) throw new EnvelopeError("stale-epoch");
@@ -185,7 +215,8 @@ export async function openSymmetric(
   try {
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: new Uint8Array(envelope.nonce!), additionalData: envelope.aad, tagLength: 128 },
-      key, envelope.ciphertext,
+      key,
+      envelope.ciphertext,
     );
     return new Uint8Array(plaintext);
   } catch {

@@ -172,8 +172,12 @@ function findTopLevelKeyword(text, keyword, from) {
       depth -= 1;
       continue;
     }
-    if (depth === 0 && text.slice(index, index + keyword.length).toUpperCase() === keyword
-      && !/[A-Za-z0-9_$]/.test(text[index - 1] ?? "") && !/[A-Za-z0-9_$]/.test(text[index + keyword.length] ?? "")) {
+    if (
+      depth === 0 &&
+      text.slice(index, index + keyword.length).toUpperCase() === keyword &&
+      !/[A-Za-z0-9_$]/.test(text[index - 1] ?? "") &&
+      !/[A-Za-z0-9_$]/.test(text[index + keyword.length] ?? "")
+    ) {
       return index;
     }
   }
@@ -366,8 +370,8 @@ function lengthCoupledColumns(ddl, blobColumn, columns, values, blobLength) {
   if (!ddl) return [];
   // The committed Drizzle DDL qualifies names, e.g.
   // `"table"."size" = length("table"."blob")`; Wrangler's export preserves it.
-  const quoted = "[`\"\\[]?";
-  const quotedEnd = "[`\"\\]]?";
+  const quoted = '[`"\\[]?';
+  const quotedEnd = '[`"\\]]?';
   const identifier = `${quoted}([A-Za-z_][A-Za-z0-9_]*)${quotedEnd}`;
   const qualifier = `(?:${quoted}[A-Za-z_][A-Za-z0-9_]*${quotedEnd}\\s*\\.\\s*)?`;
   const blob = `${quoted}${escapeRegExp(blobColumn)}${quotedEnd}`;
@@ -425,7 +429,10 @@ export function splitMultiRowStatements(statements) {
  * @param {{ maxBytes: number, primaryKeys: Map<string, string[]>, tableDdl?: Map<string, string>, maxBlobBytes?: number }} options
  * @returns {{ statements: string[], units: Array<{ statements: string[] }>, chunked: number }}
  */
-export function chunkOversizedStatements(statements, { maxBytes, primaryKeys, tableDdl = new Map(), maxBlobBytes = Number.MAX_SAFE_INTEGER }) {
+export function chunkOversizedStatements(
+  statements,
+  { maxBytes, primaryKeys, tableDdl = new Map(), maxBlobBytes = Number.MAX_SAFE_INTEGER },
+) {
   /** @type {Array<{ statements: string[] }>} */
   const units = [];
   let chunked = 0;
@@ -468,13 +475,21 @@ function chunkStatement(statement, { maxBytes, primaryKeys, tableDdl, maxBlobByt
     if (totalBytes > maxBlobBytes) {
       throw new Error(`BLOB of ${totalBytes} bytes in ${parsed.table} exceeds D1's ${maxBlobBytes}-byte row limit`);
     }
-    return [{
-      index,
-      hex,
-      column: parsedColumns[index],
-      totalBytes,
-      coupled: lengthCoupledColumns(tableDdl.get(parsed.table), parsedColumns[index], parsedColumns, values, totalBytes),
-    }];
+    return [
+      {
+        index,
+        hex,
+        column: parsedColumns[index],
+        totalBytes,
+        coupled: lengthCoupledColumns(
+          tableDdl.get(parsed.table),
+          parsedColumns[index],
+          parsedColumns,
+          values,
+          totalBytes,
+        ),
+      },
+    ];
   });
   if (oversizedBlobs.length === 0) {
     throw new Error(
@@ -485,13 +500,15 @@ function chunkStatement(statement, { maxBytes, primaryKeys, tableDdl, maxBlobByt
   if (!primaryKey || primaryKey.length === 0) {
     throw new Error(`Cannot chunk a BLOB in ${parsed.table}: no primary key is known`);
   }
-  const where = primaryKey.map((column) => {
-    const index = parsedColumns.indexOf(column);
-    if (index < 0) {
-      throw new Error(`Cannot chunk ${parsed.table}: primary key column ${column} is absent from the INSERT`);
-    }
-    return `${quoteIdentifier(column)} = ${values[index]}`;
-  }).join(" AND ");
+  const where = primaryKey
+    .map((column) => {
+      const index = parsedColumns.indexOf(column);
+      if (index < 0) {
+        throw new Error(`Cannot chunk ${parsed.table}: primary key column ${column} is absent from the INSERT`);
+      }
+      return `${quoteIdentifier(column)} = ${values[index]}`;
+    })
+    .join(" AND ");
 
   // The INSERT carries a first chunk for every oversized BLOB so NOT NULL and
   // `size = length(blob)` CHECK constraints hold from the first statement.
@@ -504,7 +521,9 @@ function chunkStatement(statement, { maxBytes, primaryKeys, tableDdl, maxBlobByt
     oversizedBlobs.flatMap((blob) => blob.coupled.map((column) => parsedColumns.indexOf(column))),
   );
   for (const index of coupledIndexes) placeholder[index] = "0";
-  const placeholderBytes = byteLength(buildInsert(parsed.table, parsedColumns, [`(${placeholder.join(",")})`], parsed.suffix));
+  const placeholderBytes = byteLength(
+    buildInsert(parsed.table, parsedColumns, [`(${placeholder.join(",")})`], parsed.suffix),
+  );
   const budget = maxBytes - placeholderBytes - 64;
   const firstChunkBytes = Math.floor(budget / (2 * oversizedBlobs.length));
   if (firstChunkBytes < 64) {

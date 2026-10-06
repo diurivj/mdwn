@@ -8,10 +8,22 @@ export const HPKE_SUITE = "HPKE-P256/HKDF-SHA-256/AES-256-GCM";
 // audience epoch`). Order is part of the enc-v1 wire format. Never renumber or
 // reorder an existing purpose; only the numeric id is serialized.
 export const PURPOSES = [
-  "directory-capability", "file-content-key", "file-content", "directory-metadata",
-  "grant", "device-enrollment", "vault-recovery", "recovery-capsule",
-  "public-representation", "private-comment-thread", "public-comment-audience-epoch",
-  "comment-content", "attribution", "archive-manifest", "import-staging-manifest", "import-chunk",
+  "directory-capability",
+  "file-content-key",
+  "file-content",
+  "directory-metadata",
+  "grant",
+  "device-enrollment",
+  "vault-recovery",
+  "recovery-capsule",
+  "public-representation",
+  "private-comment-thread",
+  "public-comment-audience-epoch",
+  "comment-content",
+  "attribution",
+  "archive-manifest",
+  "import-staging-manifest",
+  "import-chunk",
   "account-profile",
   "owned-device",
   "device-label",
@@ -84,31 +96,54 @@ function text(value: string | undefined): Uint8Array<ArrayBuffer> {
 }
 
 const contextFields = new Set([
-  "purpose", "vaultId", "objectId", "keyId", "keyEpoch", "revision", "recipientId", "publicationId",
+  "purpose",
+  "vaultId",
+  "objectId",
+  "keyId",
+  "keyEpoch",
+  "revision",
+  "recipientId",
+  "publicationId",
 ]);
 
 export function encodeContext(context: EnvelopeContext): Uint8Array<ArrayBuffer> {
-  if (!context || Object.keys(context).some((key) => !contextFields.has(key)) ||
-      !PURPOSES.includes(context.purpose) ||
-      !Number.isSafeInteger(context.keyEpoch) || context.keyEpoch < 0 ||
-      !Number.isSafeInteger(context.revision) || context.revision < 0 ||
-      context.vaultId === undefined || context.objectId === undefined || context.keyId === undefined) {
+  if (
+    !context ||
+    Object.keys(context).some((key) => !contextFields.has(key)) ||
+    !PURPOSES.includes(context.purpose) ||
+    !Number.isSafeInteger(context.keyEpoch) ||
+    context.keyEpoch < 0 ||
+    !Number.isSafeInteger(context.revision) ||
+    context.revision < 0 ||
+    context.vaultId === undefined ||
+    context.objectId === undefined ||
+    context.keyId === undefined
+  ) {
     throw new EnvelopeError("malformed");
   }
   return concat(
     Uint8Array.of(PURPOSES.indexOf(context.purpose) + 1),
-    integer(context.keyEpoch, 8), integer(context.revision, 8),
-    text(context.vaultId), text(context.objectId), text(context.keyId),
-    text(context.recipientId), text(context.publicationId),
+    integer(context.keyEpoch, 8),
+    integer(context.revision, 8),
+    text(context.vaultId),
+    text(context.objectId),
+    text(context.keyId),
+    text(context.recipientId),
+    text(context.publicationId),
   );
 }
 
 /** Purpose-specific required bindings, checked before any encryption or decryption. */
 export function assertContextBindings(suite: EnvelopeSuite, context: EnvelopeContext): void {
-  if (((context.purpose === "grant" || context.purpose === "device-enrollment") && !context.recipientId) ||
-      ((context.purpose === "public-representation" || context.purpose === "public-comment-audience-epoch" ||
-        context.purpose === "publication-attribution" || context.purpose === "public-comment-epoch-link") && !context.publicationId) ||
-      (suite === HPKE_SUITE && !context.recipientId)) {
+  if (
+    ((context.purpose === "grant" || context.purpose === "device-enrollment") && !context.recipientId) ||
+    ((context.purpose === "public-representation" ||
+      context.purpose === "public-comment-audience-epoch" ||
+      context.purpose === "publication-attribution" ||
+      context.purpose === "public-comment-epoch-link") &&
+      !context.publicationId) ||
+    (suite === HPKE_SUITE && !context.recipientId)
+  ) {
     throw new EnvelopeError("malformed");
   }
 }
@@ -118,9 +153,16 @@ export function prefix(suite: EnvelopeSuite, context: EnvelopeContext): Uint8Arr
   return concat(magic, Uint8Array.of(suite === SYMMETRIC_SUITE ? 1 : 2), encodeContext(context));
 }
 
-export function header(prefixBytes: Uint8Array, parameters: Uint8Array, plaintextLength: number): Uint8Array<ArrayBuffer> {
-  if (!Number.isSafeInteger(plaintextLength) || plaintextLength < 0 ||
-      prefixBytes.length + parameters.length + 4 + plaintextLength + 16 > MAX_ENVELOPE_BYTES) {
+export function header(
+  prefixBytes: Uint8Array,
+  parameters: Uint8Array,
+  plaintextLength: number,
+): Uint8Array<ArrayBuffer> {
+  if (
+    !Number.isSafeInteger(plaintextLength) ||
+    plaintextLength < 0 ||
+    prefixBytes.length + parameters.length + 4 + plaintextLength + 16 > MAX_ENVELOPE_BYTES
+  ) {
     throw new EnvelopeError("malformed");
   }
   return concat(prefixBytes, parameters, integer(plaintextLength + 16, 4));
@@ -170,8 +212,12 @@ export function parseEnvelope(input: Uint8Array) {
   const keyEpoch = reader.integer(8);
   const revision = reader.integer(8);
   const context: EnvelopeContext = {
-    purpose, keyEpoch, revision,
-    vaultId: reader.text(), objectId: reader.text(), keyId: reader.text(),
+    purpose,
+    keyEpoch,
+    revision,
+    vaultId: reader.text(),
+    objectId: reader.text(),
+    keyId: reader.text(),
   };
   const recipientId = reader.text();
   const publicationId = reader.text();

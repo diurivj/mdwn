@@ -26,8 +26,11 @@ export function newPublicationIdentifier(): string {
 /** Exactly the canonical encoding of 32 bytes; never a UUID or a padded spelling. */
 export function isPublicationIdentifier(value: unknown): value is string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) return false;
-  try { return decodeTreeBytes(value, IDENTIFIER_BYTES).length === IDENTIFIER_BYTES; }
-  catch { return false; }
+  try {
+    return decodeTreeBytes(value, IDENTIFIER_BYTES).length === IDENTIFIER_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 /** A raw SEC1 uncompressed P-256 point, as stored by the service for editors. */
@@ -48,7 +51,8 @@ export function publicationRecipientId(publicKey: Uint8Array): string {
 }
 
 export function formatPublicationFragment(privateKey: Uint8Array): string {
-  if (!(privateKey instanceof Uint8Array) || privateKey.length !== SCALAR_BYTES) throw new Error("invalid publication capability");
+  if (!(privateKey instanceof Uint8Array) || privateKey.length !== SCALAR_BYTES)
+    throw new Error("invalid publication capability");
   return `${PUBLICATION_FRAGMENT_VERSION}.${encodeTreeBytes(privateKey)}`;
 }
 
@@ -60,7 +64,9 @@ export function parsePublicationFragment(hash: string): Uint8Array<ArrayBuffer> 
   try {
     const scalar = decodeTreeBytes(match[1], SCALAR_BYTES);
     return scalar.length === SCALAR_BYTES ? scalar : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** The complete Public link. Only the path is ever sent to the service. */
@@ -74,7 +80,10 @@ export function publicLinkUrl(origin: string, linkId: string, privateKey: Uint8A
  * once for the fragment and the creating browser then drops the extractable
  * handle; every engine reports the true public point for a generated key.
  */
-export async function createPublicationKeyPair(): Promise<{ privateKey: Uint8Array<ArrayBuffer>; publicKey: Uint8Array<ArrayBuffer> }> {
+export async function createPublicationKeyPair(): Promise<{
+  privateKey: Uint8Array<ArrayBuffer>;
+  publicKey: Uint8Array<ArrayBuffer>;
+}> {
   const pair = await crypto.subtle.generateKey(ECDH, true, ["deriveBits"]);
   const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
   const privateKey = decodeTreeBytes(jwk.d, SCALAR_BYTES);
@@ -92,10 +101,16 @@ export function importPublicationPublicKey(publicKey: Uint8Array): Promise<Crypt
  * the others a substituted point still cannot decrypt (HPKE binds `pkR`).
  */
 export async function importPublicationKeyPair(privateKey: Uint8Array, publicKey: Uint8Array): Promise<CryptoKeyPair> {
-  if (!(privateKey instanceof Uint8Array) || privateKey.length !== SCALAR_BYTES) throw new Error("invalid publication capability");
+  if (!(privateKey instanceof Uint8Array) || privateKey.length !== SCALAR_BYTES)
+    throw new Error("invalid publication capability");
   const point = publicPoint(publicKey);
-  const jwk: JsonWebKey = { kty: "EC", crv: "P-256", x: encodeTreeBytes(point.slice(1, 33)),
-    y: encodeTreeBytes(point.slice(33)), d: encodeTreeBytes(privateKey) };
+  const jwk: JsonWebKey = {
+    kty: "EC",
+    crv: "P-256",
+    x: encodeTreeBytes(point.slice(1, 33)),
+    y: encodeTreeBytes(point.slice(33)),
+    d: encodeTreeBytes(privateKey),
+  };
   return {
     privateKey: await crypto.subtle.importKey("jwk", jwk, ECDH, false, ["deriveBits"]),
     publicKey: await crypto.subtle.importKey("raw", point, ECDH, true, []),

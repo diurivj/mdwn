@@ -27,29 +27,36 @@ declare global {
 
 // Serve only in this browser test: no production test route or extra application export.
 const test = appTest.extend<{}, { deviceScript: string }>({
-  deviceScript: [async ({}, use) => {
-    const result = await build({
-      configFile: false, publicDir: false, logLevel: "error",
-      build: {
-        write: false, minify: false,
-        lib: { entry: "app/shared/device/store.ts", name: "mdwnDeviceStore", formats: ["iife"] },
-      },
-    });
-    for (const output of Array.isArray(result) ? result : [result]) {
-      if (!("output" in output)) continue;
-      const script = output.output.find((item) => item.type === "chunk");
-      if (script?.type === "chunk") {
-        await use(script.code);
-        return;
+  deviceScript: [
+    async ({}, use) => {
+      const result = await build({
+        configFile: false,
+        publicDir: false,
+        logLevel: "error",
+        build: {
+          write: false,
+          minify: false,
+          lib: { entry: "app/shared/device/store.ts", name: "mdwnDeviceStore", formats: ["iife"] },
+        },
+      });
+      for (const output of Array.isArray(result) ? result : [result]) {
+        if (!("output" in output)) continue;
+        const script = output.output.find((item) => item.type === "chunk");
+        if (script?.type === "chunk") {
+          await use(script.code);
+          return;
+        }
       }
-    }
-    throw new Error("Missing device store bundle");
-  }, { scope: "worker" }],
+      throw new Error("Missing device store bundle");
+    },
+    { scope: "worker" },
+  ],
 });
 
 async function installStore(page: Page, script: string, url = "/") {
   await page.route("**/__test__/device-store.js", (route) =>
-    route.fulfill({ contentType: "text/javascript", body: script }));
+    route.fulfill({ contentType: "text/javascript", body: script }),
+  );
   await page.goto(url, { waitUntil: "commit" });
   await page.addScriptTag({ url: new URL("/__test__/device-store.js", page.url()).href });
   expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
@@ -61,30 +68,46 @@ async function proveKeys(page: Page, accountId: string) {
     if (!device) return null;
     const message = new TextEncoder().encode("device possession after reload");
     const signature = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" }, device.assertionKeyPair.privateKey, message,
+      { name: "ECDSA", hash: "SHA-256" },
+      device.assertionKeyPair.privateKey,
+      message,
     );
     const verified = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" }, device.assertionKeyPair.publicKey, signature, message,
+      { name: "ECDSA", hash: "SHA-256" },
+      device.assertionKeyPair.publicKey,
+      signature,
+      message,
     );
     const peer = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
     const secret = await crypto.subtle.deriveBits(
-      { name: "ECDH", public: peer.publicKey }, device.transportKeyPair.privateKey, 256,
+      { name: "ECDH", public: peer.publicKey },
+      device.transportKeyPair.privateKey,
+      256,
     );
     return {
-      deviceId: device.deviceId, epoch: device.registryEpoch, verified,
+      deviceId: device.deviceId,
+      epoch: device.registryEpoch,
+      verified,
       derivedBits: secret.byteLength * 8,
-      privateKeysNonExtractable: !device.transportKeyPair.privateKey.extractable &&
-        !device.assertionKeyPair.privateKey.extractable,
+      privateKeysNonExtractable:
+        !device.transportKeyPair.privateKey.extractable && !device.assertionKeyPair.privateKey.extractable,
     };
   }, accountId);
 }
 
 const expected = {
-  deviceId: "first-device", epoch: 1, verified: true,
-  derivedBits: 256, privateKeysNonExtractable: true,
+  deviceId: "first-device",
+  epoch: 1,
+  verified: true,
+  derivedBits: 256,
+  privateKeysNonExtractable: true,
 };
 
-test("persists both private key handles through tab close and sign-out-equivalent reload", async ({ context, deviceScript, baseURL }) => {
+test("persists both private key handles through tab close and sign-out-equivalent reload", async ({
+  context,
+  deviceScript,
+  baseURL,
+}) => {
   const first = await context.newPage();
   await installStore(first, deviceScript, baseURL!);
   await first.evaluate(async () => {
@@ -100,11 +123,17 @@ test("persists both private key handles through tab close and sign-out-equivalen
   await second.reload({ waitUntil: "commit" });
   await second.addScriptTag({ url: new URL("/__test__/device-store.js", second.url()).href });
   expect(await proveKeys(second, "first-account")).toEqual(expected);
-  expect(await second.evaluate(async () => (await window.mdwnDeviceStore.getAnyDevice())?.accountId))
-    .toBe("first-account");
+  expect(await second.evaluate(async () => (await window.mdwnDeviceStore.getAnyDevice())?.accountId)).toBe(
+    "first-account",
+  );
 });
 
-test("persists keys across full browser profile restart", async ({ playwright, browserName, baseURL, deviceScript }) => {
+test("persists keys across full browser profile restart", async ({
+  playwright,
+  browserName,
+  baseURL,
+  deviceScript,
+}) => {
   // storageState does not include IndexedDB CryptoKey handles on all engines.
   const profile = await mkdtemp(join(tmpdir(), "mdwn-device-store-"));
   const type = playwright[browserName];
@@ -133,7 +162,10 @@ test("persists keys across full browser profile restart", async ({ playwright, b
   }
 });
 
-test("missing, swapped, and mismatched handles fail closed without regenerating keys", async ({ page, deviceScript }) => {
+test("missing, swapped, and mismatched handles fail closed without regenerating keys", async ({
+  page,
+  deviceScript,
+}) => {
   await installStore(page, deviceScript);
   await page.evaluate(async () => {
     const store = window.mdwnDeviceStore;

@@ -11,8 +11,11 @@ const denied = (status = 403, error = "device_proof_required") =>
   Response.json({ error }, { status, headers: noStore });
 
 type DeviceRow = {
-  id: string; label_ciphertext: ArrayBuffer | null; state: string;
-  created_at: number; last_proof_at: number | null;
+  id: string;
+  label_ciphertext: ArrayBuffer | null;
+  state: string;
+  created_at: number;
+  last_proof_at: number | null;
 };
 
 /** Read-only, proof-guarded ciphertext inventory; never exposes keys, provenance or fingerprint data. */
@@ -25,12 +28,21 @@ export async function deviceInventory(env: Env, authorized: AuthorizedDevice): P
     ORDER BY d.created_at ASC, d.id ASC`);
   // A current, active device must itself be in this inventory.
   if (!rows.some((row) => row.id === authorized.deviceId && row.state === "active")) return denied();
-  return Response.json({ accountId: authorized.accountId, registryEpoch: authorized.registryEpoch, currentDeviceId: authorized.deviceId,
-    devices: rows.map((row) => ({
-      id: row.id, labelCiphertext: row.label_ciphertext ? encodeBytes(new Uint8Array(row.label_ciphertext)) : null,
-      state: row.state, createdAt: row.created_at,
-      lastUseAt: row.last_proof_at === null ? null : coarseProofTime(row.last_proof_at),
-    })) }, { headers: noStore });
+  return Response.json(
+    {
+      accountId: authorized.accountId,
+      registryEpoch: authorized.registryEpoch,
+      currentDeviceId: authorized.deviceId,
+      devices: rows.map((row) => ({
+        id: row.id,
+        labelCiphertext: row.label_ciphertext ? encodeBytes(new Uint8Array(row.label_ciphertext)) : null,
+        state: row.state,
+        createdAt: row.created_at,
+        lastUseAt: row.last_proof_at === null ? null : coarseProofTime(row.last_proof_at),
+      })),
+    },
+    { headers: noStore },
+  );
 }
 
 // The trusted browser checks the typed, decrypted label. The Worker cannot
@@ -38,11 +50,22 @@ export async function deviceInventory(env: Env, authorized: AuthorizedDevice): P
 // exact label metadata and target at the expected epoch without leaking it.
 type Removal = { targetDeviceId: string; expectedEpoch: number; labelDigest: string; confirmation: string };
 function removalBody(value: Record<string, unknown> | null): Removal | null {
-  if (!value || Object.keys(value).sort().join(",") !== "confirmation,expectedEpoch,labelDigest,targetDeviceId" ||
-      typeof value.targetDeviceId !== "string" || !/^[0-9a-f-]{36}$/.test(value.targetDeviceId) ||
-      !Number.isSafeInteger(value.expectedEpoch) || (value.expectedEpoch as number) < 1 ||
-      typeof value.labelDigest !== "string" || value.confirmation !== "remove-device") return null;
-  try { decodeBytes(value.labelDigest, 32); } catch { return null; }
+  if (
+    !value ||
+    Object.keys(value).sort().join(",") !== "confirmation,expectedEpoch,labelDigest,targetDeviceId" ||
+    typeof value.targetDeviceId !== "string" ||
+    !/^[0-9a-f-]{36}$/.test(value.targetDeviceId) ||
+    !Number.isSafeInteger(value.expectedEpoch) ||
+    (value.expectedEpoch as number) < 1 ||
+    typeof value.labelDigest !== "string" ||
+    value.confirmation !== "remove-device"
+  )
+    return null;
+  try {
+    decodeBytes(value.labelDigest, 32);
+  } catch {
+    return null;
+  }
   return value as Removal;
 }
 
@@ -52,12 +75,18 @@ async function labelDigest(label: ArrayBuffer | null): Promise<string> {
 }
 
 /** A retry of the same signed, consumed request has no effects, even after the epoch advanced. */
-export async function completedRemovalRetry(env: Env, session: ActiveSession, request: Request,
-  proof: unknown, raw: string, value: Record<string, unknown> | null): Promise<boolean> {
+export async function completedRemovalRetry(
+  env: Env,
+  session: ActiveSession,
+  request: Request,
+  proof: unknown,
+  raw: string,
+  value: Record<string, unknown> | null,
+): Promise<boolean> {
   const body = removalBody(value);
   const now = Date.now();
-  if (!body || !session.deviceId || session.deviceId === body.targetDeviceId ||
-      !hasFreshAssertion(session, now)) return false;
+  if (!body || !session.deviceId || session.deviceId === body.targetDeviceId || !hasFreshAssertion(session, now))
+    return false;
   const row = await createDb(env.DB).get<{ assertion_public_key: ArrayBuffer }>(sql`
     SELECT actor.assertion_public_key FROM encryption_devices actor
     JOIN encryption_devices target ON target.account_id = actor.account_id
@@ -69,28 +98,41 @@ export async function completedRemovalRetry(env: Env, session: ActiveSession, re
       AND used.expires_at > ${now} AND ${freshNormalSessionGuard(session, now)}
       AND EXISTS (SELECT 1 FROM account_encryption_identities WHERE account_id = ${session.accountId}
         AND registry_epoch > ${body.expectedEpoch})`);
-  return !!row && verifyDeviceProof(proof, new Uint8Array(row.assertion_public_key), {
-    sessionBinding: await sessionBindingDigest(session.id), deviceId: session.deviceId,
-    registryEpoch: body.expectedEpoch, method: request.method, url: request.url, body: raw,
-  });
+  return (
+    !!row &&
+    verifyDeviceProof(proof, new Uint8Array(row.assertion_public_key), {
+      sessionBinding: await sessionBindingDigest(session.id),
+      deviceId: session.deviceId,
+      registryEpoch: body.expectedEpoch,
+      method: request.method,
+      url: request.url,
+      body: raw,
+    })
+  );
 }
 
 /** Conditional, serialized D1 batch; only the first guarded update can authorize side effects. */
-export async function removeEncryptionDevice(env: Env, session: ActiveSession,
-  authorized: AuthorizedDevice, value: Record<string, unknown> | null): Promise<Response> {
+export async function removeEncryptionDevice(
+  env: Env,
+  session: ActiveSession,
+  authorized: AuthorizedDevice,
+  value: Record<string, unknown> | null,
+): Promise<Response> {
   const body = removalBody(value);
   const now = Date.now();
   if (!body || body.targetDeviceId === authorized.deviceId) return denied(400, "cannot_remove_device");
   if (body.expectedEpoch !== authorized.registryEpoch) return denied(409, "registry_changed");
-  if (!hasFreshAssertion(session, now) || session.id !== authorized.sessionId ||
-      authorized.expiresAt <= now) return denied(403);
+  if (!hasFreshAssertion(session, now) || session.id !== authorized.sessionId || authorized.expiresAt <= now)
+    return denied(403);
   const proofDay = coarseProofTime(now);
   const target = await createDb(env.DB).get<{
-    label_ciphertext: ArrayBuffer | null; state: string; revocation_reason: string | null;
+    label_ciphertext: ArrayBuffer | null;
+    state: string;
+    revocation_reason: string | null;
   }>(sql`
     SELECT label_ciphertext, state, revocation_reason FROM encryption_devices WHERE id = ${body.targetDeviceId}
       AND account_id = ${authorized.accountId}`);
-  if (!target || body.labelDigest !== await labelDigest(target.label_ciphertext)) {
+  if (!target || body.labelDigest !== (await labelDigest(target.label_ciphertext))) {
     return denied(409, "registry_changed");
   }
   if (target.state === "tombstoned" && target.revocation_reason === "device-removal") {
@@ -102,7 +144,8 @@ export async function removeEncryptionDevice(env: Env, session: ActiveSession,
         AND revocation_reason = 'device-removal'
         AND label_ciphertext IS ${target.label_ciphertext === null ? null : new Uint8Array(target.label_ciphertext)}
         AND ${privateReadGuard(authorized)} AND ${freshNormalSessionGuard(session, now)}`);
-    return current ? Response.json({ ok: true, alreadyRemoved: true }, { headers: noStore })
+    return current
+      ? Response.json({ ok: true, alreadyRemoved: true }, { headers: noStore })
       : denied(409, "registry_changed");
   }
   if (target.state !== "active") return denied(409, "registry_changed");
@@ -170,5 +213,7 @@ export async function removeEncryptionDevice(env: Env, session: ActiveSession,
     if (!results[0]?.meta.changes) return denied(409, "registry_changed");
     if (results[1]?.meta.changes !== 1 || results[2]?.meta.changes !== 1) throw new Error("Removal not committed");
     return Response.json({ ok: true, registryEpoch: body.expectedEpoch + 1 }, { headers: noStore });
-  } catch { return denied(503, "temporarily_unavailable"); }
+  } catch {
+    return denied(503, "temporarily_unavailable");
+  }
 }

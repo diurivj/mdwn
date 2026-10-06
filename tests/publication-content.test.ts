@@ -48,8 +48,10 @@ describe("Public presentation", () => {
 
   it.each(["\n", "\r\n", "\r"])("strips front matter with %j line endings without rewriting the body", (newline) => {
     const body = `# Public${newline}${newline}Body${newline}`;
-    expect(publicPresentation(["---", "title: Public", "private: never public", "---", body].join(newline)))
-      .toEqual({ title: "Public", markdown: body });
+    expect(publicPresentation(["---", "title: Public", "private: never public", "---", body].join(newline))).toEqual({
+      title: "Public",
+      markdown: body,
+    });
   });
 
   it("keeps only a real top-level title, never text from another YAML value", () => {
@@ -81,7 +83,10 @@ describe("Public presentation", () => {
   it("treats an unterminated leading block as ordinary Markdown", () => {
     const source = "---\ntitle: Not front matter\n\nBody";
     expect(publicPresentation(source)).toEqual({ title: null, markdown: source });
-    expect(publicPresentation("text\n---\ntitle: x\n---\n")).toEqual({ title: null, markdown: "text\n---\ntitle: x\n---\n" });
+    expect(publicPresentation("text\n---\ntitle: x\n---\n")).toEqual({
+      title: null,
+      markdown: "text\n---\ntitle: x\n---\n",
+    });
   });
 
   it("parses quoted, commented and folded title scalars conservatively", () => {
@@ -97,27 +102,46 @@ describe("Public presentation", () => {
 
   it("never renders structured, empty, null or nested title values", () => {
     const title = (line: string) => publicPresentation(`---\n${line}\n---\nBody`).title;
-    for (const line of ["title:", "title: [a, b]", "title: {a: b}",
-      "title: *alias", "private: &secret SECRET\ntitle: *secret", "title: !tag value", "title: ~", "title: null", "title: \"unterminated",
-      "title: 'unterminated", "title: \"bad \\q escape\"", "subtitle: nope", "title:no-space",
-      "Title: case-sensitive"]) {
+    for (const line of [
+      "title:",
+      "title: [a, b]",
+      "title: {a: b}",
+      "title: *alias",
+      "private: &secret SECRET\ntitle: *secret",
+      "title: !tag value",
+      "title: ~",
+      "title: null",
+      'title: "unterminated',
+      "title: 'unterminated",
+      'title: "bad \\q escape"',
+      "subtitle: nope",
+      "title:no-space",
+      "Title: case-sensitive",
+    ]) {
       expect(title(line), line).toBeNull();
     }
   });
 
   it("round-trips the canonical payload and rejects malformed or oversized framing", () => {
-    for (const presentation of [{ title: null, markdown: "" }, { title: "Title 🌍", markdown: "Body\n" }]) {
+    for (const presentation of [
+      { title: null, markdown: "" },
+      { title: "Title 🌍", markdown: "Body\n" },
+    ]) {
       expect(decodePublicPresentation(encodePublicPresentation(presentation))).toEqual(presentation);
     }
     const encoded = encodePublicPresentation({ title: "T", markdown: "Body" });
     expect(() => decodePublicPresentation(encoded.slice(0, -1))).toThrow();
     expect(() => decodePublicPresentation(new Uint8Array([...encoded, 0]))).toThrow();
-    const wrongMagic = new Uint8Array(encoded); wrongMagic[0] ^= 1;
+    const wrongMagic = new Uint8Array(encoded);
+    wrongMagic[0] ^= 1;
     expect(() => decodePublicPresentation(wrongMagic)).toThrow();
     expect(() => encodePublicPresentation({ title: "", markdown: "x" })).toThrow();
-    expect(() => encodePublicPresentation({ title: null, markdown: "a".repeat(MAX_PUBLIC_REPRESENTATION_BYTES + 1) })).toThrow();
-    expect(encodePublicPresentation({ title: null, markdown: "a".repeat(FILE_SOURCE_LIMIT) }).length)
-      .toBeLessThan(MAX_PUBLIC_REPRESENTATION_BYTES);
+    expect(() =>
+      encodePublicPresentation({ title: null, markdown: "a".repeat(MAX_PUBLIC_REPRESENTATION_BYTES + 1) }),
+    ).toThrow();
+    expect(encodePublicPresentation({ title: null, markdown: "a".repeat(FILE_SOURCE_LIMIT) }).length).toBeLessThan(
+      MAX_PUBLIC_REPRESENTATION_BYTES,
+    );
   });
 });
 
@@ -161,13 +185,18 @@ describe("Publication capability", () => {
   });
 
   it("never opens a representation through a substituted service public key", async () => {
-    const keys = await createPublicationKeyPair(), substitute = await createPublicationKeyPair();
+    const keys = await createPublicationKeyPair(),
+      substitute = await createPublicationKeyPair();
     const binding = { publicationId, linkId, publicKey: keys.publicKey, revision: 1 };
     const envelope = await sealPublicRepresentation(binding, { title: null, markdown: "Body" });
     // Some engines reject the mismatched JWK pair at import; any that accept it still cannot decrypt.
-    await expect((async () => openPublicRepresentation(envelope,
-      await importPublicationKeyPair(keys.privateKey, substitute.publicKey), { ...binding, publicKey: substitute.publicKey }))())
-      .rejects.toThrow();
+    await expect(
+      (async () =>
+        openPublicRepresentation(envelope, await importPublicationKeyPair(keys.privateKey, substitute.publicKey), {
+          ...binding,
+          publicKey: substitute.publicKey,
+        }))(),
+    ).rejects.toThrow();
   });
 });
 
@@ -183,8 +212,16 @@ describe("Public representation envelopes", () => {
     const { keys, context, envelope, pair } = await sealed();
     const header = inspectEnvelope(envelope);
     expect(header.suite).toBe("HPKE-P256/HKDF-SHA-256/AES-256-GCM");
-    expect(header.context).toEqual({ purpose: "public-representation", vaultId: publicationId, objectId: publicationId,
-      keyId: linkId, keyEpoch: 1, revision: 3, recipientId: publicationRecipientId(keys.publicKey), publicationId });
+    expect(header.context).toEqual({
+      purpose: "public-representation",
+      vaultId: publicationId,
+      objectId: publicationId,
+      keyId: linkId,
+      keyEpoch: 1,
+      revision: 3,
+      recipientId: publicationRecipientId(keys.publicKey),
+      publicationId,
+    });
     expect(header.context).toEqual(publicRepresentationContext(context));
     expect(await openPublicRepresentation(envelope, pair, context)).toEqual({ title: "Live", markdown: "Body" });
   });
@@ -192,21 +229,32 @@ describe("Public representation envelopes", () => {
   it("rejects another link, Publication, revision, key or purpose", async () => {
     const { keys, context, envelope, pair } = await sealed();
     await expect(openPublicRepresentation(envelope, pair, { ...context, linkId: declarationId })).rejects.toThrow();
-    await expect(openPublicRepresentation(envelope, pair, { ...context, publicationId: declarationId })).rejects.toThrow();
+    await expect(
+      openPublicRepresentation(envelope, pair, { ...context, publicationId: declarationId }),
+    ).rejects.toThrow();
     await expect(openPublicRepresentation(envelope, pair, { ...context, revision: 4 })).rejects.toThrow();
     const other = await createPublicationKeyPair();
-    await expect(openPublicRepresentation(envelope, await importPublicationKeyPair(other.privateKey, other.publicKey),
-      { ...context, publicKey: other.publicKey })).rejects.toThrow();
+    await expect(
+      openPublicRepresentation(envelope, await importPublicationKeyPair(other.privateKey, other.publicKey), {
+        ...context,
+        publicKey: other.publicKey,
+      }),
+    ).rejects.toThrow();
     // A crossed Publication envelope (author declaration) never opens as presentation.
-    const declaration = await sealAuthorDeclaration({ publicationId, linkId, publicKey: keys.publicKey,
-      declarationId: publicationId, revision: 3 }, "Member Pine");
+    const declaration = await sealAuthorDeclaration(
+      { publicationId, linkId, publicKey: keys.publicKey, declarationId: publicationId, revision: 3 },
+      "Member Pine",
+    );
     await expect(openPublicRepresentation(declaration, pair, context)).rejects.toThrow();
   });
 
   it("rejects a forged envelope with valid framing but the wrong payload format", async () => {
     const { keys, context, pair } = await sealed();
-    const forged = await sealToRecipient(new TextEncoder().encode("raw markdown"), pair.publicKey,
-      publicRepresentationContext(context));
+    const forged = await sealToRecipient(
+      new TextEncoder().encode("raw markdown"),
+      pair.publicKey,
+      publicRepresentationContext(context),
+    );
     expect(inspectEnvelope(forged).context.recipientId).toBe(publicationRecipientId(keys.publicKey));
     await expect(openPublicRepresentation(forged, pair, context)).rejects.toThrow();
   });

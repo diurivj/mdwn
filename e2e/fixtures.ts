@@ -5,8 +5,7 @@ import { test as base, expect } from "@playwright/test";
 
 import { supportAddressBindings } from "../tests/support/donation-fixtures";
 
-export const TEST_SESSION_COOKIE_SECRET =
-  "mdwn-browser-tests-only-not-a-deployment-secret";
+export const TEST_SESSION_COOKIE_SECRET = "mdwn-browser-tests-only-not-a-deployment-secret";
 
 type TestFixtures = {
   reset: void;
@@ -17,9 +16,10 @@ type WorkerFixtures = {
 };
 
 function localHttpsWorkerConfig() {
-  const config = JSON.parse(
-    readFileSync(new URL("../build/server/wrangler.json", import.meta.url), "utf8"),
-  ) as Record<string, unknown>;
+  const config = JSON.parse(readFileSync(new URL("../build/server/wrangler.json", import.meta.url), "utf8")) as Record<
+    string,
+    unknown
+  >;
   const dev = (config.dev ?? {}) as Record<string, unknown>;
   const vars = (config.vars ?? {}) as Record<string, unknown>;
 
@@ -31,7 +31,8 @@ function localHttpsWorkerConfig() {
       upstream_protocol: "https",
     },
     vars: {
-      ...vars, SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET,
+      ...vars,
+      SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET,
       ABUSE_HMAC_SECRET: "mdwn-browser-abuse-tests-only-not-a-deployment-secret",
       ...supportAddressBindings(),
     },

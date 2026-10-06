@@ -19,7 +19,10 @@ export default function SignUp() {
   useEffect(() => {
     mounted.current = true;
     setHydrated(true);
-    return () => { mounted.current = false; controller.current?.abort(); };
+    return () => {
+      mounted.current = false;
+      controller.current?.abort();
+    };
   }, []);
   const [prepared, setPrepared] = useState<PreparedSignup | null>(null);
   const secrets = prepared?.secrets ?? null;
@@ -108,20 +111,33 @@ export default function SignUp() {
           )}
           <form className="mt-8" onSubmit={createAccount}>
             <HoneypotField />
-            <button type="submit" disabled={!hydrated || stage === "working"} className="rounded-md bg-stone-900 px-4 py-2 text-white disabled:opacity-60">
+            <button
+              type="submit"
+              disabled={!hydrated || stage === "working"}
+              className="rounded-md bg-stone-900 px-4 py-2 text-white disabled:opacity-60"
+            >
               {stage === "working" ? "Creating your account…" : "Create account"}
             </button>
           </form>
-          {stage !== "working" && <Link className="mt-4 text-sm underline" to="/sign-in">Sign in</Link>}
+          {stage !== "working" && (
+            <Link className="mt-4 text-sm underline" to="/sign-in">
+              Sign in
+            </Link>
+          )}
         </>
       )}
       {stage === "phrase" && secrets && (
         <section className="mt-8">
           <h2 className="text-xl font-semibold">Save your recovery phrase</h2>
-          <p className="mt-2">Write these 24 words down and keep them somewhere safe. They cannot be recovered for you.</p>
+          <p className="mt-2">
+            Write these 24 words down and keep them somewhere safe. They cannot be recovered for you.
+          </p>
           <ol className="mt-4 grid grid-cols-2 gap-2 rounded-md border p-4 sm:grid-cols-3">
             {secrets.phrase.split(" ").map((word, index) => (
-              <li key={index} className="font-mono text-sm"><span className="text-stone-500">{index + 1}. </span>{word}</li>
+              <li key={index} className="font-mono text-sm">
+                <span className="text-stone-500">{index + 1}. </span>
+                {word}
+              </li>
             ))}
           </ol>
           <form onSubmit={checkWords} className="mt-6 flex flex-col gap-3">
@@ -129,33 +145,67 @@ export default function SignUp() {
             {indices.map((index, position) => (
               <label key={index} className="flex items-center gap-3">
                 <span className="w-20">Word {index + 1}</span>
-                <input required autoComplete="off" spellCheck={false} className="min-w-0 flex-1 rounded border px-2 py-1"
-                  value={words[position]} onChange={(event) => {
+                <input
+                  required
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 rounded border px-2 py-1"
+                  value={words[position]}
+                  onChange={(event) => {
                     const updated = [...words];
                     updated[position] = event.target.value;
                     setWords(updated);
-                  }} />
+                  }}
+                />
               </label>
             ))}
-            {mismatch && <p role="alert" className="text-red-700">Those words do not match. Check your copy and try again.</p>}
-            <button type="submit" className="self-start rounded-md bg-stone-900 px-4 py-2 text-white">Verify phrase</button>
+            {mismatch && (
+              <p role="alert" className="text-red-700">
+                Those words do not match. Check your copy and try again.
+              </p>
+            )}
+            <button type="submit" className="self-start rounded-md bg-stone-900 px-4 py-2 text-white">
+              Verify phrase
+            </button>
           </form>
         </section>
       )}
       {stage === "codes" && secrets && (
         <section className="mt-8">
           <h2 className="text-xl font-semibold">Save your recovery codes</h2>
-          <p className="mt-2">These ten one-time codes are shown only now. Store them separately from your recovery phrase and passkey. Add a second passkey in Account security when you finish.</p>
-          <p className="mt-4">Save this non-secret recovery identifier alongside your codes: <span className="break-all font-mono">{prepared?.transcriptBase.accountId}</span></p>
+          <p className="mt-2">
+            These ten one-time codes are shown only now. Store them separately from your recovery phrase and passkey.
+            Add a second passkey in Account security when you finish.
+          </p>
+          <p className="mt-4">
+            Save this non-secret recovery identifier alongside your codes:{" "}
+            <span className="break-all font-mono">{prepared?.transcriptBase.accountId}</span>
+          </p>
           <ol className="mt-4 space-y-2 rounded-md border p-4">
-            {secrets.recoveryCodes.map((code, index) => <li key={index} className="break-all font-mono text-sm">{index + 1}. {code}</li>)}
+            {secrets.recoveryCodes.map((code, index) => (
+              <li key={index} className="break-all font-mono text-sm">
+                {index + 1}. {code}
+              </li>
+            ))}
           </ol>
           <button type="button" onClick={confirmCodes} className="mt-6 rounded-md bg-stone-900 px-4 py-2 text-white">
             I saved my phrase and codes
           </button>
         </section>
       )}
-      {stage === "done" && <p className="mt-6">Your account is ready. Your recovery material will not be shown again. <Link to="/account/device-access" className="underline">Check private access</Link> · <Link to="/account/security" className="underline">Add a second passkey</Link>.</p>}
+      {stage === "done" && (
+        <p className="mt-6">
+          Your account is ready. Your recovery material will not be shown again.{" "}
+          <Link to="/account/device-access" className="underline">
+            Check private access
+          </Link>{" "}
+          ·{" "}
+          <Link to="/account/security" className="underline">
+            Add a second passkey
+          </Link>
+          .
+        </p>
+      )}
     </main>
   );
 }

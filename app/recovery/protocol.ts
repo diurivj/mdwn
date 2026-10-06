@@ -23,7 +23,8 @@ export type NextRecoveryMetadata = {
 };
 
 function generation(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value >= Number.MAX_SAFE_INTEGER) throw new Error("invalid recovery generation");
+  if (!Number.isSafeInteger(value) || value < 1 || value >= Number.MAX_SAFE_INTEGER)
+    throw new Error("invalid recovery generation");
   return value;
 }
 
@@ -41,10 +42,14 @@ function bytes(value: string, length: number): string {
 export function recoveryIntentMessage(value: RecoveryIntent): Uint8Array {
   if (!value || !uuid.test(value.accountId) || !uuid.test(value.deviceId)) throw new Error("invalid recovery intent");
   const fields = [
-    "mdwn/recovery-enrollment-intent/v1", value.accountId,
-    String(generation(value.generation)), bytes(value.nonce, 32),
-    String(generation(value.registryEpoch)), value.deviceId,
-    publicKey(value.transportPublicKey), publicKey(value.assertionPublicKey),
+    "mdwn/recovery-enrollment-intent/v1",
+    value.accountId,
+    String(generation(value.generation)),
+    bytes(value.nonce, 32),
+    String(generation(value.registryEpoch)),
+    value.deviceId,
+    publicKey(value.transportPublicKey),
+    publicKey(value.assertionPublicKey),
     bytes(value.nextMetadataDigest, 32),
   ];
   return encoder.encode(JSON.stringify(fields));
@@ -52,9 +57,12 @@ export function recoveryIntentMessage(value: RecoveryIntent): Uint8Array {
 
 export async function nextRecoveryMetadataDigest(value: NextRecoveryMetadata): Promise<string> {
   const fields = [
-    "mdwn/recovery-next-metadata/v1", String(generation(value.generation)),
-    bytes(value.recoverySalt, 32), publicKey(value.verificationPublicKey),
-    bytes(value.capsuleDigest, 32), bytes(value.enrollmentEnvelopeDigest, 32),
+    "mdwn/recovery-next-metadata/v1",
+    String(generation(value.generation)),
+    bytes(value.recoverySalt, 32),
+    publicKey(value.verificationPublicKey),
+    bytes(value.capsuleDigest, 32),
+    bytes(value.enrollmentEnvelopeDigest, 32),
   ];
   return encodeBytes(await sha256(encoder.encode(JSON.stringify(fields))));
 }

@@ -5,11 +5,7 @@ import {
   COMPOSITIONS,
   FULL_CASE_FOLDINGS,
 } from "./generated";
-import {
-  NAMESPACE_IMPLEMENTATION_VERSION,
-  UCD_SOURCE_SHA256,
-  UNICODE_VERSION,
-} from "./data-version";
+import { NAMESPACE_IMPLEMENTATION_VERSION, UCD_SOURCE_SHA256, UNICODE_VERSION } from "./data-version";
 
 export {
   NAMESPACE_IMPLEMENTATION_VERSION,
@@ -132,7 +128,10 @@ const FORBIDDEN_ASCII = new Set([
 ]);
 
 const DEVICE_STEMS = new Set([
-  "CON", "PRN", "AUX", "NUL",
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
   ...Array.from({ length: 9 }, (_, index) => `COM${index + 1}`),
   ...Array.from({ length: 9 }, (_, index) => `LPT${index + 1}`),
 ]);
@@ -144,7 +143,7 @@ function compositionKey(first: number, second: number): number {
 function scalarValues(input: string): number[] {
   if (typeof input !== "string") throw new NamespaceError("not-string");
   const values: number[] = [];
-  for (let offset = 0; offset < input.length;) {
+  for (let offset = 0; offset < input.length; ) {
     const first = input.charCodeAt(offset);
     if (first >= 0xd800 && first <= 0xdbff) {
       if (offset + 1 >= input.length) throw new NamespaceError("malformed-scalar");
@@ -173,10 +172,7 @@ function fromScalars(values: readonly number[]): string {
       continue;
     }
     const adjusted = value - 0x10000;
-    result += String.fromCharCode(
-      0xd800 + (adjusted >> 10),
-      0xdc00 + (adjusted & 0x3ff),
-    );
+    result += String.fromCharCode(0xd800 + (adjusted >> 10), 0xdc00 + (adjusted & 0x3ff));
   }
   return result;
 }
@@ -212,10 +208,7 @@ function reorderCanonical(values: readonly number[]): number[] {
       continue;
     }
     let insertion = result.length;
-    while (
-      insertion > 0 &&
-      canonicalCombiningClass(result[insertion - 1]) > ccc
-    ) {
+    while (insertion > 0 && canonicalCombiningClass(result[insertion - 1]) > ccc) {
       insertion -= 1;
     }
     result.splice(insertion, 0, value);
@@ -240,9 +233,11 @@ function hangulComposition(starter: number, next: number): number | undefined {
   const syllableIndex = starter - S_BASE;
   const trailingIndex = next - T_BASE;
   if (
-    syllableIndex >= 0 && syllableIndex < S_COUNT &&
+    syllableIndex >= 0 &&
+    syllableIndex < S_COUNT &&
     syllableIndex % T_COUNT === 0 &&
-    trailingIndex > 0 && trailingIndex < T_COUNT
+    trailingIndex > 0 &&
+    trailingIndex < T_COUNT
   ) {
     return starter + trailingIndex;
   }
@@ -257,9 +252,10 @@ function composeCanonical(values: readonly number[]): number[] {
     const ccc = canonicalCombiningClass(value);
     if (ccc === 0) {
       const starter = starterIndex >= 0 ? result[starterIndex] : undefined;
-      const composed = starter === undefined
-        ? undefined
-        : hangulComposition(starter, value) ?? composition.get(compositionKey(starter, value));
+      const composed =
+        starter === undefined
+          ? undefined
+          : (hangulComposition(starter, value) ?? composition.get(compositionKey(starter, value)));
       if (composed !== undefined && lastCombiningClass === 0) {
         result[starterIndex] = composed;
         lastCombiningClass = 0;
@@ -275,7 +271,7 @@ function composeCanonical(values: readonly number[]): number[] {
     const composed =
       starter === undefined || lastCombiningClass >= ccc
         ? undefined
-        : hangulComposition(starter, value) ?? composition.get(compositionKey(starter, value));
+        : (hangulComposition(starter, value) ?? composition.get(compositionKey(starter, value)));
     if (composed !== undefined) {
       result[starterIndex] = composed;
       continue;
@@ -332,11 +328,7 @@ function encodeUtf8Scalars(values: readonly number[]): Bytes {
     else if (value <= 0x7ff) {
       bytes.push(0xc0 | (value >> 6), 0x80 | (value & 0x3f));
     } else if (value <= 0xffff) {
-      bytes.push(
-        0xe0 | (value >> 12),
-        0x80 | ((value >> 6) & 0x3f),
-        0x80 | (value & 0x3f),
-      );
+      bytes.push(0xe0 | (value >> 12), 0x80 | ((value >> 6) & 0x3f), 0x80 | (value & 0x3f));
     } else {
       bytes.push(
         0xf0 | (value >> 18),
@@ -366,9 +358,7 @@ function validateDisplay(display: string): NamespaceErrorCode | undefined {
   if (values.some(isBidiControl)) return "bidi-control";
 
   const firstDot = display.indexOf(".");
-  const stem = display
-    .slice(0, firstDot < 0 ? display.length : firstDot)
-    .replace(/[ .]+$/g, "");
+  const stem = display.slice(0, firstDot < 0 ? display.length : firstDot).replace(/[ .]+$/g, "");
   if (DEVICE_STEMS.has(asciiUppercase(stem))) return "device-name";
 
   const byteLength = encodeUtf8Scalars(values).byteLength;
@@ -380,9 +370,7 @@ function asciiUppercase(value: string): string {
   let result = "";
   for (let offset = 0; offset < value.length; offset++) {
     const code = value.charCodeAt(offset);
-    result += code >= 0x61 && code <= 0x7a
-      ? String.fromCharCode(code - 0x20)
-      : value[offset];
+    result += code >= 0x61 && code <= 0x7a ? String.fromCharCode(code - 0x20) : value[offset];
   }
   return result;
 }
@@ -417,7 +405,7 @@ export function validateSegment(input: string): SegmentValidationResult {
 
 export function comparisonKey(input: string | CanonicalSegment): Bytes {
   return input && typeof input === "object"
-    ? new Uint8Array(input.comparisonKey) as Bytes
+    ? (new Uint8Array(input.comparisonKey) as Bytes)
     : canonicalizeSegment(input).comparisonKey;
 }
 
@@ -436,7 +424,8 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
 }
 
 function pathKey(segments: readonly CanonicalSegment[]): Bytes {
-  const length = segments.reduce((total, segment) => total + segment.comparisonKey.length, 0) + Math.max(0, segments.length - 1);
+  const length =
+    segments.reduce((total, segment) => total + segment.comparisonKey.length, 0) + Math.max(0, segments.length - 1);
   const bytes = new Uint8Array(length);
   let offset = 0;
   segments.forEach((segment, index) => {
@@ -508,9 +497,7 @@ function allocationOptions(
  * source reservations are made before generated candidates, and generated
  * requests are processed by NFC source path then NFC requested display bytes.
  */
-export function allocateKeepBothNames(
-  options: NameAllocationOptions,
-): readonly NameAllocation[];
+export function allocateKeepBothNames(options: NameAllocationOptions): readonly NameAllocation[];
 export function allocateKeepBothNames(
   existingSiblingNames: readonly string[],
   requests: readonly NameRequest[],
@@ -552,7 +539,9 @@ export function allocateKeepBothNames(
 
   const ordered = prepared
     .slice()
-    .sort((a, b) => compareBytes(a.sourcePathBytes, b.sourcePathBytes) || compareBytes(a.requestedBytes, b.requestedBytes));
+    .sort(
+      (a, b) => compareBytes(a.sourcePathBytes, b.sourcePathBytes) || compareBytes(a.requestedBytes, b.requestedBytes),
+    );
   const used = new Set(existingKeys.keys());
   const directReservations = new Set<string>();
   const directWinners = new Map<string, number>();
