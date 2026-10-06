@@ -9,6 +9,46 @@ npm run test:all     # npm test, a production Worker build, and all browser engi
 npm run verify      # local preflight: every CI check, then all browser engines
 ```
 
+## Linting and formatting
+
+Biome (`@biomejs/biome`, pinned) is the formatting and lint guardrail:
+
+```sh
+npm run lint    # biome check: format check + lint rules, read-only
+npm run format  # biome format --write: apply the formatter
+```
+
+The `CI` workflow runs `Lint and format check` before `Typecheck`, and
+`npm run verify` runs the same step first, so static checking is no longer
+`tsc -b` alone. The checks stay separate: Biome is not a type checker, and its
+inference-based rules do not replace the TypeScript build.
+
+`biome.json` is the only config. The formatter matches the repo's existing
+style (two-space indent, double quotes, semicolons, trailing commas,
+120-column lines) and parses `app/app.css` with Tailwind directive support. It
+ignores `.scratch`, `drizzle`, `vendor`, and the generated
+`app/shared/namespace-v1/generated.ts` and `data-version.ts`; `.gitignore`
+supplies the rest (build output, generated Worker types). The linter starts
+from the recommended preset: `noNonNullAssertion` is off because the codebase
+uses `!` deliberately, while `useOptionalChain`, `useTemplate`, and
+`noBannedTypes` are off as noisy style rules. The organize-imports assist is
+off, so `biome check` is formatter plus linter only.
+
+When a rule fires, prefer changing the code. For an intentional pattern, add a
+suppression directly above the flagged line with a one-line reason:
+
+```ts
+// biome-ignore lint/suspicious/noControlCharactersInRegex: strips C0 control characters from export file names.
+```
+
+Use a `//` line immediately above the flagged line; inside a JSX attribute
+list it can sit between attributes, and as a JSX child use `{/* ... */}`. For
+a single-purpose file, `// biome-ignore-all lint/<group>/<rule>: reason` at
+the top suppresses the whole category. `useExhaustiveDependencies` can ignore
+one dependency by name:
+`// biome-ignore lint/correctness/useExhaustiveDependencies(name): reason`.
+Never run `biome check --write --unsafe` without reviewing each change.
+
 ## TypeScript project boundaries
 
 `npm run typecheck` builds the root `tsconfig.json` solution, which references
