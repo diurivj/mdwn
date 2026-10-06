@@ -61,9 +61,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         </div>
       </main>
 
-      <footer className="border-t border-stone-200 py-4 text-xs text-stone-500">
-        No tracking, no ads, no monetization. Private content is decrypted only
-        in your browser.
+      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-200 py-4 text-xs text-stone-500">
+        <p>
+          No tracking, no ads, no monetization. Private content is decrypted only
+          in your browser.
+        </p>
+        <Link className="text-stone-700 hover:underline" to="/support">
+          Support mdwn
+        </Link>
       </footer>
     </div>
   );

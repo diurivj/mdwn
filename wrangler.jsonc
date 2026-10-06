@@ -3,8 +3,14 @@
   "name": "mdwn-local",
   "compatibility_date": "2026-09-18",
   "main": "./workers/app.ts",
+  // Public donation addresses for the anonymous /support page (not secrets).
+  // Leave a value empty to hide that asset; override locally in .dev.vars.
   "vars": {
-    "APP_ENV": "local"
+    "APP_ENV": "local",
+    "SUPPORT_MONERO_ADDRESS": "",
+    "SUPPORT_BITCOIN_ADDRESS": "",
+    "SUPPORT_LIGHTNING_ADDRESS": "",
+    "SUPPORT_ETHEREUM_ADDRESS": "0x5399A7a61d553936A2B7d5a8fA75Ce7B4534D1CA"
   },
   // The privacy policy disables blanket invocation logs and traces; only
   // explicitly allowlisted Security events are persisted in D1.
@@ -30,7 +36,11 @@
     "preview": {
       "name": "mdwn-preview",
       "vars": {
-        "APP_ENV": "preview"
+        "APP_ENV": "preview",
+        "SUPPORT_MONERO_ADDRESS": "",
+        "SUPPORT_BITCOIN_ADDRESS": "",
+        "SUPPORT_LIGHTNING_ADDRESS": "",
+        "SUPPORT_ETHEREUM_ADDRESS": "0x5399A7a61d553936A2B7d5a8fA75Ce7B4534D1CA"
       },
       "triggers": {
         "crons": ["*/15 * * * *"]
@@ -53,7 +63,11 @@
       // Deployment readiness still probes the workers.dev URL.
       "workers_dev": true,
       "vars": {
-        "APP_ENV": "production"
+        "APP_ENV": "production",
+        "SUPPORT_MONERO_ADDRESS": "",
+        "SUPPORT_BITCOIN_ADDRESS": "",
+        "SUPPORT_LIGHTNING_ADDRESS": "",
+        "SUPPORT_ETHEREUM_ADDRESS": "0x5399A7a61d553936A2B7d5a8fA75Ce7B4534D1CA"
       },
       "triggers": {
         "crons": ["*/15 * * * *"]

@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { createTestHarness, type TestHarness } from "wrangler";
 import { test as base, expect } from "@playwright/test";
 
+import { supportAddressBindings } from "../tests/support/donation-fixtures";
+
 export const TEST_SESSION_COOKIE_SECRET =
   "mdwn-browser-tests-only-not-a-deployment-secret";
 
@@ -31,6 +33,7 @@ function localHttpsWorkerConfig() {
     vars: {
       ...vars, SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET,
       ABUSE_HMAC_SECRET: "mdwn-browser-abuse-tests-only-not-a-deployment-secret",
+      ...supportAddressBindings(),
     },
   };
 }

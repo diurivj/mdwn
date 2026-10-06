@@ -33,6 +33,7 @@
     "app/namespace-v1/**/*.ts",
     "app/opaque-id.ts",
     "app/signup/recovery-gate.ts",
+    "app/support/donations.ts",
     "app/tree/client.ts",
     "app/tree/listing.ts",
     "app/tree/wire.ts",
