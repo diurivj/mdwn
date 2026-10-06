@@ -1,8 +1,8 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { prepareRecoveryCodeSet } from "../../app/auth/recovery-codes";
-import { decodeBytes } from "../../app/signup/protocol";
+import { prepareRecoveryCodeSet } from "../../app/shared/auth/recovery-codes";
+import { decodeBytes } from "../../app/shared/signup/protocol";
 import { mutation, seedNormalSession, sessionState } from "./auth-fixtures";
 
 declare global {

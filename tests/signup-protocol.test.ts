@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   bindingMessage, decodeBytes, encodeBytes, solveProofOfWork,
   transcriptDigest, verifyProofOfWork, type SignupTranscript,
-} from "../app/signup/protocol";
+} from "../app/shared/signup/protocol";
 
 const b64 = (length: number, fill: number) => encodeBytes(new Uint8Array(length).fill(fill));
 const key = (fill: number) => encodeBytes(Uint8Array.of(4, ...new Uint8Array(64).fill(fill)));

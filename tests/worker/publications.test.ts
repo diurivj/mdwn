@@ -1,20 +1,20 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { sealAttribution, sealCommentBody } from "../../app/comments/content";
-import { sealCommentEpochLink } from "../../app/comments/public-content";
-import { createSymmetricWriter } from "../../app/crypto/enc-v1";
-import { createFileRepresentation, generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
+import { sealAttribution, sealCommentBody } from "../../app/shared/comments/content";
+import { sealCommentEpochLink } from "../../app/shared/comments/public-content";
+import { createSymmetricWriter } from "../../app/shared/crypto/enc-v1";
+import { createFileRepresentation, generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
 import {
   createPublicationKeyPair, formatPublicationFragment, importPublicationKeyPair, newPublicationIdentifier,
-} from "../../app/publications/capability";
+} from "../../app/shared/publications/capability";
 import {
   openAuthorDeclaration, openPublicRepresentation, publicPresentation, sealAuthorDeclaration, sealPublicRepresentation,
-} from "../../app/publications/content";
+} from "../../app/shared/publications/content";
 import { publicationsAction } from "../../app/publications/publications.server";
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
-import { createFileHead } from "../../app/tree/file-head";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
+import { createFileHead } from "../../app/shared/tree/file-head";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   deletePayload, grant, movePayload, opaqueId, renamePayload, sharingAccount, sharingRequest, treeChild, type SharingAccount,
 } from "./sharing-fixtures";

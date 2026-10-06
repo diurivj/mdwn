@@ -1,11 +1,11 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
-import { MAX_COMMENT_BODY_BYTES, MAX_COMMENT_CHARS, sealAttribution, sealCommentBody } from "../../app/comments/content";
-import { createRecoveryMaterial, generateVaultRootKey, openVaultRecoveryEnvelope, sealDeviceEnrollmentEnvelope, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
-import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
-import { resumeRotation, type RotationBrowser } from "../../app/sharing/rotation-client";
-import { openSymmetric } from "../../app/crypto/enc-v1";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+import { MAX_COMMENT_BODY_BYTES, MAX_COMMENT_CHARS, sealAttribution, sealCommentBody } from "../../app/shared/comments/content";
+import { createRecoveryMaterial, generateVaultRootKey, openVaultRecoveryEnvelope, sealDeviceEnrollmentEnvelope, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
+import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
+import { resumeRotation, type RotationBrowser } from "../../app/shared/sharing/rotation-client";
+import { openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import { deletePayload, grant, invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild, type SharingAccount } from "./sharing-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }

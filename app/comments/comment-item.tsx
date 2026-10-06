@@ -1,4 +1,4 @@
-import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
+import { commentCharacters, MAX_COMMENT_CHARS } from "../shared/comments/content";
 import type { ReactNode } from "react";
 
 /**

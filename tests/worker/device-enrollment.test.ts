@@ -1,12 +1,12 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { createVaultKeyHierarchy, openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
-import { digestEnvelope } from "../../app/crypto/enc-v1";
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
+import { createVaultKeyHierarchy, openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "../../app/shared/crypto/vault";
+import { digestEnvelope } from "../../app/shared/crypto/enc-v1";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
 import { approvalMessage, candidateTranscriptMessage, possessionMessage, sha256,
   type CandidateTranscript, type EnrollmentApproval } from "../../app/enrollment/protocol";
-import { decodeBytes, encodeBytes } from "../../app/signup/protocol";
+import { decodeBytes, encodeBytes } from "../../app/shared/signup/protocol";
 import { seedNormalSession } from "./auth-fixtures";
 
 declare global {

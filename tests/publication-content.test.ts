@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { inspectEnvelope, sealToRecipient } from "../app/crypto/enc-v1";
-import { FILE_SOURCE_LIMIT } from "../app/crypto/file-source";
+import { inspectEnvelope, sealToRecipient } from "../app/shared/crypto/enc-v1";
+import { FILE_SOURCE_LIMIT } from "../app/shared/crypto/file-source";
 import {
   createPublicationKeyPair,
   formatPublicationFragment,
@@ -11,7 +11,7 @@ import {
   parsePublicationFragment,
   publicationRecipientId,
   publicLinkUrl,
-} from "../app/publications/capability";
+} from "../app/shared/publications/capability";
 import {
   authorDeclarationContext,
   decodePublicPresentation,
@@ -23,7 +23,7 @@ import {
   publicRepresentationContext,
   sealAuthorDeclaration,
   sealPublicRepresentation,
-} from "../app/publications/content";
+} from "../app/shared/publications/content";
 
 const publicationId = "HyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OPq8fg";
 const linkId = "PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30-wIJEBc";

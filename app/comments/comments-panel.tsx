@@ -15,9 +15,9 @@ import {
   type CommentView,
   type CommentsState,
   type PrivateComments,
-} from "./comments-client";
+} from "../shared/comments/comments-client";
 import { CommentItem } from "./comment-item";
-import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
+import { commentCharacters, MAX_COMMENT_CHARS } from "../shared/comments/content";
 import { PublicThreadPanel } from "./public-thread-panel";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 

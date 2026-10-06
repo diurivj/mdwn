@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { FILE_SOURCE_FEEDBACK, FILE_SOURCE_LIMIT, fileSourceBytes } from "~/crypto/file-source";
+import { FILE_SOURCE_FEEDBACK, FILE_SOURCE_LIMIT, fileSourceBytes } from "~/shared/crypto/file-source";
 
 import { CommentsPanel } from "~/comments/comments-panel";
 
 import { MarkdownPreview } from "./markdown-preview";
 import type { FilesSnapshot } from "./navigation-client";
 import { useFileDraft } from "./use-file-draft";
-import type { FileDocument } from "./file-client";
-import type { DirectoryListing } from "./client";
+import type { FileDocument } from "../shared/tree/file-client";
+import type { DirectoryListing } from "../shared/tree/client";
 
 function RightPaneToggle({ view, onShowPreview, onShowComments }: {
   view: "edit" | "preview" | "comments"; onShowPreview: () => void; onShowComments: () => void;

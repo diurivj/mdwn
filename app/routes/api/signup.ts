@@ -1,7 +1,7 @@
 import { AuthRequestError, readAuthJson, record, requireSameOrigin, string } from "~/auth/request.server";
 import { SessionConfigurationError } from "~/auth/session.server";
 import { getEnv } from "~/context/env";
-import { AbuseControlUnavailableError, abuseControlUnavailableResponse } from "~/security/abuse-control.server";
+import { AbuseControlUnavailableError, abuseControlUnavailableResponse } from "~/shared/security/abuse-control.server";
 import { beginSignupChallenge, beginSignupRegistration, completeSignup } from "~/signup/signup.server";
 
 import type { Route } from "./+types/signup";

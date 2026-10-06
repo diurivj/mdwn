@@ -1,6 +1,6 @@
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { encodeTreeBytes } from "~/tree/wire";
+import { encodeTreeBytes } from "~/shared/tree/wire";
 import { nextPseudonymChangeAt } from "./pseudonym-guard.server";
 
 const headers = { "Cache-Control": "no-store" };

@@ -1,14 +1,14 @@
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
 import { deletedPseudonymItems } from "~/account/pseudonym-items.server";
 import { deletedCommentReports } from "~/comments/public.server";
-import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
-import { SYMMETRIC_SUITE } from "~/crypto/enc-v1/format";
-import { createDb, sql } from "~/db/client.server";
+import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
+import { SYMMETRIC_SUITE } from "~/shared/crypto/enc-v1/format";
+import { createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, commitDirectoryMutation, commitPrivateBatch, commitTreeMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "./wire";
-import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "./listing";
-import { verifyFileHead, type FileHead, type FileHeadIdentity } from "./file-head";
-import { boundedSubtreeQuery, MAX_DELETE_NODES } from "./subtree.server";
+import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "../shared/tree/wire";
+import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "../shared/tree/listing";
+import { verifyFileHead, type FileHead, type FileHeadIdentity } from "../shared/tree/file-head";
+import { boundedSubtreeQuery, MAX_DELETE_NODES } from "../shared/tree/subtree.server";
 import { accessPredicate, committedNodeVisible, effectiveAccessQuery, exitsSharedScope, moveAccessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
 import { retireDeletedScopeNeeds } from "~/sharing/provisioning-needs.server";
 import {

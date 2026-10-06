@@ -8,7 +8,7 @@ independent security review required by ADR-0003.
 
 ## Public interface and trust
 
-Import from `app/crypto/enc-v1`:
+Import from `app/shared/crypto/enc-v1`:
 
 - `createSymmetricWriter(baseKey, { maxMessages?, maxAuthenticatedBytes? })`
   returns an ephemeral writer with `seal(plaintext, context)`. The base key must
@@ -29,7 +29,7 @@ Import from `app/crypto/enc-v1`:
 - `inspectEnvelope(envelope)` validates framing and returns **unauthenticated**
   metadata. It is suitable for Worker structural validation, never authorization
   or establishing the expected context. The parser is also available from the
-  dependency-free `app/crypto/enc-v1/format` module.
+  dependency-free `app/shared/crypto/enc-v1/format` module.
 - `digestEnvelope(envelope)` returns SHA-256 of the entire canonical envelope,
   after structural validation. It is a byte-exact ciphertext identity, not a
   plaintext hash or an authenticity claim.
@@ -106,7 +106,7 @@ domain. [Ticket 04](../.scratch/mdwn/issues/04-key-hierarchy-phrase-capsule.md)
 adds the Recovery capsule domain through `infoLabel`. Its canonical `info` is
 UTF-8 `mdwn/vault-recovery-capsule/v1`, followed by the Account ID's u16 byte
 length, its UTF-8 bytes, and the recovery generation as u64 (all integers big-endian).
-`app/crypto/vault.ts` supplies the 32-byte Vault recovery secret as the HKDF input
+`app/shared/crypto/vault.ts` supplies the 32-byte Vault recovery secret as the HKDF input
 and records the writer's fresh public salt. It does not feed an already-derived
 capsule key into the default content-key domain or restore a writer's salt.
 
@@ -217,7 +217,7 @@ pseudonym; the service persists only the opaque ciphertext, Account-profile
 revision, and Vault-root epoch. No Account-profile key or plaintext reaches a
 Worker route, D1, logs, or a test-only production endpoint.
 
-`app/crypto/account-profile` binds its envelope context to caller-supplied,
+`app/shared/crypto/account-profile` binds its envelope context to caller-supplied,
 trusted current metadata: `vaultId` is the opaque Account ID, `objectId` is
 `account-profile`, `keyId` is `vault-root`, and `keyEpoch` and `revision` are
 the expected externally stored current epoch and profile revision. Opening
@@ -237,7 +237,7 @@ the Account and exact device ID. Neither purpose carries a Grant capability.
 
 ## Public representation and author declarations (ticket 22)
 
-`app/publications/content` seals the Public representation (purpose 9) and each
+`app/shared/publications/content` seals the Public representation (purpose 9) and each
 Owner-selected author's pseudonym declaration (purpose 21) with HPKE to the
 active Publication link's public key. This consumer pins HPKE for both purposes:
 the Worker rejects a symmetric envelope for either, and the browser opens them
@@ -253,7 +253,7 @@ authenticated Publication protocol, not from a successful open. See
 
 ## Grant-derived Comment envelopes (ticket 18)
 
-`app/sharing/comment-keys` uses purposes 10 and 11 for direct HPKE device delivery, with an independent source-device intent signature. Pending Share acceptance requires the Owner; ticket 20 also permits a current recipient holder to forward an accepted Grant's capability within the same Account/Grant, with source authority rechecked in the committing transaction. Its externally expected context and signature additionally bind File, logical thread, root Grant relationship/target and both approved registry snapshots. Purpose 11 binds the logical Publication, never a URL fragment. Grant routes reject symmetric wrappers and all crossed contexts; acceptance requires complete current-device root and registered Comment/history coverage. These envelopes remain outside Account-owned recovery/enrollment stores. See [sharing](sharing.md) for the producer registration and lifecycle integration contract.
+`app/shared/sharing/comment-keys` uses purposes 10 and 11 for direct HPKE device delivery, with an independent source-device intent signature. Pending Share acceptance requires the Owner; ticket 20 also permits a current recipient holder to forward an accepted Grant's capability within the same Account/Grant, with source authority rechecked in the committing transaction. Its externally expected context and signature additionally bind File, logical thread, root Grant relationship/target and both approved registry snapshots. Purpose 11 binds the logical Publication, never a URL fragment. Grant routes reject symmetric wrappers and all crossed contexts; acceptance requires complete current-device root and registered Comment/history coverage. These envelopes remain outside Account-owned recovery/enrollment stores. See [sharing](sharing.md) for the producer registration and lifecycle integration contract.
 
 Ticket 23 adds the symmetric `public-comment-epoch-link` purpose (22) for the
 Publication-link wrapper of a `public` audience epoch. It is derived from the

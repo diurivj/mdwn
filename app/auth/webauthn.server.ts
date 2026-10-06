@@ -7,8 +7,8 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 
-import { atomicSqlBatch, createDb, passkeys, sessions, sql } from "~/db/client.server";
-import { sessionBindingDigest } from "~/device/proof";
+import { atomicSqlBatch, createDb, passkeys, sessions, sql } from "~/shared/db/client.server";
+import { sessionBindingDigest } from "~/shared/device/proof";
 import { verifySignInDevice } from "~/device/proof.server";
 
 import type { AssertionStart, PasskeySummary, RegistrationStart } from "./contracts";

@@ -1,4 +1,4 @@
-import { DYNAMIC_CACHE_CONTROL } from "~/security/headers";
+import { DYNAMIC_CACHE_CONTROL } from "~/shared/security/headers";
 import type { Route } from "./+types/robots.txt";
 
 /** Block indexing of all pages; anonymous public pages are non-indexed by default. */

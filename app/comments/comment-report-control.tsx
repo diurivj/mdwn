@@ -5,7 +5,7 @@ import {
   REPORT_CATEGORIES,
   REPORT_CATEGORY_LABELS,
   type ReportCategory,
-} from "~/security/public-participation";
+} from "~/shared/security/public-participation";
 import {
   PublicCommentsLimitedError,
   PublicCommentsSuspendedError,

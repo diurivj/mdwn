@@ -1,7 +1,7 @@
 import type { EntryContext, RouterContextProvider } from "react-router";
 import { ServerRouter } from "react-router";
 import { renderToReadableStream } from "react-dom/server";
-import { cspNonceContext } from "~/security/nonce";
+import { cspNonceContext } from "~/shared/security/nonce";
 
 /**
  * Server renderer. Only the application shell is rendered here; private

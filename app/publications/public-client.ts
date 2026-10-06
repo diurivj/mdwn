@@ -1,10 +1,10 @@
 import { loadLinkPublicComments, publicCommentsWire, type PublicLinkComments } from "~/comments/public-client";
-import { decodeTreeBytes } from "~/tree/wire";
-import { decodePublicationPublicKey, importPublicationKeyPair, isPublicationIdentifier, parsePublicationFragment } from "./capability";
+import { decodeTreeBytes } from "~/shared/tree/wire";
+import { decodePublicationPublicKey, importPublicationKeyPair, isPublicationIdentifier, parsePublicationFragment } from "../shared/publications/capability";
 import {
   MAX_AUTHOR_DECLARATION_BYTES, MAX_PUBLIC_REPRESENTATION_BYTES, MAX_PUBLICATION_AUTHORS,
   openAuthorDeclaration, openPublicRepresentation,
-} from "./content";
+} from "../shared/publications/content";
 
 export type PublicPage =
   | { status: "ready"; title: string | null; markdown: string; authors: string[];

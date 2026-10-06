@@ -13,10 +13,10 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { sealAttribution, sealCommentBody } from "../../app/comments/content";
-import { openSymmetric } from "../../app/crypto/enc-v1";
-import { decodeFileRepresentation, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+import { sealAttribution, sealCommentBody } from "../../app/shared/comments/content";
+import { openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { decodeFileRepresentation, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   opaqueId, renamePayload, savePayload, sharingRequest, sharingAccount, treeChild, type SharingAccount,
 } from "./sharing-fixtures";

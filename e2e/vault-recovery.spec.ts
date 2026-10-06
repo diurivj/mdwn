@@ -1,6 +1,6 @@
 import type { Browser } from "@playwright/test";
 
-import { openRecoveryCapsule, sealVaultRecoveryEnvelope } from "../app/crypto/vault";
+import { openRecoveryCapsule, sealVaultRecoveryEnvelope } from "../app/shared/crypto/vault";
 import { test, expect } from "./fixtures";
 import { seedAccount, signInAccount } from "./support/seeded-account";
 

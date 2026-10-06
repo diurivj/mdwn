@@ -1,12 +1,12 @@
 import { authGet, authPost } from "~/auth/client";
 import { confirmFreshPasskey } from "~/auth/fresh-client";
-import { createSymmetricWriter, digestEnvelope } from "~/crypto/enc-v1";
-import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "~/crypto/vault";
-import { privateRequest } from "~/device/private-client";
+import { createSymmetricWriter, digestEnvelope } from "~/shared/crypto/enc-v1";
+import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
+import { privateRequest } from "~/shared/device/private-client";
 import { activateEnrollmentCandidate, createEnrollmentCandidate, getDevice,
-  getEnrollmentCandidate } from "~/device/store";
-import { newOpaqueId } from "~/opaque-id";
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+  getEnrollmentCandidate } from "~/shared/device/store";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
 import { approvalMessage, candidateTranscriptMessage, parseQrPayload, possessionMessage,
   qrPayload, sha256, type CandidateTranscript, type EnrollmentApproval } from "./protocol";

@@ -2,18 +2,18 @@ import type { SQL } from "drizzle-orm";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { record } from "~/auth/request.server";
 import { MAX_ATTRIBUTION_BYTES, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES, MAX_COMMENT_BODY_BYTES,
-  MAX_COMMENT_KEY_ENVELOPE_BYTES, MAX_COMMENTS_PAGE } from "~/comments/content";
+  MAX_COMMENT_KEY_ENVELOPE_BYTES, MAX_COMMENTS_PAGE } from "~/shared/comments/content";
 import { commentEnvelopeWire, readCommentEnvelopes } from "~/comments/envelopes.server";
 import { isCommentEpochLink, MAX_PUBLIC_EPOCH_LINK_BYTES, publicAttributionContext, publicAttributionKeyContext,
-  publicCommentBodyContext, publicCommentEnvelope, publicCommentKeyContext } from "~/comments/public-content";
-import { createDb, sql } from "~/db/client.server";
+  publicCommentBodyContext, publicCommentEnvelope, publicCommentKeyContext } from "~/shared/comments/public-content";
+import { createDb, sql } from "~/shared/db/client.server";
 import { commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { isPublicationIdentifier } from "~/publications/capability";
-import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse, type RateLimitDecision } from "~/security/abuse-control.server";
-import { isReportCategory, REPORT_RETENTION_MS } from "~/security/public-participation";
-import { activePublicParticipationSuspension, publicParticipationSuspendedResponse } from "~/security/public-participation.server";
+import { isPublicationIdentifier } from "~/shared/publications/capability";
+import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse, type RateLimitDecision } from "~/shared/security/abuse-control.server";
+import { isReportCategory, REPORT_RETENTION_MS } from "~/shared/security/public-participation";
+import { activePublicParticipationSuspension, publicParticipationSuspendedResponse } from "~/shared/security/public-participation.server";
 import { accessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
+import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 
 /**
  * Public Comment threads and Comment audience epochs (ticket 23).

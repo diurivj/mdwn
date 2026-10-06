@@ -1,7 +1,7 @@
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 import type { TestHarness } from "wrangler";
 
-import { openAccountProfile, sealAccountProfile } from "../app/crypto/account-profile";
+import { openAccountProfile, sealAccountProfile } from "../app/shared/crypto/account-profile";
 import { test, expect } from "./fixtures";
 import { coseP256PublicKey } from "./support/passkey";
 

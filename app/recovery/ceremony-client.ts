@@ -1,19 +1,19 @@
 import { authFailure, authGet, authPost } from "~/auth/client";
 import { confirmFreshPasskey } from "~/auth/fresh-client";
-import { digestEnvelope } from "~/crypto/enc-v1";
+import { digestEnvelope } from "~/shared/crypto/enc-v1";
 import {
   createRecoveryMaterial, openDeviceEnrollmentEnvelope, openRecoveryCapsule,
   sealDeviceEnrollmentEnvelope,
-} from "~/crypto/vault";
+} from "~/shared/crypto/vault";
 import {
   activateRecoveryCandidate, createRecoveryCandidate, getDevice, getRecoveryCandidate,
   listRecoveryCandidates,
-} from "~/device/store";
-import { newOpaqueId } from "~/opaque-id";
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+} from "~/shared/device/store";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
 import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type NextRecoveryMetadata, type RecoveryIntent } from "./protocol";
-import { ownedProvisioningNeeded } from "~/device/owned-provision-client";
+import { ownedProvisioningNeeded } from "~/shared/device/owned-provision-client";
 
 type Start = {
   enrollmentId: string; accountId: string; generation: number; registryEpoch: number;

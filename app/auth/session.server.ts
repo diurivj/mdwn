@@ -1,6 +1,6 @@
 import { createCookie, createSessionStorage, type SessionStorage } from "react-router";
 
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 
 import type { SessionSummary } from "./contracts";
 

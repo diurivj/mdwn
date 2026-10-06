@@ -1,11 +1,11 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { sealAttribution, sealCommentBody } from "../../app/comments/content";
-import { generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
-import { newPublicationIdentifier } from "../../app/publications/capability";
-import { applyPublicParticipationSuspension } from "../../app/security/public-participation.server";
-import { encodeTreeBytes } from "../../app/tree/wire";
+import { sealAttribution, sealCommentBody } from "../../app/shared/comments/content";
+import { generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
+import { newPublicationIdentifier } from "../../app/shared/publications/capability";
+import { applyPublicParticipationSuspension } from "../../app/shared/security/public-participation.server";
+import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   commentPayload, publish, sealedAttribution, sealedComment, type Publication,
 } from "./publication-fixtures";

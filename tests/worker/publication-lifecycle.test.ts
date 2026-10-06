@@ -1,13 +1,13 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { openCommentEpochLink, openPublicCommentBody, sealCommentEpochLink, sealPublicCommentBody } from "../../app/comments/public-content";
-import { sealVaultRecoveryEnvelope, generateVaultRootKey } from "../../app/crypto/vault";
+import { openCommentEpochLink, openPublicCommentBody, sealCommentEpochLink, sealPublicCommentBody } from "../../app/shared/comments/public-content";
+import { sealVaultRecoveryEnvelope, generateVaultRootKey } from "../../app/shared/crypto/vault";
 import { createPublicationKeyPair, formatPublicationFragment, importPublicationKeyPair, isPublicationIdentifier,
-  newPublicationIdentifier } from "../../app/publications/capability";
-import { openPublicRepresentation, publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } from "../../app/publications/content";
-import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+  newPublicationIdentifier } from "../../app/shared/publications/capability";
+import { openPublicRepresentation, publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } from "../../app/shared/publications/content";
+import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import { deletePayload, grant, invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild, type SharingAccount } from "./sharing-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }

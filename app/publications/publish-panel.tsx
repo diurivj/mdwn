@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { publicParticipationSuspensionNotice } from "~/security/public-participation";
+import { publicParticipationSuspensionNotice } from "~/shared/security/public-participation";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import {
   addAccountAuthor, addSelfAuthor, changeCommentAudience, continuePublicationTeardown, loadPublicationState, publishFile,
   PublicationError, removeAuthor, removePublicationRequest, requestPublication, rotatePublicationLink, unpublishPublication,
   type CommentAudience, type PreparedPublicLink, type PublicationState, type TeardownProgress,
 } from "./publications-client";
-import { loadFile } from "~/tree/client";
+import { loadFile } from "~/shared/tree/client";
 
 type PanelState = { status: "loading" } | { status: "failed" } | { status: "ready"; state: PublicationState };
 

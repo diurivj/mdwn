@@ -12,13 +12,13 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
-import { prepareImportPlan, type ImportPlan } from "../../app/import/plan";
-import { reviewImport, type ImportTarget } from "../../app/import/review";
-import { analyzeImportSelection, type ImportSourceFile, type RawImportInput } from "../../app/import/source";
-import { encodeImportChunkBody, encodeImportSessionBody } from "../../app/import/staging";
-import { createFileHead } from "../../app/tree/file-head";
-import { createListingHead } from "../../app/tree/listing";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
+import { prepareImportPlan, type ImportPlan } from "../../app/shared/import/plan";
+import { reviewImport, type ImportTarget } from "../../app/shared/import/review";
+import { analyzeImportSelection, type ImportSourceFile, type RawImportInput } from "../../app/shared/import/source";
+import { encodeImportChunkBody, encodeImportSessionBody } from "../../app/shared/import/staging";
+import { createFileHead } from "../../app/shared/tree/file-head";
+import { createListingHead } from "../../app/shared/tree/listing";
 import { grant, sharingAccount, sharingRequest, treeListing, type SharingAccount } from "./sharing-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }

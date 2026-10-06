@@ -2,10 +2,10 @@ import type { Page } from "@playwright/test";
 import { createCookie } from "react-router";
 import { build } from "vite";
 
-import { sealAccountProfile } from "../app/crypto/account-profile";
-import { createSymmetricWriter } from "../app/crypto/enc-v1";
-import { createFileRepresentation, createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/crypto/vault";
-import { encodeTreeBytes } from "../app/tree/wire";
+import { sealAccountProfile } from "../app/shared/crypto/account-profile";
+import { createSymmetricWriter } from "../app/shared/crypto/enc-v1";
+import { createFileRepresentation, createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/shared/crypto/vault";
+import { encodeTreeBytes } from "../app/shared/tree/wire";
 import { test as appTest, expect, TEST_SESSION_COOKIE_SECRET } from "./fixtures";
 import { waitForSharedProvisioning } from "./support/navigation";
 

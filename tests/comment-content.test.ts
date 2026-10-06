@@ -13,7 +13,7 @@ import {
   sealAttribution,
   sealCommentBody,
   validCommentText,
-} from "../app/comments/content";
+} from "../app/shared/comments/content";
 
 const vaultId = "0198c0de-0000-7000-8000-000000000001";
 const commentId = "0198c0de-0000-7000-8000-000000000002";

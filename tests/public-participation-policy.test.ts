@@ -11,7 +11,7 @@ import {
   isPublicParticipationSuspensionReason,
   isReportCategory,
   publicParticipationSuspensionNotice,
-} from "../app/security/public-participation";
+} from "../app/shared/security/public-participation";
 
 const day = 24 * 60 * 60 * 1000;
 const operatorScript = readFileSync(join(process.cwd(), "scripts/public-participation.mjs"), "utf8");

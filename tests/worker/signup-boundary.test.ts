@@ -2,10 +2,10 @@ import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test"
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { getActiveSession } from "../../app/auth/session.server";
-import { sql } from "../../app/db/client.server";
+import { sql } from "../../app/shared/db/client.server";
 import { authorizePrivateRequest, commitPrivateMutation, purgeExpiredSignupProofs } from "../../app/device/proof.server";
-import { sessionBindingDigest, signDeviceProof } from "../../app/device/proof";
-import { encodeBytes, solveProofOfWork, type SignupTranscript } from "../../app/signup/protocol";
+import { sessionBindingDigest, signDeviceProof } from "../../app/shared/device/proof";
+import { encodeBytes, solveProofOfWork, type SignupTranscript } from "../../app/shared/signup/protocol";
 import { seedAccount, seedNormalSession } from "./auth-fixtures";
 
 declare global {

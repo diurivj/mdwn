@@ -1,2 +1,2 @@
-export * from "../../app/device/private-client";
-export * from "../../app/device/store";
+export * from "../../app/shared/device/private-client";
+export * from "../../app/shared/device/store";

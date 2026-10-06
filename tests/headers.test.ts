@@ -5,7 +5,7 @@ import {
   buildSecurityHeaders,
   generateCspNonce,
   normalizeCspNonce,
-} from "../app/security/headers";
+} from "../app/shared/security/headers";
 
 const NONCE = "testNonceValue123456";
 

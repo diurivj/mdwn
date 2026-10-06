@@ -1,15 +1,15 @@
-import { newPublicationIdentifier } from "../../app/publications/capability";
+import { newPublicationIdentifier } from "../../app/shared/publications/capability";
 import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 import { addSharingDevice, deletePayload, grant, invite, opaqueId, prepareGrantKeys, savePayload, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
-import { createSymmetricWriter, openSymmetric } from "../../app/crypto/enc-v1";
-import { createRecoveryMaterial, sealDeviceEnrollmentEnvelope, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
-import { openGrantKeyEnvelope } from "../../app/sharing/grant-keys";
-import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
-import { resumeRotation, type RotationBrowser } from "../../app/sharing/rotation-client";
+import { createSymmetricWriter, openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { createRecoveryMaterial, sealDeviceEnrollmentEnvelope, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
+import { openGrantKeyEnvelope } from "../../app/shared/sharing/grant-keys";
+import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
+import { resumeRotation, type RotationBrowser } from "../../app/shared/sharing/rotation-client";
 import type { SharingAccount } from "./sharing-fixtures";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
-import { rotationResumeContext, type RotationNext, type RotationEntries } from "../../app/sharing/rotation-wire";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
+import { rotationResumeContext, type RotationNext, type RotationEntries } from "../../app/shared/sharing/rotation-wire";
 
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
 

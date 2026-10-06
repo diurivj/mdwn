@@ -10,8 +10,8 @@ import {
   resumeAccountPseudonymUpdate,
   type PseudonymJob,
 } from "~/account/pseudonym-client";
-import { PrivateAccessError } from "~/device/private-client";
-import { isV7 } from "~/tree/wire";
+import { PrivateAccessError } from "~/shared/device/private-client";
+import { isV7 } from "~/shared/tree/wire";
 
 import type { Route } from "./+types/account-pseudonym";
 

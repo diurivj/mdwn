@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
-import { encodeBytes, solveProofOfWork, transcriptDigest, type SignupTranscript } from "../../app/signup/protocol";
+import { encodeBytes, solveProofOfWork, transcriptDigest, type SignupTranscript } from "../../app/shared/signup/protocol";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[]; SESSION_COOKIE_SECRET: string; ABUSE_HMAC_SECRET: string } } }
 beforeAll(async () => applyD1Migrations(env.DB, env.TEST_MIGRATIONS));

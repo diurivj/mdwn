@@ -1,17 +1,17 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createSymmetricWriter, inspectEnvelope, openSymmetric } from "../../app/crypto/enc-v1";
-import { createChildDirectoryCapability, createFileRepresentation, decodeFileRepresentation, generateDirectoryCapabilityKey } from "../../app/crypto/vault";
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
-import { NamespaceError, canonicalizeSegment } from "../../app/namespace-v1";
-import { encodeBytes, decodeBytes } from "../../app/signup/protocol";
-import { createTreeChild, NameConflictError, prepareTreeCreate, prepareTreeRename, renameTreeChild } from "../../app/tree/client";
-import { RecoveryConfirmationPendingError } from "../../app/signup/recovery-gate";
-import { createListingHead, openListingHead, type SealedEntry, type StoredListingHead } from "../../app/tree/listing";
+import { createSymmetricWriter, inspectEnvelope, openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { createChildDirectoryCapability, createFileRepresentation, decodeFileRepresentation, generateDirectoryCapabilityKey } from "../../app/shared/crypto/vault";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
+import { NamespaceError, canonicalizeSegment } from "../../app/shared/namespace-v1";
+import { encodeBytes, decodeBytes } from "../../app/shared/signup/protocol";
+import { createTreeChild, NameConflictError, prepareTreeCreate, prepareTreeRename, renameTreeChild } from "../../app/shared/tree/client";
+import { RecoveryConfirmationPendingError } from "../../app/shared/signup/recovery-gate";
+import { createListingHead, openListingHead, type SealedEntry, type StoredListingHead } from "../../app/shared/tree/listing";
 import { seedNormalSession } from "./auth-fixtures";
-import { encodeTreeBytes } from "../../app/tree/wire";
-import { createFileHead } from "../../app/tree/file-head";
+import { encodeTreeBytes } from "../../app/shared/tree/wire";
+import { createFileHead } from "../../app/shared/tree/file-head";
 
 declare global {
   namespace Cloudflare { interface Env {

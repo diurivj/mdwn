@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { newOpaqueId } from "~/opaque-id";
+import { newOpaqueId } from "~/shared/opaque-id";
 
 type LeaseState = "checking" | "owner" | "read-only" | "transferring" | "unavailable";
 type Actions = { flush: () => Promise<boolean>; reload: () => Promise<boolean>; discard: () => Promise<void> };

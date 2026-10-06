@@ -1,8 +1,8 @@
 import { hasEmptyBody, requireSameOrigin } from "~/auth/request.server";
 import { getEnv } from "~/context/env";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, privateReadGuard } from "~/device/proof.server";
-import { encodeBytes } from "~/signup/protocol";
+import { encodeBytes } from "~/shared/signup/protocol";
 
 import type { Route } from "./+types/private-bootstrap";
 

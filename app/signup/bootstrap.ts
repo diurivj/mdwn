@@ -1,19 +1,19 @@
 import { startRegistration } from "@simplewebauthn/browser";
 
 import { authPost } from "~/auth/client";
-import { prepareRecoveryCodeSet } from "~/auth/recovery-codes";
-import { sealAccountProfile } from "~/crypto/account-profile";
-import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
+import { prepareRecoveryCodeSet } from "~/shared/auth/recovery-codes";
+import { sealAccountProfile } from "~/shared/crypto/account-profile";
+import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
 import {
   createRecoveryMaterial, createVaultKeyHierarchy, openDeviceEnrollmentEnvelope,
   sealDeviceEnrollmentEnvelope,
-} from "~/crypto/vault";
-import { createDevice, getDevice, updateRegistryEpoch } from "~/device/store";
-import { newOpaqueId } from "~/opaque-id";
-import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "~/signup/protocol";
-import { RECOVERY_CONFIRMATION_GATE_KEY } from "~/signup/recovery-gate";
+} from "~/shared/crypto/vault";
+import { createDevice, getDevice, updateRegistryEpoch } from "~/shared/device/store";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "~/shared/signup/protocol";
+import { RECOVERY_CONFIRMATION_GATE_KEY } from "~/shared/signup/recovery-gate";
 
-export { confirmSignupRecovery, isSignupRecoveryConfirmationPending } from "~/signup/recovery-gate";
+export { confirmSignupRecovery, isSignupRecoveryConfirmationPending } from "~/shared/signup/recovery-gate";
 
 async function digest(bytes: Uint8Array): Promise<string> {
   return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))));

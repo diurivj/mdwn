@@ -16,20 +16,20 @@
 
 import type { SQL } from "drizzle-orm";
 import { hasEmptyBody } from "~/auth/request.server";
-import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
-import { SYMMETRIC_SUITE, HPKE_SUITE } from "~/crypto/enc-v1/format";
-import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
+import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
+import { SYMMETRIC_SUITE, HPKE_SUITE } from "~/shared/crypto/enc-v1/format";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, type AuthorizedDevice } from "~/device/proof.server";
 import { accessPredicate, sharingWriteBlocked } from "~/sharing/access.server";
-import { verifyFileHead } from "~/tree/file-head";
-import { verifyListingSignature } from "~/tree/listing";
-import { encodeTreeBytes } from "~/tree/wire";
+import { verifyFileHead } from "~/shared/tree/file-head";
+import { verifyListingSignature } from "~/shared/tree/listing";
+import { encodeTreeBytes } from "~/shared/tree/wire";
 import {
   MAX_IMPORT_CHUNK_BODY_BYTES, MAX_IMPORT_SESSION_BODY_BYTES, IMPORT_RECORD_KINDS,
   decodeImportChunkBody, decodeImportSessionBody, verifyChunkDigests,
   type DecodedDescriptor, type StagingRecordKind,
-} from "./staging";
-import { MAX_STAGING_MANIFEST_BYTES } from "./limits";
+} from "../shared/import/staging";
+import { MAX_STAGING_MANIFEST_BYTES } from "../shared/import/limits";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });

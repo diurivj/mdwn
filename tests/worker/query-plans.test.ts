@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { QUERY_PLANS, assertQueryPlan, coveringProbeSql } from "../../scripts/lib/d1-query-plans.mjs";
-import { createDb, sql } from "../../app/db/client.server";
+import { createDb, sql } from "../../app/shared/db/client.server";
 import { accountAccessQuery } from "../../app/sharing/access.server";
 import { seedAccount } from "./auth-fixtures";
 

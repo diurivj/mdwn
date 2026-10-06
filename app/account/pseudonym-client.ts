@@ -1,13 +1,13 @@
-import { MAX_COMMENT_KEY_ENVELOPE_BYTES, sealAttribution } from "~/comments/content";
-import { sealPublicAttribution } from "~/comments/public-content";
-import { MAX_ACCOUNT_PROFILE_BYTES, openAccountProfile, sealAccountProfile } from "~/crypto/account-profile";
-import { openVaultRecoveryEnvelope } from "~/crypto/vault";
-import { loadPrivateBrowser, type PrivateBrowser } from "~/device/private-browser";
-import { privateRequest } from "~/device/private-client";
-import { newOpaqueId } from "~/opaque-id";
-import { sealAuthorDeclaration } from "~/publications/content";
-import { openCommentKeyEnvelope, type CommentKeyContext } from "~/sharing/comment-keys";
-import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
+import { MAX_COMMENT_KEY_ENVELOPE_BYTES, sealAttribution } from "~/shared/comments/content";
+import { sealPublicAttribution } from "~/shared/comments/public-content";
+import { MAX_ACCOUNT_PROFILE_BYTES, openAccountProfile, sealAccountProfile } from "~/shared/crypto/account-profile";
+import { openVaultRecoveryEnvelope } from "~/shared/crypto/vault";
+import { loadPrivateBrowser, type PrivateBrowser } from "~/shared/device/private-browser";
+import { privateRequest } from "~/shared/device/private-client";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { sealAuthorDeclaration } from "~/shared/publications/content";
+import { openCommentKeyEnvelope, type CommentKeyContext } from "~/shared/sharing/comment-keys";
+import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/shared/tree/wire";
 
 /**
  * Browser driver for the exclusive Public-pseudonym update (ticket 24).

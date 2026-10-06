@@ -1,15 +1,15 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { digestEnvelope } from "../../app/crypto/enc-v1";
+import { digestEnvelope } from "../../app/shared/crypto/enc-v1";
 import {
   createRecoveryMaterial, createVaultKeyHierarchy, openDeviceEnrollmentEnvelope,
   openOwnedDeviceEnvelope, openRecoveryCapsule, openVaultRecoveryEnvelope,
   sealDeviceEnrollmentEnvelope, sealOwnedDeviceEnvelope,
-} from "../../app/crypto/vault";
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
+} from "../../app/shared/crypto/vault";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
 import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type RecoveryIntent } from "../../app/recovery/protocol";
-import { decodeBytes, encodeBytes } from "../../app/signup/protocol";
+import { decodeBytes, encodeBytes } from "../../app/shared/signup/protocol";
 import { seedNormalSession, type SeededSession } from "./auth-fixtures";
 import { seedRecipientEnvelopeDependents } from "./grant-envelope-lifecycle-fixtures";
 

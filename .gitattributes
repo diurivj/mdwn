@@ -1,3 +1,3 @@
 # Preserve the official Unicode 17 source bytes, including upstream line endings.
 vendor/unicode/17.0.0/ucd/** -text whitespace=-blank-at-eol,cr-at-eol linguist-vendored
-app/namespace-v1/generated.ts linguist-generated
+app/shared/namespace-v1/generated.ts linguist-generated

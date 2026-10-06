@@ -7,7 +7,7 @@ import {
   clearSessionCookie, getActiveSession, SessionConfigurationError,
 } from "~/auth/session.server";
 import { getEnv } from "~/context/env";
-import { AbuseControlUnavailableError, abuseControlUnavailableResponse } from "~/security/abuse-control.server";
+import { AbuseControlUnavailableError, abuseControlUnavailableResponse } from "~/shared/security/abuse-control.server";
 
 import type { Route } from "./+types/auth-recovery";
 

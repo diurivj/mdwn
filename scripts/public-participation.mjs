@@ -27,7 +27,7 @@
 import { isEnvironment, WRANGLER_TARGETS, spawnWrangler } from "./lib/wrangler-targets.mjs";
 
 const REASONS = ["repeated_technical_abuse", "report_pattern"];
-// Mirrors app/security/public-participation.ts / .server.ts; keep in lockstep.
+// Mirrors app/shared/security/public-participation.ts / .server.ts; keep in lockstep.
 const FIRST_SUSPENSION_MS = 604_800_000;
 const REPEAT_SUSPENSION_MS = 2_592_000_000;
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

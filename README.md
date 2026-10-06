@@ -29,7 +29,7 @@ npm run dev          # local Workers runtime + D1 simulation + Tailwind
 | `npm run test:e2e` | browser tests against the built Worker (all three engines) |
 | `npm run verify` | local preflight: every CI check, then all three browser engines (see AGENTS.md) |
 | `npm run build` | production build into `build/` |
-| `npm run db:generate` | generate a migration from `app/db/schema.ts` into `drizzle/` |
+| `npm run db:generate` | generate a migration from `app/shared/db/schema.ts` into `drizzle/` |
 | `npm run db:migrate[:preview\|:production]` | apply migrations via Wrangler |
 | `npm run db:smoke` | fresh-D1 schema and foreign-key smoke test |
 | `npm run db:operations [-- --remote preview\|production]` | read-only remote FK/query-plan verification, or disposable local verification |

@@ -1,5 +1,5 @@
 import { RECOVERY_SESSION_MS } from "~/auth/session.server";
-import { atomicSqlBatch, sql } from "~/db/client.server";
+import { atomicSqlBatch, sql } from "~/shared/db/client.server";
 
 /** Scheduled maintenance has no device authority. Remove only expired security
  * material, in FK dependency order; never rotate keys or touch current content.

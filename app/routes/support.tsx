@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 
 import { getEnv } from "~/context/env";
-import { donationOptionsFromEnv } from "~/support/donations";
+import { donationOptionsFromEnv } from "~/shared/support/donations";
 import { renderQrSvg } from "~/support/qr.server";
 
 import type { Route } from "./+types/support";

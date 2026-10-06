@@ -1,10 +1,10 @@
 import { createCookie } from "react-router";
-import { createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/crypto/vault";
+import { createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../app/shared/crypto/vault";
 import { test, expect, installWorkspaceScript, objectId } from "./workspace-fixture";
 import { TEST_SESSION_COOKIE_SECRET } from "./fixtures";
-import { newPublicationIdentifier } from "../app/publications/capability";
-import type { GrantKeyContext } from "../app/sharing/grant-keys";
-import type { CommentKeyContext } from "../app/sharing/comment-keys";
+import { newPublicationIdentifier } from "../app/shared/publications/capability";
+import type { GrantKeyContext } from "../app/shared/sharing/grant-keys";
+import type { CommentKeyContext } from "../app/shared/sharing/comment-keys";
 
 test.use({ initialSource: "# Shared secret\n\nOnly the target File." });
 

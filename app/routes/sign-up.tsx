@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
 import { commitSignup, confirmSignupRecovery, prepareSignup, type PreparedSignup } from "~/signup/bootstrap";
-import { HoneypotField } from "~/security/honeypot-field";
-import { HONEYPOT_FIELD_NAME } from "~/security/honeypot";
+import { HoneypotField } from "~/shared/security/honeypot-field";
+import { HONEYPOT_FIELD_NAME } from "~/shared/security/honeypot";
 
 export function meta() {
   return [{ title: "Sign up — mdwn" }];

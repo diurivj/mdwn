@@ -1,14 +1,14 @@
 import type { SQL } from "drizzle-orm";
 import { record } from "~/auth/request.server";
-import { digestEnvelope } from "~/crypto/enc-v1";
-import { createDb, sql } from "~/db/client.server";
+import { digestEnvelope } from "~/shared/crypto/enc-v1";
+import { createDb, sql } from "~/shared/db/client.server";
 import type { AuthorizedDevice } from "~/device/proof.server";
-import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "~/tree/listing";
-import { verifyFileHead, type FileHead } from "~/tree/file-head";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
+import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "~/shared/tree/listing";
+import { verifyFileHead, type FileHead } from "~/shared/tree/file-head";
+import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 import { readRotationSource, rotationSourceSnapshot } from "./rotation-data.server";
 import { liveGrant } from "./grant-lifetime.server";
-import type { RotationDirectory, RotationItem, RotationJob, RotationSource } from "./rotation-wire";
+import type { RotationDirectory, RotationItem, RotationJob, RotationSource } from "../shared/sharing/rotation-wire";
 
 const exact = (input: Record<string, unknown>, fields: string[]) => Object.keys(input).length === fields.length && fields.every((field) => Object.hasOwn(input, field));
 type HeadBytes = { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array };

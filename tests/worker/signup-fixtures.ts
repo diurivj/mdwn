@@ -2,15 +2,15 @@ import { SELF } from "cloudflare:test";
 import type { PublicKeyCredentialCreationOptionsJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import { cose, isoCBOR } from "@simplewebauthn/server/helpers";
 
-import { prepareRecoveryCodeSet } from "../../app/auth/recovery-codes";
-import { sealAccountProfile } from "../../app/crypto/account-profile";
-import { digestEnvelope } from "../../app/crypto/enc-v1";
+import { prepareRecoveryCodeSet } from "../../app/shared/auth/recovery-codes";
+import { sealAccountProfile } from "../../app/shared/crypto/account-profile";
+import { digestEnvelope } from "../../app/shared/crypto/enc-v1";
 import {
   createRecoveryMaterial, createVaultKeyHierarchy, openDeviceEnrollmentEnvelope,
   sealDeviceEnrollmentEnvelope,
-} from "../../app/crypto/vault";
-import { newOpaqueId } from "../../app/opaque-id";
-import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "../../app/signup/protocol";
+} from "../../app/shared/crypto/vault";
+import { newOpaqueId } from "../../app/shared/opaque-id";
+import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "../../app/shared/signup/protocol";
 
 const ORIGIN = "https://mdwn.test";
 

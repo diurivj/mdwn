@@ -1,9 +1,9 @@
 import { beforeAll, expect, test } from "vitest";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, verifyCommentKeySignature,
-  type CommentKeyContext } from "../app/sharing/comment-keys";
-import { encodeTreeBytes } from "../app/tree/wire";
-import { createSymmetricWriter, sealToRecipient, type EnvelopeContext } from "../app/crypto/enc-v1";
-import { newPublicationIdentifier } from "../app/publications/capability";
+  type CommentKeyContext } from "../app/shared/sharing/comment-keys";
+import { encodeTreeBytes } from "../app/shared/tree/wire";
+import { createSymmetricWriter, sealToRecipient, type EnvelopeContext } from "../app/shared/crypto/enc-v1";
+import { newPublicationIdentifier } from "../app/shared/publications/capability";
 
 async function signedPacket(ciphertext: Uint8Array, expected = context) {
   const digest = encodeTreeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(ciphertext))));

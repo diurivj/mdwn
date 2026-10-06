@@ -10,7 +10,7 @@ import {
   enforceRateLimit,
   purgeExpiredAbuseRecords,
   recordSecurityEvent,
-} from "../../app/security/abuse-control.server";
+} from "../../app/shared/security/abuse-control.server";
 import worker from "../../workers/app";
 
 declare global {

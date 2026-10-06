@@ -1,6 +1,6 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
-import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
+import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
 import { addSharingDevice, grant, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
 
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });

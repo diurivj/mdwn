@@ -1,15 +1,15 @@
 import type { SQL } from "drizzle-orm";
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { newOpaqueId } from "~/opaque-id";
-import { isV7 } from "~/tree/wire";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { isV7 } from "~/shared/tree/wire";
 import { activeGrantCoverage, activeRootCoverage, requiredGrantComments } from "./capability-coverage.server";
 import { readGrantKeys, uploadGrantKeys } from "./grant-keys.server";
 import { readCommentKey, uploadCommentKeys } from "./comment-keys.server";
 import { affectedRotationGrant, liveRotation, readRotationItem, readRotationJob, readRotationSource, rotationCommentItems,
   rotationDeliveryPermit, rotationEntries, rotationOrder } from "./rotation-data.server";
-import { rotationSourceVersion, type RotationJob } from "./rotation-wire";
+import { rotationSourceVersion, type RotationJob } from "../shared/sharing/rotation-wire";
 import { stepRotation } from "./rotation-step.server";
 import { hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
 

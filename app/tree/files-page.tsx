@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
-import { ensurePrivateThread } from "~/comments/comments-client";
+import { ensurePrivateThread } from "~/shared/comments/comments-client";
 import { ExportControl } from "~/export/export-control";
 import { ImportControl, type ImportControlHandle } from "~/import/import-control";
 import { declarePublicationAuthor, type PreparedPublicLink } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/publish-panel";
-import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/signup/recovery-gate";
+import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
 
 import {
@@ -13,7 +13,7 @@ import {
   reorderTreeChild, moveTreeChild, deleteTreeChild, DirectoryTooLargeError,
   openChildDirectory, prepareTreeCreate, prepareTreeRename, renameTreeChild, TreeCommitUncertainError, TreeNotFoundError,
   type DirectoryListing, type TreeEntry, type TreeKind,
-} from "./client";
+} from "../shared/tree/client";
 import { FileEditor } from "./file-editor";
 import { expandedPreferenceKey, savedExpanded, type FilesPageData, type FilesSnapshot } from "./navigation-client";
 

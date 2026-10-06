@@ -1,10 +1,10 @@
-import { privateRequest } from "~/device/private-client";
-import { getDevice } from "~/device/store";
-import { openGrantKeyEnvelope, type GrantKeyContext } from "~/sharing/grant-keys";
+import { privateRequest } from "~/shared/device/private-client";
+import { getDevice } from "~/shared/device/store";
+import { openGrantKeyEnvelope, type GrantKeyContext } from "~/shared/sharing/grant-keys";
 import {
   loadAncestors, loadDirectory, loadFile, openChildDirectory, openRoot, TreeNotFoundError,
   type DirectoryListing, type RootAccess, type TreeKind,
-} from "./client";
+} from "../shared/tree/client";
 
 export type Crumb = { id: string; name: string };
 export type FilesSnapshot = {

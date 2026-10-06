@@ -1,5 +1,5 @@
 import type { SQL } from "drizzle-orm";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { record } from "~/auth/request.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { activeGrantCoverage } from "./capability-coverage.server";

@@ -1,10 +1,10 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
-import { createSymmetricWriter, openSymmetric } from "../../app/crypto/enc-v1";
-import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
-import { decodeBytes, encodeBytes } from "../../app/signup/protocol";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
+import { createSymmetricWriter, openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "../../app/shared/crypto/vault";
+import { decodeBytes, encodeBytes } from "../../app/shared/signup/protocol";
 import { recoveryCookie, seedNormalSession } from "./auth-fixtures";
 import { seedRecipientEnvelopeDependents } from "./grant-envelope-lifecycle-fixtures";
 

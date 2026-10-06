@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { allocateKeepBothNames } from "../app/namespace-v1";
-import { ImportError } from "../app/import/limits";
-import { reviewImport, type ImportChoice, type ImportCollisionSibling, type ImportTarget } from "../app/import/review";
-import { analyzeImportSelection, type ImportSource } from "../app/import/source";
+import { allocateKeepBothNames } from "../app/shared/namespace-v1";
+import { ImportError } from "../app/shared/import/limits";
+import { reviewImport, type ImportChoice, type ImportCollisionSibling, type ImportTarget } from "../app/shared/import/review";
+import { analyzeImportSelection, type ImportSource } from "../app/shared/import/source";
 
 const encoder = new TextEncoder();
 

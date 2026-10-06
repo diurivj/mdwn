@@ -15,8 +15,8 @@ import {
   sealVaultRecoveryEnvelope,
   reissueRecoveryMaterial,
   type RecoveryCapsuleExpectation,
-} from "../app/crypto/vault";
-import { inspectEnvelope, openSymmetric } from "../app/crypto/enc-v1";
+} from "../app/shared/crypto/vault";
+import { inspectEnvelope, openSymmetric } from "../app/shared/crypto/enc-v1";
 
 const accountId = "account-01";
 const expected: RecoveryCapsuleExpectation = {

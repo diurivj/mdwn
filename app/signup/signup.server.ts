@@ -1,16 +1,16 @@
 import { generateRegistrationOptions, verifyRegistrationResponse, type RegistrationResponseJSON } from "@simplewebauthn/server";
 
 import { assertSessionConfiguration, prepareBoundSession, signSessionId } from "~/auth/session.server";
-import { inspectEnvelope } from "~/crypto/enc-v1";
-import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
-import { sealToRecipient } from "~/crypto/enc-v1";
-import { sessionBindingDigest } from "~/device/proof";
-import { enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
-import { honeypotFailureResponse } from "~/security/honeypot";
-import { prepareRegistrationSuccess } from "~/security/registration-success.server";
-import { AbuseControlUnavailableError } from "~/security/abuse-control.server";
+import { inspectEnvelope } from "~/shared/crypto/enc-v1";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
+import { sealToRecipient } from "~/shared/crypto/enc-v1";
+import { sessionBindingDigest } from "~/shared/device/proof";
+import { enforceRateLimit, rateLimitResponse } from "~/shared/security/abuse-control.server";
+import { honeypotFailureResponse } from "~/shared/security/honeypot";
+import { prepareRegistrationSuccess } from "~/shared/security/registration-success.server";
+import { AbuseControlUnavailableError } from "~/shared/security/abuse-control.server";
 
-import { bindingMessage, decodeBytes, encodeBytes, transcriptDigest, verifyProofOfWork, type SignupTranscript } from "./protocol";
+import { bindingMessage, decodeBytes, encodeBytes, transcriptDigest, verifyProofOfWork, type SignupTranscript } from "../shared/signup/protocol";
 
 const CHALLENGE_MS = 5 * 60_000;
 const encoder = new TextEncoder();

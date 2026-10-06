@@ -1,15 +1,15 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { generateDirectoryCapabilityKey } from "../../app/crypto/vault";
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
-import type { HistoricalComment } from "../../app/archive/format";
-import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../../app/import/plan";
-import { reviewImport, type ImportChoice, type ImportTarget } from "../../app/import/review";
-import { analyzeImportSelection, type ImportSource, type ImportSourceFile, type RawImportInput } from "../../app/import/source";
-import { encodeImportChunkBody, encodeImportSessionBody } from "../../app/import/staging";
-import { createFileHead } from "../../app/tree/file-head";
-import { createListingHead } from "../../app/tree/listing";
+import { generateDirectoryCapabilityKey } from "../../app/shared/crypto/vault";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
+import type { HistoricalComment } from "../../app/shared/archive/format";
+import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../../app/shared/import/plan";
+import { reviewImport, type ImportChoice, type ImportTarget } from "../../app/shared/import/review";
+import { analyzeImportSelection, type ImportSource, type ImportSourceFile, type RawImportInput } from "../../app/shared/import/source";
+import { encodeImportChunkBody, encodeImportSessionBody } from "../../app/shared/import/staging";
+import { createFileHead } from "../../app/shared/tree/file-head";
+import { createListingHead } from "../../app/shared/tree/listing";
 import { seedNormalSession } from "./auth-fixtures";
 
 declare global {

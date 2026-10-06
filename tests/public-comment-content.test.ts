@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   derivePublicationCapabilityKey, isCommentEpochLink, openCommentEpochLink, openPublicAttribution,
   openPublicCommentBody, sealCommentEpochLink, sealPublicAttribution, sealPublicCommentBody,
-} from "../app/comments/public-content";
-import { inspectEnvelope, sealToRecipient } from "../app/crypto/enc-v1";
-import { createPublicationKeyPair, newPublicationIdentifier } from "../app/publications/capability";
-import { encodeTreeBytes } from "../app/tree/wire";
+} from "../app/shared/comments/public-content";
+import { inspectEnvelope, sealToRecipient } from "../app/shared/crypto/enc-v1";
+import { createPublicationKeyPair, newPublicationIdentifier } from "../app/shared/publications/capability";
+import { encodeTreeBytes } from "../app/shared/tree/wire";
 
 const publicationId = newPublicationIdentifier(), linkId = newPublicationIdentifier();
 const epochId = crypto.randomUUID(), capabilityId = crypto.randomUUID();
