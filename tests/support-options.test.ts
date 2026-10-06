@@ -41,6 +41,21 @@ describe("donationOptionsFromEnv", () => {
     ]);
   });
 
+  it("lists Ethereum after the Bitcoin options when configured", () => {
+    const options = donationOptionsFromEnv({
+      SUPPORT_BITCOIN_ADDRESS: "bc1qexample",
+      SUPPORT_ETHEREUM_ADDRESS: "0x1234567890abcdef1234567890abcdef12345678",
+    });
+    expect(options.map((option) => option.id)).toEqual(["bitcoin", "ethereum"]);
+    expect(options[1]).toEqual(
+      expect.objectContaining({
+        id: "ethereum",
+        asset: "Ethereum (ETH)",
+        address: "0x1234567890abcdef1234567890abcdef12345678",
+      }),
+    );
+  });
+
   it("returns no options when nothing is configured", () => {
     expect(donationOptionsFromEnv({})).toEqual([]);
     expect(

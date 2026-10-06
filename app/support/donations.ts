@@ -14,10 +14,11 @@ export interface SupportAddressEnv {
   SUPPORT_MONERO_ADDRESS?: string | undefined;
   SUPPORT_BITCOIN_ADDRESS?: string | undefined;
   SUPPORT_LIGHTNING_ADDRESS?: string | undefined;
+  SUPPORT_ETHEREUM_ADDRESS?: string | undefined;
 }
 
 export interface DonationOption {
-  id: "monero" | "bitcoin" | "lightning";
+  id: "monero" | "bitcoin" | "lightning" | "ethereum";
   /** Display name for the asset. */
   asset: string;
   /** The exact string shown and encoded into the QR code. */
@@ -51,6 +52,12 @@ const CATALOG: readonly SupportCatalogEntry[] = [
     asset: "Bitcoin Lightning",
     note: "Low-fee option for small amounts. A Lightning address or BOLT12 offer can be pasted into a wallet.",
     envKey: "SUPPORT_LIGHTNING_ADDRESS",
+  },
+  {
+    id: "ethereum",
+    asset: "Ethereum (ETH)",
+    note: "ETH and ERC-20 tokens. Verify the address and network in your wallet before sending.",
+    envKey: "SUPPORT_ETHEREUM_ADDRESS",
   },
 ] as const;
 

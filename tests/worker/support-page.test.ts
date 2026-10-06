@@ -33,7 +33,9 @@ describe("anonymous support page", () => {
     }
     // One inline SVG QR code per configured asset, generated from the same
     // address string that is displayed (never a remote image service).
-    expect(html.match(/shape-rendering="crispEdges"/g)).toHaveLength(3);
+    expect(html.match(/shape-rendering="crispEdges"/g)).toHaveLength(
+      Object.keys(SUPPORT_ADDRESS_FIXTURES).length,
+    );
   });
 
   it("requires no session, sets no cookie, and stores no record", async () => {

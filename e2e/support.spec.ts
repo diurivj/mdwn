@@ -1,6 +1,8 @@
 import { expect, test } from "./fixtures";
 import { SUPPORT_ADDRESS_FIXTURES } from "../tests/support/donation-fixtures";
 
+const CONFIGURED_ASSET_COUNT = Object.keys(SUPPORT_ADDRESS_FIXTURES).length;
+
 test("home footer links to the anonymous support page", async ({ page }) => {
   await page.goto("/");
 
@@ -13,7 +15,7 @@ test("home footer links to the anonymous support page", async ({ page }) => {
   await link.click();
   await expect(page).toHaveURL(/\/support$/);
   await expect(page.getByRole("heading", { name: "Support mdwn" })).toBeVisible();
-  await expect(page.locator("svg[shape-rendering='crispEdges']")).toHaveCount(3);
+  await expect(page.locator("svg[shape-rendering='crispEdges']")).toHaveCount(CONFIGURED_ASSET_COUNT);
 });
 
 test("support page serves static addresses and locally generated QR codes privately", async ({
@@ -37,7 +39,7 @@ test("support page serves static addresses and locally generated QR codes privat
     await expect(page.getByText(address)).toBeVisible();
   }
   // One inline SVG QR code per configured asset, generated locally at render.
-  await expect(page.locator("svg[shape-rendering='crispEdges']")).toHaveCount(3);
+  await expect(page.locator("svg[shape-rendering='crispEdges']")).toHaveCount(CONFIGURED_ASSET_COUNT);
 
   // Funding and no-entitlement statements required by the spec.
   await expect(page.getByText(/domain and any future paid infrastructure/i)).toBeVisible();
