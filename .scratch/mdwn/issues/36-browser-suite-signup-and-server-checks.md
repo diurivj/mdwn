@@ -4,7 +4,7 @@
 
 **Type:** test infrastructure
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** None.
 
@@ -44,26 +44,26 @@ Result per engine: 4 real signups instead of 23, and 93 browser tests instead of
 
 ## Acceptance criteria
 
-- [ ] **Seeded Account fixture** (for example `e2e/support/seeded-account.ts`). It produces an Account indistinguishable, for these tests, from one created by real signup, with no ceremony or proof of work:
+- [x] **Seeded Account fixture** (for example `e2e/support/seeded-account.ts`). It produces an Account indistinguishable, for these tests, from one created by real signup, with no ceremony or proof of work:
   - device keys created in the test browser through the production device store (`app/device/store`, as `e2e/workspace-fixture.ts` already does), at registry epoch 1;
   - the vault key hierarchy, device-enrollment envelope, Account profile, recovery capsule, and recovery-code set built with the production functions (`createVaultKeyHierarchy`, `sealDeviceEnrollmentEnvelope`, `sealAccountProfile`, `createRecoveryMaterial`, `prepareRecoveryCodeSet`);
   - a real virtual-authenticator passkey whose COSE public key is stored in `passkeys`, following the existing `signInSeededAccount` pattern in `e2e/auth-sign-in.spec.ts`;
   - the same D1 rows real signup commits, inserted at the storage boundary.
 
   The fixture returns what the tests read today: the context, page, Account ID, device ID, root Directory ID, recovery phrase, recovery codes, and passkey. Callers that need a signed-in Session get one through the real passkey sign-in route, which involves no proof of work.
-- [ ] **Drift guard.** The kept atomic-signup test already asserts the exact rows signup writes (account profile, passkey, encryption identity, device, 2 key envelopes, recovery capsule, 10 recovery codes, Session). Share that expected shape so a test also asserts the seeded fixture produces it. A change to signup's committed rows must then fail until the fixture is updated.
-- [ ] **Convert the seeded-Account tests** in the table without weakening any assertion. Keep each test's subject, real routes, and real browser crypto. Adjust only assertions that counted signup's own side effects (for example the signup Session), and explain each adjustment in the PR.
-- [ ] **Move the server-only checks** to `tests/worker/**/*.test.ts` through `SELF.fetch`, then delete the browser copies. Build a Worker-side helper that produces a valid signup `verify` request:
+- [x] **Drift guard.** The kept atomic-signup test already asserts the exact rows signup writes (account profile, passkey, encryption identity, device, 2 key envelopes, recovery capsule, 10 recovery codes, Session). Share that expected shape so a test also asserts the seeded fixture produces it. A change to signup's committed rows must then fail until the fixture is updated.
+- [x] **Convert the seeded-Account tests** in the table without weakening any assertion. Keep each test's subject, real routes, and real browser crypto. Adjust only assertions that counted signup's own side effects (for example the signup Session), and explain each adjustment in the PR.
+- [x] **Move the server-only checks** to `tests/worker/**/*.test.ts` through `SELF.fetch`, then delete the browser copies. Build a Worker-side helper that produces a valid signup `verify` request:
   - transcript and material from the same production crypto functions, with in-memory keys instead of the browser device store;
   - the proof of work solved with the app's existing `solveProofOfWork`;
   - the transport proof and binding signature computed as `commitSignup` does;
   - a software WebAuthn registration response with `none` attestation, built with `@simplewebauthn/server/helpers` (`isoCBOR`, `cose`).
 
   Each moved scenario asserts the server's rejection and that no Account, Session, or challenge reuse results, matching the browser assertions it replaces. Prove the helper is valid by committing one unaltered request successfully in the same file.
-- [ ] **Do not change the challenge.** The signup proof of work (18-bit difficulty, protocol, and the browser solver in `app/signup/protocol.ts`) and the signup UI stay exactly as they are. No application code changes, production test routes, or new test-only server endpoints.
-- [ ] **Keep engine coverage.** Every browser test that remains still runs in Chromium, Firefox, and WebKit; ticket 33's cross-browser flows stay cross-browser.
-- [ ] **Measure.** Record real-signup counts and the per-engine browser-test times before and after, from CI runs with one worker and no retries needed. Note any test that became flaky, and confirm the suite is green in all three engines with `--retries=0` locally.
-- [ ] **Update `docs/testing.md`.** Explain when a browser test may use real signup (only when signup is under test, or the single golden path) versus the seeded fixture, and say that server-only assertions belong in the Workers suite.
+- [x] **Do not change the challenge.** The signup proof of work (18-bit difficulty, protocol, and the browser solver in `app/signup/protocol.ts`) and the signup UI stay exactly as they are. No application code changes, production test routes, or new test-only server endpoints.
+- [x] **Keep engine coverage.** Every browser test that remains still runs in Chromium, Firefox, and WebKit; ticket 33's cross-browser flows stay cross-browser.
+- [x] **Measure.** Record real-signup counts and the per-engine browser-test times before and after, from CI runs with one worker and no retries needed. Note any test that became flaky, and confirm the suite is green in all three engines with `--retries=0` locally.
+- [x] **Update `docs/testing.md`.** Explain when a browser test may use real signup (only when signup is under test, or the single golden path) versus the seeded fixture, and say that server-only assertions belong in the Workers suite.
 - [ ] Run typecheck, `npm test`, and the full browser suite. Then complete the Standards/Spec review and the RR8 post-review gate (`AGENTS.md`) before committing, pushing, and opening the PR.
 
 ## Implementation pointers
@@ -86,3 +86,5 @@ Result per engine: 4 real signups instead of 23, and 93 browser tests instead of
 ## Comments
 
 - 2026-10-03: Written after the Firefox CI timeouts from the two-worker trial (rolled back in PR #28). The maintainer approved removing unneeded signups and moving server-only browser checks, and asked not to change the challenge (proof of work).
+
+- 2026-10-06: Status reconciled to **done**: implemented and merged on main via PR #31 (merge `0c3b763`; implementation `84ef022`, measurements `378a36d`). Checklist boxes were ticked in this reconciliation from repo evidence: `e2e/support/seeded-account.ts`, `e2e/support/signup-shape.ts`, `tests/worker/signup-integrity.test.ts`, `tests/worker/account-security-shell.test.ts`, `tests/worker/signup-fixtures.ts`, the converted specs, `docs/testing.md`, and `docs/browser-suite-signup-benchmark.md`. The final workflow box stays unticked: no in-repo record of the Standards/Spec and RR8 review gate was found for this ticket, though the CI measurement runs are recorded in the benchmark doc.

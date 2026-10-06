@@ -6,7 +6,7 @@
 
 **Priority:** hotfix — address next in a separate small issue branch/PR, not as additional Grant-provisioning work.
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** None; the editor and browser harness already exist.
 
@@ -67,3 +67,5 @@ No database migration, cryptographic protocol change, Grant/Comment delivery cha
 - 2026-10-04: Added real-Worker/browser regressions for newer select-all/replacement, immediate multibyte and unchanged-value paste carets, and late work after navigation unmount. All three failed against the old implementation. The lifetime case holds only cancellation-aware animation frames so real navigation readiness timers remain live, and restores the temporary browser scheduler in `finally`. The original limit case now explicitly verifies the near-limit replacement before saving; whole-paste/composition rejection and zero additional save assertions remain.
 - 2026-10-04: Verification passed: typecheck; 94 Node + 237 Worker/D1 tests; production build; migration smoke/idempotency; secret/namespace checks; 126 editor scenarios (three repetitions across all three engines, no retries); and a final full `test:all` run with all 309 browser scenarios passing at the automatic seven-worker local default. No test retries, timeouts or production endpoints were added; temporary diagnostic controls were removed.
 - 2026-10-04: Independent **Standards: Pass, 0 findings** and **Spec: Pass, 0 findings**, followed by a separate **RR8/stack: Pass** on the same pinned code scope `030a84a...155c415` (frozen patch SHA256 `c8f5472f89aa14cc82e879d58b4f399012518ed93067aaa4eed92d9cb087f074`). Checked the local accepted-input lifecycle and unchanged browser-only File loader/SSR fallback, encrypted fetcher/clientAction, draft-safe revalidation and proof-guarded Worker save path; no route, Worker, schema, protocol or dependency changes. Ticket 22's PR #29 was not modified.
+
+- 2026-10-06: Status reconciled to **done**: the work merged on main via PR #30 (merge `9d939d3`), and the completion evidence is recorded in the comments above. This reconciliation changed only the stale `Status:` line.

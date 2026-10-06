@@ -4,7 +4,7 @@
 
 **Blocked by:** 01–32 (every ticket above).
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Related follow-ups:** [37: TypeScript runtime project boundaries](37-typescript-runtime-project-boundaries.md); [38: D1 export-based database restoration](38-d1-export-database-restoration.md).
 
@@ -26,3 +26,5 @@
 - 2026-10-06: Reviews on `main...issue/33-mvp-acceptance-suite` (frozen at `15cf4df`): **Standards: Pass** — no documented-standard violations; one judgement call (the remote proof and Worker Import suites duplicate plan-building helpers, matching the repo's existing per-suite fixture style). **Spec: Pass** with disclosed boundaries: the gate's create/save exact case uses the maximum legal Markdown source, the largest a real browser can produce; exact 512 KiB canonical acceptance is exercised as an Import record and as a one-over save rejection, and synthesizing an accepted 512 KiB private create exceeded Workers Free CPU intermittently. Exactly 1,000 Historical Comments cannot occur in a legal plan because the 2,000-record/40-chunk ceiling binds first (preflight and the deployed D1 CHECK cover that boundary). Generalized export restoration remains ticket 38; tickets 34 and 37 remain organization follow-ups. **RR8/stack: Not applicable — no route, component, Worker, schema, or SSR data-flow changes.**
 - 2026-10-06: Security-review readiness: the brief is written and the automated evidence map is complete, but the independent review is **not commissioned**. The delivery-quality bullet stays open and no end-to-end-security claim is made until the maintainer pins an independent reviewer and commit. `docs/security-review-request.md` is the engagement document to send to a candidate: scope, access rules, the concrete attack checklist, disclosed limits to validate, and the report format.
 - 2026-10-06: PR [#45](https://github.com/diurivj/mdwn/pull/45) opened from `issue/33-mvp-acceptance-suite`; implementation `15cf4df`, evidence record `a5674f9`. Merge only after every `CI` job passes at the PR head (the `deploy` workflow runs on merge).
+
+- 2026-10-06: Status reconciled to **done**: implementation and evidence merged on main via PR #45 (merge `e1be3ee`). One acceptance item remains intentionally open and is recorded above: the independent security review is not yet commissioned, and no end-to-end-security claim is made until the maintainer pins a reviewer and commit.

@@ -4,7 +4,7 @@
 
 **Blocked by:** 15 (Editor and preview workspace), 21 (Private Comment threads).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] **Export my Files** includes every File owned by the current Account; a selected owned File or owned Directory can also be exported from the Files chrome.
 - [x] Shared-only content is never included, even as a static copy.
@@ -22,3 +22,5 @@
 - 2026-10-04: Pinned two-axis review `main...4eec473` (parallel Standards + Spec sub-agents). Fixed: the doc/behavior contradiction where partial Comment history could enter the sidecar (now all-or-nothing per File); the missing e2e `waitForSharedProvisioning` before replacing a ready document; duplicated comparison-token helpers; `exportFileName`/`exportFilename` naming; and the unenforced 8 MiB recognized-archive bound (`checkArchiveCompressedSize`). Also corrected Keep-both ordering to the ticket-25 rule that explicit names are reserved first (`a` + `a.md` + `a (2).md` exports as `a (3).md`, `a.md`, `a (2).md`). Disclosed, not changed: the 256-Directory walk ceiling is defence against a malformed/cyclic listing and sits above the service's 100-Directory ancestry bound; an over-limit name whose `.md` append would exceed the segment profile keeps its exact name rather than truncating or failing; the archive preflight/reader is deliberately larger than export's minimum because ticket 28's own test checkbox requires Import-preflight compatibility.
 - 2026-10-04: RR8/stack post-review gate on the same scope: **Pass**. No route, loader, `clientLoader`, resource route, Worker, D1, or migration changed. `FilesPage` keeps its browser-only client data with a public `HydrateFallback`; `ExportControl` runs only on click, uses the existing proof-guarded bodyless ciphertext reads (no new endpoint, no writes), creates the ZIP with Web APIs, honors its `AbortController`, and resets its state on abort; Comment paging uses the existing separate Private endpoint. No private data enters SSR/hydration payloads and the bundle-secret check is clean.
 - 2026-10-04: Verification: `npm run typecheck`; Node + Workers `npm test` (345 passed, including `tests/archive.test.ts` and `tests/export-collect.test.ts`); production build; fresh local D1 migration smoke; bundle-secret and namespace checks; `npm run verify` passed at `4eec473` with 345 Playwright scenarios across Chromium, Firefox, and WebKit including the new `e2e/export-owned-files.spec.ts` (zero request bodies during export, nested hierarchy and selected File/folder exports, suspension availability, shared-only boundary). Ticket 29 remains the place for collision review, Import targets, and encrypted staging; the shared preflight core here is tested against a produced archive.
+
+- 2026-10-06: Status reconciled to **done**: the work merged on main via PR #38 (merge `59d5eee`), and the completion evidence is recorded in the comments above. This reconciliation changed only the stale `Status:` line.

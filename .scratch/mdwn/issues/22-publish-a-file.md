@@ -4,7 +4,7 @@
 
 **Blocked by:** 15 (Editor and preview workspace), 17 (Shares and Grants).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A Publication exposes exactly one File, is independent of Shares, follows File identity through rename and move, and presents the latest successfully saved representation; a partial unique constraint allows at most one active-or-deleting Publication per File.
 - [x] Only the File Owner may create, configure, or later rotate or unpublish a Publication. An active Collaborator with File access may create one pending Publication request that the Owner approves or denies and the requester may cancel; denial or cancellation removes the pending request, and a request never creates public access on its own.
@@ -25,3 +25,5 @@
 - 2026-10-04: Resumed Claude Code's interrupted review at `030a84a → 56839a8`. Corrected front-matter disclosure and missing valid YAML titles with a pinned structural parser; statement-time authorization gaps in request/author fallbacks; ignored fragment-only navigation; and capability loss after collapse, lost responses or a competing retry. Prepared candidates stay in page memory keyed by Publication ID until reconciliation. Presentation/envelope bounds are independent of the original source bound, including expanded YAML escapes.
 - 2026-10-04: Final pinned code review `030a84a → 4349145`: **Standards: Pass, 0 findings. Spec: Pass, 0 findings. RR8/stack: Pass**, separately checked after both axes. The RR8 follow-up accounts for page/API placement, shell-only SSR and explicit hydration, native hash revalidation/cancellation, browser-only capability retention and profile/author crypto, File fetcher/clientAction and draft-safe refresh, current-authority resource actions, and atomic Drizzle/D1 saves/deletion/migrations. Remote deployment remains the reviewed `main` deploy workflow's responsibility after green CI.
 - 2026-10-04: Verified typecheck; 127 Node and 296 Worker/D1 tests; production build; fresh/idempotent migration smoke; bundle-secret and namespace checks; and 327 no-retry Playwright scenarios across Chromium, Firefox and WebKit, including 21 Publication scenarios. An earlier full run hit the already-diagnosed ticket-35 paste/caret race (`a🙂c🙂x` instead of the large replacement); the final corrected-snapshot run passed all 327. No ticket-35 application code or test was changed, and a green later run is not a fix for that separate hotfix.
+
+- 2026-10-06: Status reconciled to **done**: the work merged on main via PR #29 (merge `50a6c04`), and the completion evidence is recorded in the comments above. This reconciliation changed only the stale `Status:` line.

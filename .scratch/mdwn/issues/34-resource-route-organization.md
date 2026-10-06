@@ -4,7 +4,7 @@
 
 **Blocked by:** 08 (Signup: first-Encryption-device bootstrap; includes the signup and device resource routes in PR #11).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Move the `/api/*` resource-only modules (`auth`, `signup`, `device-state`, and `private-bootstrap`) into `app/routes/api/`. Leave their authentication, crypto, database, and other business logic in the existing feature modules.
 - [x] Move non-API resource-only modules (`healthz` and `robots.txt`) into `app/routes/resources/`. Leave page modules such as Home, Sign in, Sign up, and Account security at the top level of `app/routes/`.
@@ -23,3 +23,5 @@
 - 2026-10-05 (kebab-case): Implemented on the same branch (`a867b01`, test grouping in `d340d5c`). The rename changed import specifiers only (plus `AGENTS.md` and the `docs/import.md` table); no exported identifier moved. No non-kebab authored file remains under `app/`, `tests/`, `e2e/`, or `scripts/`. `npm run typecheck`, `npm test` (30 Node files/227 tests, 50 Workers files/374 tests), `npm run build`, and `npm run check:secrets` (123 client files) pass at this head. Stale `app/tree/FileEditor.tsx` / `useFileDraft.ts` paths in open ticket 35 were updated to the new names; historical ticket comments are left as written. No migration or database change.
 - 2026-10-05 (kebab-case review): Two-axis review of `main...d340d5c`, focused on the rename commit and re-checking the whole PR. **Standards:** rename complete and clean — no non-kebab authored app/test/script file remains, every import specifier resolves, and exported identifiers are unchanged. Findings fixed pre-push: the `AGENTS.md` exception list now covers `NOTES_TO_DISCUSS.md` and skill `SKILL.md` files, and the unauthenticated `/healthz` case is grouped in its own `describe`. **Spec:** all six checklist items satisfied; the scope decision is recorded in this file. **RR8 post-review gate:** Pass — 0/0 route renames with all six URLs `hasDefaultExport:false`/`imports:[]`/0-byte client chunks, no `.server` module in the client manifest, no route-id consumer anywhere, and the file renames changed no route or `.server` boundary.
 - 2026-10-05 (verify gate): `npm run verify` passed at `0f6b51c` (clean tree, HEAD contains `origin/main`): typecheck, Unicode namespace drift, 30 Node files/227 tests + 50 Workers files/374 tests, production build, fresh-D1 migration smoke, bundle-secret check, and the Chromium/Firefox/WebKit suite (125 tests per engine; 374 passed, 1 skipped).
+
+- 2026-10-06: Status reconciled to **done**: the work merged on main via PR #46 (merge `1f10825`), and the completion evidence is recorded in the comments above. This reconciliation changed only the stale `Status:` line.

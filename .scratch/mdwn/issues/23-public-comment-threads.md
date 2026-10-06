@@ -4,7 +4,7 @@
 
 **Blocked by:** 21 (Private Comment threads), 22 (Publish a File).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] One Public Comment thread exists per logical Publication, built from ordered, independently keyed Comment audience epochs (`comment_thread_epochs`: immutable `public | collaborators_only` audience, key epoch, order, lifecycle state). New Publications default to `public`.
 - [x] Each audience change starts a new epoch, and every epoch is explicitly marked public or collaborators-only; Public readers receive only epochs explicitly marked public.
@@ -26,3 +26,5 @@
 - 2026-10-04: Pinned review `cc76626` (Standards + Spec, parallel sub-agents) found: the default Public thread was client-enforced only; a missing epoch envelope surfaced without the preparing state; epoch device delivery was unproven; the link route allowed retained-epoch author mutations while the audience was Collaborators-only; and CommentItem/target types were duplicated. All corrected: creation requires the first epoch, the panel renders the preparing state, the delivery need trigger is asserted, link author mutations require the current public audience, and one shared CommentItem serves all three inspectors. Corrected-snapshot re-reviews: Standards resolved except the pre-existing `public_history` rotation kind (documented; renaming would rebuild the table), Spec complete with no new gaps.
 - 2026-10-04: RR8/stack post-review gate on `c60c2b8` returned **Findings**: the authenticated second page lost each epoch's capability identity (`loadMoreFilePublicComments` passed an empty epoch list), the new anonymous comments route had no boundary test, and public-page mutations had no abort signal. Fixed on `7d2bfe5` by passing the opened epoch map, abortable link mutations, and worker plus cross-engine coverage of the route and both pagination paths; re-check returned Pass.
 - 2026-10-04: Verification: `npm run typecheck`; 131 Node and 314 Worker/D1 tests; production build; fresh and idempotent local migration smoke; bundle-secret and namespace checks; 321 no-retry Playwright scenarios across Chromium, Firefox and WebKit, including the public reader/audience transitions and long-thread pagination on both routes.
+
+- 2026-10-06: Status reconciled to **done**: the work merged on main via PR #32 (merge `3729ad5`), and the completion evidence is recorded in the comments above. This reconciliation changed only the stale `Status:` line.

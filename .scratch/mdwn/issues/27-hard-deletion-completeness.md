@@ -4,7 +4,7 @@
 
 **Blocked by:** 16 (Move, reorder, delete, and bounded Directory hard deletion), 19 (Key rotation), 23 (Public Comment threads and audience epochs), 25 (Public-link rotation and unpublish teardown).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] File hard deletion explicitly removes, in dependency order: its Directory entry, private representations, Key envelopes, Shares and Grants, Publication requests, links, Public representations, and teardown state, and both Comment threads with their Comments and attributions — before the node itself.
 - [x] Deleting the File revokes and deletes its Publication as part of File hard deletion, without requiring a separate unpublish step.
@@ -22,3 +22,5 @@
 - 2026-10-04: RR8/stack post-review gate on the same pinned diff (`df2ac07..b7d5058`): **Pass**. No route, loader, `clientLoader`, resource-route file, or UI component changed; the touched Worker/D1 boundary reuses the reviewed `commitPrivateBatch` deferred-FK pattern, reports are deleted before their Comments in every reachable path, the migration rebuild has 0005/0006/0007/0022 precedent, and `smoke-db.mjs` plus `migrations.test.ts` pin RESTRICT. Private `deleteComment` cannot orphan reports because reports only attach to `purpose = 'public'` Comments, and the transient staged-pseudonym orphan from `removeAuthor` is bounded and purged by the job's commit/cancel path.
 - 2026-10-04: Disclosed boundaries. Browser export has no server endpoint yet (ticket 28 owns it), so its security-action guarantee rests on the absence of any gate rather than on a test added here. Unpublish/teardown and session revocation while suspended are pinned by ticket 26's `public-abuse-response.test.ts`; hard deletion while suspended is pinned here. `removeAuthor` outside File/Directory hard deletion can leave an inert staged pseudonym item until that job commits or cancels, which is ticket 24's job lifecycle, not a deletion path. The implementation summary above covers the final corrected snapshot (`b7d5058`).
 - 2026-10-04: Verification: `npm run typecheck`; 137 Node and 345 Worker/D1 tests, including the new `tests/worker/hard-deletion-completeness.test.ts` (seven tests: no-cascade FK inventory; File and Directory zero-orphan deletion; over-cap no-change; per-Comment report removal; teardown report and staged-item removal; suspended-Owner hard deletion) and the updated `tests/migrations.test.ts` RESTRICT pin; production build; fresh and idempotent local migration smoke; 333 Playwright scenarios across Chromium (111), Firefox (111) and WebKit (111), including the tree-structure hard-deletion and over-cap scenarios, the publication teardown path and the Public Comment report flow.
+
+- 2026-10-06: Status reconciled to **done**: the work merged on main via PR #37 (merge `61045ee`), and the completion evidence is recorded in the comments above. This reconciliation changed only the stale `Status:` line.

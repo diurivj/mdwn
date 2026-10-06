@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 (Abuse-control primitives), 23 (Public Comment threads and audience epochs).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A signed-in Account may submit a rate-limited category-only report for an opaque Public Comment ID (3 per 24 h); the report conveys no plaintext and grants no content access.
 - [x] Reports and suspensions are keyed only to reporter Account, opaque Public Comment ID, suspension start/end, and fixed reason metadata — no content, fragment or capability, raw IP, full URL, headers or body, cookie or session token, credential payload, user agent, or behavioural fingerprint.
@@ -22,3 +22,5 @@
 - 2026-10-04: Disclosed boundaries. Blocking Public Comment **edit** is the intended reading of "posting" (ticket 23 counts create, edit and report as Comment participation) while hard deletion stays open; a self-report is accepted server-side but the UI never offers one, and the unique index bounds it; a suspension is checked at the same gate as the rate limit, after create/rotate preconditions, so a stale payload can still see `409` first; the suspension row is retained after expiry (expiry is a time comparison) so a later offense is a 30-day repeat until the operator clears it; browser export (ticket 28) has no server endpoint yet, so its guarantee is covered by the private File read staying available; and the operator script SQL is a deliberate `.mjs` mirror of the reviewed server upsert, pinned by the drift guard.
 - 2026-10-04: RR8/stack post-review gate on the same pinned diff across `010c15b` + `7f82ad1` + `bc66274` + `fffc042`: the first run returned **Findings** (the report endpoint probed Comment IDs before consuming the limit; operator SQL untested), fixed on `7f82ad1`; the re-run returned **Findings** (the drift guard missed the first-offense expression; `PublicThreadPanel` report gating lacked the posting-state guard), fixed on `bc66274`; the final run on `fffc042` returned **Pass** with every changed data-flow site accounted for and no SSR/privacy or authorization issue.
 - 2026-10-04: Verification: `npm run typecheck`; 136 Node and 338 Worker/D1 tests, including the new `tests/worker/public-abuse-response.test.ts` (report shape/limit/probing, suspension boundary, automatic expiry, repeat escalation, correction, scheduled purge) and `tests/public-participation-policy.test.ts` (locked policy and operator-script parity); production build; fresh and idempotent local migration smoke; bundle-secret and namespace checks; operator CLI exercised against local D1; 333 Playwright scenarios across Chromium (111), Firefox (111) and WebKit (111), including `e2e/public-abuse-response.spec.ts` (category report, suspension notice, successful unpublish and report cascade).
+
+- 2026-10-06: Status reconciled to **done**: the work merged on main via PR #35 (merge `7e4f138`), and the completion evidence is recorded in the comments above. This reconciliation changed only the stale `Status:` line.
