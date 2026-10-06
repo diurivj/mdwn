@@ -10,7 +10,7 @@
     "SUPPORT_MONERO_ADDRESS": "",
     "SUPPORT_BITCOIN_ADDRESS": "",
     "SUPPORT_LIGHTNING_ADDRESS": "",
-    "SUPPORT_ETHEREUM_ADDRESS": ""
+    "SUPPORT_ETHEREUM_ADDRESS": "0x5399A7a61d553936A2B7d5a8fA75Ce7B4534D1CA"
   },
   // The privacy policy disables blanket invocation logs and traces; only
   // explicitly allowlisted Security events are persisted in D1.
@@ -40,7 +40,7 @@
         "SUPPORT_MONERO_ADDRESS": "",
         "SUPPORT_BITCOIN_ADDRESS": "",
         "SUPPORT_LIGHTNING_ADDRESS": "",
-        "SUPPORT_ETHEREUM_ADDRESS": ""
+        "SUPPORT_ETHEREUM_ADDRESS": "0x5399A7a61d553936A2B7d5a8fA75Ce7B4534D1CA"
       },
       "triggers": {
         "crons": ["*/15 * * * *"]
@@ -67,7 +67,7 @@
         "SUPPORT_MONERO_ADDRESS": "",
         "SUPPORT_BITCOIN_ADDRESS": "",
         "SUPPORT_LIGHTNING_ADDRESS": "",
-        "SUPPORT_ETHEREUM_ADDRESS": ""
+        "SUPPORT_ETHEREUM_ADDRESS": "0x5399A7a61d553936A2B7d5a8fA75Ce7B4534D1CA"
       },
       "triggers": {
         "crons": ["*/15 * * * *"]
