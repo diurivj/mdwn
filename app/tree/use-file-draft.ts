@@ -7,7 +7,7 @@ import { loadDirectory, loadFile, rememberListing, type DirectoryListing } from 
 import { rememberFile } from "./file-capability-client";
 import { prepareFileSave, withFileListing, type FileDocument, type FileSavePayload, type FileSaveResult } from "./file-client";
 import type { FilesSnapshot } from "./navigation-client";
-import { useFileLease } from "./useFileLease";
+import { useFileLease } from "./use-file-lease";
 
 export type SaveStatus = "Unsaved" | "Saving" | "Saved" | "Couldn't save";
 

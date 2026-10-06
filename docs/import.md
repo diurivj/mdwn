@@ -22,7 +22,7 @@ except where a test target imports the pure pieces directly:
 | `plan.ts` | Encrypted record/chunk plan, Directory listing heads, Historical Comments, `import-staging-manifest` |
 | `targets.ts` | Eligible Import-target derivation from the decrypted snapshot |
 | `browser.ts` | File/DataTransfer inputs, Replace document reads, File/listing head signers |
-| `ImportControl.tsx` | Files-chrome command, hidden inputs, drop handling, review dialog, upload/commit progress |
+| `import-control.tsx` | Files-chrome command, hidden inputs, drop handling, review dialog, upload/commit progress |
 
 ## Accepted input and bounds
 

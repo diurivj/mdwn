@@ -16,9 +16,9 @@ import {
   type CommentsState,
   type PrivateComments,
 } from "./comments-client";
-import { CommentItem } from "./CommentItem";
+import { CommentItem } from "./comment-item";
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
-import { PublicThreadPanel } from "./PublicThreadPanel";
+import { PublicThreadPanel } from "./public-thread-panel";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 
 type PanelState = { status: "loading" } | { status: "failed"; message: string } | CommentsState;

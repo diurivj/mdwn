@@ -1,4 +1,4 @@
-import { FilesPage } from "~/tree/FilesPage";
+import { FilesPage } from "~/tree/files-page";
 import { loadFilesPage } from "~/tree/navigation-client";
 
 import type { Route } from "./+types/directory";

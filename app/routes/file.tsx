@@ -1,5 +1,5 @@
 import type { ShouldRevalidateFunction } from "react-router";
-import { FilesPage } from "~/tree/FilesPage";
+import { FilesPage } from "~/tree/files-page";
 import { loadFilesPage } from "~/tree/navigation-client";
 import { fileSaveAction } from "~/tree/file-client";
 

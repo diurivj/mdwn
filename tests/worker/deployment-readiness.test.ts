@@ -20,3 +20,11 @@ describe("deployed Worker identity", () => {
     expect(body.versionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 });
+
+describe("health probe authorization", () => {
+  it("rejects a probe without the bearer token", async () => {
+    const response = await SELF.fetch("https://mdwn.test/healthz");
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("unauthorized");
+  });
+});

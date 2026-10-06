@@ -14,7 +14,7 @@
 
 ## Diagnosis
 
-`app/tree/FileEditor.tsx` schedules an unconditional `requestAnimationFrame` after an accepted paste to call `textarea.setSelectionRange(...)`. That callback can run after a subsequent select-all operation but before the replacement input arrives, restoring the previous paste's caret instead of respecting the newer selection.
+`app/tree/file-editor.tsx` schedules an unconditional `requestAnimationFrame` after an accepted paste to call `textarea.setSelectionRange(...)`. That callback can run after a subsequent select-all operation but before the replacement input arrives, restoring the previous paste's caret instead of respecting the newer selection.
 
 The existing `e2e/editor-workspace.spec.ts` case **rejects paste and an entire composition result without draft loss or another save** exposes this ordering intermittently:
 
@@ -52,8 +52,8 @@ npx playwright test e2e/editor-workspace.spec.ts \
   --project=chromium --workers=1 --retries=0 --repeat-each=10
 ```
 
-- `app/tree/FileEditor.tsx`: accepted-paste caret scheduling and controlled textarea.
-- `app/tree/useFileDraft.ts`: existing draft/composition contract; avoid unrelated changes.
+- `app/tree/file-editor.tsx`: accepted-paste caret scheduling and controlled textarea.
+- `app/tree/use-file-draft.ts`: existing draft/composition contract; avoid unrelated changes.
 - `e2e/editor-workspace.spec.ts`: existing paste/composition limit case and adjacent editor regressions.
 - `docs/testing.md`: real browser/Worker fixture and cross-engine test requirements.
 

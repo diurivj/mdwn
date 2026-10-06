@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PSEUDONYM_UPDATE_PENDING_MESSAGE } from "~/account/pseudonym-client";
 import { publicParticipationSuspensionNotice } from "~/security/public-participation";
 import type { FilesSnapshot } from "~/tree/navigation-client";
-import { CommentItem } from "./CommentItem";
-import { CommentReportControl } from "./CommentReportControl";
+import { CommentItem } from "./comment-item";
+import { CommentReportControl } from "./comment-report-control";
 import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
 import {
   createFilePublicComment,
