@@ -288,3 +288,12 @@ observed requests, including the worst-case upload and commit, then deleted
 the disposable Worker and D1. Re-run it after any change to the staging
 schema, bounds, or commit path; if it fails, reduce the bounded plan or make
 the commit more efficient — never require a paid plan.
+
+Executed 2026-10-06 for ticket 33 at `15cf4df`: the extended 14-test release
+gate passed on a disposable Workers Free + D1 deployment in 150.6 s and
+deleted the Worker and D1. Space repeated same-day runs; back-to-back
+attempts after several heavy runs hit environment-level generic edge 404s and
+`exceededCpu` 503s even on lightweight requests, which a spaced re-run
+cleared. Because neither failure type was a test assertion, treat a rerun
+that fails this way as an environment problem only after confirming the
+account and route are healthy.
