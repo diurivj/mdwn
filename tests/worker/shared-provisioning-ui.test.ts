@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { expect, it } from "vitest";
 
-import { SharedProvisioning } from "../../app/sharing/SharedProvisioning";
+import { SharedProvisioning } from "../../app/sharing/shared-provisioning";
 
 it("reports provisioning busy before the initial fetcher effect has run", () => {
   const router = createMemoryRouter([{ path: "/", Component: SharedProvisioning }]);

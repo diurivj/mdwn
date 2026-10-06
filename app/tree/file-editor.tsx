@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { FILE_SOURCE_FEEDBACK, FILE_SOURCE_LIMIT, fileSourceBytes } from "~/crypto/file-source";
 
-import { CommentsPanel } from "~/comments/CommentsPanel";
+import { CommentsPanel } from "~/comments/comments-panel";
 
-import { MarkdownPreview } from "./MarkdownPreview";
+import { MarkdownPreview } from "./markdown-preview";
 import type { FilesSnapshot } from "./navigation-client";
-import { useFileDraft } from "./useFileDraft";
+import { useFileDraft } from "./use-file-draft";
 import type { FileDocument } from "./file-client";
 import type { DirectoryListing } from "./client";
 

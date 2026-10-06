@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import { data, useLocation, useRevalidator } from "react-router";
-import { PublicComments } from "~/comments/PublicComments";
+import { PublicComments } from "~/comments/public-comments";
 import { getEnv } from "~/context/env";
 import { activePublicLink } from "~/publications/publications.server";
 import { loadPublicPage, type PublicPage } from "~/publications/public-client";
-import { MarkdownPreview } from "~/tree/MarkdownPreview";
+import { MarkdownPreview } from "~/tree/markdown-preview";
 
 import type { Route } from "./+types/publication";
 
