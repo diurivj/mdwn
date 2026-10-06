@@ -21,10 +21,10 @@ describe("deployed Worker identity", () => {
   });
 });
 
-it("rejects a health probe without the bearer token", async () => {
-  // Ticket 34 moved the module under app/routes/resources/; the auth gate is
-  // part of the URL's unchanged contract.
-  const response = await SELF.fetch("https://mdwn.test/healthz");
-  expect(response.status).toBe(401);
-  expect(await response.text()).toBe("unauthorized");
+describe("health probe authorization", () => {
+  it("rejects a probe without the bearer token", async () => {
+    const response = await SELF.fetch("https://mdwn.test/healthz");
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("unauthorized");
+  });
 });
