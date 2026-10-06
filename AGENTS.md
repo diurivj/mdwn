@@ -14,7 +14,7 @@ Single-context: `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents
 
 ### React Router route placement
 
-Put resource-only route modules (no default page component) under `app/routes/api/` for `/api/*` URLs and `app/routes/resources/` for other endpoints. Keep page modules at the top level of `app/routes/`, map public URLs explicitly in `app/routes.ts`, and keep business logic in feature modules. Existing root-level handlers are tracked in `.scratch/mdwn/issues/34-resource-route-organization.md`.
+Put resource-only route modules (no default page component) under `app/routes/api/` for `/api/*` URLs and `app/routes/resources/` for other endpoints. Keep page modules at the top level of `app/routes/`, map public URLs explicitly in `app/routes.ts`, and keep business logic in feature modules.
 
 ### Post-review RR8 gate
 
