@@ -8,7 +8,10 @@
  * 100-node commit, the 40-chunk/20 MiB/50-record/512 KiB upload envelope with
  * one-over rejections, the 128 KiB manifest boundary, every per-kind
  * ciphertext cap, retry/mismatch, cancel/expiry, stale revision/Owner, and
- * no-visible-partial-tree reads. Because D1 Free hard-fails an invocation
+ * no-visible-partial-tree reads. Ticket 33 extends the same disposable
+ * deployment to the release-gate criteria: maximum-source create/save,
+ * one-byte-excess rejection, staged Replace, active-Publication paired
+ * updates, and stale-conflict preservation. Because D1 Free hard-fails an invocation
  * above 50 queries and Workers Free surfaces CPU-limit errors, a clean pass on
  * a genuine Free account is the statement-budget evidence.
  */
@@ -16,18 +19,24 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
+import { sealCommentEpochLink } from "../../app/comments/public-content";
 import type { EnvelopeContext } from "../../app/crypto/enc-v1";
-import { createSymmetricWriter } from "../../app/crypto/enc-v1";
+import { createSymmetricWriter, openSymmetric } from "../../app/crypto/enc-v1";
+import { FILE_SOURCE_LIMIT } from "../../app/crypto/file-source";
+import { createFileRepresentation, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
 import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
-import { prepareImportPlan, type ImportPlan } from "../../app/import/plan";
-import { reviewImport, type ImportTarget } from "../../app/import/review";
+import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../../app/import/plan";
+import { reviewImport, type ImportChoice, type ImportTarget } from "../../app/import/review";
 import { analyzeImportSelection, type ImportSourceFile, type RawImportInput } from "../../app/import/source";
 import {
   IMPORT_RECORD_KINDS, MAX_IMPORT_SESSION_BODY_BYTES, encodeImportChunkBody, encodeImportSessionBody,
   type ImportSessionKindCount, type ImportSessionMetadata, type StagingRecordKind,
 } from "../../app/import/staging";
+import { createPublicationKeyPair, importPublicationKeyPair, newPublicationIdentifier } from "../../app/publications/capability";
+import { openPublicRepresentation, publicPresentation, sealPublicRepresentation } from "../../app/publications/content";
 import { createFileHead } from "../../app/tree/file-head";
 import { createListingHead } from "../../app/tree/listing";
+import { decodeTreeBytes, encodeTreeBytes, MAX_REPRESENTATION_BYTES } from "../../app/tree/wire";
 
 const env = process.env;
 const baseUrl = env.PROOF_BASE_URL ?? "";
@@ -73,21 +82,33 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 /** One request against the deployed Worker with a fresh device proof. */
+/** One signed request against the deployed Worker. A freshly created or
+ * updated workers.dev route can briefly return its generic 404 page after a
+ * deploy; the proof asserts no expected 404s, so bounded retries are safe. */
+async function signedFetch(url: string, method: string, body: Uint8Array | string | undefined,
+  contentType?: string): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    const proof = await signDeviceProof(deviceKey, {
+      sessionBinding, deviceId, registryEpoch: 1, method, url, body: body ?? "",
+    });
+    const response = await fetch(url, {
+      method,
+      headers: {
+        cookie: sessionCookie,
+        origin: baseUrl,
+        "X-Mdwn-Device-Proof": JSON.stringify(proof),
+        ...(contentType ? { "content-type": contentType } : {}),
+      },
+      ...(body !== undefined ? { body: body as BodyInit } : {}),
+    });
+    if (response.status !== 404 || attempt >= 6) return response;
+    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+  }
+}
+
+/** One binary request against the deployed Worker with a fresh device proof. */
 async function proofFetch(path: string, method: "POST" | "PUT" | "DELETE", body?: Uint8Array): Promise<Response> {
-  const url = `${baseUrl}${path}`;
-  const proof = await signDeviceProof(deviceKey, {
-    sessionBinding, deviceId, registryEpoch: 1, method, url, body: body ?? "",
-  });
-  return fetch(url, {
-    method,
-    headers: {
-      cookie: sessionCookie,
-      origin: baseUrl,
-      "X-Mdwn-Device-Proof": JSON.stringify(proof),
-      ...(body ? { "content-type": "application/octet-stream" } : {}),
-    },
-    ...(body ? { body: body as BodyInit } : {}),
-  });
+  return signedFetch(`${baseUrl}${path}`, method, body, body ? "application/octet-stream" : undefined);
 }
 
 function remoteSql(command: string): { ok: boolean; output: string } {
@@ -170,7 +191,8 @@ function sessionMetadata(overrides: Partial<ImportSessionMetadata> & { importId:
   };
 }
 
-type PlanOptions = { targetRevision?: number; target?: Partial<ImportTarget> };
+type PlanOptions = { targetRevision?: number; target?: Partial<ImportTarget>;
+  choices?: Record<string, ImportChoice>; replacements?: Map<string, ImportReplacementDocument> };
 
 async function buildPlan(inputs: readonly RawImportInput[], options: PlanOptions = {}): Promise<ImportPlan> {
   const source = await analyzeImportSelection(inputs);
@@ -187,9 +209,10 @@ async function buildPlan(inputs: readonly RawImportInput[], options: PlanOptions
     ownerAccountId: accountId, actorAccountId: accountId, label: "Files", siblings: [], listing: [],
     ...options.target,
   };
-  const review = reviewImport(source, target);
+  const review = reviewImport(source, target, options.choices ?? {});
   return prepareImportPlan({
-    review, files, comments: source.comments, targetKey: rootKey, replacements: new Map(),
+    review, files, comments: source.comments, targetKey: rootKey,
+    replacements: options.replacements ?? new Map(),
     signFileHead: (identity) => createFileHead(deviceKey, { ...identity, deviceId }),
     signListingHead: (input) => createListingHead(input.parentKey, deviceKey, {
       vaultId: accountId, directoryId: input.directoryId, deviceId,
@@ -425,5 +448,294 @@ describe("disposable remote Workers Free + D1 import proof", () => {
          header_key_id, header_key_epoch, header_revision)
        VALUES ('${importId}', 0, 0, 'representation', '${uuid()}', '${uuid()}', '${uuid()}', 0, 524289, zeroblob(32),
          '${uuid()}', 1, 1)`);
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Ticket 33 release-gate extension: maximum-source create/save, staged
+ * Replace, and an active-Publication paired update on the same disposable
+ * deployment.
+ * ------------------------------------------------------------------------- */
+
+async function proofJson(path: string, method: "POST" | "PUT" | "PATCH" | "DELETE", value: object): Promise<Response> {
+  return signedFetch(`${baseUrl}${path}`, method, JSON.stringify(value), "application/json");
+}
+
+type RemoteEntry = { nodeId: string; kind: "directory" | "file";
+  nameCiphertext: string; orderCiphertext: string; keyEnvelope: string };
+type RemoteListing = { entriesRevision: number; entries: RemoteEntry[] };
+
+async function remoteListing(directoryId = rootId): Promise<RemoteListing> {
+  const response = await proofFetch(`/api/private/tree/directories/${directoryId}`, "POST");
+  if (response.status !== 200) throw new Error(`listing failed: ${response.status} ${await response.text()}`);
+  return response.json() as Promise<RemoteListing>;
+}
+
+async function openRemoteName(entry: RemoteEntry, directoryId = rootId): Promise<string> {
+  return new TextDecoder().decode(await openSymmetric(decodeTreeBytes(entry.nameCiphertext), rootKey, {
+    context: { purpose: "directory-metadata", vaultId: accountId, objectId: entry.nodeId,
+      keyId: directoryId, keyEpoch: 1, revision: 1 },
+  }));
+}
+
+type RemotePublication = { publicationId: string; linkId: string; publicKey: string; revision: number };
+type RemoteFileView = { revision: number; representationId: string; contentKeyId: string; keyEpoch: number;
+  capability: { id: string; epoch: number }; ciphertext: string; keyEnvelope: string;
+  representationKeyEnvelope: string; publication?: RemotePublication };
+
+async function readRemoteFile(fileId: string): Promise<RemoteFileView> {
+  const response = await proofFetch(`/api/private/tree/files/${fileId}`, "POST");
+  if (response.status !== 200) throw new Error(`file read failed: ${response.status} ${await response.text()}`);
+  return response.json() as Promise<RemoteFileView>;
+}
+
+type SaveBody = { expectedRevision: number; expectedRepresentationId: string;
+  capability: { id: string; epoch: number };
+  representation: { id: string; contentKeyId: string; keyEpoch: number; revision: number;
+    ciphertext: string; keyEnvelope: string; fileHead: { digest: string; signature: string } };
+  publication?: { publicationId: string; linkId: string; revision: number; ciphertext: string } };
+
+/** One converted File in the dedicated release-gate Directory whose first
+ * representation carries the maximum legal Markdown source. Keeping the
+ * parent listing small avoids making every request re-verify the 100-entry
+ * listing the import tests left in the hidden root. */
+let cappedDirectoryId: string | undefined;
+async function cappedDirectory(): Promise<string> {
+  if (cappedDirectoryId) return cappedDirectoryId;
+  const listing = await remoteListing();
+  const directoryId = uuid(), directoryKey = crypto.getRandomValues(new Uint8Array(32));
+  const metadataContext: EnvelopeContext = { purpose: "directory-metadata", vaultId: accountId,
+    objectId: directoryId, keyId: rootId, keyEpoch: 1, revision: 1 };
+  const writer = await createSymmetricWriter(rootKey);
+  const keyEnvelope = await (await createSymmetricWriter(rootKey)).seal(directoryKey,
+    { purpose: "directory-capability", vaultId: accountId, objectId: directoryId, keyId: directoryId,
+      keyEpoch: 1, revision: 1 });
+  const listingHead = await createListingHead(rootKey, deviceKey, { vaultId: accountId, directoryId: rootId,
+    deviceId, revision: listing.entriesRevision + 1,
+    entries: [...listing.entries, { nodeId: directoryId, kind: "directory",
+      nameCiphertext: encodeTreeBytes(await writer.seal(encoder.encode("release-gate"), metadataContext)),
+      orderCiphertext: encodeTreeBytes(await writer.seal(encoder.encode("last"), metadataContext)),
+      keyEnvelope: encodeTreeBytes(keyEnvelope) }] });
+  const response = await proofJson(`/api/private/tree/directories/${rootId}/children`, "PUT", {
+    nodeId: directoryId, kind: "directory", expectedRevision: listing.entriesRevision,
+    nameCiphertext: encodeTreeBytes(await writer.seal(encoder.encode("release-gate"), metadataContext)),
+    orderCiphertext: encodeTreeBytes(await writer.seal(encoder.encode("last"), metadataContext)),
+    keyEnvelope: encodeTreeBytes(keyEnvelope), listingHead,
+  });
+  await expectStatus(response, 201, "release-gate Directory create");
+  cappedDirectoryId = directoryId;
+  return directoryId;
+}
+
+async function createCappedFile(): Promise<{ fileId: string; capabilityKey: Uint8Array<ArrayBuffer>; name: string; directoryId: string }> {
+  const directoryId = await cappedDirectory();
+  const listing = await remoteListing(directoryId);
+  const fileId = uuid(), representationId = uuid(), contentKeyId = uuid();
+  const capability = { id: uuid(), epoch: 1 };
+  const capabilityKey = crypto.getRandomValues(new Uint8Array(32));
+  const name = `cap-${fileId.slice(0, 8)}.md`;
+  const metadataContext: EnvelopeContext = { purpose: "directory-metadata", vaultId: accountId,
+    objectId: fileId, keyId: directoryId, keyEpoch: 1, revision: 1 };
+  const writer = await createSymmetricWriter(rootKey);
+  const nameCiphertext = await writer.seal(encoder.encode(name), metadataContext);
+  const orderCiphertext = await writer.seal(encoder.encode("first"), metadataContext);
+  const keyEnvelope = await (await createSymmetricWriter(rootKey)).seal(capabilityKey,
+    { purpose: "file-capability", vaultId: accountId, objectId: fileId, keyId: capability.id, keyEpoch: 1, revision: 1 });
+  const representation = await createFileRepresentation(capabilityKey,
+    { markdown: "a".repeat(FILE_SOURCE_LIMIT), metadata: new Uint8Array() },
+    { vaultId: accountId, fileId, keyId: contentKeyId, keyEpoch: 1, revision: 1 });
+  const ciphertext = representation.contentEnvelope;
+  const representationKeyEnvelope = representation.fileContentKeyEnvelope;
+  const fileHead = await createFileHead(deviceKey, { vaultId: accountId, fileId,
+    capabilityId: capability.id, capabilityEpoch: 1, representationId, contentKeyId, keyEpoch: 1, revision: 1,
+    deviceId, ciphertext: encodeTreeBytes(ciphertext), keyEnvelope: encodeTreeBytes(representationKeyEnvelope) });
+  const listingHead = await createListingHead(rootKey, deviceKey, { vaultId: accountId, directoryId,
+    deviceId, revision: listing.entriesRevision + 1,
+    entries: [...listing.entries, { nodeId: fileId, kind: "file", nameCiphertext: encodeTreeBytes(nameCiphertext),
+      orderCiphertext: encodeTreeBytes(orderCiphertext), keyEnvelope: encodeTreeBytes(keyEnvelope) }] });
+  const response = await proofJson(`/api/private/tree/directories/${directoryId}/children`, "PUT", {
+    nodeId: fileId, kind: "file", expectedRevision: listing.entriesRevision,
+    nameCiphertext: encodeTreeBytes(nameCiphertext), orderCiphertext: encodeTreeBytes(orderCiphertext),
+    keyEnvelope: encodeTreeBytes(keyEnvelope), capability,
+    representation: { id: representationId, contentKeyId, keyEpoch: 1, revision: 1,
+      ciphertext: encodeTreeBytes(ciphertext), keyEnvelope: encodeTreeBytes(representationKeyEnvelope), fileHead },
+    listingHead,
+  });
+  await expectStatus(response, 201, "maximum-source File create");
+  return { fileId, capabilityKey, name, directoryId };
+}
+
+/** A fresh conditional save whose private representation carries the maximum
+ * legal Markdown source, the largest a real browser can produce. */
+async function cappedSaveBody(fileId: string, capabilityKey: Uint8Array<ArrayBuffer>):
+  Promise<{ current: RemoteFileView; body: SaveBody }> {
+  const current = await readRemoteFile(fileId);
+  const representationId = uuid(), contentKeyId = uuid();
+  const keyEpoch = current.keyEpoch + 1, revision = current.revision + 1;
+  const representation = await createFileRepresentation(capabilityKey,
+    { markdown: "a".repeat(FILE_SOURCE_LIMIT), metadata: new Uint8Array() },
+    { vaultId: accountId, fileId, keyId: contentKeyId, keyEpoch, revision });
+  const ciphertext = representation.contentEnvelope, keyEnvelope = representation.fileContentKeyEnvelope;
+  const fileHead = await createFileHead(deviceKey, { vaultId: accountId, fileId,
+    capabilityId: current.capability.id, capabilityEpoch: current.capability.epoch, representationId,
+    contentKeyId, keyEpoch, revision, deviceId, ciphertext: encodeTreeBytes(ciphertext),
+    keyEnvelope: encodeTreeBytes(keyEnvelope) });
+  return { current, body: { expectedRevision: current.revision, expectedRepresentationId: current.representationId,
+    capability: current.capability, representation: { id: representationId, contentKeyId, keyEpoch, revision,
+      ciphertext: encodeTreeBytes(ciphertext), keyEnvelope: encodeTreeBytes(keyEnvelope), fileHead } } };
+}
+
+/** One byte past the canonical 512 KiB decoded-representation bound. The
+ * local `encodeTreeBytes` refuses the over-limit bytes, so this proof encodes
+ * them directly to exercise the Worker/D1 rejection on the wire. */
+async function oversizedSaveBody(fileId: string, capabilityKey: Uint8Array<ArrayBuffer>):
+  Promise<{ current: RemoteFileView; body: SaveBody }> {
+  const current = await readRemoteFile(fileId);
+  const representationId = uuid(), contentKeyId = uuid();
+  const keyEpoch = current.keyEpoch + 1, revision = current.revision + 1;
+  const contentKey = crypto.getRandomValues(new Uint8Array(32));
+  const context: EnvelopeContext = { purpose: "file-content", vaultId: accountId, objectId: fileId,
+    keyId: contentKeyId, keyEpoch, revision };
+  const ciphertext = new Uint8Array([...(await sealExact(contentKey, MAX_REPRESENTATION_BYTES, context)), 0]);
+  expect(ciphertext.length).toBe(MAX_REPRESENTATION_BYTES + 1);
+  const keyEnvelope = await (await createSymmetricWriter(capabilityKey)).seal(contentKey,
+    { purpose: "file-content-key", vaultId: accountId, objectId: fileId, keyId: contentKeyId, keyEpoch, revision });
+  const fileHead = await createFileHead(deviceKey, { vaultId: accountId, fileId,
+    capabilityId: current.capability.id, capabilityEpoch: current.capability.epoch, representationId,
+    contentKeyId, keyEpoch, revision, deviceId, ciphertext: encodeTreeBytes(ciphertext.subarray(0, MAX_REPRESENTATION_BYTES)),
+    keyEnvelope: encodeTreeBytes(keyEnvelope) });
+  return { current, body: { expectedRevision: current.revision, expectedRepresentationId: current.representationId,
+    capability: current.capability, representation: { id: representationId, contentKeyId, keyEpoch, revision,
+      ciphertext: Buffer.from(ciphertext).toString("base64url"), keyEnvelope: encodeTreeBytes(keyEnvelope), fileHead } } };
+}
+
+describe("disposable remote Workers Free + D1 release-gate proof (ticket 33)", () => {
+  it("accepts an exact maximum-source create and save, rejects one byte over the 512 KiB bound, and preserves the stale conflict", async () => {
+    const { fileId, capabilityKey } = await createCappedFile();
+    expect((await readRemoteFile(fileId)).revision).toBe(1);
+
+    const exact = await cappedSaveBody(fileId, capabilityKey);
+    await expectStatus(await proofJson(`/api/private/tree/files/${fileId}`, "PATCH", exact.body), 200, "maximum-source save");
+    const afterExact = await readRemoteFile(fileId);
+    expect(afterExact.revision).toBe(2);
+
+    const over = await oversizedSaveBody(fileId, capabilityKey);
+    expect((await proofJson(`/api/private/tree/files/${fileId}`, "PATCH", over.body)).status).toBe(400);
+    const afterOver = await readRemoteFile(fileId);
+    expect(afterOver.revision).toBe(2);
+    expect(afterOver.representationId).toBe(afterExact.representationId);
+
+    // The now-stale exact body must conflict without moving the current pointer.
+    expect((await proofJson(`/api/private/tree/files/${fileId}`, "PATCH", exact.body)).status).toBe(409);
+    expect((await readRemoteFile(fileId)).representationId).toBe(afterExact.representationId);
+    expect(scalar(`SELECT current_revision FROM files WHERE node_id = '${fileId}'`)).toBe("2");
+  });
+
+  it("stages an Import Replace that keeps the old representation current until the commit marker", async () => {
+    const { fileId, capabilityKey, name, directoryId } = await createCappedFile();
+    const before = await readRemoteFile(fileId);
+    const listing = await remoteListing(directoryId);
+    const entry = listing.entries.find((item) => item.nodeId === fileId)!;
+    const displayName = await openRemoteName(entry, directoryId);
+    expect(displayName).toBe(name);
+    const replacement: ImportReplacementDocument = { revision: before.revision, keyEpoch: before.keyEpoch,
+      contentKeyId: before.contentKeyId, representationId: before.representationId, markdown: "old",
+      metadata: new Uint8Array(), capability: before.capability, capabilityKey, publication: null };
+    const plan = await buildPlan([{ path: name, bytes: encoder.encode("# replaced body") }], {
+      target: { directoryId, entriesRevision: listing.entriesRevision,
+        siblings: [{ nodeId: fileId, kind: "file", name }], listing: listing.entries },
+      choices: { [name]: { action: "replace" } },
+      replacements: new Map<string, ImportReplacementDocument>([[fileId, replacement]]),
+    });
+    const session = await createSession(plan.manifest.metadata, plan.manifest.envelope);
+    await expectStatus(session, 201, "Replace session");
+    const { importId } = await session.json() as { importId: string };
+    for (const chunk of plan.chunks) {
+      expect((await proofFetch(`/api/private/imports/${importId}/chunks/${chunk.sequence}`, "PUT",
+        encodeImportChunkBody(chunk.descriptors, chunk.payload))).status).toBe(201);
+    }
+    expect((await readRemoteFile(fileId)).representationId).toBe(before.representationId);
+    await expectStatus(await proofFetch(`/api/private/imports/${importId}/commit`, "POST"), 200, "Replace commit");
+    const after = await readRemoteFile(fileId);
+    expect(after.representationId).not.toBe(before.representationId);
+    expect(after.revision).toBe(before.revision + 1);
+  });
+
+  it("pairs an active Publication with the private save and rejects stale or oversized Public updates", async () => {
+    const { fileId, capabilityKey } = await createCappedFile();
+    const current = await readRemoteFile(fileId);
+    const linkKey = await createPublicationKeyPair();
+    const publicationId = newPublicationIdentifier(), linkId = newPublicationIdentifier();
+    const epochId = uuid(), capabilityId = uuid(), threadId = uuid();
+    const capability = crypto.getRandomValues(new Uint8Array(32));
+    const recoveryEnvelope = await sealVaultRecoveryEnvelope(crypto.getRandomValues(new Uint8Array(32)),
+      { scope: "owned", objectId: epochId, keyId: capabilityId, key: capability },
+      { purpose: "vault-recovery", vaultId: accountId, objectId: epochId, keyId: capabilityId, keyEpoch: 1, revision: 1 });
+    const linkWrapper = await sealCommentEpochLink(linkKey.privateKey, linkKey.publicKey,
+      { publicationId, linkId, epochId, capabilityId, keyEpoch: 1, capability });
+    const published = await proofJson(`/api/private/publications/files/${fileId}`, "PUT", {
+      publicationId, linkId, publicKey: encodeTreeBytes(linkKey.publicKey),
+      expectedRevision: current.revision, expectedRepresentationId: current.representationId,
+      representation: { ciphertext: encodeTreeBytes(await sealPublicRepresentation(
+        { publicationId, linkId, publicKey: linkKey.publicKey, revision: 1 }, publicPresentation("# Public body"))) },
+      author: null,
+      comments: { threadId, epochId, capabilityId, audience: "public",
+        recoveryEnvelope: encodeTreeBytes(recoveryEnvelope), linkWrapper: encodeTreeBytes(linkWrapper) },
+    });
+    await expectStatus(published, 201, "Publication create");
+
+    const paired = await cappedSaveBody(fileId, capabilityKey);
+    const publication = paired.current.publication!;
+    paired.body.publication = { publicationId: publication.publicationId, linkId: publication.linkId,
+      revision: publication.revision + 1,
+      ciphertext: encodeTreeBytes(await sealPublicRepresentation({ publicationId: publication.publicationId,
+        linkId: publication.linkId, publicKey: decodeTreeBytes(publication.publicKey, 65),
+        revision: publication.revision + 1 }, publicPresentation("# Updated public"))) };
+    const saved = await proofJson(`/api/private/tree/files/${fileId}`, "PATCH", paired.body);
+    await expectStatus(saved, 200, "paired save");
+    expect(await saved.json()).toMatchObject({ revision: 2, publicRevision: 2 });
+
+    // An anonymous reader decrypts the paired update locally, without the fragment.
+    const publicResponse = await fetch(`${baseUrl}/api/public/publications/${linkId}`);
+    expect(publicResponse.status).toBe(200);
+    const publicBody = await publicResponse.json() as { publicationId: string; linkId: string; publicKey: string;
+      representation: { revision: number; ciphertext: string } };
+    const pair = await importPublicationKeyPair(linkKey.privateKey, decodeTreeBytes(publicBody.publicKey, 65));
+    const presentation = await openPublicRepresentation(
+      decodeTreeBytes(publicBody.representation.ciphertext, MAX_REPRESENTATION_BYTES), pair,
+      { publicationId: publicBody.publicationId, linkId, publicKey: decodeTreeBytes(publicBody.publicKey, 65),
+        revision: publicBody.representation.revision });
+    expect(presentation.markdown).toBe("# Updated public");
+
+    // A stale Public revision and an over-bound Public payload both leave both pointers current.
+    const stale = await cappedSaveBody(fileId, capabilityKey);
+    stale.body.publication = { publicationId: publication.publicationId, linkId: publication.linkId,
+      revision: publication.revision + 1, ciphertext: encodeTreeBytes(new Uint8Array(32)) };
+    const staleResponse = await proofJson(`/api/private/tree/files/${fileId}`, "PATCH", stale.body);
+    expect(staleResponse.status).toBe(409);
+    expect(await staleResponse.json()).toEqual({ error: "publication_changed" });
+    const over = await cappedSaveBody(fileId, capabilityKey);
+    over.body.publication = { publicationId: publication.publicationId, linkId: publication.linkId,
+      revision: publicBody.representation.revision + 1,
+      ciphertext: Buffer.from(randomBytes(MAX_REPRESENTATION_BYTES + 1)).toString("base64url") };
+    expect((await proofJson(`/api/private/tree/files/${fileId}`, "PATCH", over.body)).status).toBe(400);
+    expect((await readRemoteFile(fileId)).revision).toBe(2);
+  });
+
+  it("creates no marker for a missing import sequence", async () => {
+    const directoryId = await cappedDirectory();
+    const listing = await remoteListing(directoryId);
+    const plan = await buildPlan(Array.from({ length: 100 }, (_, index) =>
+      ({ path: `missing-${String(index).padStart(3, "0")}.md`, bytes: encoder.encode("x") })),
+      { target: { directoryId, entriesRevision: listing.entriesRevision } });
+    expect(plan.chunks.length).toBeGreaterThan(1);
+    const session = await createSession(plan.manifest.metadata, plan.manifest.envelope);
+    await expectStatus(session, 201, "missing-sequence session");
+    const { importId } = await session.json() as { importId: string };
+    const first = plan.chunks[0]!;
+    expect((await proofFetch(`/api/private/imports/${importId}/chunks/${first.sequence}`, "PUT",
+      encodeImportChunkBody(first.descriptors, first.payload))).status).toBe(201);
+    expect((await proofFetch(`/api/private/imports/${importId}/commit`, "POST")).status).toBe(409);
+    expect(scalar(`SELECT count(*) FROM import_commits WHERE import_id = '${importId}'`)).toBe("0");
   });
 });

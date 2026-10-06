@@ -34,10 +34,15 @@ npm run dev          # local Workers runtime + D1 simulation + Tailwind
 | `npm run db:smoke` | fresh-D1 schema and foreign-key smoke test |
 | `npm run db:operations [-- --remote preview\|production]` | read-only remote FK/query-plan verification, or disposable local verification |
 | `npm run check:secrets` | assert no secret leaked into `build/client` |
+| `node scripts/import-proof.mjs` | disposable Workers Free + D1 release-gate proof (requires `wrangler login`) |
 | `npm run deploy:preview` / `:production` | build + deploy that environment |
 
 Secrets: local values in gitignored `.dev.vars` (see `.dev.vars.example`);
 remote values as Cloudflare Secrets per environment.
+
+The acceptance evidence map and release-candidate gate are in
+[`docs/acceptance.md`](docs/acceptance.md); the independent security review
+brief is [`docs/security-review.md`](docs/security-review.md).
 
 Scheduled retention, reviewed D1 query plans, and the Time Travel/pre-change
 export rollback rehearsal are documented in [`docs/operations.md`](docs/operations.md).

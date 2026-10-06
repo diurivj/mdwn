@@ -249,7 +249,11 @@ manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk,
 every canonical ciphertext cap, 1,000 Historical Comments), retries and
 mismatches, expiry/failure/stale-authority, no-visible-partial-tree, and that
 every worst-case upload and commit fits the 50-statement D1 Free invocation
-limit.
+limit. Ticket 33 extends the same run to its release-gate criteria: a maximum
+262,144-byte-source File create and save, one-byte-over rejection of the
+canonical 512 KiB bound, a staged Import Replace that stays invisible until
+the marker, an active-Publication paired update, stale-conflict preservation,
+and a missing-sequence rejection — plus every check above.
 
 Run it with a Cloudflare login:
 
@@ -267,10 +271,12 @@ production endpoints), and runs `tests/proof/import-proof.test.ts` through
 100-node commit, the exact 20 MiB/40-chunk/50-record/512 KiB envelope and its
 one-over rejections, the 128 KiB manifest boundary, every per-kind ciphertext
 cap at its exact size and one byte over, exact/mismatched retries, cancel and
-expiry, stale revision and Owner, no-visible-partial-tree reads, and direct
-deployed-`CHECK` one-over rows. Because D1 Free hard-fails an invocation above
-50 queries and Workers Free reports `exceededCpu` for over-budget invocations,
-a clean pass on a Free account is the budget evidence.
+expiry, stale revision and Owner, no-visible-partial-tree reads, direct
+deployed-`CHECK` one-over rows, and (ticket 33) a maximum-source create/save,
+staged Replace invisibility, paired active-Publication saves, stale-conflict
+preservation, and a missing-sequence rejection. Because D1 Free hard-fails an
+invocation above 50 queries and Workers Free reports `exceededCpu` for
+over-budget invocations, a clean pass on a Free account is the budget evidence.
 
 Executed 2026-10-05 on a Workers Free account: the first run exposed two
 `exceededCpu` 503s on the largest invocations, so staging was made more
