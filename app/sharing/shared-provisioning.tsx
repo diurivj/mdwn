@@ -27,9 +27,8 @@ export function SharedProvisioning() {
   }, [state, data, submit]);
   // The initial idle render precedes the first load; it is not a completed check.
   return (
-    <div
+    <section
       className="mt-4 text-sm"
-      role="region"
       aria-label="Shared access provisioning"
       aria-busy={state !== "idle" || data === undefined}
     >
@@ -38,6 +37,6 @@ export function SharedProvisioning() {
       <Link to="/account/shared-access" className="underline">
         Shared access
       </Link>
-    </div>
+    </section>
   );
 }

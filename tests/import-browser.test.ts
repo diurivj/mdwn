@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ImportError } from "../app/shared/import/limits";
+import type { ImportError } from "../app/shared/import/limits";
 import { inputsFromDataTransfer, inputsFromFiles } from "../app/shared/import/browser";
 
 const encoder = new TextEncoder();

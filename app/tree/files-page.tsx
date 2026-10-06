@@ -23,7 +23,6 @@ import {
   renameTreeChild,
   TreeCommitUncertainError,
   TreeNotFoundError,
-  type DirectoryListing,
   type TreeEntry,
   type TreeKind,
 } from "../shared/tree/client";
@@ -117,9 +116,14 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const busy = submitting || revalidator.state !== "idle" || navigation.state !== "idle";
   const recoveryPending = isSignupRecoveryConfirmationPending();
 
+  const dialogRef = useRef(dialog);
+  useEffect(() => {
+    dialogRef.current = dialog;
+  }, [dialog]);
+
   useEffect(() => {
     setSnapshot((previous) =>
-      initial.snapshot && previous && dialog && route.current === `${kind}/${nodeId}`
+      initial.snapshot && previous && dialogRef.current && route.current === `${kind}/${nodeId}`
         ? {
             ...initial.snapshot,
             keys: { ...previous.keys, ...initial.snapshot.keys },
@@ -560,6 +564,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           </>
         )}
       </aside>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only File drop target; the Import control exposes a labelled file picker for keyboard users. */}
       <section
         className="min-w-0 p-4 md:p-6"
         onDragOver={(event) => {
@@ -794,6 +799,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                 Name{" "}
                 <input
                   ref={nameInput}
+                  // biome-ignore lint/a11y/noAutofocus: the rename/create dialog opens on an explicit user action; focus starts in its only field.
                   autoFocus
                   value={dialog.requestedName}
                   disabled={busy}

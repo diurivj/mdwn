@@ -12,7 +12,6 @@ import {
   editPrivateComment,
   loadMorePrivateComments,
   loadPrivateComments,
-  type CommentView,
   type CommentsState,
   type PrivateComments,
 } from "../shared/comments/comments-client";
@@ -37,17 +36,20 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
   const lifetime = useRef<AbortController | null>(null);
   const creating = useRef(false);
   // Revalidation (rename, save, provisioning) produces a new snapshot object
-  // with the same File authority. Keep the latest access in a ref so only a
-  // File change resets the composer, edit or pending state.
+  // with the same File authority. Keep the latest access and File capability
+  // key in refs so only a File change resets the composer, edit or pending
+  // state.
   const accessRef = useRef(snapshot.access);
+  const capabilityRef = useRef(snapshot.file?.capabilityKey ?? null);
   useEffect(() => {
     accessRef.current = snapshot.access;
-  }, [snapshot.access]);
+    capabilityRef.current = snapshot.file?.capabilityKey ?? null;
+  }, [snapshot.access, snapshot.file?.capabilityKey]);
 
   const reload = useCallback(
     async (signal: AbortSignal) => {
       try {
-        const next = await loadPrivateComments(accessRef.current, fileId, signal, snapshot.file?.capabilityKey ?? null);
+        const next = await loadPrivateComments(accessRef.current, fileId, signal, capabilityRef.current);
         if (!signal.aborted) setPanel(next);
         return next;
       } catch (error) {

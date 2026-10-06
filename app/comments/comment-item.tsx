@@ -79,6 +79,7 @@ export function CommentItem({
           <label className="block text-sm">
             Edit comment
             <textarea
+              // biome-ignore lint/a11y/noAutofocus: focus follows the user's explicit Edit action on this comment.
               autoFocus
               value={edit.text}
               disabled={busy}

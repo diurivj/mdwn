@@ -14,7 +14,7 @@ type SecurityData =
 
 type Operation = "passkeys" | "sessions" | "codes";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Account security — mdwn" }];
 }
 
@@ -227,7 +227,7 @@ export default function AccountSecurity({ loaderData }: Route.ComponentProps) {
                 <p>Save these ten new one-time codes now. All previous codes are invalid.</p>
                 <ol className="mt-3 space-y-1">
                   {fetcher.data.codes.map((code, index) => (
-                    <li className="break-all font-mono text-sm" key={index}>
+                    <li className="break-all font-mono text-sm" key={code}>
                       {index + 1}. {code}
                     </li>
                   ))}

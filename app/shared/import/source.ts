@@ -18,6 +18,7 @@ import {
   ArchiveError,
   checkArchiveCompressedSize,
   inspectArchive,
+  type ArchiveInspection,
   type HistoricalComment,
 } from "~/shared/archive/format";
 import { readZip, ZipError, type ZipEntry } from "~/shared/archive/zip";
@@ -307,7 +308,7 @@ async function archiveTree(bytes: Uint8Array, limits: ImportLimits) {
     }
     throw error;
   }
-  let inspection;
+  let inspection: ArchiveInspection;
   try {
     inspection = inspectArchive(entries, { limits });
   } catch (error) {

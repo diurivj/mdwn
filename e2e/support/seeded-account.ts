@@ -26,7 +26,7 @@ export type SeededAccount = {
 
 let script: Promise<string> | undefined;
 function accountScript(): Promise<string> {
-  return (script ??= build({
+  script ??= build({
     configFile: false,
     publicDir: false,
     logLevel: "error",
@@ -45,7 +45,8 @@ function accountScript(): Promise<string> {
     const chunk = output.find((item) => item.type === "chunk");
     if (chunk?.type !== "chunk") throw new Error("Missing seeded Account fixture bundle");
     return chunk.code;
-  }));
+  });
+  return script;
 }
 
 /** Signup's persisted Account shape, except its Session. Caller owns context.close(). */

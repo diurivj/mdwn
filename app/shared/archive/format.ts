@@ -16,9 +16,9 @@
  * remain the Import flow's responsibility.
  */
 
-import { MAX_COMMENT_CHARS, normalizeCommentText, validCommentText } from "~/shared/comments/content";
+import { normalizeCommentText, validCommentText } from "~/shared/comments/content";
 import { FILE_SOURCE_LIMIT } from "~/shared/crypto/file-source";
-import { canonicalizeSegment, comparisonKey, NamespaceError, utf8Bytes } from "~/shared/namespace-v1";
+import { canonicalizeSegment, comparisonKey, NamespaceError } from "~/shared/namespace-v1";
 import type { ZipEntry } from "./zip";
 
 export const ARCHIVE_METADATA_DIRECTORY = ".mdwn";
@@ -120,8 +120,6 @@ export const ARCHIVE_LIMITS: ArchiveLimits = {
 export function checkArchiveCompressedSize(bytes: Uint8Array, max = MAX_ARCHIVE_COMPRESSED_BYTES): void {
   if (bytes.length > max) throw new ArchiveError("archive-too-large");
 }
-
-const encoder = new TextEncoder();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -13,7 +13,7 @@ import type { Route } from "./+types/account-devices";
 
 type Screen = { state: "ready"; inventory: DeviceInventory } | { state: PrivateAccessState | "failed" };
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Encryption devices — mdwn" }];
 }
 

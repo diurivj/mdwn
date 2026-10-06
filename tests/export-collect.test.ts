@@ -7,13 +7,12 @@ import {
   parsePrivateCommentsSidecar,
   type HistoricalComment,
 } from "../app/shared/archive/format";
-import { createZip, readZip, type ZipEntry } from "../app/shared/archive/zip";
+import { createZip, readZip } from "../app/shared/archive/zip";
 import {
   allocateExportPaths,
   buildArchiveFiles,
   collectExportFile,
   collectExportTree,
-  ExportError,
   exportFileName,
   MAX_EXPORT_DIRECTORY_DEPTH,
   type ArchiveFile,
@@ -21,7 +20,6 @@ import {
   type ExportSource,
 } from "../app/shared/export/collect";
 
-const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const at = new Date("2026-10-04T12:00:00.000Z");
 const owned = { vaultId: "account-1", actorAccountId: "account-1" };
@@ -60,7 +58,7 @@ function sourceFor(root: FakeDirectory, calls: string[] = []): ExportSource<Fake
   };
   visit(root);
   return {
-    async listDirectory(directoryId, key, abort) {
+    async listDirectory(directoryId, _key, abort) {
       calls.push(`list:${directoryId}`);
       abort.throwIfAborted();
       const node = nodes.get(directoryId);

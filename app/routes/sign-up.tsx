@@ -134,6 +134,7 @@ export default function SignUp() {
           </p>
           <ol className="mt-4 grid grid-cols-2 gap-2 rounded-md border p-4 sm:grid-cols-3">
             {secrets.phrase.split(" ").map((word, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the phrase is a fixed, never-reordered list, and duplicate words are possible.
               <li key={index} className="font-mono text-sm">
                 <span className="text-stone-500">{index + 1}. </span>
                 {word}
@@ -183,7 +184,7 @@ export default function SignUp() {
           </p>
           <ol className="mt-4 space-y-2 rounded-md border p-4">
             {secrets.recoveryCodes.map((code, index) => (
-              <li key={index} className="break-all font-mono text-sm">
+              <li key={code} className="break-all font-mono text-sm">
                 {index + 1}. {code}
               </li>
             ))}

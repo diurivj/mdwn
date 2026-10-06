@@ -21,7 +21,6 @@ import {
   rotationSourceVersion,
   type RotationDirectory,
   type RotationEntries,
-  type RotationFile,
   type RotationItem,
   type RotationJob,
   type RotationNext,
@@ -292,7 +291,7 @@ async function stage(browser: RotationBrowser, next: RotationNext) {
     };
     const name = await openSymmetric(decodeTreeBytes(entry.nameCiphertext), oldKey, { context: before });
     const order = await openSymmetric(decodeTreeBytes(entry.orderCiphertext), oldKey, { context: before });
-    let context;
+    let context: ReturnType<typeof cryptoContext>;
     if (entry.kind === "directory")
       context = cryptoContext(
         browser.accountId,

@@ -145,12 +145,12 @@ describe("import plan: complete encrypted record and chunk plan", () => {
       expect(chunk.digest).toBe(await sha256Hex(encodeImportChunkBody(chunk.descriptors, chunk.payload)));
     }
     const concatenated = new Uint8Array(plan.chunks.length * 32);
-    plan.chunks.forEach((chunk, index) =>
+    plan.chunks.forEach((chunk, index) => {
       concatenated.set(
         Uint8Array.from(chunk.digest.match(/../g)!.map((byte) => Number.parseInt(byte, 16))),
         index * 32,
-      ),
-    );
+      );
+    });
     expect(plan.manifest.metadata.aggregateDigest).toBe(await sha256Hex(concatenated));
     expect(plan.manifest.metadata.chunkCount).toBe(plan.chunks.length);
     expect(plan.manifest.metadata.recordCount).toBe(plan.records.length);

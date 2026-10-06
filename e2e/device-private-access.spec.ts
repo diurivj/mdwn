@@ -16,6 +16,7 @@ declare global {
 
 const test = appTest.extend<{}, { accessScript: string }>({
   accessScript: [
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright requires the fixture function's first parameter to be an object destructuring pattern.
     async ({}, use) => {
       const result = await build({
         configFile: false,

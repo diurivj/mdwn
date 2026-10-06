@@ -21,7 +21,7 @@ import {
   type RecoveryIntent,
 } from "../../app/recovery/protocol";
 import { decodeBytes, encodeBytes } from "../../app/shared/signup/protocol";
-import { seedNormalSession, type SeededSession } from "./auth-fixtures";
+import { seedNormalSession } from "./auth-fixtures";
 import { seedRecipientEnvelopeDependents } from "./grant-envelope-lifecycle-fixtures";
 
 declare global {

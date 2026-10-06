@@ -12,7 +12,7 @@ function sent(request: Request): string {
 test("public readers decrypt public comments, signed-in visitors post, and the audience can be closed", async ({
   browser,
   page,
-  workspace,
+  workspace: _workspace,
 }) => {
   // The Owner publishes with the default public Comments audience.
   await page.getByRole("button", { name: "Publish", exact: true }).click();

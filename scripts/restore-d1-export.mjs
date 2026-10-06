@@ -28,7 +28,6 @@
  * The prepared SQL and the manifest contain restored data or its digests:
  * keep them local, do not commit or upload them, and delete them after use.
  */
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { assembleRestoreCommands, prepareRestore, queryRows, verifyRestoreTarget } from "./lib/d1-export-restore.mjs";
@@ -39,7 +38,6 @@ import {
   optionalFlag,
   parseFlags,
   readText,
-  runWranglerOrThrow,
   SENSITIVE_FILE_MODE,
   sha256,
   writeSensitive,

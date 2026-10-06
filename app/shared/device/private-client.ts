@@ -1,5 +1,5 @@
 import { PUBLIC_PARTICIPATION_SUSPENDED } from "~/shared/security/public-participation";
-import { signDeviceProof } from "./proof";
+import { signDeviceProof, type DeviceProof } from "./proof";
 import { getDevice, updateRegistryEpoch } from "./store";
 
 export type PrivateAccessState = "signed-out" | "unprovisioned" | "device-lost" | "stale" | "denied" | "unavailable";
@@ -115,7 +115,7 @@ export async function privateRequest(
     }
   }
 
-  let proof;
+  let proof: DeviceProof;
   try {
     proof = await signDeviceProof(device.assertionKeyPair.privateKey, {
       sessionBinding: state.sessionBinding,

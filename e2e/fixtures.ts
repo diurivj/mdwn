@@ -8,6 +8,7 @@ import { supportAddressBindings } from "../tests/support/donation-fixtures";
 export const TEST_SESSION_COOKIE_SECRET = "mdwn-browser-tests-only-not-a-deployment-secret";
 
 type TestFixtures = {
+  // biome-ignore lint/suspicious/noConfusingVoidType: a Playwright fixture value; void lets the fixture call use() with no value.
   reset: void;
 };
 
@@ -46,6 +47,7 @@ function localHttpsWorkerConfig() {
  */
 export const test = base.extend<TestFixtures, WorkerFixtures>({
   server: [
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright requires the fixture function's first parameter to be an object destructuring pattern.
     async ({}, use) => {
       const server = createTestHarness({
         // WebKit honors the production CSP's upgrade-insecure-requests. Serve

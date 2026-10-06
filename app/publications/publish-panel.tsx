@@ -118,6 +118,7 @@ export function PublishPanel({
   // The Owner's browser finishes a sealed teardown in idempotent bounded
   // batches and shows progress until the Publication row is gone.
   const deleting = panel.status === "ready" && panel.state.isOwner && panel.state.publication?.state === "deleting";
+  // biome-ignore lint/correctness/useExhaustiveDependencies(teardownAttempt): teardownAttempt is a retry trigger, not a value the effect reads.
   useEffect(() => {
     if (!deleting) return;
     const controller = new AbortController();

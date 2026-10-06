@@ -9,7 +9,7 @@
  * credentials, sessions, and local drafts are never read or serialized.
  */
 
-import { type ArchiveRoot, type HistoricalComment } from "~/shared/archive/format";
+import type { ArchiveRoot, HistoricalComment } from "~/shared/archive/format";
 import { createZip } from "~/shared/archive/zip";
 import { loadAllPrivateComments } from "~/shared/comments/comments-client";
 import { normalizeCommentText } from "~/shared/comments/content";
@@ -89,6 +89,7 @@ function createSource(access: RootAccess): ExportSource<TreeEntry> {
 
 function sanitizeFilename(name: string): string {
   const cleaned = name
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: strips C0 control characters from export file names.
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
     .replace(/[ .]+$/g, "")
     .trim();

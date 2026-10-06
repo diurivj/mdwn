@@ -214,7 +214,6 @@ export function rotationSourceSnapshot(item: RotationItem, source: RotationSourc
 export async function rotationCommentItems(
   env: Env,
   auth: AuthorizedDevice,
-  job: RotationJob,
   item: RotationItem,
   cursor: string | null,
 ): Promise<{ records: RotationCommentRecord[]; nextCursor: string | null }> {

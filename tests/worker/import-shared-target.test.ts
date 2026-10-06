@@ -123,7 +123,6 @@ describe("MVP acceptance: shared-target Import", () => {
   it("assigns every new descendant to the target Owner, creates no authority, and hides staging until commit", async () => {
     const owner = await sharingAccount(),
       collaborator = await sharingAccount();
-    const ownerKey = owner.keys.get(owner.rootId)!;
     const { grantId } = await grant(owner, collaborator, owner.rootId, "read_write");
     expect(collaborator.keys.has(owner.rootId)).toBe(true);
     const grantsBefore = await count("SELECT count(*) AS n FROM grants WHERE owner_id = ?", owner.accountId);

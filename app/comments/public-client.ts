@@ -625,7 +625,7 @@ export type FilePublicComments =
   | { status: "ready"; thread: PublicThreadView };
 
 /** Fetch the authenticated Public thread wire; one mapping for every caller. */
-async function readFileThread(access: RootAccess, fileId: string, signal?: AbortSignal): Promise<FileThreadWire> {
+async function readFileThread(fileId: string, signal?: AbortSignal): Promise<FileThreadWire> {
   const response = await privateRequest(`/api/private/comments/files/${fileId}/public`, { method: "POST", signal });
   if (response.status === 404) throw new PublicCommentsNotFoundError();
   if (response.status === 409) {
@@ -665,7 +665,7 @@ export async function loadFilePublicComments(
   fileId: string,
   signal?: AbortSignal,
 ): Promise<FilePublicComments> {
-  const data = await readFileThread(access, fileId, signal);
+  const data = await readFileThread(fileId, signal);
   if (!data.thread)
     return {
       status: "absent",
@@ -723,7 +723,7 @@ export async function loadFilePublicEpochs(
   ownerId: string;
   epochs: PublicEpoch[];
 }> {
-  const data = await readFileThread(access, fileId, signal);
+  const data = await readFileThread(fileId, signal);
   if (!data.thread) throw new PublicCommentsNotFoundError();
   return {
     publicationId: data.thread.publicationId,

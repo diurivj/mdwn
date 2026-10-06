@@ -31,7 +31,9 @@ import {
   decodeImportChunkBody,
   decodeImportSessionBody,
   verifyChunkDigests,
+  type DecodedChunk,
   type DecodedDescriptor,
+  type DecodedSessionBody,
   type StagingRecordKind,
 } from "../shared/import/staging";
 import { MAX_STAGING_MANIFEST_BYTES } from "../shared/import/limits";
@@ -332,7 +334,7 @@ function recordInsertStatements(importId: string, sequence: number, records: rea
 
 /** Create the initiating-Account-bound session after the local preflight. */
 async function createSession(env: Env, auth: AuthorizedDevice, body: Uint8Array): Promise<Response> {
-  let decoded;
+  let decoded: DecodedSessionBody;
   try {
     decoded = decodeImportSessionBody(body);
   } catch {
@@ -386,7 +388,7 @@ async function uploadChunk(
   body: Uint8Array,
   bodyDigest: Uint8Array,
 ): Promise<Response> {
-  let chunk;
+  let chunk: DecodedChunk;
   try {
     chunk = decodeImportChunkBody(body, MAX_IMPORT_CHUNK_BODY_BYTES);
   } catch {
@@ -614,7 +616,9 @@ async function commitImport(env: Env, auth: AuthorizedDevice, importId: string):
   const totalBytes = chunks.reduce((total, chunk) => total + chunk.bytes, 0);
   if (totalBytes !== session.expected_payload_bytes) return incomplete();
   const ordered = new Uint8Array(chunks.length * 32);
-  chunks.forEach((chunk, index) => ordered.set(bytesOf(chunk.digest), index * 32));
+  chunks.forEach((chunk, index) => {
+    ordered.set(bytesOf(chunk.digest), index * 32);
+  });
   if (!equalBytes(await sha256(ordered), bytesOf(session.aggregate_digest))) return incomplete();
   const kindRows = await createDb(env.DB).all<{ kind: StagingRecordKind; actual: number }>(sql`
     SELECT kind, count(*) AS actual FROM import_record_payloads WHERE import_id = ${importId} GROUP BY kind`);

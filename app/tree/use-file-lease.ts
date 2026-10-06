@@ -40,6 +40,13 @@ export function useFileLease(accountId: string, fileId: string, actions: Actions
     release.current?.();
   }
 
+  // Latest-transfer ref: the lease effect owns the channel and must not re-run
+  // when this render's function identity changes.
+  const transferRef = useRef(transfer);
+  useEffect(() => {
+    transferRef.current = transfer;
+  });
+
   useEffect(() => {
     alive.current = true;
     if (!navigator.locks || typeof BroadcastChannel === "undefined") {
@@ -93,7 +100,7 @@ export function useFileLease(accountId: string, fileId: string, actions: Actions
         !transferId.current
       ) {
         transferId.current = event.data.requestId;
-        void transfer();
+        void transferRef.current();
       } else if (event.data.type === "owner" && requestId.current) {
         messages.postMessage({ type: "transfer", requestId: requestId.current } satisfies LeaseMessage);
       } else if (event.data.type === "declined" && event.data.requestId === requestId.current) {

@@ -23,10 +23,6 @@ import { RECOVERY_CONFIRMATION_GATE_KEY } from "~/shared/signup/recovery-gate";
 
 export { confirmSignupRecovery, isSignupRecoveryConfirmationPending } from "~/shared/signup/recovery-gate";
 
-async function digest(bytes: Uint8Array): Promise<string> {
-  return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))));
-}
-
 export type SignupSecrets = { phrase: string; recoveryCodes: string[] };
 export type PreparedSignup = {
   readonly secrets: SignupSecrets;

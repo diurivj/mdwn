@@ -123,8 +123,8 @@ describe("production-representative restore rehearsal (committed schema)", () =>
 
   it("fails to re-import the raw export order, then restores it losslessly", () => {
     const source = seededSource();
-    let exportSql;
-    let sourceDigests;
+    let exportSql: string;
+    let sourceDigests: ReturnType<typeof tableDigests>;
     try {
       exportSql = dumpAsD1Export(source);
       sourceDigests = tableDigests(source, [

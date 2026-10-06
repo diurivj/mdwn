@@ -7,7 +7,7 @@ import { SharedProvisioning } from "~/sharing/shared-provisioning";
 
 import type { Route } from "./+types/device-access";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Device access — mdwn" }];
 }
 

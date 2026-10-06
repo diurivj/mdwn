@@ -16,7 +16,13 @@
  * the Import duplicate-path preflight.
  */
 
-import { canonicalizeSegment, keepBothCandidate, NamespaceError, utf8Bytes } from "~/shared/namespace-v1";
+import {
+  canonicalizeSegment,
+  keepBothCandidate,
+  NamespaceError,
+  utf8Bytes,
+  type CanonicalSegment,
+} from "~/shared/namespace-v1";
 import {
   ARCHIVE_COMMENTS_PATH,
   ARCHIVE_MANIFEST_PATH,
@@ -168,7 +174,7 @@ export function allocateExportPaths(
     if (used.has(comparisonToken(chosen))) {
       let number = 2;
       for (;;) {
-        let candidate;
+        let candidate: CanonicalSegment;
         try {
           candidate = keepBothCandidate(chosen, number);
         } catch {

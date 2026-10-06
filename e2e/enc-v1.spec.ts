@@ -16,6 +16,7 @@ declare global {
 // or putting test private keys in build/client. Only this Playwright route serves it.
 const test = appTest.extend<{}, { envelopeScript: string }>({
   envelopeScript: [
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright requires the fixture function's first parameter to be an object destructuring pattern.
     async ({}, use) => {
       const result = await build({
         configFile: false,

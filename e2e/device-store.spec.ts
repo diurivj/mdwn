@@ -28,6 +28,7 @@ declare global {
 // Serve only in this browser test: no production test route or extra application export.
 const test = appTest.extend<{}, { deviceScript: string }>({
   deviceScript: [
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright requires the fixture function's first parameter to be an object destructuring pattern.
     async ({}, use) => {
       const result = await build({
         configFile: false,

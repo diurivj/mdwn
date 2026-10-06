@@ -28,7 +28,10 @@ test("edits a tab-local draft and renders sanitized GFM live in the split worksp
   expect(await document.text()).not.toContain("Local draft");
 });
 
-test("measures UTF-8 bytes, gives 90% feedback, and rejects a whole over-limit edit", async ({ page, workspace }) => {
+test("measures UTF-8 bytes, gives 90% feedback, and rejects a whole over-limit edit", async ({
+  page,
+  workspace: _workspace,
+}) => {
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await source.fill("a".repeat(235_929));
   await expect(page.getByText("235,929 / 262,144", { exact: true })).toHaveCount(0);
@@ -77,7 +80,7 @@ test("debounces autosave for 750 ms and Ctrl/Cmd+S flushes encrypted content imm
   await expect(source).toHaveValue("# Shortcut draft");
 });
 
-test("accepted paste cannot override a newer selection or replacement", async ({ page, workspace }) => {
+test("accepted paste cannot override a newer selection or replacement", async ({ page, workspace: _workspace }) => {
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   // Hold animation frames until after the user has made a newer selection.
   // Keep the clock behind the Worker's real clock for request-bound proofs.
@@ -100,7 +103,10 @@ test("accepted paste cannot override a newer selection or replacement", async ({
   await expect(source).toHaveValue(replacement);
 });
 
-test("paste commits its caret before the next frame, including an unchanged draft", async ({ page, workspace }) => {
+test("paste commits its caret before the next frame, including an unchanged draft", async ({
+  page,
+  workspace: _workspace,
+}) => {
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   const time = new Date(Date.now() - 10_000);
   await page.clock.install({ time });
@@ -189,7 +195,7 @@ test("paste leaves no caret work after the editor is unmounted", async ({ page, 
 
 test("rejects paste and an entire composition result without draft loss or another save", async ({
   page,
-  workspace,
+  workspace: _workspace,
 }) => {
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await source.fill("abc");
@@ -228,7 +234,10 @@ test("rejects paste and an entire composition result without draft loss or anoth
   expect(attempts).toBe(0);
 });
 
-test("resumes autosave of a valid pending draft after rejecting a composition result", async ({ page, workspace }) => {
+test("resumes autosave of a valid pending draft after rejecting a composition result", async ({
+  page,
+  workspace: _workspace,
+}) => {
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   const time = new Date(Date.now() - 10_000);
   await page.clock.install({ time });
@@ -442,7 +451,10 @@ test("coordinates one editing lease per File and requires save or explicit disca
   }
 });
 
-test("narrow Edit/Preview views and the tree drawer preserve the same in-memory draft", async ({ page, workspace }) => {
+test("narrow Edit/Preview views and the tree drawer preserve the same in-memory draft", async ({
+  page,
+  workspace: _workspace,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await expect(source).toBeVisible();
@@ -466,7 +478,7 @@ test.describe("legacy Files", () => {
   test.use({ initialSource: "a".repeat(262_146), legacySource: true });
   test("keeps oversized legacy source readable/exportable and unsavable until reduced within the bound", async ({
     page,
-    workspace,
+    workspace: _workspace,
   }) => {
     const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
     await expect(source).toHaveValue("a".repeat(262_146));

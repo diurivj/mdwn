@@ -5,7 +5,7 @@ import { useOwnedProvisioning } from "~/device/owned-provision-hook";
 
 import type { Route } from "./+types/recover-files";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Recover your Files — mdwn" }];
 }
 

@@ -13,7 +13,7 @@
  * creates no session and performs no upload.
  */
 
-import { canonicalizeSegment, keepBothCandidate, NamespaceError } from "~/shared/namespace-v1";
+import { canonicalizeSegment, keepBothCandidate, NamespaceError, type CanonicalSegment } from "~/shared/namespace-v1";
 import { ImportError } from "./limits";
 import { compareUtf8, foldedToken, type ImportSource, type ImportSourceChild } from "./source";
 
@@ -235,7 +235,7 @@ function allocateDirectory(node: ImportReviewNode, existingTokens: ReadonlyMap<s
   for (const child of pendingGenerated) {
     let chosen: string | null = null;
     for (let number = 2; number <= 100_000; number++) {
-      let candidate;
+      let candidate: CanonicalSegment;
       try {
         candidate = keepBothCandidate(child.requestedName, number);
       } catch (error) {

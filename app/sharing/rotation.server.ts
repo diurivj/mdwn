@@ -152,7 +152,7 @@ async function nextRotation(env: Env, auth: AuthorizedDevice, job: RotationJob) 
       item.kind === "directory"
         ? (await rotationEntries(env, auth, job, item, item.cursor, false)).entries.length
         : item.kind === "private_comment" || (item.kind === "public_history" && item.rotate)
-          ? (await rotationCommentItems(env, auth, job, item, item.cursor)).records.length
+          ? (await rotationCommentItems(env, auth, item, item.cursor)).records.length
           : 0;
     return Response.json({ job, item, source, operation: remaining ? "stage" : "promote" }, { headers });
   }
@@ -296,7 +296,7 @@ export async function rotationAction(request: Request, env: Env): Promise<Respon
     if (!item || (item.kind !== "private_comment" && !(item.kind === "public_history" && item.rotate))) {
       return failure("not_found", 404);
     }
-    return Response.json(await rotationCommentItems(env, auth, job, item, cursor), { headers });
+    return Response.json(await rotationCommentItems(env, auth, item, cursor), { headers });
   }
   const item = await readRotationItem(env, auth, job, entries![2]!);
   if (!item || item.kind !== "directory") return failure("not_found", 404);

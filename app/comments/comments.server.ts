@@ -31,7 +31,7 @@ import {
   type AuthorizedDevice,
 } from "~/device/proof.server";
 import { accessPredicate, committedNodeVisible, sharingWriteBlocked } from "~/sharing/access.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
+import { encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });

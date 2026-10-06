@@ -726,7 +726,7 @@ export function prepareRestore({
 /** @param {string} preparedSql @param {any} manifest */
 export function assembleRestoreCommands(preparedSql, manifest) {
   const statements = splitStatements(preparedSql);
-  const pragma = statements[0]?.trim().toUpperCase() === "PRAGMA DEFER_FOREIGN_KEYS=TRUE" ? statements.shift() : null;
+  if (statements[0]?.trim().toUpperCase() === "PRAGMA DEFER_FOREIGN_KEYS=TRUE") statements.shift();
   const ranges = manifest.prepared?.commands;
   if (!Array.isArray(ranges) || ranges.length === 0) {
     throw new Error("Manifest has no command grouping; re-run prepare with this tool version");

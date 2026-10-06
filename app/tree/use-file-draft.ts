@@ -216,6 +216,13 @@ export function useFileDraft(
     return saved && draftRef.current !== document.current.markdown ? flush() : saved;
   }
 
+  // Latest-flush ref: the blocked-navigation effect must not re-run when this
+  // render's function identity changes.
+  const flushRef = useRef(flush);
+  useEffect(() => {
+    flushRef.current = flush;
+  });
+
   const warn = () =>
     composing.current ||
     inFlight.current !== null ||
@@ -240,7 +247,7 @@ export function useFileDraft(
       return;
     }
     let active = true;
-    void flush().then((saved) => {
+    void flushRef.current().then((saved) => {
       if (!active) return;
       if (saved) blocker.proceed();
       else setNavigationFailed(true);

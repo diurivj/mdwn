@@ -7,7 +7,7 @@ import { useOwnedProvisioning } from "~/device/owned-provision-hook";
 
 import type { Route } from "./+types/enroll-device";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Enroll this device — mdwn" }];
 }
 

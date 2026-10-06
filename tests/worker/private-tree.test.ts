@@ -100,7 +100,7 @@ async function expectAgreedEdges(f: Fixture) {
 async function signedRequest(
   f: Fixture,
   path: string,
-  method: "PUT" | "PATCH" | "DELETE",
+  _method: "PUT" | "PATCH" | "DELETE",
   value: object,
 ): Promise<object> {
   const create = /^\/api\/private\/tree\/directories\/([0-9a-f-]+)\/children$/.exec(path);

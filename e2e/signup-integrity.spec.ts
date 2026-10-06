@@ -1,4 +1,4 @@
-import type { Browser, Page } from "@playwright/test";
+import type { Browser } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
 import { seedAccount, signInAccount } from "./support/seeded-account";

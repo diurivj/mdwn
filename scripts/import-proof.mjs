@@ -144,6 +144,7 @@ try {
     mode: 0o600,
   });
   const deployOutput = capture("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretsFile]);
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: strips ANSI escape sequences from Wrangler output.
   const url = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(deployOutput.replace(/\u001b\[[0-9;]*m/g, ""))?.[0];
   if (!url) throw new Error("could not read the deployed workers.dev URL");
   // A freshly created or re-created workers.dev route can take a few seconds

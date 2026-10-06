@@ -105,7 +105,6 @@ describe("D1 abuse-control counters", () => {
   it("keeps a 24-hour Network limit across HMAC epoch rollover until its exact expiry", async () => {
     const dayMs = 86_400_000;
     const beforeEpochChange = 200_000 * dayMs - 1;
-    const afterEpochChange = beforeEpochChange + 1;
     const beforeExpiry = beforeEpochChange + dayMs - 1;
     const exactExpiry = beforeEpochChange + dayMs;
     const request = makeRequest("203.0.113.9");

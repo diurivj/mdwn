@@ -144,7 +144,7 @@ export async function loadReplacementDocuments(
   const documents = new Map<string, ImportReplacementDocument>();
   for (const node of review.nodes) {
     if (node.action !== "replace" || !node.existingNodeId) continue;
-    let document;
+    let document: Awaited<ReturnType<typeof loadFile>>;
     try {
       document = await loadFile(access, node.existingNodeId, targetKey);
     } catch {

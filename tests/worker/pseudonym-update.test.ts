@@ -32,7 +32,6 @@ import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/shar
 import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   addSharingDevice,
-  grant,
   invite,
   opaqueId,
   prepareGrantKeys,

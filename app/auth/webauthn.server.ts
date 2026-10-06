@@ -5,6 +5,7 @@ import {
   verifyRegistrationResponse,
   type AuthenticationResponseJSON,
   type RegistrationResponseJSON,
+  type VerifiedRegistrationResponse,
 } from "@simplewebauthn/server";
 
 import { atomicSqlBatch, createDb, passkeys, sessions, sql } from "~/shared/db/client.server";
@@ -410,7 +411,7 @@ export async function completePasskeyRegistration(
   const response = credentialResponse<RegistrationResponseJSON>(payload);
   if (!response) return false;
 
-  let verification;
+  let verification: VerifiedRegistrationResponse;
   try {
     verification = await verifyRegistrationResponse({
       response,

@@ -16,9 +16,7 @@ import {
   PublicCommentsSealedError,
   PublicCommentsSignInError,
   PublicCommentsSuspendedError,
-  type PublicComment,
   type PublicLinkComments,
-  type PublicThreadView,
 } from "./public-client";
 
 type ReadyPage = Extract<PublicPage, { status: "ready" }>;

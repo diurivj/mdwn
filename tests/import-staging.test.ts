@@ -117,7 +117,6 @@ describe("import staging wire format", () => {
 
   it("rejects a 51st descriptor, an uncovered byte, and a wrong reference shape", () => {
     const refs = [uuid(), uuid(), uuid()];
-    const bytes = encoder.encode("r");
     const descriptors = Array.from({ length: 51 }, (_, index) => ({
       kind: "representation" as const,
       refs,

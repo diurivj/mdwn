@@ -52,7 +52,7 @@ export default function SharedAccess({ loaderData }: Route.ComponentProps) {
       )}
       {loaderData.ready ? (
         <fetcher.Form method="post" className="mt-4">
-          <button disabled={fetcher.state !== "idle"} className="rounded border px-3 py-2">
+          <button type="submit" disabled={fetcher.state !== "idle"} className="rounded border px-3 py-2">
             Provision shared content
           </button>
         </fetcher.Form>

@@ -94,7 +94,10 @@ function expectNoSentinel(value: unknown, sentinels: readonly Uint8Array[], wher
     }
     return;
   }
-  if (value instanceof ArrayBuffer) return expectNoSentinel(new Uint8Array(value), sentinels, where);
+  if (value instanceof ArrayBuffer) {
+    expectNoSentinel(new Uint8Array(value), sentinels, where);
+    return;
+  }
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     for (const sentinel of sentinels) {
@@ -106,8 +109,12 @@ function expectNoSentinel(value: unknown, sentinels: readonly Uint8Array[], wher
     }
     return;
   }
-  if (Array.isArray(value))
-    return value.forEach((item, index) => expectNoSentinel(item, sentinels, `${where}[${index}]`));
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      expectNoSentinel(item, sentinels, `${where}[${index}]`);
+    });
+    return;
+  }
   if (value && typeof value === "object") {
     for (const [key, item] of Object.entries(value)) expectNoSentinel(item, sentinels, `${where}.${key}`);
   }
@@ -214,7 +221,9 @@ describe("MVP acceptance: private plaintext never reaches the service", () => {
     expect(tables.length).toBeGreaterThan(20);
     for (const { name } of tables) {
       const rows = (await env.DB.prepare(`SELECT * FROM "${name}"`).all()).results;
-      rows.forEach((row, index) => expectNoSentinel(row, sentinels, `${name}[${index}]`));
+      rows.forEach((row, index) => {
+        expectNoSentinel(row, sentinels, `${name}[${index}]`);
+      });
     }
 
     // The same sweep over every private response the app serves for this File.

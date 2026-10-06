@@ -182,7 +182,7 @@ export async function solveProofOfWork(challenge: string, signal?: AbortSignal):
   const view = new DataView(candidate.buffer);
   let nonce = view.getBigUint64(32);
   const start = nonce;
-  do {
+  for (;;) {
     if (signal?.aborted) throw new DOMException("Proof of work aborted", "AbortError");
     for (let i = 0; i < 256; i++) {
       view.setBigUint64(32, nonce);
@@ -192,5 +192,5 @@ export async function solveProofOfWork(challenge: string, signal?: AbortSignal):
       if (nonce === start) throw new Error("nonce space exhausted");
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  } while (true);
+  }
 }

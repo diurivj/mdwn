@@ -12,7 +12,7 @@ import {
 } from "~/shared/comments/public-content";
 import { createDb, sql } from "~/shared/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { decodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
+import { isV7, treeEnvelope } from "~/shared/tree/wire";
 import { record } from "~/auth/request.server";
 import { preparePromotion } from "./rotation-promote.server";
 import {
@@ -283,7 +283,7 @@ async function stageCommentItems(
   ) {
     return failure("invalid_rotation_request", 400);
   }
-  const expected = await rotationCommentItems(env, auth, job, item, item.cursor);
+  const expected = await rotationCommentItems(env, auth, item, item.cursor);
   if (expected.records.length !== input.records.length) return failure("rotation_changed", 409);
   const records: { recordId: string; kind: "comment" | "attribution"; revision: number; envelope: Uint8Array }[] = [];
   try {

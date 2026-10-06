@@ -104,12 +104,12 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
         This generated label appears on every Comment you author and on Publications where an Owner credits you. It is
         separate from your share identifier and any share handle.
       </p>
-      <p
-        className="mt-4 rounded-md border border-stone-200 bg-white p-4 font-medium"
+      <section
         aria-label="Current Public pseudonym"
+        className="mt-4 rounded-md border border-stone-200 bg-white p-4 font-medium"
       >
         {publicPseudonym}
-      </p>
+      </section>
 
       {job ? (
         <section

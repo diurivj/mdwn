@@ -1,3 +1,4 @@
+import type { SQL } from "drizzle-orm";
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
 import { createDb, sql } from "~/shared/db/client.server";
 import {
@@ -83,7 +84,7 @@ async function createShare(env: Env, auth: AuthorizedDevice, value: unknown) {
     !recipient
   )
     return invalid();
-  let address;
+  let address: SQL;
   if (
     exact(recipient, ["shareId"]) &&
     typeof recipient.shareId === "string" &&

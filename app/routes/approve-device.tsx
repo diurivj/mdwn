@@ -3,9 +3,7 @@ import { Link } from "react-router";
 
 import { approveFromPairingLink } from "~/enrollment/ceremony-client";
 
-import type { Route } from "./+types/approve-device";
-
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Approve a device — mdwn" }];
 }
 
@@ -21,7 +19,7 @@ export function HydrateFallback() {
   );
 }
 
-export default function ApproveDevice({}: Route.ComponentProps) {
+export default function ApproveDevice() {
   const [link, setLink] = useState("");
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);

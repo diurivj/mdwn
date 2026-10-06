@@ -1,11 +1,11 @@
 import type { SQL } from "drizzle-orm";
 import { record } from "~/auth/request.server";
 import { digestEnvelope } from "~/shared/crypto/enc-v1";
-import { createDb, sql } from "~/shared/db/client.server";
+import { sql } from "~/shared/db/client.server";
 import type { AuthorizedDevice } from "~/device/proof.server";
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "~/shared/tree/listing";
 import { verifyFileHead, type FileHead } from "~/shared/tree/file-head";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
+import { decodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 import { readRotationSource, rotationSourceSnapshot } from "./rotation-data.server";
 import { liveGrant } from "./grant-lifetime.server";
 import type { RotationDirectory, RotationItem, RotationJob, RotationSource } from "../shared/sharing/rotation-wire";

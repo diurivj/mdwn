@@ -4,12 +4,12 @@ import { Link, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
 import type { AssertionStart } from "~/auth/contracts";
-import { signDeviceProof } from "~/shared/device/proof";
+import { signDeviceProof, type DeviceProof } from "~/shared/device/proof";
 import { getDevice, updateRegistryEpoch } from "~/shared/device/store";
 
 import type { Route } from "./+types/sign-in";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Sign in — mdwn" }];
 }
 
@@ -22,7 +22,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     const start = await authPost<AssertionStart>("/api/auth/sign-in/options", {}, request.signal, "failed");
     const response = await startAuthentication({ optionsJSON: start.options });
     const submission = { challengeId: start.challengeId, response };
-    let deviceProof;
+    let deviceProof: DeviceProof | undefined;
     const userHandle = response.response.userHandle;
     if (start.sessionBinding && userHandle) {
       try {

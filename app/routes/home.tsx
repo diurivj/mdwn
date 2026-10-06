@@ -15,7 +15,7 @@ export async function loader({ context }: Route.LoaderArgs) {
   return { appEnv: env.APP_ENV, dbConnected };
 }
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [
     { title: "mdwn — private markdown vault" },
     {

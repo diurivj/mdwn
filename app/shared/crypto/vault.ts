@@ -11,7 +11,6 @@ import {
   openSymmetricWithLabel,
   sealToRecipient,
   type EnvelopeContext,
-  type EnvelopeExpectation,
 } from "./enc-v1";
 
 export { EnvelopeError } from "./enc-v1";

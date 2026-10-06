@@ -21,7 +21,6 @@ import {
   PublicCommentsSignInError,
   PublicCommentsSuspendedError,
   type FilePublicComments,
-  type PublicComment,
   type PublicThreadView,
 } from "./public-client";
 

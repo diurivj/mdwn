@@ -9,7 +9,7 @@
  * takes over.
  */
 
-import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import { isSignupRecoveryConfirmationPending } from "~/shared/signup/recovery-gate";
 import type { FilesSnapshot } from "~/tree/navigation-client";
@@ -43,7 +43,7 @@ import {
   type ImportSourceFile,
   type RawImportInput,
 } from "../shared/import/source";
-import { eligibleImportTargets, preferredImportTarget, type EligibleImportTarget } from "../shared/import/targets";
+import { eligibleImportTargets, preferredImportTarget } from "../shared/import/targets";
 
 export type ImportControlHandle = {
   canAcceptDrop: () => boolean;
@@ -162,12 +162,19 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
     }
   }
 
+  // Latest-drop-handler ref: the imperative handle is read at event time, so
+  // it must not close over a stale drop handler.
+  const beginDataTransferRef = useRef(beginDataTransfer);
+  useEffect(() => {
+    beginDataTransferRef.current = beginDataTransfer;
+  });
+
   useImperativeHandle(
     ref,
     () => ({
       canAcceptDrop: () => !disabled && !recoveryPending && phase.status === "idle",
       acceptDrop: (dataTransfer: DataTransfer) => {
-        void beginDataTransfer(dataTransfer);
+        void beginDataTransferRef.current(dataTransfer);
       },
     }),
     [disabled, recoveryPending, phase.status],
