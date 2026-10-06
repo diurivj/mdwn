@@ -85,9 +85,10 @@ report.
 ## Commissioning
 
 The maintainer arranges the review: choose a reviewer independent of the
-project, pin the candidate commit, provide this brief plus `docs/acceptance.md`,
-`docs/buildable-spec.md`, `CONTEXT.md`, and `docs/adr/`, and scope the
-engagement to the claims above. After the review, link its report from the
-release ticket and only then use an end-to-end-security-verified claim. No
-reviewer identity, contact, or schedule is recorded here because it is a
-maintainer decision outside this repository.
+project, pin the candidate commit, and send them
+[`docs/security-review-request.md`](security-review-request.md) — the
+engagement document with scope, access rules, the concrete attack checklist,
+and the report format. After the review, record the engagement in that
+request's table and link the report from the release ticket; only then use an
+end-to-end-security-verified claim. No reviewer identity, contact, or schedule
+is recorded here because it is a maintainer decision outside this repository.
