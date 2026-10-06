@@ -34,6 +34,9 @@ export function spawnWrangler(args) {
   return spawnSync("npx", ["--no-install", "wrangler", ...args], {
     stdio: "pipe",
     encoding: "utf8",
+    // Digest verification pages can legitimately return tens of MB of quoted
+    // ciphertext; the 1 MB spawnSync default truncates them into invalid JSON.
+    maxBuffer: 64 * 1024 * 1024,
   });
 }
 
