@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ImportError } from "../app/shared/import/limits";
+import type { ImportError } from "../app/shared/import/limits";
 import { inputsFromDataTransfer, inputsFromFiles } from "../app/shared/import/browser";
 
 const encoder = new TextEncoder();
@@ -33,7 +33,10 @@ function directoryEntry(name: string, children: readonly FileSystemEntry[]): Fil
       return {
         readEntries: (resolve: (entries: FileSystemEntry[]) => void) => {
           if (delivered) resolve([]);
-          else { delivered = true; resolve([...children]); }
+          else {
+            delivered = true;
+            resolve([...children]);
+          }
         },
       } as unknown as FileSystemDirectoryReader;
     },
@@ -53,14 +56,14 @@ describe("import browser inputs", () => {
   it("walks a dropped directory tree and preserves empty folders", async () => {
     const item = {
       kind: "file",
-      webkitGetAsEntry: () => directoryEntry("notes", [
-        fileEntry("draft.md", "# Draft\n"),
-        directoryEntry("empty", []),
-      ]),
+      webkitGetAsEntry: () =>
+        directoryEntry("notes", [fileEntry("draft.md", "# Draft\n"), directoryEntry("empty", [])]),
     } as unknown as DataTransferItem;
     const inputs = await inputsFromDataTransfer({ items: [item], files: [] } as unknown as DataTransfer);
     expect(inputs.map((input) => `${input.directory ? "dir:" : "file:"}${input.path}`)).toEqual([
-      "dir:notes", "file:notes/draft.md", "dir:notes/empty",
+      "dir:notes",
+      "file:notes/draft.md",
+      "dir:notes/empty",
     ]);
   });
 
@@ -76,6 +79,8 @@ describe("import browser inputs", () => {
       webkitRelativePath: "",
       arrayBuffer: async () => new Uint8Array(16_777_217).buffer,
     } as unknown as File;
-    await expect(inputsFromFiles([big])).rejects.toMatchObject({ code: "expanded-too-large" satisfies ImportError["code"] });
+    await expect(inputsFromFiles([big])).rejects.toMatchObject({
+      code: "expanded-too-large" satisfies ImportError["code"],
+    });
   });
 });

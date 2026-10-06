@@ -67,7 +67,8 @@ export function runnerDigests(runner, tables) {
       );
       if (rows.length === 0) break;
       for (const row of rows) {
-        sum = (sum + BigInt(`0x${createHash("sha256").update(String(row.__value), "utf8").digest("hex")}`)) & DIGEST_MASK;
+        sum =
+          (sum + BigInt(`0x${createHash("sha256").update(String(row.__value), "utf8").digest("hex")}`)) & DIGEST_MASK;
         count += 1;
       }
       lastRowid = Number(rows[rows.length - 1].__rowid);
@@ -141,9 +142,17 @@ export function behaviorProbes(db, { full = true } = {}) {
   const probes = [];
   if (!full) {
     const enabled = db.prepare("PRAGMA foreign_keys").get();
-    probes.push({ name: "PRAGMA foreign_keys", ok: Number(enabled?.foreign_keys) === 1, detail: JSON.stringify(enabled) });
+    probes.push({
+      name: "PRAGMA foreign_keys",
+      ok: Number(enabled?.foreign_keys) === 1,
+      detail: JSON.stringify(enabled),
+    });
     const violations = db.prepare("PRAGMA foreign_key_check").all();
-    probes.push({ name: "PRAGMA foreign_key_check", ok: violations.length === 0, detail: `${violations.length} violations` });
+    probes.push({
+      name: "PRAGMA foreign_key_check",
+      ok: violations.length === 0,
+      detail: `${violations.length} violations`,
+    });
     return probes;
   }
   /** @param {string} name @param {string} sql @param {RegExp} pattern */
@@ -175,7 +184,11 @@ export function behaviorProbes(db, { full = true } = {}) {
       /immutable/,
     );
   } else {
-    probes.push({ name: "file representation immutability trigger", ok: false, detail: "no restored representation to probe" });
+    probes.push({
+      name: "file representation immutability trigger",
+      ok: false,
+      detail: "no restored representation to probe",
+    });
   }
 
   expectFailure(
@@ -221,7 +234,11 @@ export function behaviorProbes(db, { full = true } = {}) {
     detail: JSON.stringify(enabled),
   });
   const violations = db.prepare("PRAGMA foreign_key_check").all();
-  probes.push({ name: "PRAGMA foreign_key_check", ok: violations.length === 0, detail: `${violations.length} violations` });
+  probes.push({
+    name: "PRAGMA foreign_key_check",
+    ok: violations.length === 0,
+    detail: `${violations.length} violations`,
+  });
   return probes;
 }
 
@@ -252,12 +269,22 @@ export function reviewedPlanChecks(runner) {
       /** @param {Record<string, unknown>[]} rows */
       const detail = (rows) => rows.map((row) => String(row.detail)).join("; ");
       const selected = queryRows(runner, `EXPLAIN QUERY PLAN ${query.sql};`);
-      assertQueryPlan(query, selected.map((row) => ({ detail: String(row.detail) })), false);
+      assertQueryPlan(
+        query,
+        selected.map((row) => ({ detail: String(row.detail) })),
+        false,
+      );
       if (query.probeFrom) {
         const probe = queryRows(runner, `EXPLAIN QUERY PLAN ${coveringProbeSql(query)};`);
-        assertQueryPlan(query, probe.map((row) => ({ detail: String(row.detail) })));
+        assertQueryPlan(
+          query,
+          probe.map((row) => ({ detail: String(row.detail) })),
+        );
       } else {
-        assertQueryPlan(query, selected.map((row) => ({ detail: String(row.detail) })));
+        assertQueryPlan(
+          query,
+          selected.map((row) => ({ detail: String(row.detail) })),
+        );
       }
       checks.push({ name: query.name, ok: true, detail: detail(selected) });
     } catch (error) {
@@ -328,7 +355,12 @@ export function verifyRestoreTarget(runner, manifest, { checkQueryPlans = true }
   const violations = basic[1]?.results ?? [];
   record("PRAGMA foreign_key_check", violations.length === 0, `${violations.length} violations`);
 
-  const expectedObjects = new Map(manifest.schema.objects.map((/** @type {{type: string, name: string, sha256: string}} */ object) => [`${object.type}:${object.name}`, object.sha256]));
+  const expectedObjects = new Map(
+    manifest.schema.objects.map((/** @type {{type: string, name: string, sha256: string}} */ object) => [
+      `${object.type}:${object.name}`,
+      object.sha256,
+    ]),
+  );
   const actualObjects = new Map(
     (basic[2]?.results ?? []).map((row) => [`${row.type}:${row.name}`, sha256Hex(String(row.sql))]),
   );
@@ -338,9 +370,15 @@ export function verifyRestoreTarget(runner, manifest, { checkQueryPlans = true }
     else if (actualObjects.get(key) !== hash) objectProblems.push(`${key} differs`);
   }
   for (const key of actualObjects.keys()) if (!expectedObjects.has(key)) objectProblems.push(`${key} unexpected`);
-  record("schema objects (tables/indexes/triggers/views)", objectProblems.length === 0, objectProblems.join("; ") || `${expectedObjects.size} objects match`);
+  record(
+    "schema objects (tables/indexes/triggers/views)",
+    objectProblems.length === 0,
+    objectProblems.join("; ") || `${expectedObjects.size} objects match`,
+  );
 
-  const expectedMigrations = manifest.schema.migrations.map((migration) => `${migration.id}:${migration.name}`).join(",");
+  const expectedMigrations = manifest.schema.migrations
+    .map((migration) => `${migration.id}:${migration.name}`)
+    .join(",");
   const actualMigrations = (basic[3]?.results ?? []).map((row) => `${row.id}:${row.name}`).join(",");
   record("migration records", expectedMigrations === actualMigrations, `head ${manifest.schema.head ?? "none"}`);
 
@@ -354,7 +392,11 @@ export function verifyRestoreTarget(runner, manifest, { checkQueryPlans = true }
     const actual = Number(countResults[index]?.results?.[0]?.n);
     if (actual !== table.count) countProblems.push(`${table.name}: ${actual} != ${table.count}`);
   });
-  record("table row counts", countProblems.length === 0, countProblems.join("; ") || `${manifest.tables.length} tables match`);
+  record(
+    "table row counts",
+    countProblems.length === 0,
+    countProblems.join("; ") || `${manifest.tables.length} tables match`,
+  );
 
   /** @type {string[]} */
   /** @type {string[]} */
@@ -364,13 +406,18 @@ export function verifyRestoreTarget(runner, manifest, { checkQueryPlans = true }
     if (table.count === 0) continue;
     const digest = actualDigests.get(table.name);
     if (!digest) digestProblems.push(`${table.name}: no digest returned`);
-    else if (digest.count !== table.count) digestProblems.push(`${table.name}: count ${digest.count} != ${table.count}`);
+    else if (digest.count !== table.count)
+      digestProblems.push(`${table.name}: count ${digest.count} != ${table.count}`);
     else if (digest.digest !== table.digest) digestProblems.push(`${table.name}: content digest differs`);
   }
   record("table content digests", digestProblems.length === 0, digestProblems.join("; ") || "all digests match");
 
-  const restoredTables = new Set((basic[2]?.results ?? []).filter((row) => row.type === "table").map((row) => row.name));
-  const applicablePointerChecks = CURRENT_POINTER_CHECKS.filter((check) => check.requires.every((table) => restoredTables.has(table)));
+  const restoredTables = new Set(
+    (basic[2]?.results ?? []).filter((row) => row.type === "table").map((row) => row.name),
+  );
+  const applicablePointerChecks = CURRENT_POINTER_CHECKS.filter((check) =>
+    check.requires.every((table) => restoredTables.has(table)),
+  );
   /** @type {string[]} */
   const pointerProblems = [];
   for (const check of applicablePointerChecks) {
@@ -386,7 +433,11 @@ export function verifyRestoreTarget(runner, manifest, { checkQueryPlans = true }
   if (checkQueryPlans) {
     const planChecks = reviewedPlanChecks(runner);
     const planProblems = planChecks.filter((check) => !check.ok).map((check) => check.detail);
-    record("reviewed query plans", planProblems.length === 0, planProblems.join("; ") || `${QUERY_PLANS.length} plans match`);
+    record(
+      "reviewed query plans",
+      planProblems.length === 0,
+      planProblems.join("; ") || `${QUERY_PLANS.length} plans match`,
+    );
   }
 
   const problems = checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`);

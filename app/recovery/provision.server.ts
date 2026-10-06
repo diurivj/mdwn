@@ -7,8 +7,14 @@ const noStore = { "Cache-Control": "no-store" };
 const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers: noStore });
 
 type NextRow = {
-  id: string; kind: "recovery_owned" | "enrollment_owned"; state: "pending" | "complete"; cursor: string | null;
-  object_id: string | null; key_id: string | null; ciphertext: ArrayBuffer | null; key_epoch: number | null;
+  id: string;
+  kind: "recovery_owned" | "enrollment_owned";
+  state: "pending" | "complete";
+  cursor: string | null;
+  object_id: string | null;
+  key_id: string | null;
+  ciphertext: ArrayBuffer | null;
+  key_epoch: number | null;
 };
 
 export async function nextOwnedEnvelope(env: Env, authorized: AuthorizedDevice): Promise<Response> {
@@ -28,17 +34,31 @@ export async function nextOwnedEnvelope(env: Env, authorized: AuthorizedDevice):
     ORDER BY j.created_at DESC LIMIT 1
   `);
   if (!row) return Response.json({ state: "complete", item: null }, { headers: noStore });
-  return Response.json({ state: row.state, kind: row.kind, cursor: row.cursor,
-    item: row.state === "pending" && row.object_id && row.ciphertext && row.key_epoch
-      ? { objectId: row.object_id, envelope: encodeBytes(new Uint8Array(row.ciphertext)), keyEpoch: row.key_epoch,
-          ...(row.key_id === row.object_id ? {} : { keyId: row.key_id }) }
-      : null,
-  }, { headers: noStore });
+  return Response.json(
+    {
+      state: row.state,
+      kind: row.kind,
+      cursor: row.cursor,
+      item:
+        row.state === "pending" && row.object_id && row.ciphertext && row.key_epoch
+          ? {
+              objectId: row.object_id,
+              envelope: encodeBytes(new Uint8Array(row.ciphertext)),
+              keyEpoch: row.key_epoch,
+              ...(row.key_id === row.object_id ? {} : { keyId: row.key_id }),
+            }
+          : null,
+    },
+    { headers: noStore },
+  );
 }
 
 export async function finishOwnedProvisioning(env: Env, authorized: AuthorizedDevice): Promise<Response> {
   const now = Date.now();
-  const committed = await commitPrivateMutation(env, authorized, (guard) => sql`
+  const committed = await commitPrivateMutation(
+    env,
+    authorized,
+    (guard) => sql`
     UPDATE crypto_jobs SET state = 'complete', updated_at = ${now}
     WHERE account_id = ${authorized.accountId} AND device_id = ${authorized.deviceId}
       AND kind IN ('recovery_owned', 'enrollment_owned') AND state = 'pending' AND ${guard}
@@ -46,7 +66,8 @@ export async function finishOwnedProvisioning(env: Env, authorized: AuthorizedDe
         WHERE source.account_id = crypto_jobs.account_id AND source.purpose = 'vault-recovery'
           AND source.recipient_id = 'vault-root' AND source.superseded_at IS NULL
           AND (crypto_jobs.cursor IS NULL OR source.object_id > crypto_jobs.cursor))
-  `);
+  `,
+  );
   if (committed) return Response.json({ ok: true }, { headers: noStore });
   const alreadyComplete = await createDb(env.DB).get<{ id: string }>(sql`
     SELECT id FROM crypto_jobs WHERE account_id = ${authorized.accountId}
@@ -55,12 +76,24 @@ export async function finishOwnedProvisioning(env: Env, authorized: AuthorizedDe
   return alreadyComplete ? Response.json({ ok: true }, { headers: noStore }) : denied();
 }
 
-export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevice, body: Record<string, unknown>): Promise<Response> {
-  if (typeof body.objectId !== "string" || !body.objectId ||
-      typeof body.envelope !== "string" ||
-      !(body.cursor === null || typeof body.cursor === "string")) return denied();
+export async function stepOwnedProvisioning(
+  env: Env,
+  authorized: AuthorizedDevice,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  if (
+    typeof body.objectId !== "string" ||
+    !body.objectId ||
+    typeof body.envelope !== "string" ||
+    !(body.cursor === null || typeof body.cursor === "string")
+  )
+    return denied();
   let envelope: Uint8Array;
-  try { envelope = decodeBytes(body.envelope); } catch { return denied(); }
+  try {
+    envelope = decodeBytes(body.envelope);
+  } catch {
+    return denied();
+  }
   const source = await createDb(env.DB).get<{ ciphertext: ArrayBuffer; key_epoch: number }>(sql`
     SELECT ciphertext, key_epoch FROM key_envelopes WHERE account_id = ${authorized.accountId}
       AND purpose = 'vault-recovery' AND object_id = ${body.objectId}
@@ -69,19 +102,24 @@ export async function stepOwnedProvisioning(env: Env, authorized: AuthorizedDevi
   try {
     const sourceHeader = inspectEnvelope(new Uint8Array(source.ciphertext));
     const header = inspectEnvelope(envelope);
-    if (sourceHeader.context.purpose !== "vault-recovery" ||
-        sourceHeader.context.vaultId !== authorized.accountId ||
-        sourceHeader.context.objectId !== body.objectId ||
-        sourceHeader.context.keyEpoch !== source.key_epoch ||
-        header.suite !== "HPKE-P256/HKDF-SHA-256/AES-256-GCM" ||
-        header.context.purpose !== "owned-device" ||
-        header.context.vaultId !== authorized.accountId ||
-        header.context.objectId !== body.objectId ||
-        header.context.keyId !== sourceHeader.context.keyId ||
-        header.context.keyEpoch !== source.key_epoch ||
-        header.context.revision !== 1 ||
-        header.context.recipientId !== authorized.deviceId) return denied();
-  } catch { return denied(); }
+    if (
+      sourceHeader.context.purpose !== "vault-recovery" ||
+      sourceHeader.context.vaultId !== authorized.accountId ||
+      sourceHeader.context.objectId !== body.objectId ||
+      sourceHeader.context.keyEpoch !== source.key_epoch ||
+      header.suite !== "HPKE-P256/HKDF-SHA-256/AES-256-GCM" ||
+      header.context.purpose !== "owned-device" ||
+      header.context.vaultId !== authorized.accountId ||
+      header.context.objectId !== body.objectId ||
+      header.context.keyId !== sourceHeader.context.keyId ||
+      header.context.keyEpoch !== source.key_epoch ||
+      header.context.revision !== 1 ||
+      header.context.recipientId !== authorized.deviceId
+    )
+      return denied();
+  } catch {
+    return denied();
+  }
   const now = Date.now();
   if (authorized.expiresAt <= now) return denied();
   const proofDay = coarseProofTime(now);

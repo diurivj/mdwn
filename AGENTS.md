@@ -24,7 +24,7 @@ Framework-reserved entry files (`app/root.tsx`, `app/routes.ts`, `app/entry.serv
 
 ### Reference docs
 
-- `docs/testing.md`: Node/Workers/browser test layout, TypeScript project boundaries, CI output.
+- `docs/testing.md`: Node/Workers/browser test layout, lint/format commands and config, TypeScript project boundaries, CI output.
 - `docs/operations.md`: retention, D1 query plans, Time Travel, export restoration.
 - `docs/operations/d1-scripting.md`: verified Wrangler/D1 semantics before writing an operational script.
 - `docs/serving-and-security.md`: serving and security model.

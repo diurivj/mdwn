@@ -20,10 +20,9 @@ export default async function handleRequest(
 ) {
   const nonce = loadContext.get(cspNonceContext);
 
-  const body = await renderToReadableStream(
-    <ServerRouter nonce={nonce} context={routerContext} url={request.url} />,
-    { nonce },
-  );
+  const body = await renderToReadableStream(<ServerRouter nonce={nonce} context={routerContext} url={request.url} />, {
+    nonce,
+  });
 
   // Stop rendering when the client disconnects (React streaming best
   // practice); otherwise the aborted render keeps consuming CPU.

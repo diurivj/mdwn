@@ -30,6 +30,8 @@ jobs:
           package-manager-cache: false
       - name: Install
         run: npm ci
+      - name: Lint and format check
+        run: npm run lint
       - name: Typecheck
         run: npm run typecheck
       - name: Unicode namespace data drift check

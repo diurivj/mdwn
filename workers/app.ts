@@ -75,9 +75,7 @@ export default {
       // Private-first app: never share dynamic responses across users.
       headers.set("Cache-Control", DYNAMIC_CACHE_CONTROL);
     }
-    for (const [name, value] of Object.entries(
-      buildSecurityHeaders({ nonce, dev: import.meta.env.DEV }),
-    )) {
+    for (const [name, value] of Object.entries(buildSecurityHeaders({ nonce, dev: import.meta.env.DEV }))) {
       if (!headers.has(name)) headers.set(name, value);
     }
 

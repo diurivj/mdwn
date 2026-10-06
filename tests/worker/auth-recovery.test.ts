@@ -6,14 +6,18 @@ import { decodeBytes } from "../../app/shared/signup/protocol";
 import { mutation, seedNormalSession, sessionState } from "./auth-fixtures";
 
 declare global {
-  namespace Cloudflare { interface Env {
-    TEST_MIGRATIONS: D1Migration[];
-    SESSION_COOKIE_SECRET: string;
-    ABUSE_HMAC_SECRET: string;
-  } }
+  namespace Cloudflare {
+    interface Env {
+      TEST_MIGRATIONS: D1Migration[];
+      SESSION_COOKIE_SECRET: string;
+      ABUSE_HMAC_SECRET: string;
+    }
+  }
 }
 
-beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
+beforeAll(async () => {
+  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+});
 
 function recoveryIdentifier(): string {
   const randomId = crypto.randomUUID();
@@ -26,14 +30,20 @@ async function recoveryAccount() {
   const { codes, hashes } = await prepareRecoveryCodeSet();
   const now = Date.now();
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
-      .bind(identifier, crypto.randomUUID(), now, now),
+    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(
+      identifier,
+      crypto.randomUUID(),
+      now,
+      now,
+    ),
     env.DB.prepare(`INSERT INTO passkeys
       (credential_id, account_id, public_key, counter, transports, device_type, backed_up, created_at, updated_at)
       VALUES (?, ?, ?, 0, '[]', 'singleDevice', 0, ?, ?)`).bind(credentialId, identifier, Uint8Array.of(1), now, now),
-    ...hashes.map((hash, ordinal) => env.DB.prepare(
-      "INSERT INTO authentication_recovery_codes (account_id, ordinal, code_hash) VALUES (?, ?, ?)",
-    ).bind(identifier, ordinal, decodeBytes(hash, 32))),
+    ...hashes.map((hash, ordinal) =>
+      env.DB.prepare(
+        "INSERT INTO authentication_recovery_codes (account_id, ordinal, code_hash) VALUES (?, ?, ?)",
+      ).bind(identifier, ordinal, decodeBytes(hash, 32)),
+    ),
   ]);
   return { identifier, accountId: identifier, credentialIds: [credentialId], codes, hashes };
 }
@@ -68,12 +78,17 @@ describe("authentication recovery routes", () => {
     expect(await status.json()).toEqual({ restricted: true });
     expect(await sessionState(restricted)).toEqual({ authenticated: true });
     expect((await recoveryRequest("options", restricted)).status).toBe(200);
-    expect((await SELF.fetch("https://mdwn.test/api/auth/sessions", {
-      headers: { cookie: restricted },
-    })).status).toBe(403);
+    expect(
+      (
+        await SELF.fetch("https://mdwn.test/api/auth/sessions", {
+          headers: { cookie: restricted },
+        })
+      ).status,
+    ).toBe(403);
     expect((await recoveryRequest("rotate", restricted, { hashes: account.hashes })).status).toBe(403);
-    expect((await mutation("/api/auth/passkeys/remove", restricted,
-      { credentialId: account.credentialIds[0] })).status).toBe(403);
+    expect(
+      (await mutation("/api/auth/passkeys/remove", restricted, { credentialId: account.credentialIds[0] })).status,
+    ).toBe(403);
     expect(await sessionState(existing.cookie)).toEqual({ authenticated: true });
     expect((await attempt(account.identifier, account.codes[0], "203.0.113.82")).status).toBe(401);
     const second = await attempt(account.identifier, account.codes[1], "203.0.113.83");
@@ -132,11 +147,9 @@ describe("authentication recovery routes", () => {
     const actor = await seedNormalSession(account);
     const replacement = await prepareRecoveryCodeSet();
     expect((await recoveryRequest("rotate", "", { hashes: replacement.hashes })).status).toBe(403);
-    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = NULL WHERE id = ?")
-      .bind(actor.id).run();
+    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = NULL WHERE id = ?").bind(actor.id).run();
     expect((await recoveryRequest("rotate", actor.cookie, { hashes: replacement.hashes })).status).toBe(401);
-    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?")
-      .bind(Date.now(), actor.id).run();
+    await env.DB.prepare("UPDATE sessions SET fresh_asserted_at = ? WHERE id = ?").bind(Date.now(), actor.id).run();
     expect((await recoveryRequest("rotate", actor.cookie, { hashes: replacement.hashes })).status).toBe(200);
     for (const [index, ip] of ["203.0.113.111", "203.0.113.112"].entries()) {
       expect((await attempt(account.identifier, account.codes[index], ip)).status).toBe(401);
@@ -154,16 +167,23 @@ describe("authentication recovery routes", () => {
     expect((await recoveryRequest("verify", restricted, { challengeId: "guess", response: {} })).status).toBe(401);
     const otherAccount = recoveryIdentifier();
     expect((await attempt(otherAccount, account.codes[0], "203.0.113.122")).status).toBe(401);
-    const sessionId = (await env.DB.prepare("SELECT id FROM sessions WHERE account_id = ? AND purpose = 'recovery'")
-      .bind(account.identifier).first<{ id: string }>())?.id;
+    const sessionId = (
+      await env.DB.prepare("SELECT id FROM sessions WHERE account_id = ? AND purpose = 'recovery'")
+        .bind(account.identifier)
+        .first<{ id: string }>()
+    )?.id;
     expect(sessionId).toBeDefined();
     await env.DB.prepare("UPDATE sessions SET created_at = ?, idle_expires_at = ? WHERE id = ?")
-      .bind(Date.now() - 5 * 60_000 - 1, Date.now() + 60_000, sessionId).run();
+      .bind(Date.now() - 5 * 60_000 - 1, Date.now() + 60_000, sessionId)
+      .run();
     expect(await sessionState(restricted)).toEqual({ authenticated: false });
     expect((await recoveryRequest("options", restricted)).status).toBe(403);
     expect((await recoveryRequest("verify", restricted, { challengeId: "guess", response: {} })).status).toBe(403);
     expect((await recoveryRequest("rotate", restricted, { hashes: account.hashes })).status).toBe(403);
-    expect((await SELF.fetch("https://mdwn.test/api/private/bootstrap", { method: "POST", headers: { cookie: restricted } })).status).toBe(403);
+    expect(
+      (await SELF.fetch("https://mdwn.test/api/private/bootstrap", { method: "POST", headers: { cookie: restricted } }))
+        .status,
+    ).toBe(403);
   });
 
   it("has no recovery route when every Passkey and code is lost", async () => {

@@ -25,7 +25,9 @@ const NONCE_RE = /^[A-Za-z0-9_-]{16,}$/;
 export function generateCspNonce(): string {
   const bytes = new Uint8Array(24);
   crypto.getRandomValues(bytes);
-  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_");
+  return btoa(String.fromCharCode(...bytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_");
 }
 
 /** Validate/normalize an incoming nonce; returns "" when unusable. */
@@ -34,12 +36,8 @@ export function normalizeCspNonce(nonce: string | undefined): string {
 }
 
 function buildCsp(nonce: string, dev: boolean): string {
-  const scriptSrc = dev
-    ? "'self' 'unsafe-inline' 'unsafe-eval'"
-    : `'self' 'nonce-${nonce}'`;
-  const connectSrc = dev
-    ? "'self' ws: wss: http://localhost:* http://127.0.0.1:*"
-    : "'self'";
+  const scriptSrc = dev ? "'self' 'unsafe-inline' 'unsafe-eval'" : `'self' 'nonce-${nonce}'`;
+  const connectSrc = dev ? "'self' ws: wss: http://localhost:* http://127.0.0.1:*" : "'self'";
   return [
     "default-src 'none'",
     "base-uri 'none'",

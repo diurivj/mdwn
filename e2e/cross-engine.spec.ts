@@ -3,15 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { test, expect } from "./fixtures";
-import {
-  CROSS_ENGINE_ROUTE,
-  CROSS_ENGINE_VECTOR,
-} from "../tests/support/cross-engine-vector";
+import { CROSS_ENGINE_ROUTE, CROSS_ENGINE_VECTOR } from "../tests/support/cross-engine-vector";
 
-async function gotoApp(
-  page: import("@playwright/test").Page,
-  url = "/",
-) {
+async function gotoApp(page: import("@playwright/test").Page, url = "/") {
   // React Router streams the document. WebKit can keep the load event open
   // while the stream is live, so commit is the portable navigation boundary;
   // locator/evaluate calls below still wait for the document to be usable.
@@ -24,13 +18,9 @@ async function runAesGcmVector(page: import("@playwright/test").Page) {
       throw new Error("WebCrypto test is not running in a secure context");
     }
 
-    const key = await crypto.subtle.importKey(
-      "raw",
-      new Uint8Array(vector.key),
-      { name: "AES-GCM" },
-      false,
-      ["encrypt"],
-    );
+    const key = await crypto.subtle.importKey("raw", new Uint8Array(vector.key), { name: "AES-GCM" }, false, [
+      "encrypt",
+    ]);
     const ciphertext = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv: new Uint8Array(vector.iv) },
       key,
@@ -39,9 +29,7 @@ async function runAesGcmVector(page: import("@playwright/test").Page) {
 
     return {
       secureContext: window.isSecureContext,
-      ciphertext: Array.from(new Uint8Array(ciphertext), (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join(""),
+      ciphertext: Array.from(new Uint8Array(ciphertext), (byte) => byte.toString(16).padStart(2, "0")).join(""),
     };
   }, CROSS_ENGINE_VECTOR);
 }
@@ -95,9 +83,7 @@ test.describe("cross-engine application contract", () => {
 
     expect(response?.status()).toBe(200);
     await expect(page).toHaveTitle(CROSS_ENGINE_ROUTE.title);
-    await expect(
-      page.getByRole("heading", { name: CROSS_ENGINE_ROUTE.heading }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: CROSS_ENGINE_ROUTE.heading })).toBeVisible();
 
     expect(await runAesGcmVector(page)).toEqual({
       secureContext: true,
@@ -134,11 +120,7 @@ test.describe("cross-engine application contract", () => {
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
-          const key = await crypto.subtle.generateKey(
-            { name: "AES-GCM", length: 256 },
-            false,
-            ["encrypt"],
-          );
+          const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt"]);
 
           await new Promise<void>((resolve, reject) => {
             const transaction = db.transaction("devices", "readwrite");
@@ -199,16 +181,10 @@ test.describe("cross-engine application contract", () => {
     baseURL,
   }) => {
     const browserType = playwright[browserName];
-    const [deviceBrowserA, deviceBrowserB] = await Promise.all([
-      browserType.launch(),
-      browserType.launch(),
-    ]);
+    const [deviceBrowserA, deviceBrowserB] = await Promise.all([browserType.launch(), browserType.launch()]);
     const deviceContextA = await deviceBrowserA.newContext({ ignoreHTTPSErrors: true });
     const deviceContextB = await deviceBrowserB.newContext({ ignoreHTTPSErrors: true });
-    const [deviceA, deviceB] = await Promise.all([
-      deviceContextA.newPage(),
-      deviceContextB.newPage(),
-    ]);
+    const [deviceA, deviceB] = await Promise.all([deviceContextA.newPage(), deviceContextB.newPage()]);
 
     try {
       await Promise.all([gotoApp(deviceA, baseURL!), gotoApp(deviceB, baseURL!)]);

@@ -6,15 +6,30 @@ import { committedNodeVisible } from "../shared/import/visibility.server";
 export { committedNodeVisible } from "../shared/import/visibility.server";
 
 export type EffectiveAccess = {
-  accountId: string; nodeId: string; ownerId: string; kind: "directory" | "file";
-  isOwner: boolean; permission: "read_only" | "read_write";
-  canReadPrivateComments: boolean; canReadCollaboratorsPublicComments: boolean;
-  directoryWriteRoots: string[]; directoryReadRoots: string[]; canChangeStructure: boolean;
+  accountId: string;
+  nodeId: string;
+  ownerId: string;
+  kind: "directory" | "file";
+  isOwner: boolean;
+  permission: "read_only" | "read_write";
+  canReadPrivateComments: boolean;
+  canReadCollaboratorsPublicComments: boolean;
+  directoryWriteRoots: string[];
+  directoryReadRoots: string[];
+  canChangeStructure: boolean;
 };
 
-type AccessRow = { node_id: string; owner_id: string; kind: "directory" | "file";
-  permission_rank: number; can_read_private_comments: number; can_read_collaborators_public_comments: number;
-  directory_write_roots: string; directory_read_roots: string; can_change_structure: number };
+type AccessRow = {
+  node_id: string;
+  owner_id: string;
+  kind: "directory" | "file";
+  permission_rank: number;
+  can_read_private_comments: number;
+  can_read_collaborators_public_comments: number;
+  directory_write_roots: string;
+  directory_read_roots: string;
+  can_change_structure: number;
+};
 
 /** At most 101 indexed node lookups (100 edges). Grants are exact covering-index
  * probes for each ancestor, never a scan over an Account's Files or Grants.
@@ -64,53 +79,104 @@ function accessQuery(accountId: string, nodeId: string | SQL, guard: SQL): SQL {
     FROM authority WHERE permission_rank > 0`;
 }
 
-export async function effectiveAccess(env: Env, auth: AuthorizedDevice, nodeId: string): Promise<EffectiveAccess | null> {
+export async function effectiveAccess(
+  env: Env,
+  auth: AuthorizedDevice,
+  nodeId: string,
+): Promise<EffectiveAccess | null> {
   const row = await createDb(env.DB).get<AccessRow>(effectiveAccessQuery(auth, nodeId));
   if (!row) return null;
-  return { accountId: auth.accountId, nodeId: row.node_id, ownerId: row.owner_id, kind: row.kind,
-    isOwner: row.permission_rank === 3, permission: row.permission_rank > 1 ? "read_write" : "read_only",
+  return {
+    accountId: auth.accountId,
+    nodeId: row.node_id,
+    ownerId: row.owner_id,
+    kind: row.kind,
+    isOwner: row.permission_rank === 3,
+    permission: row.permission_rank > 1 ? "read_write" : "read_only",
     canReadPrivateComments: !!row.can_read_private_comments,
     canReadCollaboratorsPublicComments: !!row.can_read_collaborators_public_comments,
     directoryWriteRoots: JSON.parse(row.directory_write_roots) as string[],
     directoryReadRoots: JSON.parse(row.directory_read_roots) as string[],
-    canChangeStructure: !!row.can_change_structure };
+    canChangeStructure: !!row.can_change_structure,
+  };
 }
 
-export type Operation = "read_file" | "edit_markdown" | "create_child" | "rename" | "reorder" | "delete" | "move"
-  | "import" | "read_private_comments" | "create_private_comment" | "edit_private_comment" | "delete_private_comment"
-  | "delete_another_comment" | "manage_shares" | "manage_publication" | "request_publication"
-  | "read_collaborators_public_comments" | "read_public_comments" | "post_public_comment" | "export";
+export type Operation =
+  | "read_file"
+  | "edit_markdown"
+  | "create_child"
+  | "rename"
+  | "reorder"
+  | "delete"
+  | "move"
+  | "import"
+  | "read_private_comments"
+  | "create_private_comment"
+  | "edit_private_comment"
+  | "delete_private_comment"
+  | "delete_another_comment"
+  | "manage_shares"
+  | "manage_publication"
+  | "request_publication"
+  | "read_collaborators_public_comments"
+  | "read_public_comments"
+  | "post_public_comment"
+  | "export";
 
 /** Policy seam for the full matrix. Comment/Publication/Import/Export modules
  * must apply the corresponding predicate in their own current-epoch CAS.
  */
-export function permits(access: EffectiveAccess | null, operation: Operation,
-  context: { commentAuthorId?: string; destination?: EffectiveAccess } = {}): boolean {
+export function permits(
+  access: EffectiveAccess | null,
+  operation: Operation,
+  context: { commentAuthorId?: string; destination?: EffectiveAccess } = {},
+): boolean {
   if (!access) return false;
   const file = access.kind === "file";
   switch (operation) {
-    case "read_file": return file;
-    case "edit_markdown": return file && access.permission === "read_write";
-    case "create_child": case "import":
+    case "read_file":
+      return file;
+    case "edit_markdown":
+      return file && access.permission === "read_write";
+    case "create_child":
+    case "import":
       return !file && (access.isOwner || access.directoryWriteRoots.length > 0);
-    case "rename": case "reorder": case "delete": return access.canChangeStructure;
+    case "rename":
+    case "reorder":
+    case "delete":
+      return access.canChangeStructure;
     case "move": {
       const destination = context.destination;
-      return access.canChangeStructure && !!destination && destination.kind === "directory" &&
-        destination.ownerId === access.ownerId && (access.isOwner ||
-          access.directoryWriteRoots.some((root) => destination.directoryWriteRoots.includes(root)));
+      return (
+        access.canChangeStructure &&
+        !!destination &&
+        destination.kind === "directory" &&
+        destination.ownerId === access.ownerId &&
+        (access.isOwner || access.directoryWriteRoots.some((root) => destination.directoryWriteRoots.includes(root)))
+      );
     }
-    case "read_private_comments": case "create_private_comment": return access.canReadPrivateComments;
-    case "edit_private_comment": return access.canReadPrivateComments && context.commentAuthorId === access.accountId;
-    case "delete_private_comment": return access.canReadPrivateComments &&
-      (context.commentAuthorId === access.accountId || access.isOwner);
-    case "delete_another_comment": return file && access.isOwner;
-    case "manage_shares": return access.isOwner;
-    case "manage_publication": return file && access.isOwner;
-    case "request_publication": return file && !access.isOwner;
-    case "read_collaborators_public_comments": return access.canReadCollaboratorsPublicComments;
-    case "read_public_comments": case "post_public_comment": return file;
-    case "export": return file && access.isOwner;
+    case "read_private_comments":
+    case "create_private_comment":
+      return access.canReadPrivateComments;
+    case "edit_private_comment":
+      return access.canReadPrivateComments && context.commentAuthorId === access.accountId;
+    case "delete_private_comment":
+      return access.canReadPrivateComments && (context.commentAuthorId === access.accountId || access.isOwner);
+    case "delete_another_comment":
+      return file && access.isOwner;
+    case "manage_shares":
+      return access.isOwner;
+    case "manage_publication":
+      return file && access.isOwner;
+    case "request_publication":
+      return file && !access.isOwner;
+    case "read_collaborators_public_comments":
+      return access.canReadCollaboratorsPublicComments;
+    case "read_public_comments":
+    case "post_public_comment":
+      return file;
+    case "export":
+      return file && access.isOwner;
   }
 }
 
@@ -160,18 +226,31 @@ export function exitsSharedScope(nodeId: string, destinationId: string): SQL {
  * authority. Never take either fact from request JSON. This conveys no private
  * File, structural, or Collaborators-only Comment authority.
  */
-export function permitsPublicAudience(operation: "read" | "post", verified: {
-  completeActiveLink: boolean; privateCapableSession: boolean;
-}): boolean {
+export function permitsPublicAudience(
+  operation: "read" | "post",
+  verified: {
+    completeActiveLink: boolean;
+    privateCapableSession: boolean;
+  },
+): boolean {
   return verified.completeActiveLink && (operation === "read" || verified.privateCapableSession);
 }
 
 /** SQL authorization adapter used by the tree's read/CAS, not a cached preflight. */
-export function accessPredicate(auth: AuthorizedDevice, nodeId: string | SQL,
-  operation: "read" | "edit" | "create" | "structure" | "owner" = "read"): SQL {
-  const condition = operation === "edit" ? sql`a.kind = 'file' AND a.permission_rank >= 2`
-    : operation === "create" ? sql`a.kind = 'directory' AND (a.permission_rank = 3 OR json_array_length(a.directory_write_roots) > 0)`
-    : operation === "structure" ? sql`a.can_change_structure = 1`
-    : operation === "owner" ? sql`a.permission_rank = 3` : sql`1`;
+export function accessPredicate(
+  auth: AuthorizedDevice,
+  nodeId: string | SQL,
+  operation: "read" | "edit" | "create" | "structure" | "owner" = "read",
+): SQL {
+  const condition =
+    operation === "edit"
+      ? sql`a.kind = 'file' AND a.permission_rank >= 2`
+      : operation === "create"
+        ? sql`a.kind = 'directory' AND (a.permission_rank = 3 OR json_array_length(a.directory_write_roots) > 0)`
+        : operation === "structure"
+          ? sql`a.can_change_structure = 1`
+          : operation === "owner"
+            ? sql`a.permission_rank = 3`
+            : sql`1`;
   return sql`EXISTS (SELECT 1 FROM (${effectiveAccessQuery(auth, nodeId)}) a WHERE ${condition})`;
 }

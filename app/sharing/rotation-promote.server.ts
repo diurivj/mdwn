@@ -1,37 +1,73 @@
 import type { SQL } from "drizzle-orm";
 import { record } from "~/auth/request.server";
 import { digestEnvelope } from "~/shared/crypto/enc-v1";
-import { createDb, sql } from "~/shared/db/client.server";
+import { sql } from "~/shared/db/client.server";
 import type { AuthorizedDevice } from "~/device/proof.server";
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "~/shared/tree/listing";
 import { verifyFileHead, type FileHead } from "~/shared/tree/file-head";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
+import { decodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 import { readRotationSource, rotationSourceSnapshot } from "./rotation-data.server";
 import { liveGrant } from "./grant-lifetime.server";
 import type { RotationDirectory, RotationItem, RotationJob, RotationSource } from "../shared/sharing/rotation-wire";
 
-const exact = (input: Record<string, unknown>, fields: string[]) => Object.keys(input).length === fields.length && fields.every((field) => Object.hasOwn(input, field));
+const exact = (input: Record<string, unknown>, fields: string[]) =>
+  Object.keys(input).length === fields.length && fields.every((field) => Object.hasOwn(input, field));
 type HeadBytes = { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array };
 
-export async function rotationHead(value: unknown, auth: AuthorizedDevice, directoryId: string, epoch: number, revision: number): Promise<HeadBytes> {
+export async function rotationHead(
+  value: unknown,
+  auth: AuthorizedDevice,
+  directoryId: string,
+  epoch: number,
+  revision: number,
+): Promise<HeadBytes> {
   const head = record(value);
   if (!head || !exact(head, ["ciphertext", "digest", "signature"])) throw new Error("invalid head");
-  const ciphertext = treeEnvelope(head.ciphertext, MAX_LISTING_BYTES, { purpose: "directory-metadata", vaultId: auth.accountId,
-    objectId: directoryId, keyId: directoryId, keyEpoch: epoch, revision });
-  const digest = decodeTreeBytes(head.digest, 32), signature = decodeTreeBytes(head.signature, 64);
-  if (digest.length !== 32 || signature.length !== 64 || !(await digestEnvelope(ciphertext)).every((byte, index) => byte === digest[index]) ||
-      !await verifyListingSignature(head as ListingHead, { vaultId: auth.accountId, directoryId,
-        deviceId: auth.deviceId, revision, publicKey: auth.assertionPublicKey })) throw new Error("invalid head");
+  const ciphertext = treeEnvelope(head.ciphertext, MAX_LISTING_BYTES, {
+    purpose: "directory-metadata",
+    vaultId: auth.accountId,
+    objectId: directoryId,
+    keyId: directoryId,
+    keyEpoch: epoch,
+    revision,
+  });
+  const digest = decodeTreeBytes(head.digest, 32),
+    signature = decodeTreeBytes(head.signature, 64);
+  if (
+    digest.length !== 32 ||
+    signature.length !== 64 ||
+    !(await digestEnvelope(ciphertext)).every((byte, index) => byte === digest[index]) ||
+    !(await verifyListingSignature(head as ListingHead, {
+      vaultId: auth.accountId,
+      directoryId,
+      deviceId: auth.deviceId,
+      revision,
+      publicKey: auth.assertionPublicKey,
+    }))
+  )
+    throw new Error("invalid head");
   return { ciphertext, digest, signature };
 }
 
-export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: RotationJob, item: RotationItem,
-  source: RotationSource, input: Record<string, unknown>): Promise<{ eligible: SQL; statements(marker: SQL): SQL[] }> {
+export async function preparePromotion(
+  env: Env,
+  auth: AuthorizedDevice,
+  job: RotationJob,
+  item: RotationItem,
+  source: RotationSource,
+  input: Record<string, unknown>,
+): Promise<{ eligible: SQL; statements(marker: SQL): SQL[] }> {
   const common = ["operation", "operationId", "objectId"];
   if (source.kind === "private_comment" || source.kind === "public_history") {
     if (!exact(input, [...common, "recoveryEnvelope"])) throw new Error("invalid comment promotion");
-    const recovery = treeEnvelope(input.recoveryEnvelope, 16_384, { purpose: "vault-recovery", vaultId: auth.accountId,
-      objectId: item.objectId, keyId: item.capabilityId!, keyEpoch: item.targetEpoch!, revision: 1 });
+    const recovery = treeEnvelope(input.recoveryEnvelope, 16_384, {
+      purpose: "vault-recovery",
+      vaultId: auth.accountId,
+      objectId: item.objectId,
+      keyId: item.capabilityId!,
+      keyEpoch: item.targetEpoch!,
+      revision: 1,
+    });
     const capabilityStatements = (marker: SQL): SQL[] => [
       sql`UPDATE sharing_comment_capabilities SET capability_epoch = ${item.targetEpoch}
         WHERE object_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
@@ -55,9 +91,10 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
     // A Private thread or a rotating Public epoch promotes only once every
     // current body and pseudonym wrapper is staged; deletion during staging is
     // allowed and simply drops the staged row, while an advanced revision blocks.
-    const scope = (table: string) => source.kind === "public_history"
-      ? sql`${sql.raw(table)}.epoch_id = ${item.objectId}`
-      : sql`${sql.raw(table)}.thread_id = ${item.objectId}`;
+    const scope = (table: string) =>
+      source.kind === "public_history"
+        ? sql`${sql.raw(table)}.epoch_id = ${item.objectId}`
+        : sql`${sql.raw(table)}.thread_id = ${item.objectId}`;
     const staged = (kind: "comment" | "attribution", table: string) => sql`EXISTS (
       SELECT 1 FROM key_rotation_comment_items staged WHERE staged.job_id = ${job.jobId}
         AND staged.thread_id = ${item.objectId} AND staged.kind = ${kind} AND staged.record_id = ${sql.raw(table)}.id
@@ -70,10 +107,12 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
           AND staged.record_id = ${sql.raw(table)}.id),
       content_key_epoch = ${item.targetEpoch}
       WHERE ${scope(table)} AND ${marker} AND ${staged(kind, table)}`;
-    const epochScope = source.kind === "public_history"
-      ? sql`id = ${item.objectId} AND state = 'active'`
-      : sql`thread_id = ${item.objectId} AND state = 'active'`;
-    return { eligible: sql`${rotationSourceSnapshot(item, source)}
+    const epochScope =
+      source.kind === "public_history"
+        ? sql`id = ${item.objectId} AND state = 'active'`
+        : sql`thread_id = ${item.objectId} AND state = 'active'`;
+    return {
+      eligible: sql`${rotationSourceSnapshot(item, source)}
       AND ${complete("comment", "comments")} AND ${complete("attribution", "thread_attributions")}`,
       statements: (marker) => [
         rewrap(marker, "comment", "comments"),
@@ -81,33 +120,69 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
         sql`UPDATE comment_thread_epochs SET key_epoch = ${item.targetEpoch}
           WHERE ${epochScope} AND ${marker}`,
         ...capabilityStatements(marker),
-      ] };
+      ],
+    };
   }
-  if (!exact(input, [...common, "keyEnvelope", "parent", "recoveryEnvelope", ...(source.kind === "directory"
-      ? ["listingHead"] : ["representationId", "representationKeyEnvelope", "fileHead"])])) throw new Error("invalid promotion");
+  if (
+    !exact(input, [
+      ...common,
+      "keyEnvelope",
+      "parent",
+      "recoveryEnvelope",
+      ...(source.kind === "directory"
+        ? ["listingHead"]
+        : ["representationId", "representationKeyEnvelope", "fileHead"]),
+    ])
+  )
+    throw new Error("invalid promotion");
   const parentId = source.parentId;
-  let parent: RotationDirectory | null = null, parentHead: HeadBytes | null = null;
+  let parent: RotationDirectory | null = null,
+    parentHead: HeadBytes | null = null;
   if (parentId) {
     const p = record(input.parent);
-    if (!p || !exact(p, ["directoryId", "expectedRevision", "keyEpoch", "listingHead"]) || p.directoryId !== parentId) throw new Error("invalid parent");
+    if (!p || !exact(p, ["directoryId", "expectedRevision", "keyEpoch", "listingHead"]) || p.directoryId !== parentId)
+      throw new Error("invalid parent");
     const read = await readRotationSource(env, auth, { ...item, objectId: parentId, kind: "directory" });
-    if (!read || read.kind !== "directory" || p.expectedRevision !== read.entriesRevision || p.keyEpoch !== read.keyEpoch) throw new Error("changed parent");
+    if (
+      !read ||
+      read.kind !== "directory" ||
+      p.expectedRevision !== read.entriesRevision ||
+      p.keyEpoch !== read.keyEpoch
+    )
+      throw new Error("changed parent");
     parent = read;
     parentHead = await rotationHead(p.listingHead, auth, parentId, parent.keyEpoch, parent.entriesRevision + 1);
   } else if (input.parent !== null) throw new Error("invalid root");
-  const recovery = treeEnvelope(input.recoveryEnvelope, 16_384, { purpose: "vault-recovery", vaultId: auth.accountId,
-    objectId: item.objectId, keyId: item.capabilityId!, keyEpoch: item.targetEpoch!, revision: 1 });
-  const keyEnvelope = parentId ? treeEnvelope(input.keyEnvelope, 16_384, { purpose: source.kind === "directory" ? "directory-capability" : "file-capability",
-    vaultId: auth.accountId, objectId: item.objectId, keyId: item.capabilityId!, keyEpoch: item.targetEpoch!, revision: 1 }) : recovery;
+  const recovery = treeEnvelope(input.recoveryEnvelope, 16_384, {
+    purpose: "vault-recovery",
+    vaultId: auth.accountId,
+    objectId: item.objectId,
+    keyId: item.capabilityId!,
+    keyEpoch: item.targetEpoch!,
+    revision: 1,
+  });
+  const keyEnvelope = parentId
+    ? treeEnvelope(input.keyEnvelope, 16_384, {
+        purpose: source.kind === "directory" ? "directory-capability" : "file-capability",
+        vaultId: auth.accountId,
+        objectId: item.objectId,
+        keyId: item.capabilityId!,
+        keyEpoch: item.targetEpoch!,
+        revision: 1,
+      })
+    : recovery;
   if (!parentId && input.keyEnvelope !== input.recoveryEnvelope) throw new Error("invalid root envelope");
   const eligible = sql`${rotationSourceSnapshot(item, source)} AND ${parent ? rotationSourceSnapshot({ ...item, objectId: parent.objectId }, parent) : sql`1`}`;
-  const parentStatements = (marker: SQL): SQL[] => parent && parentHead ? [
-    sql`UPDATE directory_entries SET key_envelope = ${keyEnvelope} WHERE child_node_id = ${item.objectId}
+  const parentStatements = (marker: SQL): SQL[] =>
+    parent && parentHead
+      ? [
+          sql`UPDATE directory_entries SET key_envelope = ${keyEnvelope} WHERE child_node_id = ${item.objectId}
       AND parent_node_id = ${parent.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
-    sql`UPDATE directories SET entries_revision = entries_revision + 1, listing_ciphertext = ${parentHead.ciphertext},
+          sql`UPDATE directories SET entries_revision = entries_revision + 1, listing_ciphertext = ${parentHead.ciphertext},
       listing_digest = ${parentHead.digest}, listing_signature = ${parentHead.signature}, listing_device_id = ${auth.deviceId}
       WHERE node_id = ${parent.objectId} AND entries_revision = ${parent.entriesRevision} AND key_epoch = ${parent.keyEpoch} AND ${marker}`,
-  ] : [];
+        ]
+      : [];
   const recoveryStatements = (marker: SQL): SQL[] => [
     sql`UPDATE key_envelopes SET superseded_at = ${Date.now()} WHERE account_id = ${auth.accountId} AND object_id = ${item.objectId}
       AND purpose = 'owned-device' AND superseded_at IS NULL AND ${marker}`,
@@ -129,52 +204,92 @@ export async function preparePromotion(env: Env, auth: AuthorizedDevice, job: Ro
       WHERE s.target_id = ${item.objectId} AND s.owner_id = ${auth.accountId} AND ${liveGrant()} AND ${marker}`,
   ];
   if (source.kind === "directory") {
-    const head = await rotationHead(input.listingHead, auth, item.objectId, item.targetEpoch!, source.entriesRevision + 1);
+    const head = await rotationHead(
+      input.listingHead,
+      auth,
+      item.objectId,
+      item.targetEpoch!,
+      source.entriesRevision + 1,
+    );
     const completeEntries = sql`(SELECT count(*) FROM key_rotation_entries WHERE job_id = ${job.jobId} AND directory_id = ${item.objectId})
       = (SELECT count(*) FROM directory_entries WHERE parent_node_id = ${item.objectId})
       AND NOT EXISTS (SELECT 1 FROM directory_entries e WHERE e.parent_node_id = ${item.objectId} AND NOT EXISTS (
         SELECT 1 FROM key_rotation_entries staged WHERE staged.job_id = ${job.jobId}
           AND staged.directory_id = e.parent_node_id AND staged.child_id = e.child_node_id))`;
-    return { eligible: sql`${eligible} AND ${completeEntries}`, statements: (marker) => [
-      sql`UPDATE directory_entries SET name_ciphertext = (SELECT name_ciphertext FROM key_rotation_entries staged
+    return {
+      eligible: sql`${eligible} AND ${completeEntries}`,
+      statements: (marker) => [
+        sql`UPDATE directory_entries SET name_ciphertext = (SELECT name_ciphertext FROM key_rotation_entries staged
           WHERE staged.job_id = ${job.jobId} AND staged.directory_id = ${item.objectId} AND staged.child_id = directory_entries.child_node_id),
         order_ciphertext = (SELECT order_ciphertext FROM key_rotation_entries staged
           WHERE staged.job_id = ${job.jobId} AND staged.directory_id = ${item.objectId} AND staged.child_id = directory_entries.child_node_id),
         key_envelope = (SELECT key_envelope FROM key_rotation_entries staged
           WHERE staged.job_id = ${job.jobId} AND staged.directory_id = ${item.objectId} AND staged.child_id = directory_entries.child_node_id)
         WHERE parent_node_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
-      sql`UPDATE directories SET key_epoch = ${item.targetEpoch}, entries_revision = entries_revision + 1,
+        sql`UPDATE directories SET key_epoch = ${item.targetEpoch}, entries_revision = entries_revision + 1,
         listing_ciphertext = ${head.ciphertext}, listing_digest = ${head.digest}, listing_signature = ${head.signature}, listing_device_id = ${auth.deviceId}
         WHERE node_id = ${item.objectId} AND key_epoch = ${item.sourceEpoch} AND entries_revision = ${item.sourceRevision} AND ${marker}`,
-      ...parentStatements(marker), ...recoveryStatements(marker), ...grantStatements(marker),
-      sql`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
+        ...parentStatements(marker),
+        ...recoveryStatements(marker),
+        ...grantStatements(marker),
+        sql`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
         SELECT ${job.jobId}, n.id, n.kind, CASE WHEN n.kind = 'file' THEN n.id ELSE NULL END, ${item.depth + 1}, 'ready'
         FROM vault_nodes n WHERE n.parent_node_id = ${item.objectId} AND n.owner_id = ${auth.accountId} AND ${marker}
         ON CONFLICT (job_id, object_id) DO NOTHING`,
-    ] };
+      ],
+    };
   }
-  if (!isV7(input.representationId) || input.representationId === source.representationId) throw new Error("invalid representation");
-  const wrapper = treeEnvelope(input.representationKeyEnvelope, 16_384, { purpose: "file-content-key", vaultId: auth.accountId,
-    objectId: item.objectId, keyId: source.contentKeyId, keyEpoch: source.keyEpoch, revision: source.revision });
+  if (!isV7(input.representationId) || input.representationId === source.representationId)
+    throw new Error("invalid representation");
+  const wrapper = treeEnvelope(input.representationKeyEnvelope, 16_384, {
+    purpose: "file-content-key",
+    vaultId: auth.accountId,
+    objectId: item.objectId,
+    keyId: source.contentKeyId,
+    keyEpoch: source.keyEpoch,
+    revision: source.revision,
+  });
   const head = record(input.fileHead);
-  if (!head || !exact(head, ["digest", "signature"]) || !await verifyFileHead(auth.assertionPublicKey, {
-    vaultId: auth.accountId, fileId: item.objectId, capabilityId: item.capabilityId!, capabilityEpoch: item.targetEpoch!,
-    representationId: input.representationId, contentKeyId: source.contentKeyId, keyEpoch: source.keyEpoch,
-    revision: source.revision, deviceId: auth.deviceId, ciphertext: source.ciphertext, keyEnvelope: input.representationKeyEnvelope as string,
-  }, head as FileHead)) throw new Error("invalid File head");
+  if (
+    !head ||
+    !exact(head, ["digest", "signature"]) ||
+    !(await verifyFileHead(
+      auth.assertionPublicKey,
+      {
+        vaultId: auth.accountId,
+        fileId: item.objectId,
+        capabilityId: item.capabilityId!,
+        capabilityEpoch: item.targetEpoch!,
+        representationId: input.representationId,
+        contentKeyId: source.contentKeyId,
+        keyEpoch: source.keyEpoch,
+        revision: source.revision,
+        deviceId: auth.deviceId,
+        ciphertext: source.ciphertext,
+        keyEnvelope: input.representationKeyEnvelope as string,
+      },
+      head as FileHead,
+    ))
+  )
+    throw new Error("invalid File head");
   const content = decodeTreeBytes(source.ciphertext, 524_288);
-  return { eligible, statements: (marker) => [
-    sql`UPDATE files SET current_representation_id = ${input.representationId}, capability_id = ${item.capabilityId}, capability_epoch = ${item.targetEpoch}
+  return {
+    eligible,
+    statements: (marker) => [
+      sql`UPDATE files SET current_representation_id = ${input.representationId}, capability_id = ${item.capabilityId}, capability_epoch = ${item.targetEpoch}
       WHERE node_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
-    sql`DELETE FROM file_representations WHERE id = ${source.representationId} AND file_node_id = ${item.objectId} AND ${marker}`,
-    sql`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id, key_epoch,
+      sql`DELETE FROM file_representations WHERE id = ${source.representationId} AND file_node_id = ${item.objectId} AND ${marker}`,
+      sql`INSERT INTO file_representations (id, file_node_id, owner_id, revision, content_key_id, key_epoch,
       ciphertext, ciphertext_size, created_at, key_envelope, head_digest, head_signature, head_device_id)
       SELECT ${input.representationId}, ${item.objectId}, ${auth.accountId}, ${source.revision}, ${source.contentKeyId}, ${source.keyEpoch},
         ${content}, ${content.length}, ${Date.now()}, ${wrapper}, ${decodeTreeBytes(head.digest, 32)}, ${decodeTreeBytes(head.signature, 64)}, ${auth.deviceId} WHERE ${marker}`,
-    ...parentStatements(marker), ...recoveryStatements(marker), ...grantStatements(marker),
-    sql`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
+      ...parentStatements(marker),
+      ...recoveryStatements(marker),
+      ...grantStatements(marker),
+      sql`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
       SELECT ${job.jobId}, c.object_id, CASE WHEN c.purpose = 'private-comment-thread' THEN 'private_comment' ELSE 'public_history' END,
         c.file_id, ${item.depth + 1}, 'ready' FROM sharing_comment_capabilities c
       WHERE c.file_id = ${item.objectId} AND c.owner_id = ${auth.accountId} AND ${marker} ON CONFLICT (job_id, object_id) DO NOTHING`,
-  ] };
+    ],
+  };
 }

@@ -21,7 +21,9 @@ function migratedDatabase() {
     enableForeignKeyConstraints: true,
     enableDoubleQuotedStringLiterals: true,
   });
-  const files = readdirSync("drizzle").filter((name) => name.endsWith(".sql")).sort();
+  const files = readdirSync("drizzle")
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
   for (const file of files) db.exec(readFileSync(`drizzle/${file}`, "utf8"));
   db.exec(`CREATE TABLE IF NOT EXISTS "d1_migrations"(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,13 +56,19 @@ function dumpAsD1Export(db: DatabaseSync) {
   const tables = objects.filter((object) => object.type === "table");
   const statements = ["PRAGMA defer_foreign_keys=TRUE;"];
   const emitRows = (name: string) => {
-    const columns = db.prepare(`PRAGMA table_info(${quoteIdentifier(name)})`).all().map((column) => String(column.name));
+    const columns = db
+      .prepare(`PRAGMA table_info(${quoteIdentifier(name)})`)
+      .all()
+      .map((column) => String(column.name));
     if (columns.length === 0) return [];
     const columnList = columns.map(quoteIdentifier).join(",");
     const values = columns.map((column) => `quote(${quoteIdentifier(column)})`).join(` || ',' || `);
     const prefix = `INSERT INTO "${name}" (${columnList}) VALUES(`.replaceAll("'", "''");
     const select = `SELECT '${prefix}' || ${values} || ');' AS statement FROM ${quoteIdentifier(name)}`;
-    return db.prepare(select).all().map((row) => String(row.statement));
+    return db
+      .prepare(select)
+      .all()
+      .map((row) => String(row.statement));
   };
   const firstTable = tables.find((table) => table.name === "d1_migrations");
   if (firstTable) {
@@ -90,7 +98,9 @@ describe("production-representative restore rehearsal (committed schema)", () =>
     try {
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       // The root-materialization trigger created both roots exactly once.
-      expect(db.prepare("SELECT count(*) AS n FROM vault_nodes WHERE parent_node_id IS NULL").get()).toMatchObject({ n: 2 });
+      expect(db.prepare("SELECT count(*) AS n FROM vault_nodes WHERE parent_node_id IS NULL").get()).toMatchObject({
+        n: 2,
+      });
       expect(db.prepare("SELECT count(*) AS n FROM directories").get()).toMatchObject({ n: 2 });
       // The durable Import marker survives its deleted staging.
       expect(db.prepare("SELECT count(*) AS n FROM import_commits").get()).toMatchObject({ n: 1 });
@@ -103,7 +113,9 @@ describe("production-representative restore rehearsal (committed schema)", () =>
         { id: REHEARSAL_IDS.fileA },
         { id: REHEARSAL_IDS.fileB },
       ]);
-      expect(db.prepare("SELECT length(ciphertext) AS bytes FROM file_representations LIMIT 1").get()).toMatchObject({ bytes: 524_288 });
+      expect(db.prepare("SELECT length(ciphertext) AS bytes FROM file_representations LIMIT 1").get()).toMatchObject({
+        bytes: 524_288,
+      });
     } finally {
       db.close();
     }
@@ -111,11 +123,13 @@ describe("production-representative restore rehearsal (committed schema)", () =>
 
   it("fails to re-import the raw export order, then restores it losslessly", () => {
     const source = seededSource();
-    let exportSql;
-    let sourceDigests;
+    let exportSql: string;
+    let sourceDigests: ReturnType<typeof tableDigests>;
     try {
       exportSql = dumpAsD1Export(source);
-      sourceDigests = tableDigests(source, [{ name: "accounts", columns: ["id", "share_id", "created_at", "updated_at"] }]);
+      sourceDigests = tableDigests(source, [
+        { name: "accounts", columns: ["id", "share_id", "created_at", "updated_at"] },
+      ]);
     } finally {
       source.close();
     }
@@ -148,7 +162,12 @@ describe("production-representative restore rehearsal (committed schema)", () =>
       expect(verification.problems).toEqual([]);
       expect(verification.ok).toBe(true);
       // Direct source -> target equality, not only target -> manifest.
-      expect(compareDigests(sourceDigests, tableDigests(target, [{ name: "accounts", columns: ["id", "share_id", "created_at", "updated_at"] }]))).toEqual([]);
+      expect(
+        compareDigests(
+          sourceDigests,
+          tableDigests(target, [{ name: "accounts", columns: ["id", "share_id", "created_at", "updated_at"] }]),
+        ),
+      ).toEqual([]);
     } finally {
       target.close();
     }

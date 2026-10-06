@@ -43,7 +43,13 @@ export function commentBodyContext(vaultId: string, commentId: string, revision:
 }
 
 /** Content-key wrapper context: protected by the current thread capability. */
-export function commentKeyContext(vaultId: string, commentId: string, capabilityId: string, keyEpoch: number, revision: number): EnvelopeContext {
+export function commentKeyContext(
+  vaultId: string,
+  commentId: string,
+  capabilityId: string,
+  keyEpoch: number,
+  revision: number,
+): EnvelopeContext {
   return { purpose: "comment-content", vaultId, objectId: commentId, keyId: capabilityId, keyEpoch, revision };
 }
 
@@ -53,7 +59,13 @@ export function attributionContext(vaultId: string, attributionId: string, revis
 }
 
 /** Attribution content-key wrapper context: protected by the thread capability. */
-export function attributionKeyContext(vaultId: string, attributionId: string, capabilityId: string, keyEpoch: number, revision: number): EnvelopeContext {
+export function attributionKeyContext(
+  vaultId: string,
+  attributionId: string,
+  capabilityId: string,
+  keyEpoch: number,
+  revision: number,
+): EnvelopeContext {
   return { purpose: "attribution", vaultId, objectId: attributionId, keyId: capabilityId, keyEpoch, revision };
 }
 
@@ -63,8 +75,12 @@ export type CommentRecordMeta = { createdAt: number; updatedAt: number };
 const META_BYTES = 16;
 
 function encodeCommentMeta(meta: CommentRecordMeta): Uint8Array {
-  if (!Number.isSafeInteger(meta.createdAt) || meta.createdAt < 0 ||
-      !Number.isSafeInteger(meta.updatedAt) || meta.updatedAt < meta.createdAt) {
+  if (
+    !Number.isSafeInteger(meta.createdAt) ||
+    meta.createdAt < 0 ||
+    !Number.isSafeInteger(meta.updatedAt) ||
+    meta.updatedAt < meta.createdAt
+  ) {
     throw new Error("invalid_comment_meta");
   }
   const bytes = new Uint8Array(META_BYTES);
@@ -90,40 +106,72 @@ export type SealedAttribution = { attributionId: string; ciphertext: string; con
  * Historical display metadata, when present, is sealed under the same fresh
  * content key, so a thread-capability rotation rewraps the wrapper only and the
  * metadata stays readable without ever being plaintext at rest. */
-export async function sealCommentBody(threadKey: Uint8Array, input: {
-  vaultId: string; commentId: string; capabilityId: string; keyEpoch: number; revision: number; text: string;
-  meta?: CommentRecordMeta;
-}): Promise<SealedCommentBody> {
+export async function sealCommentBody(
+  threadKey: Uint8Array,
+  input: {
+    vaultId: string;
+    commentId: string;
+    capabilityId: string;
+    keyEpoch: number;
+    revision: number;
+    text: string;
+    meta?: CommentRecordMeta;
+  },
+): Promise<SealedCommentBody> {
   if (!validCommentText(input.text)) throw new Error("comment_too_long");
   const contentKey = crypto.getRandomValues(new Uint8Array(32));
   const body = await (await createSymmetricWriter(contentKey)).seal(
     encoder.encode(normalizeCommentText(input.text)),
-    commentBodyContext(input.vaultId, input.commentId, input.revision));
+    commentBodyContext(input.vaultId, input.commentId, input.revision),
+  );
   const wrapper = await (await createSymmetricWriter(threadKey)).seal(
-    contentKey, commentKeyContext(input.vaultId, input.commentId, input.capabilityId, input.keyEpoch, input.revision));
+    contentKey,
+    commentKeyContext(input.vaultId, input.commentId, input.capabilityId, input.keyEpoch, input.revision),
+  );
   const meta = input.meta
-    ? await (await createSymmetricWriter(contentKey)).seal(encodeCommentMeta(input.meta),
-      commentBodyContext(input.vaultId, input.commentId, input.revision))
+    ? await (await createSymmetricWriter(contentKey)).seal(
+        encodeCommentMeta(input.meta),
+        commentBodyContext(input.vaultId, input.commentId, input.revision),
+      )
     : undefined;
   if (meta && meta.length > MAX_ATTRIBUTION_BYTES) throw new Error("invalid_comment_meta");
-  return { bodyCiphertext: encodeTreeBytes(body), contentKeyEnvelope: encodeTreeBytes(wrapper),
-    ...(meta ? { metaCiphertext: encodeTreeBytes(meta) } : {}) };
+  return {
+    bodyCiphertext: encodeTreeBytes(body),
+    contentKeyEnvelope: encodeTreeBytes(wrapper),
+    ...(meta ? { metaCiphertext: encodeTreeBytes(meta) } : {}),
+  };
 }
 
-async function openCommentContentKey(threadKey: Uint8Array, input: {
-  vaultId: string; commentId: string; revision: number; capabilityId: string; keyEpoch: number;
-  contentKeyEnvelope: string;
-}): Promise<Uint8Array> {
+async function openCommentContentKey(
+  threadKey: Uint8Array,
+  input: {
+    vaultId: string;
+    commentId: string;
+    revision: number;
+    capabilityId: string;
+    keyEpoch: number;
+    contentKeyEnvelope: string;
+  },
+): Promise<Uint8Array> {
   return openSymmetric(decodeTreeBytes(input.contentKeyEnvelope, MAX_COMMENT_KEY_ENVELOPE_BYTES), threadKey, {
     context: commentKeyContext(input.vaultId, input.commentId, input.capabilityId, input.keyEpoch, input.revision),
   });
 }
 
 /** Open one Comment's text plus optional encrypted historical display metadata. */
-export async function openCommentRecord(threadKey: Uint8Array, input: {
-  vaultId: string; commentId: string; revision: number; capabilityId: string; keyEpoch: number;
-  bodyCiphertext: string; contentKeyEnvelope: string; metaCiphertext?: string | null;
-}): Promise<{ text: string; meta: CommentRecordMeta | null }> {
+export async function openCommentRecord(
+  threadKey: Uint8Array,
+  input: {
+    vaultId: string;
+    commentId: string;
+    revision: number;
+    capabilityId: string;
+    keyEpoch: number;
+    bodyCiphertext: string;
+    contentKeyEnvelope: string;
+    metaCiphertext?: string | null;
+  },
+): Promise<{ text: string; meta: CommentRecordMeta | null }> {
   const contentKey = await openCommentContentKey(threadKey, input);
   const plaintext = await openSymmetric(decodeTreeBytes(input.bodyCiphertext, MAX_COMMENT_BODY_BYTES), contentKey, {
     context: commentBodyContext(input.vaultId, input.commentId, input.revision),
@@ -133,26 +181,45 @@ export async function openCommentRecord(threadKey: Uint8Array, input: {
   let meta: CommentRecordMeta | null = null;
   if (input.metaCiphertext) {
     try {
-      meta = decodeCommentMeta(await openSymmetric(decodeTreeBytes(input.metaCiphertext, MAX_ATTRIBUTION_BYTES), contentKey, {
-        context: commentBodyContext(input.vaultId, input.commentId, input.revision),
-      }));
-    } catch { meta = null; }
+      meta = decodeCommentMeta(
+        await openSymmetric(decodeTreeBytes(input.metaCiphertext, MAX_ATTRIBUTION_BYTES), contentKey, {
+          context: commentBodyContext(input.vaultId, input.commentId, input.revision),
+        }),
+      );
+    } catch {
+      meta = null;
+    }
   }
   return { text, meta };
 }
 
-export async function openCommentBody(threadKey: Uint8Array, input: {
-  vaultId: string; commentId: string; revision: number; capabilityId: string; keyEpoch: number;
-  bodyCiphertext: string; contentKeyEnvelope: string;
-}): Promise<string> {
+export async function openCommentBody(
+  threadKey: Uint8Array,
+  input: {
+    vaultId: string;
+    commentId: string;
+    revision: number;
+    capabilityId: string;
+    keyEpoch: number;
+    bodyCiphertext: string;
+    contentKeyEnvelope: string;
+  },
+): Promise<string> {
   return (await openCommentRecord(threadKey, input)).text;
 }
 
-export async function sealAttribution(threadKey: Uint8Array, input: {
-  vaultId: string; attributionId: string; pseudonym: string; capabilityId: string; keyEpoch: number;
-  /** A Pseudonym update re-seals the record at the next revision; new declarations are 1. */
-  revision?: number;
-}): Promise<SealedAttribution> {
+export async function sealAttribution(
+  threadKey: Uint8Array,
+  input: {
+    vaultId: string;
+    attributionId: string;
+    pseudonym: string;
+    capabilityId: string;
+    keyEpoch: number;
+    /** A Pseudonym update re-seals the record at the next revision; new declarations are 1. */
+    revision?: number;
+  },
+): Promise<SealedAttribution> {
   if (typeof input.pseudonym !== "string" || !input.pseudonym || commentCharacters(input.pseudonym) > 256) {
     throw new Error("invalid_pseudonym");
   }
@@ -160,19 +227,45 @@ export async function sealAttribution(threadKey: Uint8Array, input: {
   if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("invalid_pseudonym");
   const contentKey = crypto.getRandomValues(new Uint8Array(32));
   const ciphertext = await (await createSymmetricWriter(contentKey)).seal(
-    encoder.encode(input.pseudonym), attributionContext(input.vaultId, input.attributionId, revision));
+    encoder.encode(input.pseudonym),
+    attributionContext(input.vaultId, input.attributionId, revision),
+  );
   const wrapper = await (await createSymmetricWriter(threadKey)).seal(
-    contentKey, attributionKeyContext(input.vaultId, input.attributionId, input.capabilityId, input.keyEpoch, revision));
-  return { attributionId: input.attributionId, ciphertext: encodeTreeBytes(ciphertext), contentKeyEnvelope: encodeTreeBytes(wrapper) };
+    contentKey,
+    attributionKeyContext(input.vaultId, input.attributionId, input.capabilityId, input.keyEpoch, revision),
+  );
+  return {
+    attributionId: input.attributionId,
+    ciphertext: encodeTreeBytes(ciphertext),
+    contentKeyEnvelope: encodeTreeBytes(wrapper),
+  };
 }
 
-export async function openAttribution(threadKey: Uint8Array, input: {
-  vaultId: string; attributionId: string; revision: number; capabilityId: string; keyEpoch: number;
-  ciphertext: string; contentKeyEnvelope: string;
-}): Promise<string> {
-  const contentKey = await openSymmetric(decodeTreeBytes(input.contentKeyEnvelope, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES), threadKey, {
-    context: attributionKeyContext(input.vaultId, input.attributionId, input.capabilityId, input.keyEpoch, input.revision),
-  });
+export async function openAttribution(
+  threadKey: Uint8Array,
+  input: {
+    vaultId: string;
+    attributionId: string;
+    revision: number;
+    capabilityId: string;
+    keyEpoch: number;
+    ciphertext: string;
+    contentKeyEnvelope: string;
+  },
+): Promise<string> {
+  const contentKey = await openSymmetric(
+    decodeTreeBytes(input.contentKeyEnvelope, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES),
+    threadKey,
+    {
+      context: attributionKeyContext(
+        input.vaultId,
+        input.attributionId,
+        input.capabilityId,
+        input.keyEpoch,
+        input.revision,
+      ),
+    },
+  );
   const plaintext = await openSymmetric(decodeTreeBytes(input.ciphertext, MAX_ATTRIBUTION_BYTES), contentKey, {
     context: attributionContext(input.vaultId, input.attributionId, input.revision),
   });

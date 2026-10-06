@@ -16,7 +16,7 @@ describe("splitStatements", () => {
       "-- a comment with ; inside",
       "CREATE TABLE `accounts` (\n  `id` text PRIMARY KEY NOT NULL,\n  `note` text DEFAULT 'a;b'\n);",
       "/* block ; comment */",
-      "INSERT INTO \"accounts\" (\"id\",\"note\") VALUES('1','x');",
+      'INSERT INTO "accounts" ("id","note") VALUES(\'1\',\'x\');',
       "",
     ].join("\n");
     const statements = splitStatements(sql);
@@ -64,15 +64,20 @@ describe("classifyStatement and parseInsert", () => {
     expect(classifyStatement("CREATE TABLE IF NOT EXISTS `t` (id text)")).toMatchObject({ kind: "table" });
     expect(classifyStatement("CREATE UNIQUE INDEX `i` ON `t` (`id`)")).toMatchObject({ kind: "index" });
     expect(classifyStatement("CREATE VIEW v AS SELECT 1")).toMatchObject({ kind: "view" });
-    expect(classifyStatement("CREATE TRIGGER x BEFORE INSERT ON t BEGIN SELECT 1; END")).toMatchObject({ kind: "trigger" });
+    expect(classifyStatement("CREATE TRIGGER x BEFORE INSERT ON t BEGIN SELECT 1; END")).toMatchObject({
+      kind: "trigger",
+    });
     expect(classifyStatement("PRAGMA defer_foreign_keys=TRUE")).toMatchObject({ kind: "pragma" });
-    expect(classifyStatement("DELETE FROM sqlite_sequence")).toMatchObject({ kind: "delete", table: "sqlite_sequence" });
+    expect(classifyStatement("DELETE FROM sqlite_sequence")).toMatchObject({
+      kind: "delete",
+      table: "sqlite_sequence",
+    });
     expect(classifyStatement("BEGIN")).toMatchObject({ kind: "transaction" });
   });
 
   it("parses a single-row INSERT with quoted identifiers", () => {
     const parsed = parseInsert(
-      "INSERT INTO \"file_representations\" (\"id\",\"ciphertext\",\"ciphertext_size\") VALUES('r',X'0102',2)",
+      'INSERT INTO "file_representations" ("id","ciphertext","ciphertext_size") VALUES(\'r\',X\'0102\',2)',
     );
     expect(parsed).toMatchObject({ table: "file_representations" });
     expect(parsed?.columns).toEqual(["id", "ciphertext", "ciphertext_size"]);
@@ -81,9 +86,7 @@ describe("classifyStatement and parseInsert", () => {
   });
 
   it("parses multi-row INSERTs and keeps commas inside strings", () => {
-    const parsed = parseInsert(
-      "INSERT INTO `t` (`a`,`b`) VALUES(1,'x,y'),(2,'z') ON CONFLICT DO NOTHING",
-    );
+    const parsed = parseInsert("INSERT INTO `t` (`a`,`b`) VALUES(1,'x,y'),(2,'z') ON CONFLICT DO NOTHING");
     expect(parsed?.tuples).toHaveLength(2);
     expect(splitValues(parsed!.tuples[1]!)).toEqual(["2", "'z'"]);
     expect(parsed?.suffix).toMatch(/ON CONFLICT/);
@@ -134,7 +137,10 @@ describe("chunkOversizedStatements", () => {
       expect(emitted).toMatch(/^UPDATE "t" SET "data" = unhex\(hex\("data"\) \|\| '[0-9a-f]+'\) WHERE "id" = 'row-1'$/);
       expect(Buffer.byteLength(emitted, "utf8")).toBeLessThanOrEqual(400);
     }
-    const appended = result.statements.slice(1).map((s: string) => /\|\| '([0-9a-f]+)'\)/.exec(s)![1]).join("");
+    const appended = result.statements
+      .slice(1)
+      .map((s: string) => /\|\| '([0-9a-f]+)'\)/.exec(s)![1])
+      .join("");
     expect(first![1] + appended).toBe(hex);
     expect(result.chunked).toBe(1);
   });
@@ -142,14 +148,21 @@ describe("chunkOversizedStatements", () => {
   it("chunks several oversized BLOBs in one row", () => {
     const statement = `INSERT INTO \`t\` (\`id\`,\`data\`,\`meta\`) VALUES('row-2',X'${"11".repeat(600)}',X'${"22".repeat(600)}')`;
     const result = chunkOversizedStatements([statement], { maxBytes: 500, primaryKeys });
-    expect(result.statements[0]).toMatch(/^INSERT INTO "t" \("id","data","meta"\) VALUES\('row-2',X'[0-9a-f]+',X'[0-9a-f]+'\)$/);
+    expect(result.statements[0]).toMatch(
+      /^INSERT INTO "t" \("id","data","meta"\) VALUES\('row-2',X'[0-9a-f]+',X'[0-9a-f]+'\)$/,
+    );
     expect(result.statements.some((s: string) => s.includes('SET "data"'))).toBe(true);
     expect(result.statements.some((s: string) => s.includes('SET "meta"'))).toBe(true);
   });
 
   it("keeps a length-coupled size column valid at every chunk step", async () => {
     const { DatabaseSync } = await import("node:sqlite");
-    const ddl = new Map([["t", 'CREATE TABLE `t` (`id` text PRIMARY KEY NOT NULL, `data` blob NOT NULL, `data_size` integer NOT NULL, CONSTRAINT "t_size" CHECK(`data_size` = length(`data`)))']]);
+    const ddl = new Map([
+      [
+        "t",
+        'CREATE TABLE `t` (`id` text PRIMARY KEY NOT NULL, `data` blob NOT NULL, `data_size` integer NOT NULL, CONSTRAINT "t_size" CHECK(`data_size` = length(`data`)))',
+      ],
+    ]);
     const hex = "cd".repeat(5000);
     const statement = `INSERT INTO \`t\` (\`id\`,\`data\`,\`data_size\`) VALUES('row-3',X'${hex}',5000)`;
     const result = chunkOversizedStatements([statement], { maxBytes: 400, primaryKeys, tableDdl: ddl });
@@ -168,13 +181,11 @@ describe("chunkOversizedStatements", () => {
 
   it("refuses to silently drop an oversized statement it cannot split", () => {
     const statement = `INSERT INTO \`t\` (\`id\`,\`data\`) VALUES('row-3','${"y".repeat(500)}')`;
-    expect(() => chunkOversizedStatements([statement], { maxBytes: 100, primaryKeys }))
-      .toThrow(/cannot split/i);
+    expect(() => chunkOversizedStatements([statement], { maxBytes: 100, primaryKeys })).toThrow(/cannot split/i);
   });
 
   it("refuses to chunk a BLOB when the primary key is not in the INSERT", () => {
     const statement = `INSERT INTO \`t\` (\`data\`) VALUES(X'${"ab".repeat(5000)}')`;
-    expect(() => chunkOversizedStatements([statement], { maxBytes: 400, primaryKeys }))
-      .toThrow(/primary key/i);
+    expect(() => chunkOversizedStatements([statement], { maxBytes: 400, primaryKeys })).toThrow(/primary key/i);
   });
 });

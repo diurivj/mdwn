@@ -10,7 +10,9 @@ function sent(request: Request): string {
 }
 
 test("public readers decrypt public comments, signed-in visitors post, and the audience can be closed", async ({
-  browser, page, workspace,
+  browser,
+  page,
+  workspace: _workspace,
 }) => {
   // The Owner publishes with the default public Comments audience.
   await page.getByRole("button", { name: "Publish", exact: true }).click();
@@ -58,9 +60,13 @@ test("public readers decrypt public comments, signed-in visitors post, and the a
     // Wait for the refreshed panel state, not the action button's own label.
     await expect(publishPanel.getByText("Audience: Collaborators only", { exact: false })).toBeVisible();
     await reader.reload();
-    await expect(section.getByText("Sign in to see or add comments if you have access to this file.", { exact: false })).toBeVisible();
+    await expect(
+      section.getByText("Sign in to see or add comments if you have access to this file.", { exact: false }),
+    ).toBeVisible();
     await expect(section.getByText("Hello from the public page")).toHaveCount(0);
-    const publicData = await readerContext.request.get(`/api/public/publications/${new URL(link).pathname.split("/").pop()}`);
+    const publicData = await readerContext.request.get(
+      `/api/public/publications/${new URL(link).pathname.split("/").pop()}`,
+    );
     const anonymousBody = await publicData.text();
     expect(anonymousBody).not.toContain("Hello from the public page");
     await ownerTab.close();
@@ -89,17 +95,22 @@ test("pages a long authenticated Public thread past the first bounded page", asy
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
   await expect(panel.getByText(/^Published\./)).toBeVisible();
-  const thread = await workspace.db.prepare(
-    "SELECT id AS threadId, current_epoch_id AS epochId FROM comment_threads WHERE file_id = ? AND purpose = 'public'")
-    .bind(workspace.fileId).first<{ threadId: string; epochId: string }>();
+  const thread = await workspace.db
+    .prepare(
+      "SELECT id AS threadId, current_epoch_id AS epochId FROM comment_threads WHERE file_id = ? AND purpose = 'public'",
+    )
+    .bind(workspace.fileId)
+    .first<{ threadId: string; epochId: string }>();
   expect(thread).not.toBeNull();
   // Fifty opaque rows fill the bounded first page at the storage boundary; the
   // real Comment is the only entry on page two and must decrypt after Load more.
   for (let sequence = 1; sequence <= 50; sequence++) {
-    await workspace.db.prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision,
+    await workspace.db
+      .prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision,
         body_ciphertext, body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 1, X'01', 1, X'01', 1, 1, 1)`)
-      .bind(objectId(), thread!.threadId, thread!.epochId, workspace.accountId, sequence).run();
+      .bind(objectId(), thread!.threadId, thread!.epochId, workspace.accountId, sequence)
+      .run();
   }
   await workspace.db.prepare("UPDATE comment_threads SET next_sequence = 52 WHERE id = ?").bind(thread!.threadId).run();
   await page.getByRole("button", { name: "Comments", exact: true }).click();

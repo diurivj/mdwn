@@ -4,10 +4,13 @@ import { parse } from "yaml";
 
 const workflow: {
   env?: Record<string, string>;
-  jobs: Record<string, {
-    env?: Record<string, string>;
-    steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> }>;
-  }>;
+  jobs: Record<
+    string,
+    {
+      env?: Record<string, string>;
+      steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> }>;
+    }
+  >;
 } = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
 
 test.each(["verify", "browser"])("%s keeps the persistent runner's npm cache local", (job) => {
@@ -21,6 +24,7 @@ test.each(["verify", "browser"])("%s keeps the persistent runner's npm cache loc
 test("the Playwright network preload is scoped to browser installation", () => {
   const install = workflow.jobs.browser.steps.find((step) => step.run?.startsWith("npx playwright install "));
   expect(install?.env).toEqual({
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal GitHub Actions expression inside the workflow-file string.
     NODE_OPTIONS: '--import="${{ github.workspace }}/scripts/playwright-download-network.mjs"',
   });
   expect(workflow.env?.NODE_OPTIONS ?? "").not.toContain("playwright-download-network.mjs");

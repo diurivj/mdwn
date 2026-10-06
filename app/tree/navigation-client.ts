@@ -2,8 +2,15 @@ import { privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
 import { openGrantKeyEnvelope, type GrantKeyContext } from "~/shared/sharing/grant-keys";
 import {
-  loadAncestors, loadDirectory, loadFile, openChildDirectory, openRoot, TreeNotFoundError,
-  type DirectoryListing, type RootAccess, type TreeKind,
+  loadAncestors,
+  loadDirectory,
+  loadFile,
+  openChildDirectory,
+  openRoot,
+  TreeNotFoundError,
+  type DirectoryListing,
+  type RootAccess,
+  type TreeKind,
 } from "../shared/tree/client";
 
 export type Crumb = { id: string; name: string };
@@ -14,17 +21,32 @@ export type FilesSnapshot = {
   crumbs: Crumb[];
   file: Awaited<ReturnType<typeof loadFile>> | null;
 };
-export type FilesPageData = { status: "ready"; snapshot: FilesSnapshot } |
-  { status: "not-found" | "unavailable" | "provisioning"; snapshot: null };
+export type FilesPageData =
+  | { status: "ready"; snapshot: FilesSnapshot }
+  | { status: "not-found" | "unavailable" | "provisioning"; snapshot: null };
 
 export class SharedContentProvisioningError extends Error {
-  constructor() { super("Shared content is being securely provisioned"); }
+  constructor() {
+    super("Shared content is being securely provisioned");
+  }
 }
-type ReceivedGrant = { grantId: string; ownerId: string; recipientId: string; targetId: string;
-  targetKind: TreeKind; permission: string; revision: number; keyEpoch: number };
+type ReceivedGrant = {
+  grantId: string;
+  ownerId: string;
+  recipientId: string;
+  targetId: string;
+  targetKind: TreeKind;
+  permission: string;
+  revision: number;
+  keyEpoch: number;
+};
 
 /** Current proof-guarded relationship reads precede HPKE; old signed registry epochs remain valid. */
-export async function openReceivedGrantRoot(owned: RootAccess, targetId: string, signal: AbortSignal): Promise<RootAccess> {
+export async function openReceivedGrantRoot(
+  owned: RootAccess,
+  targetId: string,
+  signal: AbortSignal,
+): Promise<RootAccess> {
   const actorAccountId = owned.actorAccountId;
   const device = await getDevice(actorAccountId);
   if (!device) throw new Error("private tree unavailable");
@@ -32,28 +54,53 @@ export async function openReceivedGrantRoot(owned: RootAccess, targetId: string,
   const seen = new Set<string>();
   let provisioning = false;
   do {
-    const response = await privateRequest(`/api/private/grants${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
-      { method: "POST", signal });
+    const response = await privateRequest(
+      `/api/private/grants${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+      { method: "POST", signal },
+    );
     if (!response.ok) throw new Error("private tree unavailable");
-    const page = await response.json() as { received: ReceivedGrant[]; nextCursor: string | null };
+    const page = (await response.json()) as { received: ReceivedGrant[]; nextCursor: string | null };
     if (!Array.isArray(page.received) || page.received.length > 100) throw new Error("invalid Grants page");
     for (const grant of page.received) {
       if (grant.targetId !== targetId || grant.recipientId !== actorAccountId) continue;
       const keys = await privateRequest(`/api/private/grants/${grant.grantId}/keys`, { method: "POST", signal });
-      if (keys.status === 409) { provisioning = true; continue; }
+      if (keys.status === 409) {
+        provisioning = true;
+        continue;
+      }
       if (keys.status === 404) continue;
       if (!keys.ok) throw new Error("private tree unavailable");
-      const envelope = await keys.json() as GrantKeyContext & { deviceId: string; signerDeviceId: string;
-        signerPublicKey: string; ciphertext: string; signature: string };
-      if (envelope.relationshipId !== grant.grantId || envelope.ownerId !== grant.ownerId ||
-          envelope.recipientId !== actorAccountId || envelope.targetId !== targetId ||
-          envelope.targetKind !== grant.targetKind || envelope.grantKeyEpoch !== grant.keyEpoch ||
-          envelope.deviceId !== device.deviceId || (grant.targetKind === "directory" &&
-            (envelope.capabilityId !== targetId || !Number.isSafeInteger(envelope.capabilityEpoch) ||
-              envelope.capabilityEpoch < 1))) throw new Error("invalid Grant scope");
+      const envelope = (await keys.json()) as GrantKeyContext & {
+        deviceId: string;
+        signerDeviceId: string;
+        signerPublicKey: string;
+        ciphertext: string;
+        signature: string;
+      };
+      if (
+        envelope.relationshipId !== grant.grantId ||
+        envelope.ownerId !== grant.ownerId ||
+        envelope.recipientId !== actorAccountId ||
+        envelope.targetId !== targetId ||
+        envelope.targetKind !== grant.targetKind ||
+        envelope.grantKeyEpoch !== grant.keyEpoch ||
+        envelope.deviceId !== device.deviceId ||
+        (grant.targetKind === "directory" &&
+          (envelope.capabilityId !== targetId ||
+            !Number.isSafeInteger(envelope.capabilityEpoch) ||
+            envelope.capabilityEpoch < 1))
+      )
+        throw new Error("invalid Grant scope");
       const rootKey = await openGrantKeyEnvelope({ ...envelope, recipient: device.transportKeyPair });
-      return { actorAccountId, vaultId: grant.ownerId, rootId: targetId, rootKind: grant.targetKind, rootKey,
-        actorVaultRootKey: owned.actorVaultRootKey, capability: { id: envelope.capabilityId, epoch: envelope.capabilityEpoch } };
+      return {
+        actorAccountId,
+        vaultId: grant.ownerId,
+        rootId: targetId,
+        rootKind: grant.targetKind,
+        rootKey,
+        actorVaultRootKey: owned.actorVaultRootKey,
+        capability: { id: envelope.capabilityId, epoch: envelope.capabilityEpoch },
+      };
     }
     cursor = page.nextCursor;
     if (cursor !== null) {
@@ -69,8 +116,12 @@ export const expandedPreferenceKey = (accountId: string) => `mdwn:files-expanded
 export function savedExpanded(accountId: string): string[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(expandedPreferenceKey(accountId)) ?? "[]");
-    return Array.isArray(parsed) ? parsed.slice(0, 200).filter((value): value is string => typeof value === "string") : [];
-  } catch { return []; }
+    return Array.isArray(parsed)
+      ? parsed.slice(0, 200).filter((value): value is string => typeof value === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesSnapshot> {
@@ -93,8 +144,12 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
     const next = path[index + 1];
     if (!next) continue;
     const entry = listing.entries.find((child) => child.nodeId === next);
-    if (!entry || (index < path.length - 2 && entry.kind !== "directory") ||
-        (index === path.length - 2 && entry.kind !== kind)) throw new TreeNotFoundError();
+    if (
+      !entry ||
+      (index < path.length - 2 && entry.kind !== "directory") ||
+      (index === path.length - 2 && entry.kind !== kind)
+    )
+      throw new TreeNotFoundError();
     crumbs.push({ id: next, name: entry.name });
     if (entry.kind === "directory") keys[next] = await openChildDirectory(access, key, entry);
   }
@@ -114,7 +169,10 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
   for (let pass = 0; pass < 201 && pending.size; pass++) {
     let progressed = false;
     for (const id of pending) {
-      if (listings[id]) { pending.delete(id); continue; }
+      if (listings[id]) {
+        pending.delete(id);
+        continue;
+      }
       const parent = Object.values(listings).find((listing) => listing.entries.some((entry) => entry.nodeId === id));
       const entry = parent?.entries.find((item) => item.nodeId === id);
       if (!parent || !entry || entry.kind !== "directory" || !keys[parent.directoryId]) continue;
@@ -124,7 +182,9 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
         keys[id] = key;
         listings[id] = await loadDirectory(access, id, key, signal);
         progressed = true;
-      } catch { /* An old local preference must not block opening the selected object. */ }
+      } catch {
+        /* An old local preference must not block opening the selected object. */
+      }
     }
     if (!progressed) break;
   }
@@ -133,10 +193,18 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
 
 /** Browser-only clientLoader data; SSR renders a public HydrateFallback instead. */
 export async function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesPageData> {
-  try { return { status: "ready", snapshot: await selectedPath(nodeId, kind, signal) }; }
-  catch (error) {
+  try {
+    return { status: "ready", snapshot: await selectedPath(nodeId, kind, signal) };
+  } catch (error) {
     if (signal.aborted) throw error;
-    return { status: error instanceof SharedContentProvisioningError ? "provisioning" :
-      error instanceof TreeNotFoundError ? "not-found" : "unavailable", snapshot: null };
+    return {
+      status:
+        error instanceof SharedContentProvisioningError
+          ? "provisioning"
+          : error instanceof TreeNotFoundError
+            ? "not-found"
+            : "unavailable",
+      snapshot: null,
+    };
   }
 }

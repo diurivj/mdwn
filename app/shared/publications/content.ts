@@ -60,9 +60,10 @@ function frontMatterTitle(lines: readonly string[]): string | null {
     // Inspect the scalar directly, never convert the document to JS or expand
     // aliases. An alias must not promote another private field into the title.
     const title = document.get("title", true);
-    return isScalar(title) && typeof title.value === "string" && title.value
-      ? title.value : null;
-  } catch { return null; }
+    return isScalar(title) && typeof title.value === "string" && title.value ? title.value : null;
+  } catch {
+    return null;
+  }
 }
 
 function u32(value: number): Uint8Array {
@@ -74,14 +75,20 @@ function u32(value: number): Uint8Array {
 function concat(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const result = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
   let offset = 0;
-  for (const part of parts) { result.set(part, offset); offset += part.length; }
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
   return result;
 }
 
 /** Canonical presentation payload; an empty title is not representable. */
 export function encodePublicPresentation(presentation: PublicPresentation): Uint8Array<ArrayBuffer> {
-  if (!presentation || typeof presentation.markdown !== "string" ||
-      (presentation.title !== null && (typeof presentation.title !== "string" || !presentation.title))) {
+  if (
+    !presentation ||
+    typeof presentation.markdown !== "string" ||
+    (presentation.title !== null && (typeof presentation.title !== "string" || !presentation.title))
+  ) {
     throw new Error("invalid public presentation");
   }
   const title = encoder.encode(presentation.title ?? "");
@@ -110,44 +117,77 @@ export function decodePublicPresentation(input: Uint8Array): PublicPresentation 
     const title = decoder.decode(bytes.slice(magic + 4, magic + 4 + titleLength));
     const markdown = decoder.decode(bytes.slice(magic + 8 + titleLength));
     return { title: title || null, markdown };
-  } catch { throw new Error("invalid public presentation"); }
+  } catch {
+    throw new Error("invalid public presentation");
+  }
 }
 
 export type PublicRepresentationBinding = {
-  publicationId: string; linkId: string; publicKey: Uint8Array; revision: number;
+  publicationId: string;
+  linkId: string;
+  publicKey: Uint8Array;
+  revision: number;
 };
 
 /** The logical Publication is both scope and object; the link is the protecting key. */
 export function publicRepresentationContext(binding: PublicRepresentationBinding): EnvelopeContext {
-  return { purpose: "public-representation", vaultId: binding.publicationId, objectId: binding.publicationId,
-    keyId: binding.linkId, keyEpoch: 1, revision: binding.revision,
-    recipientId: publicationRecipientId(binding.publicKey), publicationId: binding.publicationId };
+  return {
+    purpose: "public-representation",
+    vaultId: binding.publicationId,
+    objectId: binding.publicationId,
+    keyId: binding.linkId,
+    keyEpoch: 1,
+    revision: binding.revision,
+    recipientId: publicationRecipientId(binding.publicKey),
+    publicationId: binding.publicationId,
+  };
 }
 
 /** Editors encrypt to the stored public key; the fragment is never needed. */
-export async function sealPublicRepresentation(binding: PublicRepresentationBinding,
-  presentation: PublicPresentation): Promise<Uint8Array<ArrayBuffer>> {
-  const envelope = await sealToRecipient(encodePublicPresentation(presentation),
-    await importPublicationPublicKey(binding.publicKey), publicRepresentationContext(binding));
+export async function sealPublicRepresentation(
+  binding: PublicRepresentationBinding,
+  presentation: PublicPresentation,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const envelope = await sealToRecipient(
+    encodePublicPresentation(presentation),
+    await importPublicationPublicKey(binding.publicKey),
+    publicRepresentationContext(binding),
+  );
   if (envelope.length > MAX_PUBLIC_REPRESENTATION_BYTES) throw new Error("public representation too large");
   return envelope;
 }
 
-export async function openPublicRepresentation(envelope: Uint8Array, keyPair: CryptoKeyPair,
-  binding: PublicRepresentationBinding): Promise<PublicPresentation> {
+export async function openPublicRepresentation(
+  envelope: Uint8Array,
+  keyPair: CryptoKeyPair,
+  binding: PublicRepresentationBinding,
+): Promise<PublicPresentation> {
   if (envelope.length > MAX_PUBLIC_REPRESENTATION_BYTES) throw new Error("public representation too large");
-  return decodePublicPresentation(await openForRecipient(envelope, keyPair, { context: publicRepresentationContext(binding) }));
+  return decodePublicPresentation(
+    await openForRecipient(envelope, keyPair, { context: publicRepresentationContext(binding) }),
+  );
 }
 
 export type AuthorDeclarationBinding = {
-  publicationId: string; linkId: string; publicKey: Uint8Array; declarationId: string; revision: number;
+  publicationId: string;
+  linkId: string;
+  publicKey: Uint8Array;
+  declarationId: string;
+  revision: number;
 };
 
 /** An author's own pseudonym declaration, readable only with the Public link. */
 export function authorDeclarationContext(binding: AuthorDeclarationBinding): EnvelopeContext {
-  return { purpose: "publication-attribution", vaultId: binding.publicationId, objectId: binding.declarationId,
-    keyId: binding.linkId, keyEpoch: 1, revision: binding.revision,
-    recipientId: publicationRecipientId(binding.publicKey), publicationId: binding.publicationId };
+  return {
+    purpose: "publication-attribution",
+    vaultId: binding.publicationId,
+    objectId: binding.declarationId,
+    keyId: binding.linkId,
+    keyEpoch: 1,
+    revision: binding.revision,
+    recipientId: publicationRecipientId(binding.publicKey),
+    publicationId: binding.publicationId,
+  };
 }
 
 function encodeAuthor(pseudonym: string): Uint8Array<ArrayBuffer> {
@@ -163,24 +203,39 @@ function encodeAuthor(pseudonym: string): Uint8Array<ArrayBuffer> {
 function decodeAuthor(input: Uint8Array): string {
   const bytes = new Uint8Array(input);
   const magic = AUTHOR_MAGIC.length;
-  if (bytes.length < magic + 3 || AUTHOR_MAGIC.some((byte, index) => bytes[index] !== byte) ||
-      new DataView(bytes.buffer).getUint16(magic) !== bytes.length - magic - 2) throw new Error("invalid_pseudonym");
+  if (
+    bytes.length < magic + 3 ||
+    AUTHOR_MAGIC.some((byte, index) => bytes[index] !== byte) ||
+    new DataView(bytes.buffer).getUint16(magic) !== bytes.length - magic - 2
+  )
+    throw new Error("invalid_pseudonym");
   try {
     const pseudonym = decoder.decode(bytes.slice(magic + 2));
     encodeAuthor(pseudonym);
     return pseudonym;
-  } catch { throw new Error("invalid_pseudonym"); }
+  } catch {
+    throw new Error("invalid_pseudonym");
+  }
 }
 
-export async function sealAuthorDeclaration(binding: AuthorDeclarationBinding, pseudonym: string): Promise<Uint8Array<ArrayBuffer>> {
-  const envelope = await sealToRecipient(encodeAuthor(pseudonym), await importPublicationPublicKey(binding.publicKey),
-    authorDeclarationContext(binding));
+export async function sealAuthorDeclaration(
+  binding: AuthorDeclarationBinding,
+  pseudonym: string,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const envelope = await sealToRecipient(
+    encodeAuthor(pseudonym),
+    await importPublicationPublicKey(binding.publicKey),
+    authorDeclarationContext(binding),
+  );
   if (envelope.length > MAX_AUTHOR_DECLARATION_BYTES) throw new Error("invalid_pseudonym");
   return envelope;
 }
 
-export async function openAuthorDeclaration(envelope: Uint8Array, keyPair: CryptoKeyPair,
-  binding: AuthorDeclarationBinding): Promise<string> {
+export async function openAuthorDeclaration(
+  envelope: Uint8Array,
+  keyPair: CryptoKeyPair,
+  binding: AuthorDeclarationBinding,
+): Promise<string> {
   if (envelope.length > MAX_AUTHOR_DECLARATION_BYTES) throw new Error("invalid_pseudonym");
   return decodeAuthor(await openForRecipient(envelope, keyPair, { context: authorDeclarationContext(binding) }));
 }

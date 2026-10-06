@@ -24,7 +24,12 @@ async function readFile(file: File, path: string, total: { bytes: number }): Pro
   const buffer = new Uint8Array(await file.arrayBuffer());
   total.bytes += buffer.length;
   if (total.bytes > IMPORT_LIMITS.maxExpandedBytes) {
-    throw new ImportError("expanded-too-large", { item: path, limit: IMPORT_LIMITS.maxExpandedBytes, measured: total.bytes, action: "split" });
+    throw new ImportError("expanded-too-large", {
+      item: path,
+      limit: IMPORT_LIMITS.maxExpandedBytes,
+      measured: total.bytes,
+      action: "split",
+    });
   }
   return { path, bytes: buffer };
 }
@@ -40,7 +45,11 @@ export async function inputsFromFiles(files: Iterable<File>): Promise<RawImportI
   const total = { bytes: 0 };
   for (const file of files) {
     if (inputs.length >= MAX_RAW_INPUTS) {
-      throw new ImportError("too-many-nodes", { limit: IMPORT_LIMITS.maxNodes, measured: inputs.length + 1, action: "split" });
+      throw new ImportError("too-many-nodes", {
+        limit: IMPORT_LIMITS.maxNodes,
+        measured: inputs.length + 1,
+        action: "split",
+      });
     }
     inputs.push(await readFile(file, relativePath(file), total));
   }
@@ -51,11 +60,20 @@ function readEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry
   return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
 }
 
-async function walkEntry(entry: FileSystemEntry, prefix: string, inputs: RawImportInput[], total: { bytes: number }): Promise<void> {
+async function walkEntry(
+  entry: FileSystemEntry,
+  prefix: string,
+  inputs: RawImportInput[],
+  total: { bytes: number },
+): Promise<void> {
   const path = prefix ? `${prefix}/${entry.name}` : entry.name;
   if (entry.isFile) {
     if (inputs.length >= MAX_RAW_INPUTS) {
-      throw new ImportError("too-many-nodes", { limit: IMPORT_LIMITS.maxNodes, measured: inputs.length + 1, action: "split" });
+      throw new ImportError("too-many-nodes", {
+        limit: IMPORT_LIMITS.maxNodes,
+        measured: inputs.length + 1,
+        action: "split",
+      });
     }
     const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
     inputs.push(await readFile(file, path, total));
@@ -87,17 +105,29 @@ export async function inputsFromDataTransfer(dataTransfer: DataTransfer): Promis
 /** The importing browser's device signer for new File and Directory listing heads. */
 export async function importSigners(access: RootAccess): Promise<{
   signFileHead: (identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>;
-  signListingHead: (input: { parentKey: Uint8Array; vaultId: string; directoryId: string;
-    keyEpoch: number; revision: number; entries: readonly ImportListingEntry[] }) => Promise<ListingHead>;
+  signListingHead: (input: {
+    parentKey: Uint8Array;
+    vaultId: string;
+    directoryId: string;
+    keyEpoch: number;
+    revision: number;
+    entries: readonly ImportListingEntry[];
+  }) => Promise<ListingHead>;
 }> {
   const device = await getDevice(access.actorAccountId);
   if (!device) throw new ImportError("replacement-unavailable", { reason: "device-unavailable", action: "fix" });
   return {
-    signFileHead: (identity) => createFileHead(device.assertionKeyPair.privateKey, { ...identity, deviceId: device.deviceId }),
-    signListingHead: (input) => createListingHead(input.parentKey, device.assertionKeyPair.privateKey, {
-      vaultId: input.vaultId, directoryId: input.directoryId, deviceId: device.deviceId,
-      keyEpoch: input.keyEpoch, revision: input.revision, entries: input.entries,
-    }),
+    signFileHead: (identity) =>
+      createFileHead(device.assertionKeyPair.privateKey, { ...identity, deviceId: device.deviceId }),
+    signListingHead: (input) =>
+      createListingHead(input.parentKey, device.assertionKeyPair.privateKey, {
+        vaultId: input.vaultId,
+        directoryId: input.directoryId,
+        deviceId: device.deviceId,
+        keyEpoch: input.keyEpoch,
+        revision: input.revision,
+        entries: input.entries,
+      }),
   };
 }
 
@@ -114,7 +144,7 @@ export async function loadReplacementDocuments(
   const documents = new Map<string, ImportReplacementDocument>();
   for (const node of review.nodes) {
     if (node.action !== "replace" || !node.existingNodeId) continue;
-    let document;
+    let document: Awaited<ReturnType<typeof loadFile>>;
     try {
       document = await loadFile(access, node.existingNodeId, targetKey);
     } catch {

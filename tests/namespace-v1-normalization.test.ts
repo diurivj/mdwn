@@ -3,13 +3,8 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import {
-  normalizeNfc,
-  normalizeNfd,
-} from "../app/shared/namespace-v1";
-import {
-  GENERATED_UCD_SHA256,
-} from "../app/shared/namespace-v1/generated";
+import { normalizeNfc, normalizeNfd } from "../app/shared/namespace-v1";
+import { GENERATED_UCD_SHA256 } from "../app/shared/namespace-v1/generated";
 import {
   EXPECTED_UCD_SOURCE_SHA256,
   NAMESPACE_IMPLEMENTATION_VERSION,
@@ -37,7 +32,12 @@ function parseNormalizationLine(line: string): [string, string, string, string, 
   const fields = withoutComment.split(";").map((field) => field.trim());
   while (fields.at(-1) === "") fields.pop();
   if (fields.length !== 5) throw new Error(`Malformed NormalizationTest line: ${line}`);
-  return fields.map((field) => field.split(/\s+/).map((codePoint) => String.fromCodePoint(Number.parseInt(codePoint, 16))).join("")) as [string, string, string, string, string];
+  return fields.map((field) =>
+    field
+      .split(/\s+/)
+      .map((codePoint) => String.fromCodePoint(Number.parseInt(codePoint, 16)))
+      .join(""),
+  ) as [string, string, string, string, string];
 }
 
 describe("mdwn/namespace-v1 Unicode data gate", () => {
@@ -50,10 +50,12 @@ describe("mdwn/namespace-v1 Unicode data gate", () => {
     expect(UCD_SOURCE_SHA256).toBe(GENERATED_UCD_SHA256);
     expect(sourceHash()).toBe(UCD_SOURCE_SHA256);
     expect(readFileSync(new URL("UCD-LICENSE.txt", UCD_DIRECTORY), "utf8")).toContain("Unicode");
-    expect(() => execFileSync(process.execPath, ["scripts/generate-namespace-v1-data.mjs", "--check"], {
-      cwd: new URL("..", import.meta.url),
-      stdio: "pipe",
-    })).not.toThrow();
+    expect(() =>
+      execFileSync(process.execPath, ["scripts/generate-namespace-v1-data.mjs", "--check"], {
+        cwd: new URL("..", import.meta.url),
+        stdio: "pipe",
+      }),
+    ).not.toThrow();
   });
 
   it("rejects a drifted vendored source before regeneration", () => {
@@ -61,10 +63,12 @@ describe("mdwn/namespace-v1 Unicode data gate", () => {
     const original = readFileSync(sourcePath);
     try {
       writeFileSync(sourcePath, Buffer.concat([original, Buffer.from("\n# namespace-v1 drift\n")]));
-      expect(() => execFileSync(process.execPath, ["scripts/generate-namespace-v1-data.mjs"], {
-        cwd: new URL("..", import.meta.url),
-        stdio: "pipe",
-      })).toThrow();
+      expect(() =>
+        execFileSync(process.execPath, ["scripts/generate-namespace-v1-data.mjs"], {
+          cwd: new URL("..", import.meta.url),
+          stdio: "pipe",
+        }),
+      ).toThrow();
     } finally {
       writeFileSync(sourcePath, original);
     }
@@ -96,7 +100,9 @@ describe("mdwn/namespace-v1 Unicode data gate", () => {
     const original = String.prototype.normalize;
     Object.defineProperty(String.prototype, "normalize", {
       configurable: true,
-      value: () => { throw new Error("host normalize must not be used"); },
+      value: () => {
+        throw new Error("host normalize must not be used");
+      },
     });
     try {
       expect(normalizeNfc("Ame\u0301lie")).toBe("Amélie");

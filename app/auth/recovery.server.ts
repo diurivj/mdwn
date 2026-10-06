@@ -2,18 +2,21 @@ import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
   type RegistrationResponseJSON,
+  type VerifiedRegistrationResponse,
 } from "@simplewebauthn/server";
 
 import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
-import {
-  enforceRateLimit, MAX_EVENT_RETENTION_MS, rateLimitResponse,
-} from "~/shared/security/abuse-control.server";
+import { enforceRateLimit, MAX_EVENT_RETENTION_MS, rateLimitResponse } from "~/shared/security/abuse-control.server";
 import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
 import type { RegistrationStart } from "./contracts";
 import {
-  assertSessionConfiguration, FRESH_ASSERTION_MS, hasFreshAssertion,
-  RECOVERY_SESSION_MS, signSessionId, type ActiveSession,
+  assertSessionConfiguration,
+  FRESH_ASSERTION_MS,
+  hasFreshAssertion,
+  RECOVERY_SESSION_MS,
+  signSessionId,
+  type ActiveSession,
 } from "./session.server";
 import { WEBAUTHN_CHALLENGE_MS } from "./webauthn.server";
 
@@ -22,9 +25,13 @@ const codePattern = /^[A-Za-z0-9_-]{32}$/;
 const encoder = new TextEncoder();
 
 function failed(): Response {
-  return Response.json({ error: "recovery_failed" }, {
-    status: 401, headers: { "Cache-Control": "no-store" },
-  });
+  return Response.json(
+    { error: "recovery_failed" },
+    {
+      status: 401,
+      headers: { "Cache-Control": "no-store" },
+    },
+  );
 }
 
 function liveRecoverySession(session: ActiveSession, now: number) {
@@ -51,21 +58,31 @@ function liveFreshSession(session: ActiveSession, now: number) {
 
 /** An Account ID is the non-secret recovery identifier, not a handle or share address. */
 export async function beginAuthenticationRecovery(
-  request: Request, env: Env, identifier: unknown, code: unknown,
+  request: Request,
+  env: Env,
+  identifier: unknown,
+  code: unknown,
 ): Promise<Response> {
   assertSessionConfiguration(env);
   // Even malformed/nonexistent identifiers spend the same global/network/identifier
   // quota. Never look up an Account or a code before the abuse-control decision.
   const candidate = typeof identifier === "string" && identifier.length <= 256 ? identifier : "invalid";
   const limit = await enforceRateLimit({
-    db: env.DB, request, action: "recovery.attempt",
-    scopes: { recoveryIdentifier: candidate }, hmacSecret: env.ABUSE_HMAC_SECRET,
+    db: env.DB,
+    request,
+    action: "recovery.attempt",
+    scopes: { recoveryIdentifier: candidate },
+    hmacSecret: env.ABUSE_HMAC_SECRET,
   });
   if (!limit.allowed) return rateLimitResponse(limit);
 
   if (!identifierPattern.test(candidate) || typeof code !== "string" || !codePattern.test(code)) return failed();
   let codeBytes: Uint8Array;
-  try { codeBytes = decodeBytes(code, 24); } catch { return failed(); }
+  try {
+    codeBytes = decodeBytes(code, 24);
+  } catch {
+    return failed();
+  }
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(encodeBytes(codeBytes))));
   const now = Date.now();
   const id = crypto.randomUUID();
@@ -81,14 +98,19 @@ export async function beginAuthenticationRecovery(
       WHERE changes() = 1 AND EXISTS (SELECT 1 FROM accounts WHERE id = ${candidate})`,
   ]);
   if (consumed?.meta.changes !== 1 || created?.meta.changes !== 1) return failed();
-  return Response.json({ ok: true }, {
-    headers: { "Set-Cookie": cookie, "Cache-Control": "no-store" },
-  });
+  return Response.json(
+    { ok: true },
+    {
+      headers: { "Set-Cookie": cookie, "Cache-Control": "no-store" },
+    },
+  );
 }
 
 /** Only a live restricted Session may obtain a replacement-Passkey challenge. */
 export async function beginRecoveryRegistration(
-  request: Request, env: Env, session: ActiveSession,
+  request: Request,
+  env: Env,
+  session: ActiveSession,
 ): Promise<RegistrationStart | null> {
   if (session.purpose !== "recovery") return null;
   const now = Date.now();
@@ -96,9 +118,13 @@ export async function beginRecoveryRegistration(
     SELECT credential_id FROM passkeys WHERE account_id = ${session.accountId}
   `);
   const options = await generateRegistrationOptions({
-    rpName: "mdwn", rpID: new URL(request.url).hostname,
-    userID: encoder.encode(session.accountId), userName: "mdwn Account", userDisplayName: "mdwn",
-    attestationType: "none", authenticatorSelection: { residentKey: "required", userVerification: "required" },
+    rpName: "mdwn",
+    rpID: new URL(request.url).hostname,
+    userID: encoder.encode(session.accountId),
+    userName: "mdwn Account",
+    userDisplayName: "mdwn",
+    attestationType: "none",
+    authenticatorSelection: { residentKey: "required", userVerification: "required" },
     excludeCredentials: existing.map((passkey) => ({ id: passkey.credential_id })),
   });
   const challengeId = crypto.randomUUID();
@@ -116,7 +142,11 @@ export async function beginRecoveryRegistration(
 
 /** The replacement credential, global revocation and bounded event commit together. */
 export async function completeRecoveryRegistration(
-  request: Request, env: Env, session: ActiveSession, challengeId: string, payload: unknown,
+  request: Request,
+  env: Env,
+  session: ActiveSession,
+  challengeId: string,
+  payload: unknown,
 ): Promise<boolean> {
   if (session.purpose !== "recovery") return false;
   const now = Date.now();
@@ -130,17 +160,28 @@ export async function completeRecoveryRegistration(
       AND ${liveRecoverySession(session, now)}
     RETURNING challenge
   `);
-  if (!challenge || !payload || typeof payload !== "object" || Array.isArray(payload) ||
-      typeof (payload as { id?: unknown }).id !== "string") return false;
+  if (
+    !challenge ||
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    typeof (payload as { id?: unknown }).id !== "string"
+  )
+    return false;
 
   const response = payload as RegistrationResponseJSON;
-  let verification;
+  let verification: VerifiedRegistrationResponse;
   try {
     verification = await verifyRegistrationResponse({
-      response, expectedChallenge: challenge.challenge, expectedOrigin: origin,
-      expectedRPID: rpId, requireUserVerification: true,
+      response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: origin,
+      expectedRPID: rpId,
+      requireUserVerification: true,
     });
-  } catch { return false; }
+  } catch {
+    return false;
+  }
   if (!verification.verified || verification.registrationInfo.credential.id !== response.id) return false;
 
   const credential = verification.registrationInfo.credential;
@@ -171,22 +212,28 @@ export async function completeRecoveryRegistration(
 
 /** A recently asserted normal Session may replace all remaining codes at once. */
 export async function replaceAuthenticationRecoveryCodes(
-  env: Env, session: ActiveSession, hashes: unknown,
+  env: Env,
+  session: ActiveSession,
+  hashes: unknown,
 ): Promise<boolean> {
   if (!hasFreshAssertion(session) || !Array.isArray(hashes) || hashes.length !== 10) return false;
   let decoded: Uint8Array[];
   try {
     decoded = hashes.map((hash: unknown) => decodeBytes(hash as string, 32));
-  } catch { return false; }
+  } catch {
+    return false;
+  }
   if (new Set(hashes as string[]).size !== 10) return false;
   const now = Date.now();
   const results = await atomicSqlBatch(env.DB, [
     sql`DELETE FROM authentication_recovery_codes
       WHERE account_id = ${session.accountId} AND ${liveFreshSession(session, now)}`,
-    ...decoded.map((hash, ordinal) => sql`INSERT INTO authentication_recovery_codes
+    ...decoded.map(
+      (hash, ordinal) => sql`INSERT INTO authentication_recovery_codes
       (account_id, ordinal, code_hash)
       SELECT ${session.accountId}, ${ordinal}, ${hash}
-      WHERE ${liveFreshSession(session, now)}`),
+      WHERE ${liveFreshSession(session, now)}`,
+    ),
   ]);
   return results.slice(1).every((result) => result.meta.changes === 1);
 }

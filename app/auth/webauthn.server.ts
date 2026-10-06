@@ -5,6 +5,7 @@ import {
   verifyRegistrationResponse,
   type AuthenticationResponseJSON,
   type RegistrationResponseJSON,
+  type VerifiedRegistrationResponse,
 } from "@simplewebauthn/server";
 
 import { atomicSqlBatch, createDb, passkeys, sessions, sql } from "~/shared/db/client.server";
@@ -25,10 +26,7 @@ import {
 
 export const WEBAUTHN_CHALLENGE_MS = 5 * 60 * 1_000;
 
-type ChallengePurpose =
-  | "sign_in"
-  | "fresh_assertion"
-  | "passkey_registration";
+type ChallengePurpose = "sign_in" | "fresh_assertion" | "passkey_registration";
 
 type ChallengeRow = {
   challenge: string;
@@ -62,9 +60,7 @@ function relyingParty(request: Request): { origin: string; rpId: string } {
 function parseTransports(value: string): string[] {
   try {
     const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
-      ? parsed
-      : [];
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : [];
   } catch {
     return [];
   }
@@ -128,10 +124,7 @@ async function consumeChallenge(
   return row ?? null;
 }
 
-async function accountPasskeys(
-  env: Env,
-  accountId: string,
-): Promise<PasskeyCredentialRow[]> {
+async function accountPasskeys(env: Env, accountId: string): Promise<PasskeyCredentialRow[]> {
   return createDb(env.DB).all<PasskeyCredentialRow>(sql`
     SELECT credential_id, transports
     FROM passkeys
@@ -147,10 +140,7 @@ function allowCredentials(passkeys: PasskeyCredentialRow[]) {
   }));
 }
 
-function optionalUserHandleMatches(
-  response: AuthenticationResponseJSON,
-  accountId: string,
-): boolean {
+function optionalUserHandleMatches(response: AuthenticationResponseJSON, accountId: string): boolean {
   const userHandle = response.response?.userHandle;
   return userHandle === undefined || userHandle === accountUserHandle(accountId);
 }
@@ -226,14 +216,7 @@ export async function beginSignIn(request: Request, env: Env): Promise<Assertion
     rpID: rpId,
     userVerification: "required",
   });
-  const challengeId = await createChallenge(
-    env,
-    "sign_in",
-    request,
-    options.challenge,
-    null,
-    null,
-  );
+  const challengeId = await createChallenge(env, "sign_in", request, options.challenge, null, null);
   return { challengeId, options, sessionBinding: await sessionBindingDigest(challengeId) };
 }
 
@@ -249,14 +232,7 @@ export async function completeSignIn(
   payload: unknown,
   deviceProof?: unknown,
 ): Promise<{ setCookie: string; bound: boolean } | null> {
-  const challenge = await consumeChallenge(
-    env,
-    "sign_in",
-    challengeId,
-    request,
-    null,
-    null,
-  );
+  const challenge = await consumeChallenge(env, "sign_in", challengeId, request, null, null);
   if (!challenge) return null;
 
   const response = credentialResponse<AuthenticationResponseJSON>(payload);
@@ -275,13 +251,15 @@ export async function completeSignIn(
   if (!verification) return null;
 
   const deviceId = await verifySignInDevice(
-    env, passkey.account_id, challengeId, deviceProof, request,
+    env,
+    passkey.account_id,
+    challengeId,
+    deviceProof,
+    request,
     JSON.stringify({ challengeId, response }),
   );
   const now = Date.now();
-  const counterUpdated = await createDb(env.DB).run(
-    updatePasskeyCounter(passkey, verification, now),
-  );
+  const counterUpdated = await createDb(env.DB).run(updatePasskeyCounter(passkey, verification, now));
   if (counterUpdated.meta.changes !== 1) return null;
 
   if (deviceId) {
@@ -297,11 +275,7 @@ export async function completeSignIn(
 }
 
 /** Begins a known-Account assertion that can renew a normal Session's freshness. */
-export async function beginFreshAssertion(
-  request: Request,
-  env: Env,
-  session: ActiveSession,
-): Promise<AssertionStart> {
+export async function beginFreshAssertion(request: Request, env: Env, session: ActiveSession): Promise<AssertionStart> {
   const { rpId } = relyingParty(request);
   const options = await generateAuthenticationOptions({
     rpID: rpId,
@@ -330,14 +304,7 @@ export async function completeFreshAssertion(
   challengeId: string,
   payload: unknown,
 ): Promise<boolean> {
-  const challenge = await consumeChallenge(
-    env,
-    "fresh_assertion",
-    challengeId,
-    request,
-    session.accountId,
-    session.id,
-  );
+  const challenge = await consumeChallenge(env, "fresh_assertion", challengeId, request, session.accountId, session.id);
   if (!challenge) return false;
 
   const response = credentialResponse<AuthenticationResponseJSON>(payload);
@@ -384,10 +351,7 @@ export async function completeFreshAssertion(
        )
        AND changes() = 1
     `);
-  const [counterUpdated, sessionUpdated] = await db.batch([
-    counterStatement,
-    sessionStatement,
-  ]);
+  const [counterUpdated, sessionUpdated] = await db.batch([counterStatement, sessionStatement]);
   return counterUpdated.meta.changes === 1 && sessionUpdated.meta.changes === 1;
 }
 
@@ -447,7 +411,7 @@ export async function completePasskeyRegistration(
   const response = credentialResponse<RegistrationResponseJSON>(payload);
   if (!response) return false;
 
-  let verification;
+  let verification: VerifiedRegistrationResponse;
   try {
     verification = await verifyRegistrationResponse({
       response,
@@ -518,11 +482,7 @@ export async function listPasskeys(
  * authenticated. The D1 batch is transactional; its second statement is
  * explicitly gated on a successful conditional delete.
  */
-export async function removePasskey(
-  env: Env,
-  session: ActiveSession,
-  credentialId: string,
-): Promise<boolean> {
+export async function removePasskey(env: Env, session: ActiveSession, credentialId: string): Promise<boolean> {
   const now = Date.now();
   const db = createDb(env.DB);
   const deletePasskey = db.delete(passkeys).where(sql`

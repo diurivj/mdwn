@@ -54,11 +54,7 @@ function parseIPv6(value: string): number[] | null {
   if (compressed) {
     const zerosToInsert = 8 - words.length;
     if (zerosToInsert < 1) return null;
-    return [
-      ...words.slice(0, left.length),
-      ...Array<number>(zerosToInsert).fill(0),
-      ...words.slice(left.length),
-    ];
+    return [...words.slice(0, left.length), ...Array<number>(zerosToInsert).fill(0), ...words.slice(left.length)];
   }
   return words.length === 8 ? words : null;
 }
@@ -74,7 +70,7 @@ export function normalizeEdgeIp(input: string): string {
 
   let bestStart = -1;
   let bestLength = 1;
-  for (let start = 0; start < words.length;) {
+  for (let start = 0; start < words.length; ) {
     if (words[start] !== 0) {
       start++;
       continue;
@@ -125,9 +121,12 @@ export async function deriveOpaqueScopeBucket(
 ): Promise<string> {
   const keyBytes = new TextEncoder().encode(secret);
   if (
-    !value || value.length > 1024 || !purpose
-    || !Number.isSafeInteger(timeEpoch) || timeEpoch < 0
-    || keyBytes.length < MIN_HMAC_KEY_BYTES
+    !value ||
+    value.length > 1024 ||
+    !purpose ||
+    !Number.isSafeInteger(timeEpoch) ||
+    timeEpoch < 0 ||
+    keyBytes.length < MIN_HMAC_KEY_BYTES
   ) {
     throw new Error("abuse-control key unavailable");
   }

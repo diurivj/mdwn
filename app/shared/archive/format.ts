@@ -16,9 +16,9 @@
  * remain the Import flow's responsibility.
  */
 
-import { MAX_COMMENT_CHARS, normalizeCommentText, validCommentText } from "~/shared/comments/content";
+import { normalizeCommentText, validCommentText } from "~/shared/comments/content";
 import { FILE_SOURCE_LIMIT } from "~/shared/crypto/file-source";
-import { canonicalizeSegment, comparisonKey, NamespaceError, utf8Bytes } from "~/shared/namespace-v1";
+import { canonicalizeSegment, comparisonKey, NamespaceError } from "~/shared/namespace-v1";
 import type { ZipEntry } from "./zip";
 
 export const ARCHIVE_METADATA_DIRECTORY = ".mdwn";
@@ -53,7 +53,10 @@ export type ArchiveErrorCode =
 
 /** `detail` may name a local archive path or failure; it never contains content. */
 export class ArchiveError extends Error {
-  constructor(readonly code: ArchiveErrorCode, readonly detail?: string) {
+  constructor(
+    readonly code: ArchiveErrorCode,
+    readonly detail?: string,
+  ) {
     super(`mdwn/archive: ${code}${detail ? ` (${detail})` : ""}`);
     this.name = "ArchiveError";
   }
@@ -118,8 +121,6 @@ export function checkArchiveCompressedSize(bytes: Uint8Array, max = MAX_ARCHIVE_
   if (bytes.length > max) throw new ArchiveError("archive-too-large");
 }
 
-const encoder = new TextEncoder();
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -143,8 +144,11 @@ export function serializeArchiveManifest(manifest: ArchiveManifest): string {
 
 export function parseArchiveManifest(text: string): ArchiveManifest {
   let parsed: unknown;
-  try { parsed = JSON.parse(text); }
-  catch { throw new ArchiveError("malformed-manifest"); }
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new ArchiveError("malformed-manifest");
+  }
   if (!isRecord(parsed) || !hasOnly(parsed, ["format", "version", "createdAt", "roots"])) {
     throw new ArchiveError("malformed-manifest");
   }
@@ -155,8 +159,12 @@ export function parseArchiveManifest(text: string): ArchiveManifest {
   }
   if (!Array.isArray(parsed.roots) || parsed.roots.length > 1_024) throw new ArchiveError("malformed-manifest");
   const roots: ArchiveRoot[] = parsed.roots.map((value) => {
-    if (!isRecord(value) || !hasOnly(value, ["kind", "path"]) ||
-        (value.kind !== "file" && value.kind !== "directory") || typeof value.path !== "string") {
+    if (
+      !isRecord(value) ||
+      !hasOnly(value, ["kind", "path"]) ||
+      (value.kind !== "file" && value.kind !== "directory") ||
+      typeof value.path !== "string"
+    ) {
       throw new ArchiveError("malformed-manifest");
     }
     return { kind: value.kind, path: value.path };
@@ -165,9 +173,14 @@ export function parseArchiveManifest(text: string): ArchiveManifest {
 }
 
 export function createPrivateCommentsSidecar(files: readonly PrivateCommentsFile[]): PrivateCommentsSidecar {
-  return { format: COMMENTS_FORMAT, version: COMMENTS_VERSION, files: files.map((file) => ({
-    path: file.path, comments: file.comments.map((comment) => ({ ...comment })),
-  })) };
+  return {
+    format: COMMENTS_FORMAT,
+    version: COMMENTS_VERSION,
+    files: files.map((file) => ({
+      path: file.path,
+      comments: file.comments.map((comment) => ({ ...comment })),
+    })),
+  };
 }
 
 export function serializePrivateCommentsSidecar(sidecar: PrivateCommentsSidecar): string {
@@ -176,34 +189,56 @@ export function serializePrivateCommentsSidecar(sidecar: PrivateCommentsSidecar)
 
 export function parsePrivateCommentsSidecar(text: string): PrivateCommentsSidecar {
   let parsed: unknown;
-  try { parsed = JSON.parse(text); }
-  catch { throw new ArchiveError("malformed-comments"); }
-  if (!isRecord(parsed) || !hasOnly(parsed, ["format", "version", "files"])) throw new ArchiveError("malformed-comments");
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new ArchiveError("malformed-comments");
+  }
+  if (!isRecord(parsed) || !hasOnly(parsed, ["format", "version", "files"]))
+    throw new ArchiveError("malformed-comments");
   if (parsed.format !== COMMENTS_FORMAT) throw new ArchiveError("malformed-comments");
   if (parsed.version !== COMMENTS_VERSION) throw new ArchiveError("unsupported-version");
-  if (!Array.isArray(parsed.files) || parsed.files.length > MAX_HISTORICAL_COMMENTS) throw new ArchiveError("malformed-comments");
+  if (!Array.isArray(parsed.files) || parsed.files.length > MAX_HISTORICAL_COMMENTS)
+    throw new ArchiveError("malformed-comments");
   let total = 0;
   const files = parsed.files.map((value): PrivateCommentsFile => {
-    if (!isRecord(value) || !hasOnly(value, ["path", "comments"]) || typeof value.path !== "string" ||
-        !value.path.length || !Array.isArray(value.comments) || !value.comments.length) {
+    if (
+      !isRecord(value) ||
+      !hasOnly(value, ["path", "comments"]) ||
+      typeof value.path !== "string" ||
+      !value.path.length ||
+      !Array.isArray(value.comments) ||
+      !value.comments.length
+    ) {
       throw new ArchiveError("malformed-comments");
     }
     let previous = -1;
     const comments = value.comments.map((comment): HistoricalComment => {
-      if (!isRecord(comment) ||
-          !hasOnly(comment, ["sequence", "text", "pseudonym", "createdAt", "updatedAt"]) ||
-          !nonNegativeInteger(comment.sequence) || comment.sequence <= previous ||
-          !validCommentText(comment.text) || normalizeCommentText(comment.text) !== comment.text ||
-          typeof comment.pseudonym !== "string" || !comment.pseudonym ||
-          Array.from(comment.pseudonym).length > 256 ||
-          !nonNegativeInteger(comment.createdAt) || !nonNegativeInteger(comment.updatedAt)) {
+      if (
+        !isRecord(comment) ||
+        !hasOnly(comment, ["sequence", "text", "pseudonym", "createdAt", "updatedAt"]) ||
+        !nonNegativeInteger(comment.sequence) ||
+        comment.sequence <= previous ||
+        !validCommentText(comment.text) ||
+        normalizeCommentText(comment.text) !== comment.text ||
+        typeof comment.pseudonym !== "string" ||
+        !comment.pseudonym ||
+        Array.from(comment.pseudonym).length > 256 ||
+        !nonNegativeInteger(comment.createdAt) ||
+        !nonNegativeInteger(comment.updatedAt)
+      ) {
         throw new ArchiveError("malformed-comments");
       }
       previous = comment.sequence;
       total += 1;
       if (total > MAX_HISTORICAL_COMMENTS) throw new ArchiveError("too-many-comments");
-      return { sequence: comment.sequence, text: comment.text, pseudonym: comment.pseudonym,
-        createdAt: comment.createdAt, updatedAt: comment.updatedAt };
+      return {
+        sequence: comment.sequence,
+        text: comment.text,
+        pseudonym: comment.pseudonym,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+      };
     });
     return { path: value.path, comments };
   });
@@ -222,8 +257,9 @@ function canonicalSegments(path: string): string[] {
   if (!path.length || path.startsWith("/") || raw.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new ArchiveError("invalid-path", path);
   }
-  try { return raw.map((segment) => canonicalizeSegment(segment).display); }
-  catch (error) {
+  try {
+    return raw.map((segment) => canonicalizeSegment(segment).display);
+  } catch (error) {
     if (error instanceof NamespaceError) throw new ArchiveError("invalid-path", path);
     throw error;
   }
@@ -267,8 +303,11 @@ export function inspectArchive(
       if (entry.path === ARCHIVE_MANIFEST_PATH) {
         if (manifest) throw new ArchiveError("malformed-manifest");
         let text: string;
-        try { text = new TextDecoder("utf-8", { fatal: true }).decode(entry.data); }
-        catch { throw new ArchiveError("malformed-manifest"); }
+        try {
+          text = new TextDecoder("utf-8", { fatal: true }).decode(entry.data);
+        } catch {
+          throw new ArchiveError("malformed-manifest");
+        }
         manifest = parseArchiveManifest(text);
         continue;
       }
@@ -276,8 +315,11 @@ export function inspectArchive(
         if (sawComments) throw new ArchiveError("malformed-comments");
         sawComments = true;
         let text: string;
-        try { text = new TextDecoder("utf-8", { fatal: true }).decode(entry.data); }
-        catch { throw new ArchiveError("malformed-comments"); }
+        try {
+          text = new TextDecoder("utf-8", { fatal: true }).decode(entry.data);
+        } catch {
+          throw new ArchiveError("malformed-comments");
+        }
         const sidecar = parsePrivateCommentsSidecar(text);
         comments = new Map();
         const paths = new Set<string>();
@@ -325,6 +367,14 @@ export function inspectArchive(
     const found = byKey.get(key);
     if (!found || found.directory) throw new ArchiveError("malformed-comments", found?.path);
   }
-  return { manifest, roots, entries, comments: new Map([...comments].map(([key, value]) =>
-    [byKey.get(key)!.path, value])), expandedBytes, nodeCount: entries.length, maxDepth, sourceBytes };
+  return {
+    manifest,
+    roots,
+    entries,
+    comments: new Map([...comments].map(([key, value]) => [byKey.get(key)!.path, value])),
+    expandedBytes,
+    nodeCount: entries.length,
+    maxDepth,
+    sourceBytes,
+  };
 }

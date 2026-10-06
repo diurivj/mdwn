@@ -7,13 +7,7 @@ import {
   revokeSessionForActor,
   SESSION_ABSOLUTE_MS,
 } from "../../app/auth/session.server";
-import {
-  mutation,
-  seedAccount,
-  seedNormalSession,
-  sessionState,
-  signedCookie,
-} from "./auth-fixtures";
+import { mutation, seedAccount, seedNormalSession, sessionState, signedCookie } from "./auth-fixtures";
 
 declare global {
   namespace Cloudflare {
@@ -100,16 +94,12 @@ describe("normal Session lifecycle routes", () => {
     const now = Date.now();
 
     await env.DB.batch([
-      env.DB
-        .prepare("UPDATE sessions SET idle_expires_at = ? WHERE id = ?")
-        .bind(now - 1, idle.id),
-      env.DB
-        .prepare(
-          `UPDATE sessions
+      env.DB.prepare("UPDATE sessions SET idle_expires_at = ? WHERE id = ?").bind(now - 1, idle.id),
+      env.DB.prepare(
+        `UPDATE sessions
            SET created_at = ?, idle_expires_at = ?, absolute_expires_at = ?
            WHERE id = ?`,
-        )
-        .bind(now - SESSION_ABSOLUTE_MS - 2, now - 1, now - 1, absolute.id),
+      ).bind(now - SESSION_ABSOLUTE_MS - 2, now - 1, now - 1, absolute.id),
     ]);
 
     expect(await sessionState(idle.cookie)).toEqual({ authenticated: false });
@@ -120,13 +110,12 @@ describe("normal Session lifecycle routes", () => {
     const account = await seedAccount();
     const sessionId = crypto.randomUUID();
     const now = Date.now();
-    await env.DB
-      .prepare(
-        `INSERT INTO sessions (
+    await env.DB.prepare(
+      `INSERT INTO sessions (
           id, account_id, purpose, authenticated_passkey_id, created_at,
           idle_expires_at, absolute_expires_at, fresh_asserted_at, refreshed_at, revoked_at
         ) VALUES (?, ?, 'recovery', NULL, ?, ?, ?, NULL, NULL, NULL)`,
-      )
+    )
       .bind(sessionId, account.accountId, now, now + SESSION_ABSOLUTE_MS, now + SESSION_ABSOLUTE_MS)
       .run();
     const cookie = await signedCookie(sessionId);
@@ -139,12 +128,9 @@ describe("normal Session lifecycle routes", () => {
     ] as const) {
       expect((await mutation(path, cookie, body)).status).toBe(403);
     }
-    expect(
-      (await SELF.fetch("https://mdwn.test/api/auth/sessions", { headers: { cookie } })).status,
-    ).toBe(403);
+    expect((await SELF.fetch("https://mdwn.test/api/auth/sessions", { headers: { cookie } })).status).toBe(403);
 
-    const row = await env.DB
-      .prepare("SELECT revoked_at FROM sessions WHERE id = ?")
+    const row = await env.DB.prepare("SELECT revoked_at FROM sessions WHERE id = ?")
       .bind(sessionId)
       .first<{ revoked_at: number | null }>();
     expect(row).toEqual({ revoked_at: null });
@@ -167,8 +153,7 @@ describe("normal Session lifecycle routes", () => {
     expect(revoke.status).toBe(200);
     expect(await sessionState(target.cookie)).toEqual({ authenticated: false });
 
-    const row = await env.DB
-      .prepare("SELECT revoked_at FROM sessions WHERE id = ?")
+    const row = await env.DB.prepare("SELECT revoked_at FROM sessions WHERE id = ?")
       .bind(target.id)
       .first<{ revoked_at: number | null }>();
     expect(row?.revoked_at).toEqual(expect.any(Number));
@@ -185,10 +170,7 @@ describe("normal Session lifecycle routes", () => {
     );
     if (!capturedActor) throw new Error("expected an actor snapshot");
 
-    await env.DB
-      .prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?")
-      .bind(Date.now(), staleActor.id)
-      .run();
+    await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?").bind(Date.now(), staleActor.id).run();
 
     expect(await revokeSessionForActor(env, capturedActor, firstPeer.id)).toBe("actor_inactive");
     expect(await revokeAllSessionsForActor(env, capturedActor)).toBe(false);

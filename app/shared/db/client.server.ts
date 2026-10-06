@@ -27,10 +27,12 @@ export function createDb(db: D1Database): DrizzleD1Database {
  */
 export function atomicSqlBatch(db: D1Database, statements: readonly SQL[]): Promise<D1Result[]> {
   const dialect = new SQLiteAsyncDialect();
-  return db.batch(statements.map((statement) => {
-    const compiled = dialect.sqlToQuery(statement);
-    return db.prepare(compiled.sql).bind(...compiled.params);
-  }));
+  return db.batch(
+    statements.map((statement) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return db.prepare(compiled.sql).bind(...compiled.params);
+    }),
+  );
 }
 
 /** Cheap liveness probe through the ORM: SELECT 1. */

@@ -80,11 +80,23 @@ export function crc32(bytes: Uint8Array): number {
 
 /** Split a member path and reject absolute, empty, `.`, or `..` components. */
 export function validateZipPath(path: string): string[] {
-  if (typeof path !== "string" || !path.length || path.startsWith("/") || path.startsWith("\\") ||
-      /^[A-Za-z]:/.test(path) || path.includes("\0") || path.includes("\\")) throw new ZipError("invalid-path");
+  if (
+    typeof path !== "string" ||
+    !path.length ||
+    path.startsWith("/") ||
+    path.startsWith("\\") ||
+    /^[A-Za-z]:/.test(path) ||
+    path.includes("\0") ||
+    path.includes("\\")
+  )
+    throw new ZipError("invalid-path");
   const components = path.split("/").filter((component) => component !== "");
-  if (!components.length || components.length !== path.split("/").length ||
-      components.some((component) => component === "." || component === "..")) throw new ZipError("invalid-path");
+  if (
+    !components.length ||
+    components.length !== path.split("/").length ||
+    components.some((component) => component === "." || component === "..")
+  )
+    throw new ZipError("invalid-path");
   return components;
 }
 
@@ -92,7 +104,10 @@ function concat(parts: readonly Uint8Array[]): Uint8Array {
   const total = parts.reduce((length, part) => length + part.length, 0);
   const output = new Uint8Array(total);
   let offset = 0;
-  for (const part of parts) { output.set(part, offset); offset += part.length; }
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
   return output;
 }
 
@@ -101,7 +116,9 @@ async function deflateRaw(bytes: Uint8Array): Promise<Uint8Array | null> {
   try {
     const stream = new Response(bytes.slice()).body!.pipeThrough(new CompressionStream("deflate-raw"));
     return new Uint8Array(await new Response(stream).arrayBuffer());
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 async function inflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
@@ -109,7 +126,9 @@ async function inflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
   try {
     const stream = new Response(bytes.slice()).body!.pipeThrough(new DecompressionStream("deflate-raw"));
     return new Uint8Array(await new Response(stream).arrayBuffer());
-  } catch { throw new ZipError("malformed"); }
+  } catch {
+    throw new ZipError("malformed");
+  }
 }
 
 function dosDateTime(date: Date): { time: number; date: number } {
@@ -130,19 +149,24 @@ export async function createZip(inputs: readonly ZipInput[], options: { at?: Dat
   const central: Uint8Array[] = [];
   let offset = 0;
   for (const input of inputs) {
-    const components = validateZipPath(input.directory && input.path.endsWith("/") ? input.path.slice(0, -1) : input.path);
+    const components = validateZipPath(
+      input.directory && input.path.endsWith("/") ? input.path.slice(0, -1) : input.path,
+    );
     const path = `${components.join("/")}${input.directory ? "/" : ""}`;
     if (names.has(path)) throw new ZipError("duplicate-path");
     names.add(path);
     const name = encoder.encode(path);
     if (name.length > MAX_U16) throw new ZipError("invalid-path");
-    const data = input.directory ? new Uint8Array() : input.data ?? new Uint8Array();
+    const data = input.directory ? new Uint8Array() : (input.data ?? new Uint8Array());
     if (input.directory && data.length) throw new ZipError("invalid-path");
     let method = METHOD_STORE;
     let payload = data;
     if (!input.directory) {
       const deflated = await deflateRaw(data);
-      if (deflated !== null && deflated.length < data.length) { method = METHOD_DEFLATE; payload = deflated; }
+      if (deflated !== null && deflated.length < data.length) {
+        method = METHOD_DEFLATE;
+        payload = deflated;
+      }
     }
     const checksum = crc32(data);
     const header = new Uint8Array(30 + name.length);
@@ -202,8 +226,14 @@ export async function createZip(inputs: readonly ZipInput[], options: { at?: Dat
 }
 
 type CentralRecord = {
-  path: string; directory: boolean; method: number; flags: number; checksum: number;
-  compressedSize: number; size: number; localOffset: number;
+  path: string;
+  directory: boolean;
+  method: number;
+  flags: number;
+  checksum: number;
+  compressedSize: number;
+  size: number;
+  localOffset: number;
 };
 
 function findEnd(bytes: Uint8Array): number {
@@ -223,11 +253,20 @@ export async function readZip(bytes: Uint8Array): Promise<ZipEntry[]> {
   if (!(bytes instanceof Uint8Array) || bytes.length < END_MIN_BYTES) throw new ZipError("malformed");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const end = findEnd(bytes);
-  const disk = view.getUint16(end + 4, true), centralDisk = view.getUint16(end + 6, true);
-  const count = view.getUint16(end + 8, true), total = view.getUint16(end + 10, true);
-  const centralSize = view.getUint32(end + 12, true), centralOffset = view.getUint32(end + 16, true);
-  if (disk !== 0 || centralDisk !== 0 || count !== total || centralOffset + centralSize !== end ||
-      centralSize > bytes.length) throw new ZipError("unsupported");
+  const disk = view.getUint16(end + 4, true),
+    centralDisk = view.getUint16(end + 6, true);
+  const count = view.getUint16(end + 8, true),
+    total = view.getUint16(end + 10, true);
+  const centralSize = view.getUint32(end + 12, true),
+    centralOffset = view.getUint32(end + 16, true);
+  if (
+    disk !== 0 ||
+    centralDisk !== 0 ||
+    count !== total ||
+    centralOffset + centralSize !== end ||
+    centralSize > bytes.length
+  )
+    throw new ZipError("unsupported");
   const records: CentralRecord[] = [];
   const seen = new Set<string>();
   let offset = centralOffset;
@@ -243,14 +282,19 @@ export async function readZip(bytes: Uint8Array): Promise<ZipEntry[]> {
     const recordCommentLength = view.getUint16(offset + 32, true);
     const internal = view.getUint16(offset + 36, true);
     const localOffset = view.getUint32(offset + 42, true);
-    if (offset + 46 + nameLength + extraLength + recordCommentLength > end || !nameLength) throw new ZipError("malformed");
+    if (offset + 46 + nameLength + extraLength + recordCommentLength > end || !nameLength)
+      throw new ZipError("malformed");
     if (flags & FLAG_ENCRYPTED) throw new ZipError("unsupported");
     if (flags & FLAG_DATA_DESCRIPTOR) throw new ZipError("unsupported");
-    if (compressedSize === MAX_U32 || size === MAX_U32 || localOffset === MAX_U32 || internal !== 0) throw new ZipError("unsupported");
+    if (compressedSize === MAX_U32 || size === MAX_U32 || localOffset === MAX_U32 || internal !== 0)
+      throw new ZipError("unsupported");
     if (method !== METHOD_STORE && method !== METHOD_DEFLATE) throw new ZipError("unsupported");
     let name: string;
-    try { name = decoder.decode(bytes.subarray(offset + 46, offset + 46 + nameLength)); }
-    catch { throw new ZipError("malformed"); }
+    try {
+      name = decoder.decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
+    } catch {
+      throw new ZipError("malformed");
+    }
     const directory = name.endsWith("/");
     const path = directory ? name.slice(0, -1) : name;
     const components = validateZipPath(path);
@@ -264,14 +308,20 @@ export async function readZip(bytes: Uint8Array): Promise<ZipEntry[]> {
   const entries: ZipEntry[] = [];
   for (const record of records) {
     const { localOffset } = record;
-    if (localOffset + 30 > bytes.length || view.getUint32(localOffset, true) !== LOCAL_SIGNATURE) throw new ZipError("malformed");
+    if (localOffset + 30 > bytes.length || view.getUint32(localOffset, true) !== LOCAL_SIGNATURE)
+      throw new ZipError("malformed");
     const localFlags = view.getUint16(localOffset + 6, true);
     const localMethod = view.getUint16(localOffset + 8, true);
     const nameLength = view.getUint16(localOffset + 26, true);
     const extraLength = view.getUint16(localOffset + 28, true);
     const dataStart = localOffset + 30 + nameLength + extraLength;
-    if (localFlags !== record.flags || localMethod !== record.method || localOffset >= centralOffset ||
-        dataStart + record.compressedSize > centralOffset) throw new ZipError("malformed");
+    if (
+      localFlags !== record.flags ||
+      localMethod !== record.method ||
+      localOffset >= centralOffset ||
+      dataStart + record.compressedSize > centralOffset
+    )
+      throw new ZipError("malformed");
     const payload = bytes.subarray(dataStart, dataStart + record.compressedSize);
     const data = record.method === METHOD_DEFLATE ? await inflateRaw(payload) : new Uint8Array(payload);
     if (data.length !== record.size || crc32(data) !== record.checksum) throw new ZipError("checksum-mismatch");

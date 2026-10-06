@@ -1,12 +1,26 @@
 import { freshNormalSessionGuard } from "~/auth/fresh-session.server";
-import { assertSessionConfiguration, hasFreshAssertion, SESSION_ABSOLUTE_MS, SESSION_IDLE_MS, signSessionId, type ActiveSession } from "~/auth/session.server";
+import {
+  assertSessionConfiguration,
+  hasFreshAssertion,
+  SESSION_ABSOLUTE_MS,
+  SESSION_IDLE_MS,
+  signSessionId,
+  type ActiveSession,
+} from "~/auth/session.server";
 import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
 import { sealDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
 import { enforceRateLimit, MAX_EVENT_RETENTION_MS, rateLimitResponse } from "~/shared/security/abuse-control.server";
 import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
-import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type NextRecoveryMetadata, type RecoveryIntent } from "./protocol";
+import {
+  nextRecoveryMetadataDigest,
+  possessionMessage,
+  recoveryIntentMessage,
+  sha256,
+  type NextRecoveryMetadata,
+  type RecoveryIntent,
+} from "./protocol";
 
 const ENROLLMENT_MS = 5 * 60_000;
 const noStore = { "Cache-Control": "no-store" };
@@ -35,13 +49,15 @@ function equal(left: Uint8Array, right: Uint8Array): boolean {
 }
 
 async function enrollment(env: Env, session: ActiveSession, id: string, now: number): Promise<EnrollmentRow | null> {
-  return (await createDb(env.DB).get<EnrollmentRow>(sql`
+  return (
+    (await createDb(env.DB).get<EnrollmentRow>(sql`
     SELECT e.*, c.verification_public_key FROM recovery_enrollments e
     JOIN recovery_capsules c ON c.account_id = e.account_id AND c.generation = e.generation
     JOIN account_encryption_identities i ON i.account_id = e.account_id AND i.registry_epoch = e.registry_epoch
     WHERE e.id = ${id} AND e.account_id = ${session.accountId} AND e.session_id = ${session.id}
       AND e.expires_at > ${now} AND ${freshNormalSessionGuard(session, now)}
-  `)) ?? null;
+  `)) ?? null
+  );
 }
 
 async function burn(env: Env, session: ActiveSession, id: string): Promise<void> {
@@ -51,22 +67,45 @@ async function burn(env: Env, session: ActiveSession, id: string): Promise<void>
 
 async function verifySignature(publicBytes: Uint8Array, message: Uint8Array, signature: Uint8Array): Promise<boolean> {
   try {
-    const key = await crypto.subtle.importKey("raw", new Uint8Array(publicBytes),
-      { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
-    return crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key,
-      new Uint8Array(signature), new Uint8Array(message));
-  } catch { return false; }
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new Uint8Array(publicBytes),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
+    );
+    return crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      key,
+      new Uint8Array(signature),
+      new Uint8Array(message),
+    );
+  } catch {
+    return false;
+  }
 }
 
-async function signedIntent(row: EnrollmentRow, session: ActiveSession, intent: RecoveryIntent, signature: string): Promise<Uint8Array | null> {
+async function signedIntent(
+  row: EnrollmentRow,
+  session: ActiveSession,
+  intent: RecoveryIntent,
+  signature: string,
+): Promise<Uint8Array | null> {
   try {
-    if (intent.accountId !== session.accountId || intent.generation !== row.generation ||
-        intent.registryEpoch !== row.registry_epoch ||
-        !equal(decodeBytes(intent.nonce, 32), new Uint8Array(row.nonce))) return null;
+    if (
+      intent.accountId !== session.accountId ||
+      intent.generation !== row.generation ||
+      intent.registryEpoch !== row.registry_epoch ||
+      !equal(decodeBytes(intent.nonce, 32), new Uint8Array(row.nonce))
+    )
+      return null;
     const message = recoveryIntentMessage(intent);
-    if (!await verifySignature(new Uint8Array(row.verification_public_key), message, decodeBytes(signature, 64))) return null;
+    if (!(await verifySignature(new Uint8Array(row.verification_public_key), message, decodeBytes(signature, 64))))
+      return null;
     return sha256(message);
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** Start exposes only the current opaque capsule after a live, recent assertion and quota check. */
@@ -74,14 +113,20 @@ export async function startRecoveryEnrollment(request: Request, env: Env, sessio
   assertSessionConfiguration(env);
   if (!hasFreshAssertion(session)) return failed();
   const limit = await enforceRateLimit({
-    db: env.DB, request, action: "vault_recovery.start",
-    scopes: { accountId: session.accountId }, hmacSecret: env.ABUSE_HMAC_SECRET,
+    db: env.DB,
+    request,
+    action: "vault_recovery.start",
+    scopes: { accountId: session.accountId },
+    hmacSecret: env.ABUSE_HMAC_SECRET,
   });
   if (!limit.allowed) return rateLimitResponse(limit);
   const now = Date.now();
   const row = await createDb(env.DB).get<{
-    generation: number; recovery_salt: ArrayBuffer; ciphertext: ArrayBuffer;
-    verification_public_key: ArrayBuffer; registry_epoch: number;
+    generation: number;
+    recovery_salt: ArrayBuffer;
+    ciphertext: ArrayBuffer;
+    verification_public_key: ArrayBuffer;
+    registry_epoch: number;
   }>(sql`
     SELECT c.generation, c.recovery_salt, c.ciphertext, c.verification_public_key, i.registry_epoch
     FROM recovery_capsules c JOIN account_encryption_identities i ON i.account_id = c.account_id
@@ -102,35 +147,51 @@ export async function startRecoveryEnrollment(request: Request, env: Env, sessio
         AND registry_epoch = ${row.registry_epoch})
   `);
   if (inserted.meta.changes !== 1) return failed();
-  return Response.json({
-    enrollmentId: id, accountId: session.accountId, generation: row.generation,
-    registryEpoch: row.registry_epoch, nonce: encodeBytes(nonce),
-    recoverySalt: encodeBytes(new Uint8Array(row.recovery_salt)),
-    capsule: encodeBytes(new Uint8Array(row.ciphertext)),
-    verificationPublicKey: encodeBytes(new Uint8Array(row.verification_public_key)),
-  }, { headers: noStore });
+  return Response.json(
+    {
+      enrollmentId: id,
+      accountId: session.accountId,
+      generation: row.generation,
+      registryEpoch: row.registry_epoch,
+      nonce: encodeBytes(nonce),
+      recoverySalt: encodeBytes(new Uint8Array(row.recovery_salt)),
+      capsule: encodeBytes(new Uint8Array(row.ciphertext)),
+      verificationPublicKey: encodeBytes(new Uint8Array(row.verification_public_key)),
+    },
+    { headers: noStore },
+  );
 }
 
 /** A valid old recovery signature may issue exactly one challenge to its signed candidate keys. */
 export async function challengeRecoveryEnrollment(
-  env: Env, session: ActiveSession, id: string, intent: RecoveryIntent, signature: string,
+  env: Env,
+  session: ActiveSession,
+  id: string,
+  intent: RecoveryIntent,
+  signature: string,
 ): Promise<Response> {
   const now = Date.now();
   const row = await enrollment(env, session, id, now);
   if (!row || row.state !== "started") return failed();
   const digest = await signedIntent(row, session, intent, signature);
-  if (!digest) { await burn(env, session, id); return failed(); }
+  if (!digest) {
+    await burn(env, session, id);
+    return failed();
+  }
   try {
     const transport = decodeBytes(intent.transportPublicKey, 65);
     const assertion = decodeBytes(intent.assertionPublicKey, 65);
-    const publicKey = await crypto.subtle.importKey("raw", transport,
-      { name: "ECDH", namedCurve: "P-256" }, true, []);
+    const publicKey = await crypto.subtle.importKey("raw", transport, { name: "ECDH", namedCurve: "P-256" }, true, []);
     await crypto.subtle.importKey("raw", assertion, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
     const secret = crypto.getRandomValues(new Uint8Array(32));
     const ciphertext = await sealDeviceEnrollmentEnvelope(secret, publicKey, {
-      purpose: "device-enrollment", vaultId: session.accountId,
-      objectId: "recovery-transport-challenge", keyId: "recovery-transport-challenge",
-      keyEpoch: row.generation, revision: 1, recipientId: intent.deviceId,
+      purpose: "device-enrollment",
+      vaultId: session.accountId,
+      objectId: "recovery-transport-challenge",
+      keyId: "recovery-transport-challenge",
+      keyEpoch: row.generation,
+      revision: 1,
+      recipientId: intent.deviceId,
     });
     const hash = await sha256(secret);
     const changed = await createDb(env.DB).run(sql`
@@ -147,7 +208,10 @@ export async function challengeRecoveryEnrollment(
     `);
     if (changed.meta.changes !== 1) return failed();
     return Response.json({ challenge: encodeBytes(ciphertext) }, { headers: noStore });
-  } catch { await burn(env, session, id); return failed(); }
+  } catch {
+    await burn(env, session, id);
+    return failed();
+  }
 }
 
 export type RecoveryCommit = {
@@ -162,51 +226,75 @@ export type RecoveryCommit = {
 };
 
 /** The prepared D1 batch is one transaction; only its first guarded delete can authorize the cutover. */
-export async function commitRecoveryEnrollment(env: Env, session: ActiveSession, body: RecoveryCommit): Promise<Response> {
+export async function commitRecoveryEnrollment(
+  env: Env,
+  session: ActiveSession,
+  body: RecoveryCommit,
+): Promise<Response> {
   assertSessionConfiguration(env);
   const now = Date.now();
   const row = await enrollment(env, session, body.enrollmentId, now);
-  if (!row || row.state !== "challenged" || !row.intent_digest || !row.challenge_hash ||
-      !row.assertion_public_key || !row.transport_public_key || !row.next_metadata_digest || !row.candidate_device_id) return failed();
+  if (
+    !row ||
+    row.state !== "challenged" ||
+    !row.intent_digest ||
+    !row.challenge_hash ||
+    !row.assertion_public_key ||
+    !row.transport_public_key ||
+    !row.next_metadata_digest ||
+    !row.candidate_device_id
+  )
+    return failed();
   try {
     const intentDigest = await signedIntent(row, session, body.intent, body.intentSignature);
     const challenge = decodeBytes(body.challengeSecret, 32);
     const nextCapsule = decodeBytes(body.nextCapsule);
     const enrollmentEnvelope = decodeBytes(body.enrollmentEnvelope);
     const metadata = body.nextMetadata;
-    if (!intentDigest || !equal(intentDigest, new Uint8Array(row.intent_digest)) ||
-        !equal(await sha256(challenge), new Uint8Array(row.challenge_hash)) ||
-        !equal(decodeBytes(body.intent.transportPublicKey, 65), new Uint8Array(row.transport_public_key)) ||
-        !equal(decodeBytes(body.intent.assertionPublicKey, 65), new Uint8Array(row.assertion_public_key)) ||
-        body.intent.deviceId !== row.candidate_device_id ||
-        metadata.generation !== row.generation + 1 ||
-        !equal(decodeBytes(body.intent.nextMetadataDigest, 32), new Uint8Array(row.next_metadata_digest)) ||
-        body.intent.nextMetadataDigest !== await nextRecoveryMetadataDigest(metadata) ||
-        !equal(decodeBytes(metadata.capsuleDigest, 32), await digestEnvelope(nextCapsule)) ||
-        !equal(decodeBytes(metadata.enrollmentEnvelopeDigest, 32), await digestEnvelope(enrollmentEnvelope)) ||
-        !await verifySignature(new Uint8Array(row.assertion_public_key),
-          possessionMessage(intentDigest, challenge), decodeBytes(body.challengeSignature, 64))) {
-      await burn(env, session, body.enrollmentId); return failed();
+    if (
+      !intentDigest ||
+      !equal(intentDigest, new Uint8Array(row.intent_digest)) ||
+      !equal(await sha256(challenge), new Uint8Array(row.challenge_hash)) ||
+      !equal(decodeBytes(body.intent.transportPublicKey, 65), new Uint8Array(row.transport_public_key)) ||
+      !equal(decodeBytes(body.intent.assertionPublicKey, 65), new Uint8Array(row.assertion_public_key)) ||
+      body.intent.deviceId !== row.candidate_device_id ||
+      metadata.generation !== row.generation + 1 ||
+      !equal(decodeBytes(body.intent.nextMetadataDigest, 32), new Uint8Array(row.next_metadata_digest)) ||
+      body.intent.nextMetadataDigest !== (await nextRecoveryMetadataDigest(metadata)) ||
+      !equal(decodeBytes(metadata.capsuleDigest, 32), await digestEnvelope(nextCapsule)) ||
+      !equal(decodeBytes(metadata.enrollmentEnvelopeDigest, 32), await digestEnvelope(enrollmentEnvelope)) ||
+      !(await verifySignature(
+        new Uint8Array(row.assertion_public_key),
+        possessionMessage(intentDigest, challenge),
+        decodeBytes(body.challengeSignature, 64),
+      ))
+    ) {
+      await burn(env, session, body.enrollmentId);
+      return failed();
     }
     const capsuleHeader = inspectEnvelope(nextCapsule);
     const envelopeHeader = inspectEnvelope(enrollmentEnvelope);
-    if (capsuleHeader.suite !== "AES-256-GCM/HKDF-SHA-256" ||
-        capsuleHeader.context.purpose !== "recovery-capsule" ||
-        capsuleHeader.context.vaultId !== session.accountId ||
-        capsuleHeader.context.keyEpoch !== metadata.generation ||
-        !capsuleHeader.salt || !equal(capsuleHeader.salt, decodeBytes(metadata.recoverySalt, 32)) ||
-        envelopeHeader.suite !== "HPKE-P256/HKDF-SHA-256/AES-256-GCM" ||
-        envelopeHeader.context.purpose !== "device-enrollment" ||
-        envelopeHeader.context.vaultId !== session.accountId ||
-        envelopeHeader.context.objectId !== body.intent.deviceId ||
-        envelopeHeader.context.keyId !== body.intent.deviceId ||
-        envelopeHeader.context.recipientId !== body.intent.deviceId ||
-        envelopeHeader.context.keyEpoch !== 1 || envelopeHeader.context.revision !== 1) {
-      await burn(env, session, body.enrollmentId); return failed();
+    if (
+      capsuleHeader.suite !== "AES-256-GCM/HKDF-SHA-256" ||
+      capsuleHeader.context.purpose !== "recovery-capsule" ||
+      capsuleHeader.context.vaultId !== session.accountId ||
+      capsuleHeader.context.keyEpoch !== metadata.generation ||
+      !capsuleHeader.salt ||
+      !equal(capsuleHeader.salt, decodeBytes(metadata.recoverySalt, 32)) ||
+      envelopeHeader.suite !== "HPKE-P256/HKDF-SHA-256/AES-256-GCM" ||
+      envelopeHeader.context.purpose !== "device-enrollment" ||
+      envelopeHeader.context.vaultId !== session.accountId ||
+      envelopeHeader.context.objectId !== body.intent.deviceId ||
+      envelopeHeader.context.keyId !== body.intent.deviceId ||
+      envelopeHeader.context.recipientId !== body.intent.deviceId ||
+      envelopeHeader.context.keyEpoch !== 1 ||
+      envelopeHeader.context.revision !== 1
+    ) {
+      await burn(env, session, body.enrollmentId);
+      return failed();
     }
     const newVerificationKey = decodeBytes(metadata.verificationPublicKey, 65);
-    await crypto.subtle.importKey("raw", newVerificationKey,
-      { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    await crypto.subtle.importKey("raw", newVerificationKey, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
     const newSessionId = crypto.randomUUID();
     const cookie = await signSessionId(env, newSessionId);
     const eventId = crypto.randomUUID();
@@ -286,14 +374,22 @@ export async function commitRecoveryEnrollment(env: Env, session: ActiveSession,
       sql`DELETE FROM grant_key_envelopes WHERE device_id IN (SELECT id FROM encryption_devices
         WHERE account_id = ${session.accountId} AND id != ${body.intent.deviceId}) AND ${activatedDevice}`,
     ]);
-    if (results[0]?.meta.changes !== 1 || (results[1]?.meta.changes ?? 0) < 1 ||
-        results[4]?.meta.changes !== 1 || results[5]?.meta.changes !== 1 ||
-        results[7]?.meta.changes !== 1 || results[8]?.meta.changes !== 1 ||
-        results[9]?.meta.changes !== 1) return failed();
+    if (
+      results[0]?.meta.changes !== 1 ||
+      (results[1]?.meta.changes ?? 0) < 1 ||
+      results[4]?.meta.changes !== 1 ||
+      results[5]?.meta.changes !== 1 ||
+      results[7]?.meta.changes !== 1 ||
+      results[8]?.meta.changes !== 1 ||
+      results[9]?.meta.changes !== 1
+    )
+      return failed();
     const epoch = await createDb(env.DB).get<{ registry_epoch: number }>(sql`
       SELECT registry_epoch FROM account_encryption_identities WHERE account_id = ${session.accountId}`);
-    return Response.json({ ok: true, accountId: session.accountId, deviceId: body.intent.deviceId,
-      registryEpoch: epoch?.registry_epoch }, { headers: { ...noStore, "Set-Cookie": cookie } });
+    return Response.json(
+      { ok: true, accountId: session.accountId, deviceId: body.intent.deviceId, registryEpoch: epoch?.registry_epoch },
+      { headers: { ...noStore, "Set-Cookie": cookie } },
+    );
   } catch {
     await burn(env, session, body.enrollmentId);
     return failed();

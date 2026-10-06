@@ -8,13 +8,25 @@ import { newOpaqueId } from "~/shared/opaque-id";
 import { loadDirectory, loadFile, type FilePublication, type RootAccess } from "~/shared/tree/client";
 import { convertFileCapability } from "~/shared/tree/file-capability-client";
 import { encodeTreeBytes } from "~/shared/tree/wire";
-import { createPublicationKeyPair, newPublicationIdentifier, parsePublicationFragment, publicLinkUrl } from "../shared/publications/capability";
+import {
+  createPublicationKeyPair,
+  newPublicationIdentifier,
+  parsePublicationFragment,
+  publicLinkUrl,
+} from "../shared/publications/capability";
 import { publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } from "../shared/publications/content";
 
 export type PublicationState = {
-  fileId: string; isOwner: boolean; canEdit: boolean;
-  publication: null | { publicationId: string; state: "active" | "deleting"; linkId?: string | null; createdAt: number;
-    authors: { declarationId: string; ordinal: number; self: boolean; declared: boolean }[] };
+  fileId: string;
+  isOwner: boolean;
+  canEdit: boolean;
+  publication: null | {
+    publicationId: string;
+    state: "active" | "deleting";
+    linkId?: string | null;
+    createdAt: number;
+    authors: { declarationId: string; ordinal: number; self: boolean; declared: boolean }[];
+  };
   comments: { threadId: string; epochId: string; audience: "public" | "collaborators_only" } | null;
   commentCount: number;
   teardown: null | { commentTotal: number; commentsRemaining: number };
@@ -25,34 +37,92 @@ export type CommentAudience = "public" | "collaborators_only";
 
 /** One fresh audience epoch: an Owner recovery envelope and, for a public
  * epoch, the symmetric wrapper to the Publication capability (fragment only). */
-async function commentEpoch(access: RootAccess, input: {
-  publicationId: string; linkId: string; publicKey: Uint8Array; audience: CommentAudience;
-  privateKey: Uint8Array<ArrayBuffer> | null; threadId: string;
-}) {
-  const epochId = newOpaqueId(), capabilityId = newOpaqueId();
+async function commentEpoch(
+  access: RootAccess,
+  input: {
+    publicationId: string;
+    linkId: string;
+    publicKey: Uint8Array;
+    audience: CommentAudience;
+    privateKey: Uint8Array<ArrayBuffer> | null;
+    threadId: string;
+  },
+) {
+  const epochId = newOpaqueId(),
+    capabilityId = newOpaqueId();
   const capability = crypto.getRandomValues(new Uint8Array(32));
-  const recoveryEnvelope = await sealVaultRecoveryEnvelope(access.actorVaultRootKey,
+  const recoveryEnvelope = await sealVaultRecoveryEnvelope(
+    access.actorVaultRootKey,
     { scope: "owned", objectId: epochId, keyId: capabilityId, key: capability },
-    { purpose: "vault-recovery", vaultId: access.actorAccountId, objectId: epochId, keyId: capabilityId, keyEpoch: 1, revision: 1 });
-  const linkWrapper = input.audience === "public" ? encodeTreeBytes(await sealCommentEpochLink(input.privateKey!, input.publicKey, {
-    publicationId: input.publicationId, linkId: input.linkId, epochId, capabilityId, keyEpoch: 1, capability })) : null;
-  return { threadId: input.threadId, epochId, capabilityId, audience: input.audience,
-    recoveryEnvelope: encodeTreeBytes(recoveryEnvelope), linkWrapper };
+    {
+      purpose: "vault-recovery",
+      vaultId: access.actorAccountId,
+      objectId: epochId,
+      keyId: capabilityId,
+      keyEpoch: 1,
+      revision: 1,
+    },
+  );
+  const linkWrapper =
+    input.audience === "public"
+      ? encodeTreeBytes(
+          await sealCommentEpochLink(input.privateKey!, input.publicKey, {
+            publicationId: input.publicationId,
+            linkId: input.linkId,
+            epochId,
+            capabilityId,
+            keyEpoch: 1,
+            capability,
+          }),
+        )
+      : null;
+  return {
+    threadId: input.threadId,
+    epochId,
+    capabilityId,
+    audience: input.audience,
+    recoveryEnvelope: encodeTreeBytes(recoveryEnvelope),
+    linkWrapper,
+  };
 }
 
 /** A bounded, non-revealing failure the Publish panel can explain. A
  * Public-participation suspension carries only its fixed automatic end. */
 export class PublicationError extends Error {
-  constructor(readonly code: "changed" | "exists" | "file-changed" | "limited" | "not-found" | "suspended"
-    | "too-large" | "author-exists" | "author-limit" | "link-required" | "pseudonym-pending" | "rotation-required"
-    | "unavailable", readonly suspendedUntil: number | null = null) { super(code); }
+  constructor(
+    readonly code:
+      | "changed"
+      | "exists"
+      | "file-changed"
+      | "limited"
+      | "not-found"
+      | "suspended"
+      | "too-large"
+      | "author-exists"
+      | "author-limit"
+      | "link-required"
+      | "pseudonym-pending"
+      | "rotation-required"
+      | "unavailable",
+    readonly suspendedUntil: number | null = null,
+  ) {
+    super(code);
+  }
 }
 
-async function publicationRequest(path: string, method: "POST" | "PUT" | "DELETE", body?: object, signal?: AbortSignal) {
+async function publicationRequest(
+  path: string,
+  method: "POST" | "PUT" | "DELETE",
+  body?: object,
+  signal?: AbortSignal,
+) {
   let response: Response;
   try {
     response = await privateRequest(`/api/private/publications/files/${path}`, {
-      method, signal, ...(body ? { body: JSON.stringify(body) } : {}) });
+      method,
+      signal,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
   } catch (error) {
     if (isPublicParticipationSuspended(error)) {
       throw new PublicationError("suspended", error.detail.suspendedUntil);
@@ -63,11 +133,22 @@ async function publicationRequest(path: string, method: "POST" | "PUT" | "DELETE
   if (response.status === 404) throw new PublicationError("not-found");
   if (response.status === 429) throw new PublicationError("limited");
   if (response.status === 409) {
-    const error = (await response.json() as { error?: string }).error;
-    throw new PublicationError(error === "publication_exists" ? "exists" : error === "file_changed" ? "file-changed"
-      : error === "author_exists" ? "author-exists" : error === "author_limit" ? "author-limit"
-      : error === "pseudonym_update_pending" ? "pseudonym-pending"
-      : error === "key_rotation_required" ? "rotation-required" : "changed");
+    const error = ((await response.json()) as { error?: string }).error;
+    throw new PublicationError(
+      error === "publication_exists"
+        ? "exists"
+        : error === "file_changed"
+          ? "file-changed"
+          : error === "author_exists"
+            ? "author-exists"
+            : error === "author_limit"
+              ? "author-limit"
+              : error === "pseudonym_update_pending"
+                ? "pseudonym-pending"
+                : error === "key_rotation_required"
+                  ? "rotation-required"
+                  : "changed",
+    );
   }
   throw new PublicationError("unavailable");
 }
@@ -85,9 +166,16 @@ export type PreparedPublicLink = { publicationId: string; linkId: string; url: s
  * ciphertext, and retains/returns the complete link only in browser memory.
  * The `#` key never leaves the browser.
  */
-export async function publishFile(options: { access: RootAccess; fileId: string; parentId: string | null;
-  parentKey: Uint8Array; includeSelf: boolean; audience?: CommentAudience; signal?: AbortSignal;
-  onPrepared: (link: PreparedPublicLink) => void }): Promise<PreparedPublicLink> {
+export async function publishFile(options: {
+  access: RootAccess;
+  fileId: string;
+  parentId: string | null;
+  parentKey: Uint8Array;
+  includeSelf: boolean;
+  audience?: CommentAudience;
+  signal?: AbortSignal;
+  onPrepared: (link: PreparedPublicLink) => void;
+}): Promise<PreparedPublicLink> {
   const { access, fileId, parentKey, signal } = options;
   let document = await loadFile(access, fileId, parentKey, signal);
   if (document.sourceBytes > FILE_SOURCE_LIMIT) throw new PublicationError("too-large");
@@ -101,29 +189,52 @@ export async function publishFile(options: { access: RootAccess; fileId: string;
     document = await loadFile(access, fileId, parentKey, signal);
   }
   const keys = await createPublicationKeyPair();
-  const publicationId = newPublicationIdentifier(), linkId = newPublicationIdentifier();
+  const publicationId = newPublicationIdentifier(),
+    linkId = newPublicationIdentifier();
   const binding = { publicationId, linkId, publicKey: keys.publicKey };
   const ciphertext = await sealPublicRepresentation({ ...binding, revision: 1 }, publicPresentation(document.markdown));
   let author = null;
   if (options.includeSelf) {
     const declarationId = newPublicationIdentifier();
-    author = { declarationId, ciphertext: encodeTreeBytes(await sealAuthorDeclaration(
-      { ...binding, declarationId, revision: 1 }, await readPseudonym(access, signal))) };
+    author = {
+      declarationId,
+      ciphertext: encodeTreeBytes(
+        await sealAuthorDeclaration({ ...binding, declarationId, revision: 1 }, await readPseudonym(access, signal)),
+      ),
+    };
   }
   // New Publications default to public Comments; the creating browser holds the
   // only fragment, so the first audience epoch is sealed here and sent with the
   // creation, atomically with the Publication.
   const threadId = newOpaqueId();
-  const comments = await commentEpoch(access, { publicationId, linkId, publicKey: keys.publicKey,
-    audience: options.audience ?? "public", privateKey: keys.privateKey, threadId });
+  const comments = await commentEpoch(access, {
+    publicationId,
+    linkId,
+    publicKey: keys.publicKey,
+    audience: options.audience ?? "public",
+    privateKey: keys.privateKey,
+    threadId,
+  });
   signal?.throwIfAborted();
   const link = { publicationId, linkId, url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
   // Preserve the capability above the dismissible panel BEFORE the Worker can
   // commit. Aborting a fetch or losing its response does not undo that commit.
   options.onPrepared(link);
-  await publicationRequest(fileId, "PUT", { publicationId, linkId, publicKey: encodeTreeBytes(keys.publicKey),
-    expectedRevision: document.revision, expectedRepresentationId: document.representationId,
-    representation: { ciphertext: encodeTreeBytes(ciphertext) }, author, comments }, signal);
+  await publicationRequest(
+    fileId,
+    "PUT",
+    {
+      publicationId,
+      linkId,
+      publicKey: encodeTreeBytes(keys.publicKey),
+      expectedRevision: document.revision,
+      expectedRepresentationId: document.representationId,
+      representation: { ciphertext: encodeTreeBytes(ciphertext) },
+      author,
+      comments,
+    },
+    signal,
+  );
   return link;
 }
 
@@ -132,24 +243,51 @@ export async function publishFile(options: { access: RootAccess; fileId: string;
  * Publication's thread). A public epoch needs the complete link's fragment;
  * a Collaborators-only epoch needs no fragment at all.
  */
-export async function changeCommentAudience(access: RootAccess, fileId: string, publication: {
-  publicationId: string; linkId: string; publicKey: Uint8Array; expectedEpochId: string | null; threadId: string | null;
-}, audience: CommentAudience, completeLink: string | null, signal?: AbortSignal): Promise<void> {
+export async function changeCommentAudience(
+  access: RootAccess,
+  fileId: string,
+  publication: {
+    publicationId: string;
+    linkId: string;
+    publicKey: Uint8Array;
+    expectedEpochId: string | null;
+    threadId: string | null;
+  },
+  audience: CommentAudience,
+  completeLink: string | null,
+  signal?: AbortSignal,
+): Promise<void> {
   let privateKey: Uint8Array<ArrayBuffer> | null = null;
   if (audience === "public") {
-    try { privateKey = completeLink ? parsePublicationFragment(new URL(completeLink).hash) : null; }
-    catch { privateKey = null; }
+    try {
+      privateKey = completeLink ? parsePublicationFragment(new URL(completeLink).hash) : null;
+    } catch {
+      privateKey = null;
+    }
     if (!privateKey) throw new PublicationError("link-required");
   }
-  const epoch = await commentEpoch(access, { publicationId: publication.publicationId, linkId: publication.linkId,
-    publicKey: publication.publicKey, audience, privateKey, threadId: publication.threadId ?? newOpaqueId() });
-  const response = await privateRequest(`/api/private/comments/files/${fileId}/public`, { method: "PUT", signal,
-    body: JSON.stringify({ publicationId: publication.publicationId, expectedEpochId: publication.expectedEpochId, epoch }) });
+  const epoch = await commentEpoch(access, {
+    publicationId: publication.publicationId,
+    linkId: publication.linkId,
+    publicKey: publication.publicKey,
+    audience,
+    privateKey,
+    threadId: publication.threadId ?? newOpaqueId(),
+  });
+  const response = await privateRequest(`/api/private/comments/files/${fileId}/public`, {
+    method: "PUT",
+    signal,
+    body: JSON.stringify({
+      publicationId: publication.publicationId,
+      expectedEpochId: publication.expectedEpochId,
+      epoch,
+    }),
+  });
   if (response.ok) return;
   if (response.status === 404) throw new PublicationError("not-found");
   if (response.status === 429) throw new PublicationError("limited");
   if (response.status === 409) {
-    const error = (await response.json() as { error?: string }).error;
+    const error = ((await response.json()) as { error?: string }).error;
     throw new PublicationError(error === "key_rotation_required" ? "rotation-required" : "changed");
   }
   throw new PublicationError("unavailable");
@@ -165,12 +303,34 @@ export async function removePublicationRequest(fileId: string, requestId: string
 }
 
 /** The Owner credits itself; its own device writes the declaration immediately. */
-export async function addSelfAuthor(access: RootAccess, fileId: string, publication: FilePublication, signal?: AbortSignal) {
+export async function addSelfAuthor(
+  access: RootAccess,
+  fileId: string,
+  publication: FilePublication,
+  signal?: AbortSignal,
+) {
   const declarationId = newPublicationIdentifier();
-  const ciphertext = await sealAuthorDeclaration({ publicationId: publication.publicationId, linkId: publication.linkId,
-    publicKey: publication.publicKey, declarationId, revision: 1 }, await readPseudonym(access, signal));
-  await publicationRequest(`${fileId}/authors`, "PUT", { publicationId: publication.publicationId, declarationId,
-    account: { self: true }, declaration: { linkId: publication.linkId, ciphertext: encodeTreeBytes(ciphertext) } }, signal);
+  const ciphertext = await sealAuthorDeclaration(
+    {
+      publicationId: publication.publicationId,
+      linkId: publication.linkId,
+      publicKey: publication.publicKey,
+      declarationId,
+      revision: 1,
+    },
+    await readPseudonym(access, signal),
+  );
+  await publicationRequest(
+    `${fileId}/authors`,
+    "PUT",
+    {
+      publicationId: publication.publicationId,
+      declarationId,
+      account: { self: true },
+      declaration: { linkId: publication.linkId, ciphertext: encodeTreeBytes(ciphertext) },
+    },
+    signal,
+  );
 }
 
 /** The Owner selects a Collaborator by exact share handle or share identifier. */
@@ -179,13 +339,21 @@ export async function addAccountAuthor(fileId: string, publicationId: string, ad
   const account = /^[A-Za-z0-9_-]{3,32}$/.test(value) ? { handle: value } : { shareId: value };
   if (!value) throw new PublicationError("not-found");
   try {
-    await publicationRequest(`${fileId}/authors`, "PUT", { publicationId, declarationId: newPublicationIdentifier(),
-      account, declaration: null }, signal);
+    await publicationRequest(
+      `${fileId}/authors`,
+      "PUT",
+      { publicationId, declarationId: newPublicationIdentifier(), account, declaration: null },
+      signal,
+    );
   } catch (error) {
     // A share identifier can also look like a handle; try the other exact form once.
     if (!(error instanceof PublicationError) || error.code !== "not-found" || !("handle" in account)) throw error;
-    await publicationRequest(`${fileId}/authors`, "PUT", { publicationId, declarationId: newPublicationIdentifier(),
-      account: { shareId: value }, declaration: null }, signal);
+    await publicationRequest(
+      `${fileId}/authors`,
+      "PUT",
+      { publicationId, declarationId: newPublicationIdentifier(), account: { shareId: value }, declaration: null },
+      signal,
+    );
   }
 }
 
@@ -194,15 +362,36 @@ export async function removeAuthor(fileId: string, declarationId: string, signal
 }
 
 /** A selected author's own device declares its Public pseudonym to the current link. */
-export async function declarePublicationAuthor(access: RootAccess, fileId: string, publication: FilePublication,
-  signal?: AbortSignal) {
+export async function declarePublicationAuthor(
+  access: RootAccess,
+  fileId: string,
+  publication: FilePublication,
+  signal?: AbortSignal,
+) {
   const declaration = publication.declaration;
   if (!declaration || declaration.current) return;
   const revision = declaration.revision + 1;
-  const ciphertext = await sealAuthorDeclaration({ publicationId: publication.publicationId, linkId: publication.linkId,
-    publicKey: publication.publicKey, declarationId: declaration.declarationId, revision }, await readPseudonym(access, signal));
-  await publicationRequest(`${fileId}/authors/${declaration.declarationId}/declaration`, "PUT", {
-    publicationId: publication.publicationId, linkId: publication.linkId, revision, ciphertext: encodeTreeBytes(ciphertext) }, signal);
+  const ciphertext = await sealAuthorDeclaration(
+    {
+      publicationId: publication.publicationId,
+      linkId: publication.linkId,
+      publicKey: publication.publicKey,
+      declarationId: declaration.declarationId,
+      revision,
+    },
+    await readPseudonym(access, signal),
+  );
+  await publicationRequest(
+    `${fileId}/authors/${declaration.declarationId}/declaration`,
+    "PUT",
+    {
+      publicationId: publication.publicationId,
+      linkId: publication.linkId,
+      revision,
+      ciphertext: encodeTreeBytes(ciphertext),
+    },
+    signal,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +410,13 @@ export type TeardownProgress = { done: boolean; commentTotal: number; commentsRe
  * complete link is retained above the dismissible panel before the request so
  * a lost response never loses the replacement capability.
  */
-export async function rotatePublicationLink(options: { access: RootAccess; fileId: string; parentKey: Uint8Array;
-  signal?: AbortSignal; onPrepared: (link: PreparedPublicLink) => void }): Promise<PreparedPublicLink> {
+export async function rotatePublicationLink(options: {
+  access: RootAccess;
+  fileId: string;
+  parentKey: Uint8Array;
+  signal?: AbortSignal;
+  onPrepared: (link: PreparedPublicLink) => void;
+}): Promise<PreparedPublicLink> {
   const { access, fileId, parentKey, signal } = options;
   const document = await loadFile(access, fileId, parentKey, signal);
   const publication = document.publication;
@@ -237,23 +431,52 @@ export async function rotatePublicationLink(options: { access: RootAccess; fileI
   const epochs = [];
   for (const epoch of opened.epochs) {
     if (epoch.audience !== "public") continue;
-    epochs.push({ epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.capabilityEpoch,
-      wrapper: encodeTreeBytes(await sealCommentEpochLink(keys.privateKey, keys.publicKey,
-        { ...binding, epochId: epoch.epochId, capabilityId: epoch.capabilityId, keyEpoch: epoch.capabilityEpoch,
-          capability: epoch.capability })) });
+    epochs.push({
+      epochId: epoch.epochId,
+      capabilityId: epoch.capabilityId,
+      keyEpoch: epoch.capabilityEpoch,
+      wrapper: encodeTreeBytes(
+        await sealCommentEpochLink(keys.privateKey, keys.publicKey, {
+          ...binding,
+          epochId: epoch.epochId,
+          capabilityId: epoch.capabilityId,
+          keyEpoch: epoch.capabilityEpoch,
+          capability: epoch.capability,
+        }),
+      ),
+    });
   }
   signal?.throwIfAborted();
-  const link = { publicationId: publication.publicationId, linkId, url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
+  const link = {
+    publicationId: publication.publicationId,
+    linkId,
+    url: publicLinkUrl(location.origin, linkId, keys.privateKey),
+  };
   options.onPrepared(link);
-  await publicationRequest(`${fileId}/link`, "PUT", { publicationId: publication.publicationId, linkId,
-    publicKey: encodeTreeBytes(keys.publicKey), expectedLinkId: publication.linkId, expectedPresentationRevision: revision,
-    expectedRevision: document.revision, expectedRepresentationId: document.representationId,
-    representation: { ciphertext: encodeTreeBytes(ciphertext) }, epochs }, signal);
+  await publicationRequest(
+    `${fileId}/link`,
+    "PUT",
+    {
+      publicationId: publication.publicationId,
+      linkId,
+      publicKey: encodeTreeBytes(keys.publicKey),
+      expectedLinkId: publication.linkId,
+      expectedPresentationRevision: revision,
+      expectedRevision: document.revision,
+      expectedRepresentationId: document.representationId,
+      representation: { ciphertext: encodeTreeBytes(ciphertext) },
+      epochs,
+    },
+    signal,
+  );
   return link;
 }
 
 /** Seal the Publication: no Public route serves anything from this moment on. */
-export async function unpublishPublication(fileId: string, signal?: AbortSignal): Promise<{ publicationId: string; commentTotal: number }> {
+export async function unpublishPublication(
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<{ publicationId: string; commentTotal: number }> {
   return (await publicationRequest(`${fileId}/unpublish`, "POST", undefined, signal)).json();
 }
 

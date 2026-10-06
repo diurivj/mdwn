@@ -1,5 +1,5 @@
 import { PUBLIC_PARTICIPATION_SUSPENDED } from "~/shared/security/public-participation";
-import { signDeviceProof } from "./proof";
+import { signDeviceProof, type DeviceProof } from "./proof";
 import { getDevice, updateRegistryEpoch } from "./store";
 
 export type PrivateAccessState = "signed-out" | "unprovisioned" | "device-lost" | "stale" | "denied" | "unavailable";
@@ -17,7 +17,10 @@ export class PrivateAccessError extends Error {
  * example a Public-participation suspension) instead of a generic failure.
  */
 export class PrivatePolicyError extends PrivateAccessError {
-  constructor(readonly policy: string, readonly detail: { readonly suspendedUntil: number | null }) {
+  constructor(
+    readonly policy: string,
+    readonly detail: { readonly suspendedUntil: number | null },
+  ) {
     super("denied");
     this.name = "PrivatePolicyError";
   }
@@ -34,10 +37,12 @@ export function isPublicParticipationSuspended(error: unknown): error is Private
  * device-proof denial. The response body is cloned, never consumed. */
 async function policyDenial(response: Response): Promise<PrivatePolicyError | null> {
   try {
-    const body = await response.clone().json() as { error?: unknown; suspendedUntil?: unknown };
+    const body = (await response.clone().json()) as { error?: unknown; suspendedUntil?: unknown };
     if (body.error !== PUBLIC_PARTICIPATION_SUSPENDED) return null;
-    const suspendedUntil = typeof body.suspendedUntil === "number" && Number.isSafeInteger(body.suspendedUntil)
-      && body.suspendedUntil > 0 ? body.suspendedUntil : null;
+    const suspendedUntil =
+      typeof body.suspendedUntil === "number" && Number.isSafeInteger(body.suspendedUntil) && body.suspendedUntil > 0
+        ? body.suspendedUntil
+        : null;
     return new PrivatePolicyError(PUBLIC_PARTICIPATION_SUSPENDED, { suspendedUntil });
   } catch {
     return null;
@@ -62,8 +67,12 @@ export async function privateRequest(
   options: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: string | Uint8Array; signal?: AbortSignal },
 ): Promise<Response> {
   const url = new URL(path, location.origin);
-  if (url.origin !== location.origin || !url.pathname.startsWith("/api/") || url.hash ||
-      (options.method === "GET" && options.body !== undefined)) {
+  if (
+    url.origin !== location.origin ||
+    !url.pathname.startsWith("/api/") ||
+    url.hash ||
+    (options.method === "GET" && options.body !== undefined)
+  ) {
     throw new PrivateAccessError("unavailable");
   }
 
@@ -72,15 +81,21 @@ export async function privateRequest(
     const response = await fetch("/api/device/state", { cache: "no-store", signal: options.signal });
     if (response.status === 401) throw new PrivateAccessError("signed-out");
     if (!response.ok) throw new PrivateAccessError("unavailable");
-    state = await response.json() as RegistryState;
+    state = (await response.json()) as RegistryState;
   } catch (error) {
     if (error instanceof PrivateAccessError) throw error;
     throw new PrivateAccessError("unavailable");
   }
-  if (!state || typeof state.accountId !== "string" || !state.accountId ||
-      !Number.isSafeInteger(state.registryEpoch) || state.registryEpoch! < 1 ||
-      typeof state.sessionBinding !== "string" || !state.sessionBinding ||
-      (state.deviceId !== null && typeof state.deviceId !== "string")) {
+  if (
+    !state ||
+    typeof state.accountId !== "string" ||
+    !state.accountId ||
+    !Number.isSafeInteger(state.registryEpoch) ||
+    state.registryEpoch! < 1 ||
+    typeof state.sessionBinding !== "string" ||
+    !state.sessionBinding ||
+    (state.deviceId !== null && typeof state.deviceId !== "string")
+  ) {
     throw new PrivateAccessError("unavailable");
   }
   if (!state.deviceId) throw new PrivateAccessError("unprovisioned");
@@ -100,11 +115,14 @@ export async function privateRequest(
     }
   }
 
-  let proof;
+  let proof: DeviceProof;
   try {
     proof = await signDeviceProof(device.assertionKeyPair.privateKey, {
-      sessionBinding: state.sessionBinding, deviceId: state.deviceId,
-      registryEpoch: state.registryEpoch!, method: options.method, url: url.href,
+      sessionBinding: state.sessionBinding,
+      deviceId: state.deviceId,
+      registryEpoch: state.registryEpoch!,
+      method: options.method,
+      url: url.href,
       body: options.body,
     });
   } catch {
@@ -113,14 +131,16 @@ export async function privateRequest(
   try {
     const response = await fetch(url.href, {
       method: options.method,
-      body: options.body === undefined ? undefined : options.body as BodyInit,
+      body: options.body === undefined ? undefined : (options.body as BodyInit),
       signal: options.signal,
       headers: {
         "X-Mdwn-Device-Proof": JSON.stringify(proof),
-        ...(options.body === undefined ? {}
+        ...(options.body === undefined
+          ? {}
           : { "Content-Type": typeof options.body === "string" ? "application/json" : "application/octet-stream" }),
       },
-      cache: "no-store", redirect: "error",
+      cache: "no-store",
+      redirect: "error",
     });
     if (response.status === 401) throw new PrivateAccessError("signed-out");
     if (response.status === 403) {

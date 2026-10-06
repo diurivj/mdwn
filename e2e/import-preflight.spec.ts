@@ -23,15 +23,20 @@ function trackedWrites(page: Page) {
 }
 
 test.describe("Import preflight and review", () => {
-  test("loose Markdown files open a review with deterministic Keep-both names and measure a plan", async ({ page, workspace }) => {
+  test("loose Markdown files open a review with deterministic Keep-both names and measure a plan", async ({
+    page,
+    workspace,
+  }) => {
     expect(workspace.fileId).toBeTruthy();
     const writes = trackedWrites(page);
     await expect(page.getByTestId("import-control")).toBeVisible();
-    await page.getByTestId("import-files-input").setInputFiles([
-      { name: "Draft.md", mimeType: "text/markdown", buffer: Buffer.from("# Collides\n") },
-      { name: "Draft (2).md", mimeType: "text/markdown", buffer: Buffer.from("# Explicit suffix\n") },
-      markdown,
-    ]);
+    await page
+      .getByTestId("import-files-input")
+      .setInputFiles([
+        { name: "Draft.md", mimeType: "text/markdown", buffer: Buffer.from("# Collides\n") },
+        { name: "Draft (2).md", mimeType: "text/markdown", buffer: Buffer.from("# Explicit suffix\n") },
+        markdown,
+      ]);
 
     const dialog = page.getByRole("dialog", { name: "Import review" });
     await expect(dialog).toBeVisible();
@@ -91,14 +96,25 @@ test.describe("Import preflight and review", () => {
 
   test("a recognized mdwn archive reveals its folder hierarchy in the review", async ({ page, workspace }) => {
     expect(workspace.fileId).toBeTruthy();
-    const archive = await createZip([
-      { path: ARCHIVE_MANIFEST_PATH, data: encoder.encode(serializeArchiveManifest(
-        createArchiveManifest([{ kind: "directory", path: "" }], "2026-10-05T12:00:00.000Z"))) },
-      { path: "notes", directory: true },
-      { path: "notes/draft.md", data: encoder.encode("# Draft\n") },
-      { path: "README.md", data: encoder.encode("# Readme\n") },
-    ], { at: new Date("2026-10-05T12:00:00.000Z") });
-    await page.getByTestId("import-files-input").setInputFiles({ name: "vault.zip", mimeType: "application/zip", buffer: Buffer.from(archive) });
+    const archive = await createZip(
+      [
+        {
+          path: ARCHIVE_MANIFEST_PATH,
+          data: encoder.encode(
+            serializeArchiveManifest(
+              createArchiveManifest([{ kind: "directory", path: "" }], "2026-10-05T12:00:00.000Z"),
+            ),
+          ),
+        },
+        { path: "notes", directory: true },
+        { path: "notes/draft.md", data: encoder.encode("# Draft\n") },
+        { path: "README.md", data: encoder.encode("# Readme\n") },
+      ],
+      { at: new Date("2026-10-05T12:00:00.000Z") },
+    );
+    await page
+      .getByTestId("import-files-input")
+      .setInputFiles({ name: "vault.zip", mimeType: "application/zip", buffer: Buffer.from(archive) });
     const dialog = page.getByRole("dialog", { name: "Import review" });
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId("import-summary-sources")).toHaveText("3");
@@ -110,7 +126,9 @@ test.describe("Import preflight and review", () => {
   test("unsupported input fails before review and uploads nothing", async ({ page, workspace }) => {
     expect(workspace.fileId).toBeTruthy();
     const writes = trackedWrites(page);
-    await page.getByTestId("import-files-input").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("plain") });
+    await page
+      .getByTestId("import-files-input")
+      .setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("plain") });
     await expect(page.getByTestId("import-error")).toContainText("notes.txt");
     await expect(page.getByTestId("import-error")).toContainText("is not supported");
     await expect(page.getByTestId("import-error")).toContainText(".md/.markdown");

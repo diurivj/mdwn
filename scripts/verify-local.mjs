@@ -5,7 +5,7 @@
  * from .github/workflows/ci.yml in the same order against the checked-out
  * commit, and stops at the first failure:
  *
- *   typecheck → namespace drift → Node + Workers tests → production build →
+ *   lint → typecheck → namespace drift → Node + Workers tests → production build →
  *   fresh-D1 migration smoke → bundle secret check → Chromium/Firefox/WebKit
  *
  * The non-browser steps run with CI=true, as on GitHub, so Vitest refuses
@@ -27,6 +27,7 @@ const wip = process.argv.includes("--wip");
 
 /** @type {Array<{ name: string, command: string, args: string[], browser?: boolean }>} */
 const STEPS = [
+  { name: "Lint and format check", command: "npm", args: ["run", "lint"] },
   { name: "Typecheck", command: "npm", args: ["run", "typecheck"] },
   { name: "Unicode namespace data drift check", command: "npm", args: ["run", "check:namespace"] },
   { name: "Unit and Workers tests", command: "npm", args: ["test"] },

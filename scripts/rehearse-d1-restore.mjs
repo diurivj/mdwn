@@ -98,7 +98,9 @@ function buildSeedPlan(maxCiphertextBytes) {
   const { statements } = restoreRehearsalStatements({ maxCiphertextBytes });
   const seedDatabase = openOfflineDatabase();
   try {
-    for (const file of readdirSync("drizzle").filter((name) => name.endsWith(".sql")).sort()) {
+    for (const file of readdirSync("drizzle")
+      .filter((name) => name.endsWith(".sql"))
+      .sort()) {
       seedDatabase.exec(readFileSync(`drizzle/${file}`, "utf8"));
     }
     const tableDdl = seedDatabase
@@ -107,11 +109,14 @@ function buildSeedPlan(maxCiphertextBytes) {
       .map((row) => String(row.sql));
     const schema = deriveSchema(tableDdl);
     const primaryKeys = new Map(schema.columns.map((table) => [table.name, table.primaryKey]));
-    const chunked = chunkOversizedStatements(splitMultiRowStatements(statements.map((statement) => statement.replace(/;\s*$/, ""))), {
-      maxBytes: D1_MAX_STATEMENT_BYTES,
-      primaryKeys,
-      tableDdl: schema.ddl,
-    });
+    const chunked = chunkOversizedStatements(
+      splitMultiRowStatements(statements.map((statement) => statement.replace(/;\s*$/, ""))),
+      {
+        maxBytes: D1_MAX_STATEMENT_BYTES,
+        primaryKeys,
+        tableDdl: schema.ddl,
+      },
+    );
     return planRestoreCommands({
       schemaStatements: [],
       indexStatements: [],
@@ -157,18 +162,21 @@ function seedSource(runner, seedPlan, workDirectory) {
     runner.run(`${immutableTrigger};`);
   }
   console.log(`✓ source seeded through ${seedPlan.commands.length} atomic commands`);
-  if (Number(queryRows(runner, "PRAGMA foreign_keys;")[0]?.foreign_keys) !== 1
-    || queryRows(runner, "PRAGMA foreign_key_check;").length !== 0) {
+  if (
+    Number(queryRows(runner, "PRAGMA foreign_keys;")[0]?.foreign_keys) !== 1 ||
+    queryRows(runner, "PRAGMA foreign_key_check;").length !== 0
+  ) {
     throw new Error("source rehearsal database has broken foreign keys before export");
   }
-  const summary = queryRows(
-    runner,
-    `SELECT (SELECT count(*) FROM accounts) AS accounts,
+  const summary =
+    queryRows(
+      runner,
+      `SELECT (SELECT count(*) FROM accounts) AS accounts,
             (SELECT count(*) FROM vault_nodes WHERE parent_node_id IS NULL) AS roots,
             (SELECT count(*) FROM import_commits) AS markers,
             (SELECT count(*) FROM import_sessions) AS staging_sessions,
             (SELECT max(ciphertext_size) FROM file_representations) AS max_ciphertext;`,
-  )[0] ?? {};
+    )[0] ?? {};
   console.log(`✓ source seeded: ${JSON.stringify(summary)}`);
 }
 
@@ -176,7 +184,17 @@ function seedSource(runner, seedPlan, workDirectory) {
 function exportAndPrepare(mode, sourceConfig, sourceName, sourceUuid) {
   const exportPath = join(workDirectory, "rehearsal-export.sql");
   runWranglerOrThrow(
-    ["d1", "export", "DB", mode === "local" ? "--local" : "--remote", "--config", sourceConfig, "--output", exportPath, "-y"],
+    [
+      "d1",
+      "export",
+      "DB",
+      mode === "local" ? "--local" : "--remote",
+      "--config",
+      sourceConfig,
+      "--output",
+      exportPath,
+      "-y",
+    ],
     "source export",
   );
   const bookmark = (() => {
@@ -194,7 +212,8 @@ function exportAndPrepare(mode, sourceConfig, sourceName, sourceUuid) {
     exportSql,
     sourceName,
     sourceUuid,
-    wranglerVersion: /wrangler\s+([\d.]+)/.exec(runWranglerOrThrow(["--version"], "wrangler version").stdout)?.[1] ?? null,
+    wranglerVersion:
+      /wrangler\s+([\d.]+)/.exec(runWranglerOrThrow(["--version"], "wrangler version").stdout)?.[1] ?? null,
   });
   writeSensitive(join(workDirectory, "rehearsal-prepared.sql"), prepared.preparedSql);
   writeSensitive(join(workDirectory, "rehearsal-manifest.json"), `${JSON.stringify(prepared.manifest, null, 2)}\n`);
@@ -259,14 +278,30 @@ function writeEvidence({ mode, sourceLabel, targetLabel, exportSql, bookmark, pr
 }
 
 function runLocalRehearsal() {
-  const source = createRestoreTarget({ mode: "local", databaseName: "mdwn-restore-local-source", databaseId: "00000000-0000-4000-8000-0000000000a1" });
-  const target = createRestoreTarget({ mode: "local", databaseName: "mdwn-restore-local-target", databaseId: "00000000-0000-4000-8000-0000000000a2" });
+  const source = createRestoreTarget({
+    mode: "local",
+    databaseName: "mdwn-restore-local-source",
+    databaseId: "00000000-0000-4000-8000-0000000000a1",
+  });
+  const target = createRestoreTarget({
+    mode: "local",
+    databaseName: "mdwn-restore-local-target",
+    databaseId: "00000000-0000-4000-8000-0000000000a2",
+  });
   temporaryDirectories.push(source.directory, target.directory);
   console.log(`Local rehearsal ${suffix} (no Cloudflare auth, no remote resources)`);
-  runWranglerOrThrow(["d1", "migrations", "apply", "DB", "--local", "--config", source.configPath], "source migrations");
+  runWranglerOrThrow(
+    ["d1", "migrations", "apply", "DB", "--local", "--config", source.configPath],
+    "source migrations",
+  );
   const sourceRunner = createWranglerRunner({ mode: "local", configPath: source.configPath });
   seedSource(sourceRunner, buildSeedPlan(ciphertextBytes), workDirectory);
-  const { exportSql, prepared, bookmark } = exportAndPrepare("local", source.configPath, "mdwn-restore-local-source", source.databaseId);
+  const { exportSql, prepared, bookmark } = exportAndPrepare(
+    "local",
+    source.configPath,
+    "mdwn-restore-local-source",
+    source.databaseId,
+  );
   const targetRunner = createWranglerRunner({ mode: "local", configPath: target.configPath });
   const targetCheck = restoreAndVerify(targetRunner, sourceRunner, prepared);
   writeEvidence({
@@ -291,13 +326,24 @@ function runRemoteRehearsal() {
   const source = createRestoreTarget({ mode: "remote", databaseName: sourceName, databaseId: sourceUuid });
   const target = createRestoreTarget({ mode: "remote", databaseName: targetName, databaseId: targetUuid });
   temporaryDirectories.push(source.directory, target.directory);
-  runWranglerOrThrow(["d1", "migrations", "apply", "DB", "--remote", "--config", source.configPath], "source migrations");
+  runWranglerOrThrow(
+    ["d1", "migrations", "apply", "DB", "--remote", "--config", source.configPath],
+    "source migrations",
+  );
   const sourceRunner = createWranglerRunner({ mode: "remote", configPath: source.configPath });
   seedSource(sourceRunner, buildSeedPlan(ciphertextBytes), workDirectory);
   const { exportSql, prepared, bookmark } = exportAndPrepare("remote", source.configPath, sourceName, sourceUuid);
   const targetRunner = createWranglerRunner({ mode: "remote", configPath: target.configPath });
   const targetCheck = restoreAndVerify(targetRunner, sourceRunner, prepared);
-  writeEvidence({ mode: "remote", sourceLabel: `${sourceName} / ${sourceUuid}`, targetLabel: `${targetName} / ${targetUuid}`, exportSql, bookmark, prepared, targetCheck });
+  writeEvidence({
+    mode: "remote",
+    sourceLabel: `${sourceName} / ${sourceUuid}`,
+    targetLabel: `${targetName} / ${targetUuid}`,
+    exportSql,
+    bookmark,
+    prepared,
+    targetCheck,
+  });
 }
 
 try {
@@ -310,7 +356,8 @@ try {
   if (!local && !keep) {
     for (const database of created.reverse()) deleteDatabase(database);
   } else if (!local) {
-    for (const database of created) console.log(`Kept ${database.name} (${database.uuid}); delete with: npx wrangler d1 delete ${database.name} -y`);
+    for (const database of created)
+      console.log(`Kept ${database.name} (${database.uuid}); delete with: npx wrangler d1 delete ${database.name} -y`);
   }
   // A failed run keeps its temporary state for inspection; a successful local
   // run removes it so CI leaves nothing behind.

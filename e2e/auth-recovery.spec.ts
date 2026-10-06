@@ -12,7 +12,8 @@ async function newAuthenticator(browser: Browser, origin: string) {
   await context.addInitScript(() => {
     if (typeof globalThis.PublicKeyCredential !== "function") {
       Object.defineProperty(globalThis, "PublicKeyCredential", {
-        configurable: true, value: class PublicKeyCredential {},
+        configurable: true,
+        value: class PublicKeyCredential {},
       });
     }
   });
@@ -22,7 +23,11 @@ async function newAuthenticator(browser: Browser, origin: string) {
   return { context, page };
 }
 
-test("a used code adds a replacement Passkey, revokes other Sessions and leaves the new browser unprovisioned", async ({ browser, server, baseURL }) => {
+test("a used code adds a replacement Passkey, revokes other Sessions and leaves the new browser unprovisioned", async ({
+  browser,
+  server,
+  baseURL,
+}) => {
   const origin = new URL(baseURL!).origin;
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
@@ -41,36 +46,53 @@ test("a used code adds a replacement Passkey, revokes other Sessions and leaves 
     await replacement.page.getByLabel("Recovery identifier").fill(identifier);
     await replacement.page.getByLabel("Unused recovery code").fill(code!);
     await replacement.page.getByRole("button", { name: "Use recovery code" }).click();
-    await expect(replacement.page.getByRole("status")).toContainText("Your passkey is ready and you are signed in", { timeout: 120_000 });
+    await expect(replacement.page.getByRole("status")).toContainText("Your passkey is ready and you are signed in", {
+      timeout: 120_000,
+    });
 
-    const originalSession = await original.page.evaluate(async () =>
-      (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>);
-    const recoveredSession = await replacement.page.evaluate(async () =>
-      (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>);
+    const originalSession = await original.page.evaluate(
+      async () => (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>,
+    );
+    const recoveredSession = await replacement.page.evaluate(
+      async () => (await fetch("/api/auth/session")).json() as Promise<{ authenticated: boolean }>,
+    );
     expect(originalSession).toEqual({ authenticated: false });
     expect(recoveredSession).toEqual({ authenticated: true });
-    const privateState = await replacement.page.evaluate(async ({ identifier, code }) => {
-      const device = await fetch("/api/device/state");
-      const content = await fetch("/api/private/bootstrap", { method: "POST" });
-      const reuse = await fetch("/api/auth/recovery/start", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, code }),
-      });
-      return { device: await device.json() as { deviceId: string | null }, content: content.status, reuse: reuse.status };
-    }, { identifier, code });
+    const privateState = await replacement.page.evaluate(
+      async ({ identifier, code }) => {
+        const device = await fetch("/api/device/state");
+        const content = await fetch("/api/private/bootstrap", { method: "POST" });
+        const reuse = await fetch("/api/auth/recovery/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier, code }),
+        });
+        return {
+          device: (await device.json()) as { deviceId: string | null },
+          content: content.status,
+          reuse: reuse.status,
+        };
+      },
+      { identifier, code },
+    );
     expect(privateState.device.deviceId).toBeNull();
     expect(privateState.content).toBe(403);
     expect(privateState.reuse).toBe(401);
     const passkeys = await env.DB.prepare("SELECT credential_id FROM passkeys WHERE account_id = ?")
-      .bind(identifier).all();
+      .bind(identifier)
+      .all();
     expect(passkeys.results).toHaveLength(2);
     const sessions = await env.DB.prepare("SELECT purpose, device_id, revoked_at FROM sessions WHERE account_id = ?")
-      .bind(identifier).all<{ purpose: string; device_id: string | null; revoked_at: number | null }>();
+      .bind(identifier)
+      .all<{ purpose: string; device_id: string | null; revoked_at: number | null }>();
     expect(sessions.results.filter((session) => session.revoked_at === null)).toEqual([
       { purpose: "normal", device_id: null, revoked_at: null },
     ]);
-    const events = await env.DB.prepare("SELECT action_class, reason, created_at, expires_at FROM security_events WHERE account_id = ?")
-      .bind(identifier).all<{ action_class: string; reason: string; created_at: number; expires_at: number }>();
+    const events = await env.DB.prepare(
+      "SELECT action_class, reason, created_at, expires_at FROM security_events WHERE account_id = ?",
+    )
+      .bind(identifier)
+      .all<{ action_class: string; reason: string; created_at: number; expires_at: number }>();
     expect(events.results).toHaveLength(1);
     expect(events.results[0]).toMatchObject({ action_class: "recovery", reason: "allowed" });
     expect(events.results[0]!.expires_at - events.results[0]!.created_at).toBeLessThanOrEqual(30 * 24 * 60 * 60_000);
@@ -78,14 +100,20 @@ test("a used code adds a replacement Passkey, revokes other Sessions and leaves 
     await replacement.page.goto(`${origin}/account/security`, { waitUntil: "commit" });
     await expect(replacement.page.getByText(identifier)).toBeVisible();
     await replacement.page.getByRole("button", { name: "Replace recovery codes" }).click();
-    await expect(replacement.page.getByRole("status")).toContainText("All previous codes are invalid", { timeout: 120_000 });
-    const obsolete = await replacement.page.evaluate(async ({ identifier, code }) => {
-      const response = await fetch("/api/auth/recovery/start", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, code }),
-      });
-      return response.status;
-    }, { identifier, code: unusedCode! });
+    await expect(replacement.page.getByRole("status")).toContainText("All previous codes are invalid", {
+      timeout: 120_000,
+    });
+    const obsolete = await replacement.page.evaluate(
+      async ({ identifier, code }) => {
+        const response = await fetch("/api/auth/recovery/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier, code }),
+        });
+        return response.status;
+      },
+      { identifier, code: unusedCode! },
+    );
     expect(obsolete).toBe(401);
   } finally {
     await replacement?.context.close();
@@ -93,7 +121,11 @@ test("a used code adds a replacement Passkey, revokes other Sessions and leaves 
   }
 });
 
-test("an expired recovery Session offers a new-code form instead of only Continue", async ({ browser, server, baseURL }) => {
+test("an expired recovery Session offers a new-code form instead of only Continue", async ({
+  browser,
+  server,
+  baseURL,
+}) => {
   const origin = new URL(baseURL!).origin;
   const worker = server.getWorker<{ DB: D1Database }>();
   await worker.applyD1Migrations("DB");
@@ -103,25 +135,40 @@ test("an expired recovery Session offers a new-code form instead of only Continu
   const code = randomBytes(24).toString("base64url");
   const now = Date.now();
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
-      .bind(identifier, crypto.randomUUID(), now, now),
-    env.DB.prepare("INSERT INTO authentication_recovery_codes (account_id, ordinal, code_hash) VALUES (?, 0, ?)")
-      .bind(identifier, new Uint8Array(createHash("sha256").update(code).digest())),
+    env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(
+      identifier,
+      crypto.randomUUID(),
+      now,
+      now,
+    ),
+    env.DB.prepare("INSERT INTO authentication_recovery_codes (account_id, ordinal, code_hash) VALUES (?, 0, ?)").bind(
+      identifier,
+      new Uint8Array(createHash("sha256").update(code).digest()),
+    ),
   ]);
   const { page, context } = await newAuthenticator(browser, origin);
   try {
     await page.goto(`${origin}/recover`, { waitUntil: "commit" });
-    const start = await page.evaluate(async ({ identifier, code }) =>
-      (await fetch("/api/auth/recovery/start", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, code }),
-      })).status, { identifier, code });
+    const start = await page.evaluate(
+      async ({ identifier, code }) =>
+        (
+          await fetch("/api/auth/recovery/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ identifier, code }),
+          })
+        ).status,
+      { identifier, code },
+    );
     expect(start).toBe(200);
     await page.reload();
     await expect(page.getByRole("button", { name: "Continue adding a passkey" })).toBeVisible();
     await env.DB.prepare("UPDATE sessions SET created_at = ? WHERE account_id = ? AND purpose = 'recovery'")
-      .bind(Date.now() - 5 * 60_000 - 1, identifier).run();
+      .bind(Date.now() - 5 * 60_000 - 1, identifier)
+      .run();
     await page.getByRole("button", { name: "Continue adding a passkey" }).click();
     await expect(page.getByLabel("Unused recovery code")).toBeVisible({ timeout: 5000 });
-  } finally { await context.close(); }
+  } finally {
+    await context.close();
+  }
 });

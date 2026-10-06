@@ -1,5 +1,12 @@
 import type { SQL } from "drizzle-orm";
-import { atomicSqlBatch, createDb, deviceProofUses, registrationChallenges, webauthnChallenges, sql } from "~/shared/db/client.server";
+import {
+  atomicSqlBatch,
+  createDb,
+  deviceProofUses,
+  registrationChallenges,
+  webauthnChallenges,
+  sql,
+} from "~/shared/db/client.server";
 import { getActiveSession, type ActiveSession } from "~/auth/session.server";
 import { sessionBindingDigest, verifyDeviceProof, type DeviceProof } from "../shared/device/proof";
 
@@ -21,51 +28,79 @@ export type AuthorizedDevice = {
 };
 
 async function activeDevice(env: Env, accountId: string, deviceId: string): Promise<ActiveDevice | null> {
-  return (await createDb(env.DB).get<ActiveDevice>(sql`
+  return (
+    (await createDb(env.DB).get<ActiveDevice>(sql`
     SELECT d.assertion_public_key, r.registry_epoch
     FROM encryption_devices d JOIN account_encryption_identities r ON r.account_id = d.account_id
     WHERE d.id = ${deviceId} AND d.account_id = ${accountId} AND d.state = 'active'
-  `)) ?? null;
+  `)) ?? null
+  );
 }
 
 /** Prospective Session ID is the sign-in challenge ID; no Session exists until the assertion completes. */
 export async function verifySignInDevice(
-  env: Env, accountId: string, candidateSessionId: string,
-  proof: unknown, request: Request, body: string,
+  env: Env,
+  accountId: string,
+  candidateSessionId: string,
+  proof: unknown,
+  request: Request,
+  body: string,
 ): Promise<string | null> {
-  if (!proof || typeof proof !== "object" || !("deviceId" in proof) ||
-      typeof proof.deviceId !== "string") return null;
+  if (!proof || typeof proof !== "object" || !("deviceId" in proof) || typeof proof.deviceId !== "string") return null;
   const device = await activeDevice(env, accountId, proof.deviceId);
   if (!device) return null;
   const valid = await verifyDeviceProof(proof, new Uint8Array(device.assertion_public_key), {
-    sessionBinding: await sessionBindingDigest(candidateSessionId), deviceId: proof.deviceId,
-    registryEpoch: device.registry_epoch, method: request.method, url: request.url, body,
+    sessionBinding: await sessionBindingDigest(candidateSessionId),
+    deviceId: proof.deviceId,
+    registryEpoch: device.registry_epoch,
+    method: request.method,
+    url: request.url,
+    body,
   });
   return valid ? proof.deviceId : null;
 }
 
 /** No persistent read-proof consumption: identical read requests cannot mutate anything. */
 export async function authorizePrivateRequest(
-  request: Request, env: Env, proof: unknown, body: string | Uint8Array = "",
+  request: Request,
+  env: Env,
+  proof: unknown,
+  body: string | Uint8Array = "",
 ): Promise<AuthorizedDevice | null> {
   const session = await getActiveSession(request, env);
   return session ? authorizeDeviceForSession(env, session, request, proof, body) : null;
 }
 
 export async function authorizeDeviceForSession(
-  env: Env, session: ActiveSession, request: Request, proof: unknown, body: string | Uint8Array = "",
+  env: Env,
+  session: ActiveSession,
+  request: Request,
+  proof: unknown,
+  body: string | Uint8Array = "",
 ): Promise<AuthorizedDevice | null> {
   if (session.purpose !== "normal" || !session.deviceId) return null;
   const device = await activeDevice(env, session.accountId, session.deviceId);
-  if (!device || !await verifyDeviceProof(proof, new Uint8Array(device.assertion_public_key), {
-    sessionBinding: await sessionBindingDigest(session.id), deviceId: session.deviceId,
-    registryEpoch: device.registry_epoch, method: request.method, url: request.url, body,
-  })) return null;
+  if (
+    !device ||
+    !(await verifyDeviceProof(proof, new Uint8Array(device.assertion_public_key), {
+      sessionBinding: await sessionBindingDigest(session.id),
+      deviceId: session.deviceId,
+      registryEpoch: device.registry_epoch,
+      method: request.method,
+      url: request.url,
+      body,
+    }))
+  )
+    return null;
   const verified = proof as DeviceProof;
   return {
-    accountId: session.accountId, sessionId: session.id, deviceId: session.deviceId,
-    registryEpoch: device.registry_epoch, assertionPublicKey: new Uint8Array(device.assertion_public_key),
-    proofId: verified.proofId, expiresAt: verified.expiresAt,
+    accountId: session.accountId,
+    sessionId: session.id,
+    deviceId: session.deviceId,
+    registryEpoch: device.registry_epoch,
+    assertionPublicKey: new Uint8Array(device.assertion_public_key),
+    proofId: verified.proofId,
+    expiresAt: verified.expiresAt,
   };
 }
 
@@ -94,8 +129,7 @@ export async function purgeExpiredSignupProofs(env: Env, now = Date.now()): Prom
   await db.batch([
     db.delete(deviceProofUses).where(sql`expires_at <= ${now}`),
     db.delete(registrationChallenges).where(sql`expires_at <= ${now}`),
-    db.delete(webauthnChallenges)
-      .where(sql`purpose = 'signup' AND expires_at <= ${now}`),
+    db.delete(webauthnChallenges).where(sql`purpose = 'signup' AND expires_at <= ${now}`),
   ]);
 }
 
@@ -133,8 +167,13 @@ export async function commitPrivateMutation(
   return changed.meta.changes === 1 && consumed.meta.changes === 1;
 }
 
-function mutationProofStatements(authorization: AuthorizedDevice, now: number): {
-  committed: SQL; consume: SQL; recordActivity: SQL;
+function mutationProofStatements(
+  authorization: AuthorizedDevice,
+  now: number,
+): {
+  committed: SQL;
+  consume: SQL;
+  recordActivity: SQL;
 } {
   const { accountId, sessionId, deviceId, proofId, expiresAt } = authorization;
   const token = crypto.randomUUID();
@@ -155,7 +194,9 @@ function mutationProofStatements(authorization: AuthorizedDevice, now: number): 
  * A fresh invocation token, not changes() or a reusable proof ID, gates dependents.
  */
 export async function commitPrivateBatch(
-  env: Env, authorization: AuthorizedDevice, anchor: (guard: SQL) => SQL,
+  env: Env,
+  authorization: AuthorizedDevice,
+  anchor: (guard: SQL) => SQL,
   statements: (committed: SQL) => readonly SQL[],
   options: { deferForeignKeys?: boolean } = {},
 ): Promise<boolean> {
@@ -164,15 +205,18 @@ export async function commitPrivateBatch(
   const { committed, consume, recordActivity } = mutationProofStatements(authorization, now);
   const results = await atomicSqlBatch(env.DB, [
     ...(options.deferForeignKeys ? [sql`PRAGMA defer_foreign_keys = ON`] : []),
-    anchor(privateMutationGuard(authorization, now)), consume,
-    ...statements(committed), recordActivity,
+    anchor(privateMutationGuard(authorization, now)),
+    consume,
+    ...statements(committed),
+    recordActivity,
   ]);
   const offset = options.deferForeignKeys ? 1 : 0;
   return results[offset]!.meta.changes === 1 && results[offset + 1]!.meta.changes === 1;
 }
 
 export type DirectoryChange = {
-  directoryId: string; expectedRevision: number;
+  directoryId: string;
+  expectedRevision: number;
   head: { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array };
 };
 
@@ -183,16 +227,25 @@ export type DirectoryChange = {
  * agree again at commit. A reused proof can never authorize these dependents.
  */
 export async function commitTreeMutation(
-  env: Env, authorization: AuthorizedDevice, changes: readonly [DirectoryChange, ...DirectoryChange[]],
-  eligible: SQL, statements: (committed: SQL) => readonly SQL[],
+  env: Env,
+  authorization: AuthorizedDevice,
+  changes: readonly [DirectoryChange, ...DirectoryChange[]],
+  eligible: SQL,
+  statements: (committed: SQL) => readonly SQL[],
   contentOwnerId = authorization.accountId,
 ): Promise<boolean> {
   const now = Date.now();
-  if (authorization.expiresAt <= now || new Set(changes.map((change) => change.directoryId)).size !== changes.length) return false;
+  if (authorization.expiresAt <= now || new Set(changes.map((change) => change.directoryId)).size !== changes.length)
+    return false;
   const { deviceId } = authorization;
   const { committed, consume, recordActivity } = mutationProofStatements(authorization, now);
-  const revisions = sql.join(changes.map((change) => sql`EXISTS (SELECT 1 FROM directories
-    WHERE node_id = ${change.directoryId} AND owner_id = ${contentOwnerId} AND entries_revision = ${change.expectedRevision})`), sql` AND `);
+  const revisions = sql.join(
+    changes.map(
+      (change) => sql`EXISTS (SELECT 1 FROM directories
+    WHERE node_id = ${change.directoryId} AND owner_id = ${contentOwnerId} AND entries_revision = ${change.expectedRevision})`,
+    ),
+    sql` AND `,
+  );
   const update = (change: DirectoryChange, guard: SQL) => sql`UPDATE directories
     SET entries_revision = entries_revision + 1, listing_ciphertext = ${change.head.ciphertext},
       listing_digest = ${change.head.digest}, listing_signature = ${change.head.signature}, listing_device_id = ${deviceId}
@@ -200,9 +253,11 @@ export async function commitTreeMutation(
       AND entries_revision = ${change.expectedRevision} AND ${guard}`;
   const [, changed, consumed] = await atomicSqlBatch(env.DB, [
     sql`PRAGMA defer_foreign_keys = ON`,
-    update(changes[0], sql`${privateMutationGuard(authorization, now)} AND ${revisions} AND ${eligible}`), consume,
+    update(changes[0], sql`${privateMutationGuard(authorization, now)} AND ${revisions} AND ${eligible}`),
+    consume,
     ...changes.slice(1).map((change) => update(change, committed)),
-    ...statements(committed), recordActivity,
+    ...statements(committed),
+    recordActivity,
   ]);
   return changed!.meta.changes === 1 && consumed!.meta.changes === 1;
 }
@@ -212,9 +267,13 @@ export async function commitTreeMutation(
  * If the CAS loses, the batch commits zero changes, including zero proof uses.
  */
 export async function commitDirectoryMutation(
-  env: Env, authorization: AuthorizedDevice, parentId: string, expectedRevision: number,
+  env: Env,
+  authorization: AuthorizedDevice,
+  parentId: string,
+  expectedRevision: number,
   listingHead: { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array },
-  eligible: SQL, statements: (committed: SQL) => readonly SQL[],
+  eligible: SQL,
+  statements: (committed: SQL) => readonly SQL[],
   contentOwnerId = authorization.accountId,
 ): Promise<boolean> {
   const now = Date.now();

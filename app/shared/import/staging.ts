@@ -46,29 +46,141 @@ export type ImportRefKind = "uuid" | "opaque";
 export const IMPORT_RECORD_KINDS = {
   "node-directory": { id: 1, refs: ["uuid", "uuid"], min: 0, max: 0, envelope: null },
   "node-file": { id: 2, refs: ["uuid", "uuid"], min: 0, max: 0, envelope: null },
-  "entry-name": { id: 3, refs: ["uuid", "uuid"], min: 1, max: 4_096, envelope: "symmetric", purpose: "directory-metadata" },
-  "entry-order": { id: 4, refs: ["uuid", "uuid"], min: 1, max: 4_096, envelope: "symmetric", purpose: "directory-metadata" },
-  "directory-capability": { id: 5, refs: ["uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "directory-capability" },
-  "file-capability": { id: 6, refs: ["uuid", "uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "file-capability" },
-  "entry-key": { id: 7, refs: ["uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "file-content-key" },
-  "representation-key": { id: 8, refs: ["uuid", "uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "file-content-key" },
-  representation: { id: 9, refs: ["uuid", "uuid", "uuid"], min: 1, max: 524_288, envelope: "symmetric", purpose: "file-content" },
+  "entry-name": {
+    id: 3,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 4_096,
+    envelope: "symmetric",
+    purpose: "directory-metadata",
+  },
+  "entry-order": {
+    id: 4,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 4_096,
+    envelope: "symmetric",
+    purpose: "directory-metadata",
+  },
+  "directory-capability": {
+    id: 5,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "directory-capability",
+  },
+  "file-capability": {
+    id: 6,
+    refs: ["uuid", "uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "file-capability",
+  },
+  "entry-key": {
+    id: 7,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "file-content-key",
+  },
+  "representation-key": {
+    id: 8,
+    refs: ["uuid", "uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "file-content-key",
+  },
+  representation: {
+    id: 9,
+    refs: ["uuid", "uuid", "uuid"],
+    min: 1,
+    max: 524_288,
+    envelope: "symmetric",
+    purpose: "file-content",
+  },
   "file-head": { id: 10, refs: ["uuid", "uuid"], min: 96, max: 96, envelope: null },
   replace: { id: 11, refs: ["uuid", "uuid"], min: 8, max: 8, envelope: null },
-  "public-representation": { id: 12, refs: ["opaque", "opaque", "opaque"], min: 1, max: 524_288, envelope: "hpke", purpose: "public-representation" },
-  "comment-thread": { id: 13, refs: ["uuid", "uuid", "uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "private-comment-thread" },
-  "comment-meta": { id: 14, refs: ["uuid", "uuid"], min: 1, max: 4_096, envelope: "symmetric", purpose: "comment-content" },
-  "comment-body": { id: 15, refs: ["uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "comment-content" },
-  "comment-key": { id: 16, refs: ["uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "comment-content" },
-  "comment-attribution": { id: 17, refs: ["uuid", "uuid"], min: 1, max: 4_096, envelope: "symmetric", purpose: "attribution" },
-  "comment-attribution-key": { id: 18, refs: ["uuid", "uuid"], min: 1, max: 16_384, envelope: "symmetric", purpose: "attribution" },
-  "listing-ciphertext": { id: 19, refs: ["uuid"], min: 1, max: 524_288, envelope: "symmetric", purpose: "directory-metadata" },
+  "public-representation": {
+    id: 12,
+    refs: ["opaque", "opaque", "opaque"],
+    min: 1,
+    max: 524_288,
+    envelope: "hpke",
+    purpose: "public-representation",
+  },
+  "comment-thread": {
+    id: 13,
+    refs: ["uuid", "uuid", "uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "private-comment-thread",
+  },
+  "comment-meta": {
+    id: 14,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 4_096,
+    envelope: "symmetric",
+    purpose: "comment-content",
+  },
+  "comment-body": {
+    id: 15,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "comment-content",
+  },
+  "comment-key": {
+    id: 16,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "comment-content",
+  },
+  "comment-attribution": {
+    id: 17,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 4_096,
+    envelope: "symmetric",
+    purpose: "attribution",
+  },
+  "comment-attribution-key": {
+    id: 18,
+    refs: ["uuid", "uuid"],
+    min: 1,
+    max: 16_384,
+    envelope: "symmetric",
+    purpose: "attribution",
+  },
+  "listing-ciphertext": {
+    id: 19,
+    refs: ["uuid"],
+    min: 1,
+    max: 524_288,
+    envelope: "symmetric",
+    purpose: "directory-metadata",
+  },
   "listing-digest": { id: 20, refs: ["uuid"], min: 32, max: 32, envelope: null },
   "listing-signature": { id: 21, refs: ["uuid"], min: 64, max: 64, envelope: null },
-} as const satisfies Record<string, {
-  id: number; refs: readonly ImportRefKind[];
-  min: number; max: number; envelope: "symmetric" | "hpke" | null; purpose?: string;
-}>;
+} as const satisfies Record<
+  string,
+  {
+    id: number;
+    refs: readonly ImportRefKind[];
+    min: number;
+    max: number;
+    envelope: "symmetric" | "hpke" | null;
+    purpose?: string;
+  }
+>;
 
 export type StagingRecordKind = keyof typeof IMPORT_RECORD_KINDS;
 
@@ -98,7 +210,10 @@ export type StagingErrorCode = "malformed" | "too-large" | "unsupported-version"
 
 /** Structural staging failure; `detail` never contains private content. */
 export class StagingError extends Error {
-  constructor(readonly code: StagingErrorCode, readonly detail?: string) {
+  constructor(
+    readonly code: StagingErrorCode,
+    readonly detail?: string,
+  ) {
     super(`mdwn/import-staging: ${code}${detail ? ` (${detail})` : ""}`);
     this.name = "StagingError";
   }
@@ -133,20 +248,23 @@ function concat(parts: readonly Uint8Array[]): Uint8Array {
   const total = parts.reduce((length, part) => length + part.length, 0);
   const result = new Uint8Array(total);
   let offset = 0;
-  for (const part of parts) { result.set(part, offset); offset += part.length; }
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
   return result;
 }
 
 async function sha256HexBytes(bytes: Uint8Array): Promise<string> {
-  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
-    (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 /** `digestEnvelope`'s whole-envelope SHA-256 in lowercase hex, without opening. */
 export async function envelopeDigestHex(envelope: Uint8Array): Promise<string> {
   return sha256HexBytes(envelope);
 }
-
 
 export type DecodedDescriptor = {
   kind: StagingRecordKind;
@@ -167,9 +285,13 @@ export function encodeImportChunkBody(descriptors: readonly ImportPlanDescriptor
   for (const descriptor of descriptors) {
     const schema = IMPORT_RECORD_KINDS[descriptor.kind];
     if (!schema) throw new StagingError("wrong-shape");
-    if (descriptor.refs.length !== schema.refs.length ||
-        descriptor.refs.some((ref, index) => !isValidImportRef(schema.refs[index]!, ref)) ||
-        descriptor.offset !== expectedOffset || descriptor.length < schema.min || descriptor.length > schema.max) {
+    if (
+      descriptor.refs.length !== schema.refs.length ||
+      descriptor.refs.some((ref, index) => !isValidImportRef(schema.refs[index]!, ref)) ||
+      descriptor.offset !== expectedOffset ||
+      descriptor.length < schema.min ||
+      descriptor.length > schema.max
+    ) {
       throw new StagingError("wrong-shape", descriptor.kind);
     }
     const digest = decodeHex(descriptor.digest, 32);
@@ -191,7 +313,8 @@ function decodeHex(value: string, bytes: number): Uint8Array {
     throw new StagingError("wrong-shape");
   }
   const result = new Uint8Array(bytes);
-  for (let index = 0; index < bytes; index++) result[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  for (let index = 0; index < bytes; index++)
+    result[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
   return result;
 }
 
@@ -272,8 +395,10 @@ export async function verifyChunkDigests(chunk: DecodedChunk): Promise<boolean> 
  *   kindCount x (kindId u8, count u32) | manifest bytes
  */
 export function encodeImportSessionBody(metadata: ImportSessionMetadata, manifest: Uint8Array): Uint8Array {
-  if (metadata.kindCounts.length > Object.keys(IMPORT_RECORD_KINDS).length ||
-      new Set(metadata.kindCounts.map((entry) => entry.kind)).size !== metadata.kindCounts.length) {
+  if (
+    metadata.kindCounts.length > Object.keys(IMPORT_RECORD_KINDS).length ||
+    new Set(metadata.kindCounts.map((entry) => entry.kind)).size !== metadata.kindCounts.length
+  ) {
     throw new StagingError("wrong-shape", "kind counts");
   }
   const target = encodeIdentifier(metadata.targetDirectoryId, UUID_PATTERN);
@@ -291,7 +416,8 @@ export function encodeImportSessionBody(metadata: ImportSessionMetadata, manifes
   const kinds = new Uint8Array(metadata.kindCounts.length * 5);
   metadata.kindCounts.forEach((entry, index) => {
     const schema = IMPORT_RECORD_KINDS[entry.kind];
-    if (!schema || entry.count < 1 || entry.count > MAX_STAGING_RECORDS) throw new StagingError("wrong-shape", "kind count");
+    if (!schema || entry.count < 1 || entry.count > MAX_STAGING_RECORDS)
+      throw new StagingError("wrong-shape", "kind count");
     kinds[index * 5] = schema.id;
     writeInteger(kinds, index * 5 + 1, 4, entry.count);
   });
@@ -306,7 +432,10 @@ function encodeIdentifier(value: string, pattern: RegExp): Uint8Array {
 export type DecodedSessionBody = { metadata: ImportSessionMetadata; manifest: Uint8Array };
 
 /** Decode the session body exactly; the manifest is the trailing bytes. */
-export function decodeImportSessionBody(bytes: Uint8Array, maxBytes: number = MAX_IMPORT_SESSION_BODY_BYTES): DecodedSessionBody {
+export function decodeImportSessionBody(
+  bytes: Uint8Array,
+  maxBytes: number = MAX_IMPORT_SESSION_BODY_BYTES,
+): DecodedSessionBody {
   if (!(bytes instanceof Uint8Array)) throw new StagingError("malformed");
   if (bytes.length > maxBytes) throw new StagingError("too-large");
   const fixed = SESSION_PREFIX.length + IMPORT_REF_OPAQUE_BYTES + IMPORT_REF_UUID_BYTES + 8 * 5 + 4 + 32 + 32 + 4;
@@ -315,27 +444,47 @@ export function decodeImportSessionBody(bytes: Uint8Array, maxBytes: number = MA
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let offset = SESSION_PREFIX.length;
   let importId: string;
-  try { importId = decoder.decode(bytes.subarray(offset, offset + IMPORT_REF_OPAQUE_BYTES)); }
-  catch { throw new StagingError("malformed"); }
+  try {
+    importId = decoder.decode(bytes.subarray(offset, offset + IMPORT_REF_OPAQUE_BYTES));
+  } catch {
+    throw new StagingError("malformed");
+  }
   if (!OPAQUE_PATTERN.test(importId)) throw new StagingError("wrong-shape", "import id");
   offset += IMPORT_REF_OPAQUE_BYTES;
   let targetDirectoryId: string;
-  try { targetDirectoryId = decoder.decode(bytes.subarray(offset, offset + IMPORT_REF_UUID_BYTES)); }
-  catch { throw new StagingError("malformed"); }
+  try {
+    targetDirectoryId = decoder.decode(bytes.subarray(offset, offset + IMPORT_REF_UUID_BYTES));
+  } catch {
+    throw new StagingError("malformed");
+  }
   if (!UUID_PATTERN.test(targetDirectoryId)) throw new StagingError("wrong-shape", "target");
   offset += IMPORT_REF_UUID_BYTES;
-  const reviewedEntryRevision = readInteger(bytes, offset, 8); offset += 8;
-  const recordCount = readInteger(bytes, offset, 8); offset += 8;
-  const chunkCount = readInteger(bytes, offset, 8); offset += 8;
-  const payloadBytes = readInteger(bytes, offset, 8); offset += 8;
-  const commentCount = readInteger(bytes, offset, 8); offset += 8;
-  const kindCountValue = readInteger(bytes, offset, 4); offset += 4;
+  const reviewedEntryRevision = readInteger(bytes, offset, 8);
+  offset += 8;
+  const recordCount = readInteger(bytes, offset, 8);
+  offset += 8;
+  const chunkCount = readInteger(bytes, offset, 8);
+  offset += 8;
+  const payloadBytes = readInteger(bytes, offset, 8);
+  offset += 8;
+  const commentCount = readInteger(bytes, offset, 8);
+  offset += 8;
+  const kindCountValue = readInteger(bytes, offset, 4);
+  offset += 4;
   if (kindCountValue > Object.keys(IMPORT_RECORD_KINDS).length) throw new StagingError("wrong-shape", "kind count");
-  const aggregateDigest = bytes.slice(offset, offset + 32); offset += 32;
-  const manifestDigest = bytes.slice(offset, offset + 32); offset += 32;
-  const manifestLength = readInteger(bytes, offset, 4); offset += 4;
-  if (offset + kindCountValue * 5 > bytes.length || offset + kindCountValue * 5 + manifestLength !== bytes.length ||
-      manifestLength > MAX_STAGING_MANIFEST_BYTES || manifestLength < 1) throw new StagingError("wrong-shape", "manifest");
+  const aggregateDigest = bytes.slice(offset, offset + 32);
+  offset += 32;
+  const manifestDigest = bytes.slice(offset, offset + 32);
+  offset += 32;
+  const manifestLength = readInteger(bytes, offset, 4);
+  offset += 4;
+  if (
+    offset + kindCountValue * 5 > bytes.length ||
+    offset + kindCountValue * 5 + manifestLength !== bytes.length ||
+    manifestLength > MAX_STAGING_MANIFEST_BYTES ||
+    manifestLength < 1
+  )
+    throw new StagingError("wrong-shape", "manifest");
   const kindCounts: ImportSessionKindCount[] = [];
   for (let index = 0; index < kindCountValue; index++) {
     const kind = STAGING_RECORD_BY_ID[bytes[offset]!];
@@ -346,20 +495,37 @@ export function decodeImportSessionBody(bytes: Uint8Array, maxBytes: number = MA
     kindCounts.push({ kind, count });
   }
   const manifest = bytes.slice(offset);
-  if (!Number.isSafeInteger(reviewedEntryRevision) || reviewedEntryRevision < 1 ||
-      recordCount < 1 || recordCount > MAX_STAGING_RECORDS ||
-      chunkCount < 1 || chunkCount > MAX_STAGING_CHUNKS ||
-      payloadBytes < 1 || payloadBytes > MAX_STAGING_PAYLOAD_BYTES ||
-      commentCount < 0 || commentCount > 1_000) throw new StagingError("wrong-shape", "session bounds");
+  if (
+    !Number.isSafeInteger(reviewedEntryRevision) ||
+    reviewedEntryRevision < 1 ||
+    recordCount < 1 ||
+    recordCount > MAX_STAGING_RECORDS ||
+    chunkCount < 1 ||
+    chunkCount > MAX_STAGING_CHUNKS ||
+    payloadBytes < 1 ||
+    payloadBytes > MAX_STAGING_PAYLOAD_BYTES ||
+    commentCount < 0 ||
+    commentCount > 1_000
+  )
+    throw new StagingError("wrong-shape", "session bounds");
   const kindTotal = kindCounts.reduce((total, entry) => total + entry.count, 0);
   if (kindTotal !== recordCount) throw new StagingError("wrong-shape", "record counts");
-  const commentKinds = kindCounts.filter((entry) => entry.kind === "comment-body")
+  const commentKinds = kindCounts
+    .filter((entry) => entry.kind === "comment-body")
     .reduce((total, entry) => total + entry.count, 0);
   if (commentKinds !== commentCount) throw new StagingError("wrong-shape", "comment counts");
   return {
     metadata: {
-      importId, targetDirectoryId, reviewedEntryRevision, recordCount, chunkCount, payloadBytes, commentCount,
-      aggregateDigest: hex(aggregateDigest), manifestDigest: hex(manifestDigest), kindCounts,
+      importId,
+      targetDirectoryId,
+      reviewedEntryRevision,
+      recordCount,
+      chunkCount,
+      payloadBytes,
+      commentCount,
+      aggregateDigest: hex(aggregateDigest),
+      manifestDigest: hex(manifestDigest),
+      kindCounts,
     },
     manifest,
   };
@@ -370,12 +536,24 @@ function hex(bytes: Uint8Array): string {
 }
 
 /** The largest session-creation body: fixed routing header plus the 128 KiB manifest. */
-export const MAX_IMPORT_SESSION_BODY_BYTES = SESSION_PREFIX.length + IMPORT_REF_OPAQUE_BYTES + IMPORT_REF_UUID_BYTES +
-  8 * 5 + 4 + 32 + 32 + 4 + Object.keys(IMPORT_RECORD_KINDS).length * 5 + MAX_STAGING_MANIFEST_BYTES;
+export const MAX_IMPORT_SESSION_BODY_BYTES =
+  SESSION_PREFIX.length +
+  IMPORT_REF_OPAQUE_BYTES +
+  IMPORT_REF_UUID_BYTES +
+  8 * 5 +
+  4 +
+  32 +
+  32 +
+  4 +
+  Object.keys(IMPORT_RECORD_KINDS).length * 5 +
+  MAX_STAGING_MANIFEST_BYTES;
 
 /** The largest chunk body: framing plus 50 four-reference descriptors plus one 512 KiB payload. */
-export const MAX_IMPORT_CHUNK_BODY_BYTES = CHUNK_PREFIX.length + 1 +
-  MAX_STAGING_CHUNK_RECORDS * (1 + 4 * IMPORT_REF_OPAQUE_BYTES + 52) + MAX_STAGING_CHUNK_BYTES;
+export const MAX_IMPORT_CHUNK_BODY_BYTES =
+  CHUNK_PREFIX.length +
+  1 +
+  MAX_STAGING_CHUNK_RECORDS * (1 + 4 * IMPORT_REF_OPAQUE_BYTES + 52) +
+  MAX_STAGING_CHUNK_BYTES;
 
 /** Unguessable 256-bit base64url staging ID. */
 export function newStagingId(): string {

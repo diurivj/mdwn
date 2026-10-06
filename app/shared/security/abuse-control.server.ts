@@ -1,19 +1,7 @@
 import { and, isNotNull, lte, sql } from "drizzle-orm";
-import {
-  createDb,
-  rateLimitCounters,
-  securityEvents,
-} from "../db/client.server";
-import {
-  RATE_LIMIT_POLICIES,
-  type RateLimitAction,
-  type RateLimitRule,
-} from "./abuse-policy";
-import {
-  deriveNetworkBucket,
-  deriveOpaqueScopeBucket,
-  normalizeEdgeIp,
-} from "./network-bucket";
+import { createDb, rateLimitCounters, securityEvents } from "../db/client.server";
+import { RATE_LIMIT_POLICIES, type RateLimitAction, type RateLimitRule } from "./abuse-policy";
+import { deriveNetworkBucket, deriveOpaqueScopeBucket, normalizeEdgeIp } from "./network-bucket";
 import type {
   NewSecurityEvent,
   SecurityCounterState,
@@ -67,18 +55,8 @@ const SECURITY_SIZE_CLASSES = new Set<SecuritySizeClass>([
   "4_to_16_kib",
   "over_16_kib",
 ]);
-const SECURITY_PROOF_STATES = new Set<SecurityProofState>([
-  "not_applicable",
-  "issued",
-  "valid",
-  "invalid",
-  "spent",
-]);
-const SECURITY_COUNTER_STATES = new Set<SecurityCounterState>([
-  "not_checked",
-  "allowed",
-  "denied",
-]);
+const SECURITY_PROOF_STATES = new Set<SecurityProofState>(["not_applicable", "issued", "valid", "invalid", "spent"]);
+const SECURITY_COUNTER_STATES = new Set<SecurityCounterState>(["not_checked", "allowed", "denied"]);
 
 export interface RateLimitScopes {
   readonly accountId?: string;
@@ -127,9 +105,7 @@ async function currentAndPreviousDailyBuckets(
   now: number,
   deriveAtEpoch: (epoch: number) => Promise<string>,
 ): Promise<string[]> {
-  const bucketIds = await Promise.all(
-    currentAndPreviousDailyHmacEpochs(now).map(deriveAtEpoch),
-  );
+  const bucketIds = await Promise.all(currentAndPreviousDailyHmacEpochs(now).map(deriveAtEpoch));
   return [...new Set(bucketIds)];
 }
 
@@ -171,13 +147,7 @@ async function resolveScopeIds(
       if (!secret) throw new AbuseControlUnavailableError();
       const purpose = `${action}:${rule.windowMs}`;
       return currentAndPreviousDailyBuckets(now, (epoch) =>
-        deriveOpaqueScopeBucket(
-          "account_publication",
-          `${accountId}\u0000${publicationId}`,
-          purpose,
-          epoch,
-          secret,
-        ),
+        deriveOpaqueScopeBucket("account_publication", `${accountId}\u0000${publicationId}`, purpose, epoch, secret),
       );
     }
     case "session": {
@@ -228,7 +198,10 @@ async function incrementRollingCounter(
   const activePredicate = sql`
     purpose = ${purpose}
     AND scope_type = ${rule.scope}
-    AND scope_id IN (${sql.join(scopeIds.map((id) => sql`${id}`), sql`, `)})
+    AND scope_id IN (${sql.join(
+      scopeIds.map((id) => sql`${id}`),
+      sql`, `,
+    )})
     AND window_ms = ${rule.windowMs}
     AND time_epoch > ${now - rule.windowMs}
     AND expires_at > ${now}
@@ -254,9 +227,7 @@ async function incrementRollingCounter(
   const retryAt = retry?.retry_at;
   return {
     allowed: false,
-    retryAfterSeconds: typeof retryAt === "number"
-      ? Math.max(1, Math.ceil((retryAt - now) / 1000))
-      : 1,
+    retryAfterSeconds: typeof retryAt === "number" ? Math.max(1, Math.ceil((retryAt - now) / 1000)) : 1,
   };
 }
 
@@ -291,22 +262,13 @@ export async function enforceRateLimit({
 
     const denials: number[] = [];
     for (const rule of otherRules) {
-      const scopeIds = await resolveScopeIds(
-        rule,
-        action,
-        request,
-        scopes,
-        hmacSecret,
-        now,
-      );
+      const scopeIds = await resolveScopeIds(rule, action, request, scopes, hmacSecret, now);
       if (scopeIds === null) continue;
       const result = await incrementRollingCounter(database, action, rule, scopeIds, now);
       if (!result.allowed) denials.push(result.retryAfterSeconds ?? 1);
     }
 
-    return denials.length > 0
-      ? { allowed: false, retryAfterSeconds: Math.max(...denials) }
-      : { allowed: true };
+    return denials.length > 0 ? { allowed: false, retryAfterSeconds: Math.max(...denials) } : { allowed: true };
   } catch (error) {
     if (error instanceof AbuseControlUnavailableError) throw error;
     throw new AbuseControlUnavailableError();
@@ -315,10 +277,7 @@ export async function enforceRateLimit({
 
 /** Generic fail-closed response when D1 or the abuse-control key is unavailable. */
 export function abuseControlUnavailableResponse(): Response {
-  return Response.json(
-    { error: "temporarily_unavailable" },
-    { status: 503, headers: { "Cache-Control": "no-store" } },
-  );
+  return Response.json({ error: "temporarily_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
 }
 
 /** Identical public response for every rate-limited scope and operation. */
@@ -361,20 +320,14 @@ function validSecurityEvent(event: NewSecurityEvent): boolean {
 }
 
 /** Persist only the explicitly allowlisted Security event metadata. */
-export async function recordSecurityEvent(
-  db: D1Database,
-  event: NewSecurityEvent,
-  now = Date.now(),
-): Promise<string> {
+export async function recordSecurityEvent(db: D1Database, event: NewSecurityEvent, now = Date.now()): Promise<string> {
   if (!Number.isSafeInteger(now) || now < 0 || !validSecurityEvent(event)) {
     throw new Error("invalid security event");
   }
 
   const eventId = crypto.randomUUID();
   const expiresAt = now + MAX_EVENT_RETENTION_MS;
-  const networkBucketExpiresAt = event.networkBucket === undefined
-    ? null
-    : now + MAX_EVENT_NETWORK_BUCKET_MS;
+  const networkBucketExpiresAt = event.networkBucket === undefined ? null : now + MAX_EVENT_NETWORK_BUCKET_MS;
   await createDb(db).run(sql`
     INSERT INTO security_events
       (id, created_at, expires_at, action_class, outcome, reason, account_id, publication_id,
@@ -396,28 +349,16 @@ export interface AbusePurgeResult {
 }
 
 /** Delete expired abuse rows and scrub expired Network digests on live events. */
-export async function purgeExpiredAbuseRecords(
-  db: D1Database,
-  now = Date.now(),
-): Promise<AbusePurgeResult> {
+export async function purgeExpiredAbuseRecords(db: D1Database, now = Date.now()): Promise<AbusePurgeResult> {
   if (!Number.isSafeInteger(now) || now < 0) throw new AbuseControlUnavailableError();
   const database = createDb(db);
   const [buckets, counters, events] = await database.batch([
     database
       .update(securityEvents)
       .set({ networkBucket: null, networkBucketExpiresAt: null })
-      .where(
-        and(
-          isNotNull(securityEvents.networkBucket),
-          lte(securityEvents.networkBucketExpiresAt, now),
-        ),
-      ),
-    database
-      .delete(rateLimitCounters)
-      .where(lte(rateLimitCounters.expiresAt, now)),
-    database
-      .delete(securityEvents)
-      .where(lte(securityEvents.expiresAt, now)),
+      .where(and(isNotNull(securityEvents.networkBucket), lte(securityEvents.networkBucketExpiresAt, now))),
+    database.delete(rateLimitCounters).where(lte(rateLimitCounters.expiresAt, now)),
+    database.delete(securityEvents).where(lte(securityEvents.expiresAt, now)),
   ]);
   return {
     countersDeleted: counters.meta.changes,

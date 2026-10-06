@@ -72,7 +72,12 @@ function sourceOf(secret) {
   if (existsSync(devVarsPath) && readFileSync(devVarsPath, "utf8").includes(secret)) {
     return ".dev.vars";
   }
-  if ((process.env.MDWN_CHECK_SECRETS ?? "").split(",").map((s) => s.trim()).includes(secret)) {
+  if (
+    (process.env.MDWN_CHECK_SECRETS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .includes(secret)
+  ) {
     return "MDWN_CHECK_SECRETS";
   }
   return "environment";

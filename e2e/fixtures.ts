@@ -5,10 +5,10 @@ import { test as base, expect } from "@playwright/test";
 
 import { supportAddressBindings } from "../tests/support/donation-fixtures";
 
-export const TEST_SESSION_COOKIE_SECRET =
-  "mdwn-browser-tests-only-not-a-deployment-secret";
+export const TEST_SESSION_COOKIE_SECRET = "mdwn-browser-tests-only-not-a-deployment-secret";
 
 type TestFixtures = {
+  // biome-ignore lint/suspicious/noConfusingVoidType: a Playwright fixture value; void lets the fixture call use() with no value.
   reset: void;
 };
 
@@ -17,9 +17,10 @@ type WorkerFixtures = {
 };
 
 function localHttpsWorkerConfig() {
-  const config = JSON.parse(
-    readFileSync(new URL("../build/server/wrangler.json", import.meta.url), "utf8"),
-  ) as Record<string, unknown>;
+  const config = JSON.parse(readFileSync(new URL("../build/server/wrangler.json", import.meta.url), "utf8")) as Record<
+    string,
+    unknown
+  >;
   const dev = (config.dev ?? {}) as Record<string, unknown>;
   const vars = (config.vars ?? {}) as Record<string, unknown>;
 
@@ -31,7 +32,8 @@ function localHttpsWorkerConfig() {
       upstream_protocol: "https",
     },
     vars: {
-      ...vars, SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET,
+      ...vars,
+      SESSION_COOKIE_SECRET: TEST_SESSION_COOKIE_SECRET,
       ABUSE_HMAC_SECRET: "mdwn-browser-abuse-tests-only-not-a-deployment-secret",
       ...supportAddressBindings(),
     },
@@ -45,6 +47,7 @@ function localHttpsWorkerConfig() {
  */
 export const test = base.extend<TestFixtures, WorkerFixtures>({
   server: [
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright requires the fixture function's first parameter to be an object destructuring pattern.
     async ({}, use) => {
       const server = createTestHarness({
         // WebKit honors the production CSP's upgrade-insecure-requests. Serve

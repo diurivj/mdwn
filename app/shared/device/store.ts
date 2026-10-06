@@ -17,13 +17,16 @@ function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE, 3);
     request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath: "accountId" });
+      if (!request.result.objectStoreNames.contains(STORE))
+        request.result.createObjectStore(STORE, { keyPath: "accountId" });
       if (!request.result.objectStoreNames.contains(PENDING_RECOVERY)) {
-        request.result.createObjectStore(PENDING_RECOVERY, { keyPath: "deviceId" })
+        request.result
+          .createObjectStore(PENDING_RECOVERY, { keyPath: "deviceId" })
           .createIndex("accountId", "accountId");
       }
       if (!request.result.objectStoreNames.contains(PENDING_ENROLLMENT)) {
-        request.result.createObjectStore(PENDING_ENROLLMENT, { keyPath: "deviceId" })
+        request.result
+          .createObjectStore(PENDING_ENROLLMENT, { keyPath: "deviceId" })
           .createIndex("accountId", "accountId");
       }
     };
@@ -38,9 +41,10 @@ async function readRecords(accountId?: string): Promise<unknown[]> {
   try {
     return await new Promise<unknown[]>((resolve, reject) => {
       const transaction = db.transaction(STORE, "readonly");
-      const request = accountId === undefined
-        ? transaction.objectStore(STORE).getAll()
-        : transaction.objectStore(STORE).get(accountId);
+      const request =
+        accountId === undefined
+          ? transaction.objectStore(STORE).getAll()
+          : transaction.objectStore(STORE).get(accountId);
       request.onsuccess = () => resolve(accountId === undefined ? request.result : [request.result]);
       request.onerror = () => reject(request.error);
       transaction.onabort = () => reject(transaction.error);
@@ -69,41 +73,50 @@ async function writeRecord(device: StoredDevice, add: boolean): Promise<void> {
 function isKey(key: unknown, type: KeyType, algorithm: string, usage?: KeyUsage): key is CryptoKey {
   if (!(key instanceof CryptoKey)) return false;
   const info = key.algorithm as EcKeyAlgorithm;
-  return key.type === type && key.extractable === (type === "public") &&
-    info.name === algorithm && info.namedCurve === "P-256" && (!usage || key.usages.includes(usage));
+  return (
+    key.type === type &&
+    key.extractable === (type === "public") &&
+    info.name === algorithm &&
+    info.namedCurve === "P-256" &&
+    (!usage || key.usages.includes(usage))
+  );
 }
 
 async function validDevice(value: unknown): Promise<boolean> {
   if (typeof value !== "object" || value === null) return false;
   const device = value as Partial<StoredDevice>;
-  if (typeof device.accountId !== "string" || !device.accountId ||
-      typeof device.deviceId !== "string" || !device.deviceId ||
-      !Number.isSafeInteger(device.registryEpoch) || device.registryEpoch! < 0) return false;
+  if (
+    typeof device.accountId !== "string" ||
+    !device.accountId ||
+    typeof device.deviceId !== "string" ||
+    !device.deviceId ||
+    !Number.isSafeInteger(device.registryEpoch) ||
+    device.registryEpoch! < 0
+  )
+    return false;
   const transport = device.transportKeyPair;
   const assertion = device.assertionKeyPair;
-  if (!transport || !assertion ||
-      !isKey(transport.privateKey, "private", "ECDH", "deriveBits") ||
-      !isKey(transport.publicKey, "public", "ECDH") ||
-      !isKey(assertion.privateKey, "private", "ECDSA", "sign") ||
-      !isKey(assertion.publicKey, "public", "ECDSA", "verify")) return false;
+  if (
+    !transport ||
+    !assertion ||
+    !isKey(transport.privateKey, "private", "ECDH", "deriveBits") ||
+    !isKey(transport.publicKey, "public", "ECDH") ||
+    !isKey(assertion.privateKey, "private", "ECDSA", "sign") ||
+    !isKey(assertion.publicKey, "public", "ECDSA", "verify")
+  )
+    return false;
   try {
     // Deriving against a new independent pair verifies that the two stored ECDH
     // handles correspond; inspecting key metadata alone cannot establish this.
-    const probe = await crypto.subtle.generateKey(
-      { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"],
-    );
+    const probe = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
     const [left, right] = await Promise.all([
       crypto.subtle.deriveBits({ name: "ECDH", public: probe.publicKey }, transport.privateKey, 256),
       crypto.subtle.deriveBits({ name: "ECDH", public: transport.publicKey }, probe.privateKey, 256),
     ]);
     if (!new Uint8Array(left).every((byte, index) => byte === new Uint8Array(right)[index])) return false;
     const challenge = crypto.getRandomValues(new Uint8Array(32));
-    const signature = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" }, assertion.privateKey, challenge,
-    );
-    return await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" }, assertion.publicKey, signature, challenge,
-    );
+    const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, assertion.privateKey, challenge);
+    return await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, assertion.publicKey, signature, challenge);
   } catch {
     return false;
   }
@@ -126,7 +139,11 @@ export async function createDevice(accountId: string, deviceId: string): Promise
     crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]),
   ]);
   const device: StoredDevice = {
-    accountId, deviceId, registryEpoch: 0, transportKeyPair, assertionKeyPair,
+    accountId,
+    deviceId,
+    registryEpoch: 0,
+    transportKeyPair,
+    assertionKeyPair,
   };
   await writeRecord(device, true);
   requestPersistence();
@@ -137,8 +154,9 @@ export async function getDevice(accountId: string): Promise<StoredDevice | null>
   if (!accountId) return null;
   try {
     const [record] = await readRecords(accountId);
-    return await validDevice(record) && (record as StoredDevice).accountId === accountId
-      ? record as StoredDevice : null;
+    return (await validDevice(record)) && (record as StoredDevice).accountId === accountId
+      ? (record as StoredDevice)
+      : null;
   } catch {
     return null;
   }
@@ -156,10 +174,10 @@ export async function getAnyDevice(): Promise<StoredDevice | null> {
 }
 
 export async function saveDevice(device: StoredDevice): Promise<void> {
-  if (!await validDevice(device)) throw new Error("Invalid device keys");
+  if (!(await validDevice(device))) throw new Error("Invalid device keys");
   const existing = await getDevice(device.accountId);
-  if (!existing || existing.deviceId !== device.deviceId ||
-      device.registryEpoch < existing.registryEpoch) throw new Error("Device keys unavailable");
+  if (!existing || existing.deviceId !== device.deviceId || device.registryEpoch < existing.registryEpoch)
+    throw new Error("Device keys unavailable");
   for (const kind of ["transportKeyPair", "assertionKeyPair"] as const) {
     const [before, after] = await Promise.all([
       crypto.subtle.exportKey("raw", existing[kind].publicKey),
@@ -188,7 +206,7 @@ async function createPendingCandidate(accountId: string, deviceId: string, store
     crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]),
   ]);
   const device: StoredDevice = { accountId, deviceId, registryEpoch: 0, transportKeyPair, assertionKeyPair };
-  if (!await validDevice(device)) throw new Error("Device keys unavailable");
+  if (!(await validDevice(device))) throw new Error("Device keys unavailable");
   const db = await openDatabase();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -198,7 +216,9 @@ async function createPendingCandidate(accountId: string, deviceId: string, store
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);
     });
-  } finally { db.close(); }
+  } finally {
+    db.close();
+  }
   requestPersistence();
   return device;
 }
@@ -211,7 +231,11 @@ export async function createEnrollmentCandidate(accountId: string, deviceId: str
   return createPendingCandidate(accountId, deviceId, PENDING_ENROLLMENT);
 }
 
-async function getPendingCandidate(accountId: string, deviceId: string, store: PendingStore): Promise<StoredDevice | null> {
+async function getPendingCandidate(
+  accountId: string,
+  deviceId: string,
+  store: PendingStore,
+): Promise<StoredDevice | null> {
   try {
     const db = await openDatabase();
     let value: unknown;
@@ -221,10 +245,15 @@ async function getPendingCandidate(accountId: string, deviceId: string, store: P
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
-    } finally { db.close(); }
-    return await validDevice(value) && (value as StoredDevice).accountId === accountId
-      ? value as StoredDevice : null;
-  } catch { return null; }
+    } finally {
+      db.close();
+    }
+    return (await validDevice(value)) && (value as StoredDevice).accountId === accountId
+      ? (value as StoredDevice)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function getRecoveryCandidate(accountId: string, deviceId: string): Promise<StoredDevice | null> {
@@ -241,20 +270,23 @@ async function listPendingCandidates(accountId: string, store: PendingStore): Pr
     let records: unknown[];
     try {
       records = await new Promise((resolve, reject) => {
-        const request = db.transaction(store, "readonly")
-          .objectStore(store).index("accountId").getAll(accountId);
+        const request = db.transaction(store, "readonly").objectStore(store).index("accountId").getAll(accountId);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
     const devices: StoredDevice[] = [];
     for (const record of records) {
-      if (await validDevice(record) && (record as StoredDevice).accountId === accountId) {
+      if ((await validDevice(record)) && (record as StoredDevice).accountId === accountId) {
         devices.push(record as StoredDevice);
       }
     }
     return devices;
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 export async function listRecoveryCandidates(accountId: string): Promise<StoredDevice[]> {
@@ -262,8 +294,12 @@ export async function listRecoveryCandidates(accountId: string): Promise<StoredD
 }
 
 /** Called only after the server reports this exact candidate active at its current epoch. */
-async function activatePendingCandidate(accountId: string, deviceId: string,
-  registryEpoch: number, store: PendingStore): Promise<void> {
+async function activatePendingCandidate(
+  accountId: string,
+  deviceId: string,
+  registryEpoch: number,
+  store: PendingStore,
+): Promise<void> {
   if (!Number.isSafeInteger(registryEpoch) || registryEpoch < 1) throw new Error("Invalid registry epoch");
   const candidate = await getPendingCandidate(accountId, deviceId, store);
   if (!candidate || candidate.deviceId !== deviceId) throw new Error("Device keys unavailable");
@@ -281,14 +317,24 @@ async function activatePendingCandidate(accountId: string, deviceId: string,
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);
     });
-  } finally { db.close(); }
+  } finally {
+    db.close();
+  }
   requestPersistence();
 }
 
-export async function activateRecoveryCandidate(accountId: string, deviceId: string, registryEpoch: number): Promise<void> {
+export async function activateRecoveryCandidate(
+  accountId: string,
+  deviceId: string,
+  registryEpoch: number,
+): Promise<void> {
   return activatePendingCandidate(accountId, deviceId, registryEpoch, PENDING_RECOVERY);
 }
 
-export async function activateEnrollmentCandidate(accountId: string, deviceId: string, registryEpoch: number): Promise<void> {
+export async function activateEnrollmentCandidate(
+  accountId: string,
+  deviceId: string,
+  registryEpoch: number,
+): Promise<void> {
   return activatePendingCandidate(accountId, deviceId, registryEpoch, PENDING_ENROLLMENT);
 }

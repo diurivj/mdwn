@@ -45,9 +45,12 @@ export function reviewedQueryPlans(bindArgs) {
     assertQueryPlan(query, selected, false);
     const probe = query.probeFrom ? planDetails(results, position++, query.name) : selected;
     assertQueryPlan(query, probe);
-    return `## ${query.name}\n\nSource: \`${query.source}\`\n\n\`\`\`sql\n${query.sql}\n\`\`\`\n\nSelected plan:\n\n\`\`\`text\n${selected.map((row) => row.detail).join("\n")}\n\`\`\`${query.probeFrom
-      ? `\n\nCovering companion probe (explicit INDEXED BY; not the selected plan):\n\n\`\`\`sql\n${coveringProbeSql(query)}\n\`\`\`\n\n\`\`\`text\n${probe.map((row) => row.detail).join("\n")}\n\`\`\`` : ""}`;
+    return `## ${query.name}\n\nSource: \`${query.source}\`\n\n\`\`\`sql\n${query.sql}\n\`\`\`\n\nSelected plan:\n\n\`\`\`text\n${selected.map((row) => row.detail).join("\n")}\n\`\`\`${
+      query.probeFrom
+        ? `\n\nCovering companion probe (explicit INDEXED BY; not the selected plan):\n\n\`\`\`sql\n${coveringProbeSql(query)}\n\`\`\`\n\n\`\`\`text\n${probe.map((row) => row.detail).join("\n")}\n\`\`\``
+        : ""
+    }`;
   });
   if (position !== results.length) throw new Error("Unexpected query-plan result count");
-  return `# D1 operational query plans\n\nAll ${QUERY_PLANS.length} representative queries use persistent indexed base-table searches.\nCTE/worklist scans are bounded; payload ciphertext is not duplicated in indexes.\nSelected unique-point lookups are reported honestly, with separate covering probes where needed.\n\n${sections.join("\n\n") }\n`;
+  return `# D1 operational query plans\n\nAll ${QUERY_PLANS.length} representative queries use persistent indexed base-table searches.\nCTE/worklist scans are bounded; payload ciphertext is not duplicated in indexes.\nSelected unique-point lookups are reported honestly, with separate covering probes where needed.\n\n${sections.join("\n\n")}\n`;
 }

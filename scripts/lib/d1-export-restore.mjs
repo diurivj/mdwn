@@ -475,7 +475,9 @@ export function planRestoreCommands({
   const addUnit = (unit, { atomic = false } = {}) => {
     const unitBytes = unit.statements.reduce((sum, statement) => sum + byteSize(statement), 0);
     if (atomic && unitBytes > maxCommandBytes) {
-      throw new Error(`One atomic restore unit of ${unitBytes} bytes exceeds the ${maxCommandBytes}-byte command limit`);
+      throw new Error(
+        `One atomic restore unit of ${unitBytes} bytes exceeds the ${maxCommandBytes}-byte command limit`,
+      );
     }
     if (current.bytes + unitBytes > maxCommandBytes && current.statements.length > 0) flush();
     current.statements.push(...unit.statements);
@@ -523,7 +525,10 @@ export function planRestoreCommands({
  * @param {string} exportSql
  * @param {{ maxStatementBytes?: number, maxCommandBytes?: number }} [options]
  */
-export function buildRestorePlan(exportSql, { maxStatementBytes = D1_MAX_STATEMENT_BYTES, maxCommandBytes = D1_MAX_COMMAND_BYTES } = {}) {
+export function buildRestorePlan(
+  exportSql,
+  { maxStatementBytes = D1_MAX_STATEMENT_BYTES, maxCommandBytes = D1_MAX_COMMAND_BYTES } = {},
+) {
   const groups = groupExportStatements(exportSql);
   const { schema, columns, ddl, foreignKeys } = deriveSchema(groups.tables);
   const primaryKeys = new Map(columns.map((table) => [table.name, table.primaryKey]));
@@ -538,17 +543,18 @@ export function buildRestorePlan(exportSql, { maxStatementBytes = D1_MAX_STATEME
   });
 
   /** @param {Array<{ statements: string[] }>} dataUnits @param {number} [commandBytes] */
-  const planFor = (dataUnits, commandBytes = maxCommandBytes) => planRestoreCommands({
-    schemaStatements: groups.tables,
-    indexStatements: groups.indexes,
-    migrationStatements: groups.migrations,
-    dataUnits,
-    triggerStatements: groups.triggers,
-    viewStatements: groups.views,
-    foreignKeys,
-    primaryKeys,
-    maxCommandBytes: commandBytes,
-  });
+  const planFor = (dataUnits, commandBytes = maxCommandBytes) =>
+    planRestoreCommands({
+      schemaStatements: groups.tables,
+      indexStatements: groups.indexes,
+      migrationStatements: groups.migrations,
+      dataUnits,
+      triggerStatements: groups.triggers,
+      viewStatements: groups.views,
+      foreignKeys,
+      primaryKeys,
+      maxCommandBytes: commandBytes,
+    });
   const plan = planFor(units);
   const preparedSql = `${DEFER_PRAGMA}\n${plan.orderedStatements.map((statement) => `${statement.trimEnd().replace(/;+$/, "")};`).join("\n")}\n`;
   for (const statement of plan.orderedStatements) {
@@ -561,14 +567,15 @@ export function buildRestorePlan(exportSql, { maxStatementBytes = D1_MAX_STATEME
   }
   // Reorder-only companion: identical rows and objects without chunking.
   // Applying both offline proves the BLOB chunking is byte-lossless.
-  const referenceSql = chunked > 0
-    ? `${DEFER_PRAGMA}\n${planFor(
-      singleRowData.map((statement) => ({ statements: [statement] })),
-      Number.MAX_SAFE_INTEGER,
-    ).orderedStatements
-      .map((statement) => `${statement.trimEnd().replace(/;+$/, "")};`)
-      .join("\n")}\n`
-    : preparedSql;
+  const referenceSql =
+    chunked > 0
+      ? `${DEFER_PRAGMA}\n${planFor(
+          singleRowData.map((statement) => ({ statements: [statement] })),
+          Number.MAX_SAFE_INTEGER,
+        )
+          .orderedStatements.map((statement) => `${statement.trimEnd().replace(/;+$/, "")};`)
+          .join("\n")}\n`
+      : preparedSql;
   return {
     preparedSql,
     referenceSql,
@@ -607,15 +614,6 @@ function readMigrations(insertStatements) {
   }
   return migrations.sort((left, right) => left.id - right.id);
 }
-
-
-
-
-
-
-
-
-
 
 /**
  * Offline preparation: transform the export, prove the transform is
@@ -675,7 +673,9 @@ export function prepareRestore({
     ];
     const failedProbes = probes.filter((probe) => !probe.ok);
     if (failedProbes.length > 0) {
-      throw new Error(`Offline restore behavior probes failed: ${failedProbes.map((probe) => `${probe.name} (${probe.detail})`).join("; ")}`);
+      throw new Error(
+        `Offline restore behavior probes failed: ${failedProbes.map((probe) => `${probe.name} (${probe.detail})`).join("; ")}`,
+      );
     }
 
     const migrations = plan.migrations;
@@ -726,7 +726,7 @@ export function prepareRestore({
 /** @param {string} preparedSql @param {any} manifest */
 export function assembleRestoreCommands(preparedSql, manifest) {
   const statements = splitStatements(preparedSql);
-  const pragma = statements[0]?.trim().toUpperCase() === "PRAGMA DEFER_FOREIGN_KEYS=TRUE" ? statements.shift() : null;
+  if (statements[0]?.trim().toUpperCase() === "PRAGMA DEFER_FOREIGN_KEYS=TRUE") statements.shift();
   const ranges = manifest.prepared?.commands;
   if (!Array.isArray(ranges) || ranges.length === 0) {
     throw new Error("Manifest has no command grouping; re-run prepare with this tool version");
@@ -735,11 +735,10 @@ export function assembleRestoreCommands(preparedSql, manifest) {
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > statements.length || start >= end) {
       throw new Error(`Invalid command range ${start}-${end} for ${statements.length} prepared statements`);
     }
-    const body = statements.slice(start, end).map((statement) => `${statement.trimEnd().replace(/;+$/, "")};`).join("\n");
+    const body = statements
+      .slice(start, end)
+      .map((statement) => `${statement.trimEnd().replace(/;+$/, "")};`)
+      .join("\n");
     return `${DEFER_PRAGMA}\n${body}`;
   });
 }
-
-
-
-

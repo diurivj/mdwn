@@ -1,6 +1,9 @@
 import { test, expect } from "./workspace-fixture";
 
-test("the Owner creates, edits and hard-deletes Private Comments in the wide inspector", async ({ page, workspace }) => {
+test("the Owner creates, edits and hard-deletes Private Comments in the wide inspector", async ({
+  page,
+  workspace,
+}) => {
   await page.getByRole("button", { name: "Comments", exact: true }).click();
   const panel = page.getByRole("region", { name: "Private comments", exact: true });
   await expect(panel.getByText("No comments yet.")).toBeVisible();

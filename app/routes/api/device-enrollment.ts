@@ -2,8 +2,14 @@ import { readAuthJsonText, record, requireSameOrigin } from "~/auth/request.serv
 import { getActiveSession } from "~/auth/session.server";
 import { getEnv } from "~/context/env";
 import { authorizeDeviceForSession } from "~/device/proof.server";
-import { approveDeviceEnrollment, commitDeviceEnrollment, deviceEnrollmentStatus,
-  pendingDeviceEnrollment, startDeviceEnrollment, type EnrollmentCommit } from "~/enrollment/enrollment.server";
+import {
+  approveDeviceEnrollment,
+  commitDeviceEnrollment,
+  deviceEnrollmentStatus,
+  pendingDeviceEnrollment,
+  startDeviceEnrollment,
+  type EnrollmentCommit,
+} from "~/enrollment/enrollment.server";
 import type { CandidateTranscript, EnrollmentApproval } from "~/enrollment/protocol";
 
 import type { Route } from "./+types/device-enrollment";
@@ -22,8 +28,12 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (!session || session.purpose !== "normal") return failed(401);
     const path = new URL(request.url).pathname;
     if (path === "/api/device-enrollment/start" && body) {
-      return startDeviceEnrollment(env, session, body.transcript as CandidateTranscript,
-        body.transcriptDigest as string);
+      return startDeviceEnrollment(
+        env,
+        session,
+        body.transcript as CandidateTranscript,
+        body.transcriptDigest as string,
+      );
     }
     if (path === "/api/device-enrollment/status" && typeof body?.enrollmentId === "string") {
       return deviceEnrollmentStatus(env, session, body.enrollmentId);
@@ -31,18 +41,29 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (path === "/api/device-enrollment/commit" && body) {
       return commitDeviceEnrollment(env, session, body as EnrollmentCommit);
     }
-    if ((path === "/api/device-enrollment/pending" || path === "/api/device-enrollment/approve") &&
-        body && typeof body.enrollmentId === "string") {
+    if (
+      (path === "/api/device-enrollment/pending" || path === "/api/device-enrollment/approve") &&
+      body &&
+      typeof body.enrollmentId === "string"
+    ) {
       const proof = JSON.parse(request.headers.get("X-Mdwn-Device-Proof") ?? "null") as unknown;
       const authorized = await authorizeDeviceForSession(env, session, request, proof, raw);
       if (!authorized) return failed(403);
       if (path === "/api/device-enrollment/pending") {
         return pendingDeviceEnrollment(env, authorized, body.enrollmentId);
       }
-      return approveDeviceEnrollment(env, session, authorized, body.enrollmentId,
-        body.approval as EnrollmentApproval, body.approvalSignature as string,
-        body.enrollmentEnvelope as string);
+      return approveDeviceEnrollment(
+        env,
+        session,
+        authorized,
+        body.enrollmentId,
+        body.approval as EnrollmentApproval,
+        body.approvalSignature as string,
+        body.enrollmentEnvelope as string,
+      );
     }
     return failed(404);
-  } catch { return failed(); }
+  } catch {
+    return failed();
+  }
 }

@@ -2,7 +2,13 @@ import type { SQL } from "drizzle-orm";
 import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { expiredGrant, hasExpiredGrants } from "./grant-lifetime.server";
-import { pendingRotationJob, planRotation, rotationSnapshot, startRotation, type RotationTarget } from "./rotation.server";
+import {
+  pendingRotationJob,
+  planRotation,
+  rotationSnapshot,
+  startRotation,
+  type RotationTarget,
+} from "./rotation.server";
 
 export { expiredGrant, hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
 const headers = { "Cache-Control": "no-store" };
@@ -71,20 +77,28 @@ export async function expireGrantBatch(env: Env, auth: AuthorizedDevice): Promis
     if (!target) return Response.json({ pending: false }, { headers });
     let committed: boolean;
     if (target.dependents) {
-      committed = await commitPrivateBatch(env, auth, (guard) => sql`UPDATE grants SET updated_at = updated_at
+      committed = await commitPrivateBatch(
+        env,
+        auth,
+        (guard) => sql`UPDATE grants SET updated_at = updated_at
         WHERE id = ${target.id} AND owner_id = ${auth.accountId} AND ${expiredGrant(sql`expires_at`)} AND ${guard}`,
-      (marker) => [...drainDependents(target.id, marker), ...drainRotationDependents(target.target_id, marker)]);
+        (marker) => [...drainDependents(target.id, marker), ...drainRotationDependents(target.target_id, marker)],
+      );
     } else {
       const rotation = await planRotation(env, auth, target);
       if (!rotation) return changed();
-      committed = await commitPrivateBatch(env, auth, (guard) => sql`DELETE FROM grants
+      committed = await commitPrivateBatch(
+        env,
+        auth,
+        (guard) => sql`DELETE FROM grants
         WHERE id = ${target.id} AND owner_id = ${auth.accountId} AND ${expiredGrant(sql`expires_at`)}
           AND NOT ${hasDependents(target.id)} AND NOT ${hasRotationDependents(target.target_id)}
           AND ${rotationSnapshot(target, rotation)} AND ${guard}`,
-      (marker) => startRotation(auth, target, rotation, marker));
+        (marker) => startRotation(auth, target, rotation, marker),
+      );
     }
     if (!committed) return changed();
-    const pending = !!await db.get(sql`SELECT 1 WHERE ${hasExpiredGrants(auth)} AND ${privateReadGuard(auth)}`);
+    const pending = !!(await db.get(sql`SELECT 1 WHERE ${hasExpiredGrants(auth)} AND ${privateReadGuard(auth)}`));
     return Response.json({ pending }, { headers });
   } catch {
     return changed();

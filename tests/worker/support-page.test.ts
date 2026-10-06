@@ -3,7 +3,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { SUPPORT_ADDRESS_FIXTURES } from "../support/donation-fixtures";
 
-beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
+beforeAll(async () => {
+  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+});
 
 /** Row count per application table, to prove the request stores nothing. */
 async function tableCounts(): Promise<Record<string, number>> {
@@ -33,9 +35,7 @@ describe("anonymous support page", () => {
     }
     // One inline SVG QR code per configured asset, generated from the same
     // address string that is displayed (never a remote image service).
-    expect(html.match(/shape-rendering="crispEdges"/g)).toHaveLength(
-      Object.keys(SUPPORT_ADDRESS_FIXTURES).length,
-    );
+    expect(html.match(/shape-rendering="crispEdges"/g)).toHaveLength(Object.keys(SUPPORT_ADDRESS_FIXTURES).length);
   });
 
   it("requires no session, sets no cookie, and stores no record", async () => {

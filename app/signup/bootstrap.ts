@@ -5,19 +5,23 @@ import { prepareRecoveryCodeSet } from "~/shared/auth/recovery-codes";
 import { sealAccountProfile } from "~/shared/crypto/account-profile";
 import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
 import {
-  createRecoveryMaterial, createVaultKeyHierarchy, openDeviceEnrollmentEnvelope,
+  createRecoveryMaterial,
+  createVaultKeyHierarchy,
+  openDeviceEnrollmentEnvelope,
   sealDeviceEnrollmentEnvelope,
 } from "~/shared/crypto/vault";
 import { createDevice, getDevice, updateRegistryEpoch } from "~/shared/device/store";
 import { newOpaqueId } from "~/shared/opaque-id";
-import { bindingMessage, decodeBytes, encodeBytes, solveProofOfWork, type SignupTranscript } from "~/shared/signup/protocol";
+import {
+  bindingMessage,
+  decodeBytes,
+  encodeBytes,
+  solveProofOfWork,
+  type SignupTranscript,
+} from "~/shared/signup/protocol";
 import { RECOVERY_CONFIRMATION_GATE_KEY } from "~/shared/signup/recovery-gate";
 
 export { confirmSignupRecovery, isSignupRecoveryConfirmationPending } from "~/shared/signup/recovery-gate";
-
-async function digest(bytes: Uint8Array): Promise<string> {
-  return encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))));
-}
 
 export type SignupSecrets = { phrase: string; recoveryCodes: string[] };
 export type PreparedSignup = {
@@ -43,11 +47,18 @@ export async function prepareSignup(): Promise<PreparedSignup> {
   const hierarchy = await createVaultKeyHierarchy({ accountId, rootDirectoryId });
   const recovery = await createRecoveryMaterial(accountId, { vaultRootKey: hierarchy.vaultRootKey });
   const enrollmentContext = {
-    purpose: "device-enrollment" as const, vaultId: accountId, objectId: deviceId,
-    keyId: deviceId, keyEpoch: 1, revision: 1, recipientId: deviceId,
+    purpose: "device-enrollment" as const,
+    vaultId: accountId,
+    objectId: deviceId,
+    keyId: deviceId,
+    keyEpoch: 1,
+    revision: 1,
+    recipientId: deviceId,
   };
   const enrollmentEnvelope = await sealDeviceEnrollmentEnvelope(
-    hierarchy.vaultRootKey, device.transportKeyPair.publicKey, enrollmentContext,
+    hierarchy.vaultRootKey,
+    device.transportKeyPair.publicKey,
+    enrollmentContext,
   );
   const encryptedProfile = await sealAccountProfile(
     hierarchy.vaultRootKey,
@@ -71,12 +82,16 @@ export async function prepareSignup(): Promise<PreparedSignup> {
     encryptedProfile: encodeBytes(encryptedProfile.ciphertext),
   };
   const [capsuleDigest, rootRecoveryEnvelopeDigest, enrollmentEnvelopeDigest, profileDigest] = await Promise.all([
-    digestEnvelope(recovery.record.capsule), digestEnvelope(hierarchy.rootDirectoryRecoveryEnvelope),
-    digestEnvelope(enrollmentEnvelope), digestEnvelope(encryptedProfile.ciphertext),
+    digestEnvelope(recovery.record.capsule),
+    digestEnvelope(hierarchy.rootDirectoryRecoveryEnvelope),
+    digestEnvelope(enrollmentEnvelope),
+    digestEnvelope(encryptedProfile.ciphertext),
   ]);
 
   const transcriptBase: PreparedSignup["transcriptBase"] = {
-    accountId, rootDirectoryId, deviceId,
+    accountId,
+    rootDirectoryId,
+    deviceId,
     transportPublicKey: encodeBytes(new Uint8Array(transportPublicKey)),
     assertionPublicKey: encodeBytes(new Uint8Array(assertionPublicKey)),
     capsuleGeneration: 1,
@@ -98,11 +113,18 @@ export async function commitSignup(prepared: PreparedSignup, honeypot: string, s
   const { material, transcriptBase } = prepared;
   const { accountId, deviceId } = transcriptBase;
   const challenge = await authPost<{ challengeId: string; challenge: string }>(
-    "/api/signup/challenge", {}, signal, "failed",
+    "/api/signup/challenge",
+    {},
+    signal,
+    "failed",
   );
   decodeBytes(challenge.challenge, 32);
   const nonce = await solveProofOfWork(challenge.challenge, signal);
-  const transcript: SignupTranscript = { ...transcriptBase, registrationChallenge: challenge.challenge, proofNonce: nonce };
+  const transcript: SignupTranscript = {
+    ...transcriptBase,
+    registrationChallenge: challenge.challenge,
+    proofNonce: nonce,
+  };
   const options = await authPost<{
     challengeId: string;
     options: Parameters<typeof startRegistration>[0]["optionsJSON"];
@@ -111,23 +133,39 @@ export async function commitSignup(prepared: PreparedSignup, honeypot: string, s
   if (typeof options.challengeId !== "string" || !options.challengeId) throw new Error("Invalid signup challenge");
   // Prove possession of the persisted handles, not just the in-memory keypair.
   const persisted = await getDevice(accountId);
-  if (!persisted || persisted.deviceId !== deviceId || !persisted.transportKeyPair.privateKey ||
-      !persisted.assertionKeyPair.privateKey) throw new Error("Device keys unavailable");
-  const transportProof = encodeBytes(await openDeviceEnrollmentEnvelope(
-    decodeBytes(options.transportChallenge), persisted.transportKeyPair,
-    { purpose: "device-enrollment", vaultId: accountId,
-      objectId: "signup-transport-challenge", keyId: "signup-transport-challenge",
-      keyEpoch: 1, revision: 1, recipientId: deviceId },
-  ));
-  const bindingSignature = encodeBytes(new Uint8Array(await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" }, persisted.assertionKeyPair.privateKey,
-    new Uint8Array(await bindingMessage(transcript)),
-  )));
+  if (
+    !persisted ||
+    persisted.deviceId !== deviceId ||
+    !persisted.transportKeyPair.privateKey ||
+    !persisted.assertionKeyPair.privateKey
+  )
+    throw new Error("Device keys unavailable");
+  const transportProof = encodeBytes(
+    await openDeviceEnrollmentEnvelope(decodeBytes(options.transportChallenge), persisted.transportKeyPair, {
+      purpose: "device-enrollment",
+      vaultId: accountId,
+      objectId: "signup-transport-challenge",
+      keyId: "signup-transport-challenge",
+      keyEpoch: 1,
+      revision: 1,
+      recipientId: deviceId,
+    }),
+  );
+  const bindingSignature = encodeBytes(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        persisted.assertionKeyPair.privateKey,
+        new Uint8Array(await bindingMessage(transcript)),
+      ),
+    ),
+  );
   const response = await startRegistration({ optionsJSON: options.options });
   const result = await authPost<{ ok: true; sessionBinding: string }>(
     "/api/signup/verify",
     { challengeId: options.challengeId, transcript, material, transportProof, bindingSignature, response, honeypot },
-    signal, "failed",
+    signal,
+    "failed",
   );
   if (result.ok !== true || typeof result.sessionBinding !== "string" || !result.sessionBinding) {
     throw new Error("Signup verification failed");

@@ -16,15 +16,29 @@ export type CommentEnvelope =
   | { mode: "owned"; keyEpoch: number; ciphertext: ArrayBuffer }
   | { mode: "import"; keyEpoch: number; ciphertext: ArrayBuffer }
   | {
-    mode: "grant"; grantId: string; ownerId: string; recipientId: string; targetId: string; targetKind: string;
-    ownerRegistryEpoch: number; recipientRegistryEpoch: number; grantKeyEpoch: number;
-    signerDeviceId: string; signerPublicKey: ArrayBuffer; ciphertext: ArrayBuffer; signature: ArrayBuffer;
-  };
+      mode: "grant";
+      grantId: string;
+      ownerId: string;
+      recipientId: string;
+      targetId: string;
+      targetKind: string;
+      ownerRegistryEpoch: number;
+      recipientRegistryEpoch: number;
+      grantKeyEpoch: number;
+      signerDeviceId: string;
+      signerPublicKey: ArrayBuffer;
+      ciphertext: ArrayBuffer;
+      signature: ArrayBuffer;
+    };
 
 export async function readCommentEnvelope(
-  env: Env, auth: AuthorizedDevice,
+  env: Env,
+  auth: AuthorizedDevice,
   input: {
-    ownerId: string; objectId: string; capabilityId: string; capabilityEpoch: number;
+    ownerId: string;
+    objectId: string;
+    capabilityId: string;
+    capabilityEpoch: number;
     /** Purpose-bound authority SQL; must be evaluated with the ciphertext SELECT. */
     authority: SQL;
   },
@@ -50,10 +64,18 @@ export async function readCommentEnvelope(
   if (imported) return { mode: "import", keyEpoch: imported.key_epoch, ciphertext: imported.ciphertext };
   if (ownerId === auth.accountId) return null;
   const row = await db.get<{
-    grant_id: string; owner_id: string; recipient_id: string; target_id: string;
-    target_kind: string; owner_registry_epoch: number; recipient_registry_epoch: number;
-    grant_key_epoch: number; signer_device_id: string; signer_public_key: ArrayBuffer;
-    ciphertext: ArrayBuffer; signature: ArrayBuffer;
+    grant_id: string;
+    owner_id: string;
+    recipient_id: string;
+    target_id: string;
+    target_kind: string;
+    owner_registry_epoch: number;
+    recipient_registry_epoch: number;
+    grant_key_epoch: number;
+    signer_device_id: string;
+    signer_public_key: ArrayBuffer;
+    ciphertext: ArrayBuffer;
+    signature: ArrayBuffer;
   }>(sql`
     SELECT s.id AS grant_id, s.owner_id, s.recipient_id, s.target_id, s.target_kind,
       e.owner_registry_epoch, e.recipient_registry_epoch, e.grant_key_epoch,
@@ -65,36 +87,70 @@ export async function readCommentEnvelope(
       AND e.capability_id = ${capabilityId} AND e.capability_epoch = ${capabilityEpoch}
       AND e.grant_key_epoch = s.key_epoch AND e.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
       AND ${authority} LIMIT 1`);
-  return row ? {
-    mode: "grant", grantId: row.grant_id, ownerId: row.owner_id, recipientId: row.recipient_id,
-    targetId: row.target_id, targetKind: row.target_kind, ownerRegistryEpoch: row.owner_registry_epoch,
-    recipientRegistryEpoch: row.recipient_registry_epoch, grantKeyEpoch: row.grant_key_epoch,
-    signerDeviceId: row.signer_device_id, signerPublicKey: row.signer_public_key,
-    ciphertext: row.ciphertext, signature: row.signature,
-  } : null;
+  return row
+    ? {
+        mode: "grant",
+        grantId: row.grant_id,
+        ownerId: row.owner_id,
+        recipientId: row.recipient_id,
+        targetId: row.target_id,
+        targetKind: row.target_kind,
+        ownerRegistryEpoch: row.owner_registry_epoch,
+        recipientRegistryEpoch: row.recipient_registry_epoch,
+        grantKeyEpoch: row.grant_key_epoch,
+        signerDeviceId: row.signer_device_id,
+        signerPublicKey: row.signer_public_key,
+        ciphertext: row.ciphertext,
+        signature: row.signature,
+      }
+    : null;
 }
 
 /** The complete, signed envelope context a browser opens. A partial object would
  * silently break a recipient, so every field is always present. */
-export function commentEnvelopeWire(envelope: CommentEnvelope, context: {
-  purpose: "private-comment-thread" | "public-comment-audience-epoch";
-  fileId: string; threadId: string; objectId: string; publicationId: string | null;
-  capabilityId: string; capabilityEpoch: number; deviceId: string;
-}) {
+export function commentEnvelopeWire(
+  envelope: CommentEnvelope,
+  context: {
+    purpose: "private-comment-thread" | "public-comment-audience-epoch";
+    fileId: string;
+    threadId: string;
+    objectId: string;
+    publicationId: string | null;
+    capabilityId: string;
+    capabilityEpoch: number;
+    deviceId: string;
+  },
+) {
   if (envelope.mode === "owned" || envelope.mode === "import") {
-    return { mode: envelope.mode, keyEpoch: envelope.keyEpoch,
-      ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)) };
+    return {
+      mode: envelope.mode,
+      keyEpoch: envelope.keyEpoch,
+      ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)),
+    };
   }
-  return { mode: "grant" as const, purpose: context.purpose, fileId: context.fileId,
-    threadId: context.threadId, objectId: context.objectId, publicationId: context.publicationId,
-    relationshipId: envelope.grantId, ownerId: envelope.ownerId, recipientId: envelope.recipientId,
-    targetId: envelope.targetId, targetKind: envelope.targetKind,
-    capabilityId: context.capabilityId, capabilityEpoch: context.capabilityEpoch,
-    ownerRegistryEpoch: envelope.ownerRegistryEpoch, recipientRegistryEpoch: envelope.recipientRegistryEpoch,
-    grantKeyEpoch: envelope.grantKeyEpoch, deviceId: context.deviceId, signerDeviceId: envelope.signerDeviceId,
+  return {
+    mode: "grant" as const,
+    purpose: context.purpose,
+    fileId: context.fileId,
+    threadId: context.threadId,
+    objectId: context.objectId,
+    publicationId: context.publicationId,
+    relationshipId: envelope.grantId,
+    ownerId: envelope.ownerId,
+    recipientId: envelope.recipientId,
+    targetId: envelope.targetId,
+    targetKind: envelope.targetKind,
+    capabilityId: context.capabilityId,
+    capabilityEpoch: context.capabilityEpoch,
+    ownerRegistryEpoch: envelope.ownerRegistryEpoch,
+    recipientRegistryEpoch: envelope.recipientRegistryEpoch,
+    grantKeyEpoch: envelope.grantKeyEpoch,
+    deviceId: context.deviceId,
+    signerDeviceId: envelope.signerDeviceId,
     signerPublicKey: encodeTreeBytes(new Uint8Array(envelope.signerPublicKey)),
     ciphertext: encodeTreeBytes(new Uint8Array(envelope.ciphertext)),
-    signature: encodeTreeBytes(new Uint8Array(envelope.signature)) };
+    signature: encodeTreeBytes(new Uint8Array(envelope.signature)),
+  };
 }
 
 /** The same envelope rules, batched over a Public thread's epochs so one read
@@ -102,9 +158,12 @@ export function commentEnvelopeWire(envelope: CommentEnvelope, context: {
  * audience changes the thread has. Every row's capability identity is tied to
  * the epoch it claims, and the caller's authority is re-derived in the SELECT. */
 export async function readCommentEnvelopes(
-  env: Env, auth: AuthorizedDevice,
+  env: Env,
+  auth: AuthorizedDevice,
   input: {
-    ownerId: string; threadId: string; publicationId: string;
+    ownerId: string;
+    threadId: string;
+    publicationId: string;
     epochs: readonly { epochId: string }[];
     /** File-level live File-read authority; must be evaluated with the SELECT. */
     authority: SQL;
@@ -113,7 +172,10 @@ export async function readCommentEnvelopes(
   const { ownerId, threadId, publicationId, epochs, authority } = input;
   const envelopes = new Map<string, CommentEnvelope>();
   if (!epochs.length) return envelopes;
-  const objectIds = sql`${sql.join(epochs.map((epoch) => sql`${epoch.epochId}`), sql`, `)}`;
+  const objectIds = sql`${sql.join(
+    epochs.map((epoch) => sql`${epoch.epochId}`),
+    sql`, `,
+  )}`;
   const db = createDb(env.DB);
   if (ownerId === auth.accountId) {
     const rows = await db.all<{ object_id: string; ciphertext: ArrayBuffer; key_epoch: number }>(sql`
@@ -123,15 +185,24 @@ export async function readCommentEnvelopes(
         AND c.publication_id = ${publicationId}
       WHERE k.account_id = ${ownerId} AND k.purpose = 'vault-recovery' AND k.recipient_id = 'vault-root'
         AND k.superseded_at IS NULL AND k.object_id IN (${objectIds}) AND ${authority}`);
-    for (const row of rows) envelopes.set(row.object_id,
-      { mode: "owned", keyEpoch: row.key_epoch, ciphertext: row.ciphertext });
+    for (const row of rows)
+      envelopes.set(row.object_id, { mode: "owned", keyEpoch: row.key_epoch, ciphertext: row.ciphertext });
     return envelopes;
   }
   const rows = await db.all<{
-    object_id: string; grant_id: string; owner_id: string; recipient_id: string; target_id: string;
-    target_kind: string; owner_registry_epoch: number; recipient_registry_epoch: number;
-    grant_key_epoch: number; signer_device_id: string; signer_public_key: ArrayBuffer;
-    ciphertext: ArrayBuffer; signature: ArrayBuffer;
+    object_id: string;
+    grant_id: string;
+    owner_id: string;
+    recipient_id: string;
+    target_id: string;
+    target_kind: string;
+    owner_registry_epoch: number;
+    recipient_registry_epoch: number;
+    grant_key_epoch: number;
+    signer_device_id: string;
+    signer_public_key: ArrayBuffer;
+    ciphertext: ArrayBuffer;
+    signature: ArrayBuffer;
   }>(sql`
     SELECT e.object_id AS object_id, s.id AS grant_id, s.owner_id, s.recipient_id, s.target_id, s.target_kind,
       e.owner_registry_epoch, e.recipient_registry_epoch, e.grant_key_epoch,
@@ -144,11 +215,21 @@ export async function readCommentEnvelopes(
       AND c.capability_epoch = e.capability_epoch AND c.publication_id = ${publicationId}
     WHERE s.recipient_id = ${auth.accountId} AND ${liveGrant()} AND e.grant_key_epoch = s.key_epoch
       AND e.object_id IN (SELECT object_id FROM (${requiredGrantComments()})) AND ${authority}`);
-  for (const row of rows) envelopes.set(row.object_id, {
-    mode: "grant", grantId: row.grant_id, ownerId: row.owner_id, recipientId: row.recipient_id,
-    targetId: row.target_id, targetKind: row.target_kind, ownerRegistryEpoch: row.owner_registry_epoch,
-    recipientRegistryEpoch: row.recipient_registry_epoch, grantKeyEpoch: row.grant_key_epoch,
-    signerDeviceId: row.signer_device_id, signerPublicKey: row.signer_public_key,
-    ciphertext: row.ciphertext, signature: row.signature });
+  for (const row of rows)
+    envelopes.set(row.object_id, {
+      mode: "grant",
+      grantId: row.grant_id,
+      ownerId: row.owner_id,
+      recipientId: row.recipient_id,
+      targetId: row.target_id,
+      targetKind: row.target_kind,
+      ownerRegistryEpoch: row.owner_registry_epoch,
+      recipientRegistryEpoch: row.recipient_registry_epoch,
+      grantKeyEpoch: row.grant_key_epoch,
+      signerDeviceId: row.signer_device_id,
+      signerPublicKey: row.signer_public_key,
+      ciphertext: row.ciphertext,
+      signature: row.signature,
+    });
   return envelopes;
 }

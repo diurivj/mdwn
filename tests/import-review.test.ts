@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { allocateKeepBothNames } from "../app/shared/namespace-v1";
 import { ImportError } from "../app/shared/import/limits";
-import { reviewImport, type ImportChoice, type ImportCollisionSibling, type ImportTarget } from "../app/shared/import/review";
+import {
+  reviewImport,
+  type ImportChoice,
+  type ImportCollisionSibling,
+  type ImportTarget,
+} from "../app/shared/import/review";
 import { analyzeImportSelection, type ImportSource } from "../app/shared/import/source";
 
 const encoder = new TextEncoder();
@@ -35,7 +40,10 @@ function generated(review: ReturnType<typeof reviewImport>): string[] {
 
 describe("import review: deterministic Keep both", () => {
   it("reserves explicit source names before generating suffixes", async () => {
-    const review = reviewImport(await sourceOf(["report.md", "report (2).md"]), target([sibling("existing", "file", "report.md")]));
+    const review = reviewImport(
+      await sourceOf(["report.md", "report (2).md"]),
+      target([sibling("existing", "file", "report.md")]),
+    );
     const byPath = new Map(review.nodes.map((node) => [node.sourcePath, node]));
     expect(byPath.get("report (2).md")!.displayName).toBe("report (2).md");
     expect(byPath.get("report (2).md")!.generated).toBe(false);
@@ -48,18 +56,27 @@ describe("import review: deterministic Keep both", () => {
   });
 
   it("treats literal suffixes as ordinary names", async () => {
-    const review = reviewImport(await sourceOf(["draft (2).md"]), target([sibling("existing", "file", "draft (2).md")]));
+    const review = reviewImport(
+      await sourceOf(["draft (2).md"]),
+      target([sibling("existing", "file", "draft (2).md")]),
+    );
     expect(review.nodes[0]!.displayName).toBe("draft (2) (2).md");
     expect(review.nodes[0]!.generated).toBe(true);
   });
 
   it("folds case and canonically equivalent Unicode into one collision", async () => {
-    const review = reviewImport(await sourceOf(["stra\u00dfe.md"]), target([sibling("existing", "file", "STRASSE.md")]));
+    const review = reviewImport(
+      await sourceOf(["stra\u00dfe.md"]),
+      target([sibling("existing", "file", "STRASSE.md")]),
+    );
     const node = review.nodes[0]!;
     expect(node.displayName).toBe("stra\u00dfe (2).md");
     expect(node.collision?.sameSpelling).toBe(false);
 
-    const decomposed = reviewImport(await sourceOf(["Ame\u0301lie.md"]), target([sibling("existing", "file", "Am\u00e9lie.md")]));
+    const decomposed = reviewImport(
+      await sourceOf(["Ame\u0301lie.md"]),
+      target([sibling("existing", "file", "Am\u00e9lie.md")]),
+    );
     expect(decomposed.nodes[0]!.displayName).toBe("Am\u00e9lie (2).md");
   });
 
@@ -76,7 +93,10 @@ describe("import review: deterministic Keep both", () => {
   });
 
   it("never merges Directories: a colliding folder keeps both with a generated name", async () => {
-    const review = reviewImport(await sourceOf(["notes/draft.md"]), target([sibling("existing", "directory", "notes")]));
+    const review = reviewImport(
+      await sourceOf(["notes/draft.md"]),
+      target([sibling("existing", "directory", "notes")]),
+    );
     const folder = review.nodes.find((node) => node.kind === "directory")!;
     expect(folder.displayName).toBe("notes (2)");
     expect(folder.generated).toBe(true);
@@ -90,8 +110,11 @@ describe("import review: deterministic Keep both", () => {
 describe("import review: explicit choices", () => {
   it("Skip omits the candidate and its subtree", async () => {
     const choices: Record<string, ImportChoice> = { notes: { action: "skip" } };
-    const review = reviewImport(await sourceOf(["notes/draft.md", "keep.md"]),
-      target([sibling("existing", "directory", "notes")]), choices);
+    const review = reviewImport(
+      await sourceOf(["notes/draft.md", "keep.md"]),
+      target([sibling("existing", "directory", "notes")]),
+      choices,
+    );
     expect(review.nodes.find((node) => node.sourcePath === "notes")!.action).toBe("skip");
     expect(review.nodes.find((node) => node.sourcePath === "notes/draft.md")!.action).toBe("skip");
     expect(review.counts.skips).toBe(2);
@@ -101,8 +124,11 @@ describe("import review: explicit choices", () => {
 
   it("Replace targets an existing File and keeps its identity", async () => {
     const choices: Record<string, ImportChoice> = { "draft.md": { action: "replace" } };
-    const review = reviewImport(await sourceOf(["draft.md"]),
-      target([sibling("existing-file", "file", "DRAFT.md")]), choices);
+    const review = reviewImport(
+      await sourceOf(["draft.md"]),
+      target([sibling("existing-file", "file", "DRAFT.md")]),
+      choices,
+    );
     const node = review.nodes[0]!;
     expect(node.action).toBe("replace");
     expect(node.existingNodeId).toBe("existing-file");
@@ -113,8 +139,11 @@ describe("import review: explicit choices", () => {
 
   it("never replaces a Directory and never merges it", async () => {
     const choices: Record<string, ImportChoice> = { notes: { action: "replace" } };
-    const review = reviewImport(await sourceOf(["notes/draft.md"]),
-      target([sibling("existing", "directory", "notes")]), choices);
+    const review = reviewImport(
+      await sourceOf(["notes/draft.md"]),
+      target([sibling("existing", "directory", "notes")]),
+      choices,
+    );
     const folder = review.nodes.find((node) => node.kind === "directory")!;
     expect(folder.action).toBe("create");
     expect(folder.blocked).toBe("cannot_replace");
@@ -124,8 +153,11 @@ describe("import review: explicit choices", () => {
 
   it("never lets a source Directory Replace an existing File, and excludes its children from create counts", async () => {
     const choices: Record<string, ImportChoice> = { notes: { action: "replace" } };
-    const review = reviewImport(await sourceOf(["notes/draft.md"]),
-      target([sibling("existing-file", "file", "notes")]), choices);
+    const review = reviewImport(
+      await sourceOf(["notes/draft.md"]),
+      target([sibling("existing-file", "file", "notes")]),
+      choices,
+    );
     const folder = review.nodes.find((node) => node.kind === "directory")!;
     const child = review.nodes.find((node) => node.kind === "file")!;
     expect(folder.blocked).toBe("cannot_replace");
@@ -141,8 +173,10 @@ describe("import review: explicit choices", () => {
       { sourcePath: "report (2).md", requestedName: "report (2).md" },
       { sourcePath: "other.md", requestedName: "other.md" },
     ];
-    const review = reviewImport(await sourceOf(requests.map((request) => request.sourcePath)),
-      target([sibling("existing", "file", "report.md")]));
+    const review = reviewImport(
+      await sourceOf(requests.map((request) => request.sourcePath)),
+      target([sibling("existing", "file", "report.md")]),
+    );
     const vendored = allocateKeepBothNames(["report.md"], requests);
     const vendoredByPath = new Map(vendored.map((allocation) => [allocation.sourcePath, allocation.display]));
     for (const node of review.nodes) {
@@ -151,17 +185,20 @@ describe("import review: explicit choices", () => {
   });
 
   it("requires a valid, unused Rename", async () => {
-    const used = reviewImport(await sourceOf(["draft.md"]),
-      target([sibling("existing", "file", "draft.md")]), { "draft.md": { action: "rename", name: "other.md" } });
+    const used = reviewImport(await sourceOf(["draft.md"]), target([sibling("existing", "file", "draft.md")]), {
+      "draft.md": { action: "rename", name: "other.md" },
+    });
     expect(used.nodes[0]!.displayName).toBe("other.md");
     expect(used.nodes[0]!.blocked).toBeNull();
 
-    const inUse = reviewImport(await sourceOf(["draft.md"]),
-      target([sibling("existing", "file", "draft.md")]), { "draft.md": { action: "rename", name: "draft.md" } });
+    const inUse = reviewImport(await sourceOf(["draft.md"]), target([sibling("existing", "file", "draft.md")]), {
+      "draft.md": { action: "rename", name: "draft.md" },
+    });
     expect(inUse.nodes[0]!.blocked).toBe("name_in_use");
 
-    const invalid = reviewImport(await sourceOf(["draft.md"]),
-      target([sibling("existing", "file", "draft.md")]), { "draft.md": { action: "rename", name: "../escape.md" } });
+    const invalid = reviewImport(await sourceOf(["draft.md"]), target([sibling("existing", "file", "draft.md")]), {
+      "draft.md": { action: "rename", name: "../escape.md" },
+    });
     expect(invalid.nodes[0]!.blocked).toBe("invalid_name");
   });
 
@@ -175,13 +212,15 @@ describe("import review: explicit choices", () => {
     expect(review.status).toBe("blocked");
     expect(review.canConfirm).toBe(false);
 
-    const renamed = reviewImport(await sourceOf([long]), target([sibling("existing", "file", long)]),
-      { [long]: { action: "rename", name: "short.md" } });
+    const renamed = reviewImport(await sourceOf([long]), target([sibling("existing", "file", long)]), {
+      [long]: { action: "rename", name: "short.md" },
+    });
     expect(renamed.nodes[0]!.displayName).toBe("short.md");
     expect(renamed.canConfirm).toBe(true);
 
-    const replaced = reviewImport(await sourceOf([long]), target([sibling("existing", "file", long)]),
-      { [long]: { action: "replace" } });
+    const replaced = reviewImport(await sourceOf([long]), target([sibling("existing", "file", long)]), {
+      [long]: { action: "replace" },
+    });
     expect(replaced.nodes[0]!.action).toBe("replace");
     expect(replaced.canConfirm).toBe(true);
   });
@@ -190,12 +229,24 @@ describe("import review: explicit choices", () => {
 describe("import review: summary and guardrails", () => {
   it("reports counts, depth, sizes, comments, and target ownership", async () => {
     const source = await sourceOf(["notes/draft.md", "README.md"]);
-    const review = reviewImport(source, target([], {
-      ownerAccountId: "owner-id", actorAccountId: "collaborator-id", label: "Shared/notes",
-    }));
+    const review = reviewImport(
+      source,
+      target([], {
+        ownerAccountId: "owner-id",
+        actorAccountId: "collaborator-id",
+        label: "Shared/notes",
+      }),
+    );
     expect(review.counts).toEqual({
-      sources: 3, createFiles: 2, createDirectories: 1, replaces: 0, skips: 0,
-      maxDepth: 1, compressedBytes: null, expandedBytes: 2, comments: 0,
+      sources: 3,
+      createFiles: 2,
+      createDirectories: 1,
+      replaces: 0,
+      skips: 0,
+      maxDepth: 1,
+      compressedBytes: null,
+      expandedBytes: 2,
+      comments: 0,
     });
     expect(review.target.ownerAccountId).not.toBe(review.target.actorAccountId);
   });
@@ -207,15 +258,22 @@ describe("import review: summary and guardrails", () => {
         { kind: "file", path: ["a.md"], name: "a.md", markdown: "x", bytes: 1 },
         { kind: "file", path: ["a.md"], name: "a.md", markdown: "y", bytes: 1 },
       ],
-      nodes: [], comments: new Map(), nodeCount: 2, maxDepth: 0, sourceBytes: 1,
-      compressedBytes: null, expandedBytes: 2, commentCount: 0,
+      nodes: [],
+      comments: new Map(),
+      nodeCount: 2,
+      maxDepth: 0,
+      sourceBytes: 1,
+      compressedBytes: null,
+      expandedBytes: 2,
+      commentCount: 0,
     } as ImportSource;
     expect(() => reviewImport(duplicate, target())).toThrow(ImportError);
   });
 
   it("does not confirm when every candidate is skipped", async () => {
-    const review = reviewImport(await sourceOf(["draft.md"]),
-      target([sibling("existing", "file", "draft.md")]), { "draft.md": { action: "skip" } });
+    const review = reviewImport(await sourceOf(["draft.md"]), target([sibling("existing", "file", "draft.md")]), {
+      "draft.md": { action: "skip" },
+    });
     expect(review.empty).toBe(true);
     expect(review.canConfirm).toBe(false);
     expect(review.status).toBe("ok");

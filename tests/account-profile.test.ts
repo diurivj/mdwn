@@ -20,10 +20,22 @@ const expected = {
 describe("encrypted Account profiles", () => {
   it("pins account-profile as purpose 17 and appends device purposes without renumbering", () => {
     expect(PURPOSES).toEqual([
-      "directory-capability", "file-content-key", "file-content", "directory-metadata",
-      "grant", "device-enrollment", "vault-recovery", "recovery-capsule",
-      "public-representation", "private-comment-thread", "public-comment-audience-epoch",
-      "comment-content", "attribution", "archive-manifest", "import-staging-manifest", "import-chunk",
+      "directory-capability",
+      "file-content-key",
+      "file-content",
+      "directory-metadata",
+      "grant",
+      "device-enrollment",
+      "vault-recovery",
+      "recovery-capsule",
+      "public-representation",
+      "private-comment-thread",
+      "public-comment-audience-epoch",
+      "comment-content",
+      "attribution",
+      "archive-manifest",
+      "import-staging-manifest",
+      "import-chunk",
       "account-profile",
       "owned-device",
       "device-label",
@@ -42,11 +54,7 @@ describe("encrypted Account profiles", () => {
   });
 
   it("encrypts a Public pseudonym and opens only against caller-supplied current metadata", async () => {
-    const record = await sealAccountProfile(
-      rootKey,
-      { publicPseudonym: "Cobalt Wren" },
-      expected,
-    );
+    const record = await sealAccountProfile(rootKey, { publicPseudonym: "Cobalt Wren" }, expected);
 
     expect(record).toMatchObject({ epoch: 1, revision: 1 });
     expect(inspectEnvelope(record.ciphertext)).toMatchObject({
@@ -56,13 +64,17 @@ describe("encrypted Account profiles", () => {
     await expect(openAccountProfile(record.ciphertext, rootKey, expected)).resolves.toEqual({
       publicPseudonym: "Cobalt Wren",
     });
-    await expect(openAccountProfile(record.ciphertext, rootKey, {
-      ...expected,
-      accountId: "019950d7-98c0-7000-8000-000000000007",
-    })).rejects.toMatchObject({ code: "context-mismatch" });
-    await expect(openAccountProfile(record.ciphertext, rootKey, {
-      ...expected,
-      revision: 2,
-    })).rejects.toMatchObject({ code: "context-mismatch" });
+    await expect(
+      openAccountProfile(record.ciphertext, rootKey, {
+        ...expected,
+        accountId: "019950d7-98c0-7000-8000-000000000007",
+      }),
+    ).rejects.toMatchObject({ code: "context-mismatch" });
+    await expect(
+      openAccountProfile(record.ciphertext, rootKey, {
+        ...expected,
+        revision: 2,
+      }),
+    ).rejects.toMatchObject({ code: "context-mismatch" });
   });
 });

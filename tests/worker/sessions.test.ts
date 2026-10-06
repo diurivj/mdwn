@@ -27,9 +27,12 @@ describe("D1-backed Account Sessions", () => {
     const credentialId = "session-test-passkey";
     const now = Date.now();
     await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      ).bind(accountId, "independent-session-test-share-id", now, now),
+      env.DB.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(
+        accountId,
+        "independent-session-test-share-id",
+        now,
+        now,
+      ),
       env.DB.prepare(
         `INSERT INTO passkeys (credential_id, account_id, public_key, counter,
           transports, device_type, backed_up, created_at, updated_at)

@@ -1,21 +1,30 @@
 import { test, expect, objectId } from "./workspace-fixture";
 
-test("automatic shared provisioning preserves an unsaved File draft when private reloads fail", async ({ page, workspace }) => {
+test("automatic shared provisioning preserves an unsaved File draft when private reloads fail", async ({
+  page,
+  workspace,
+}) => {
   const progress = page.getByRole("region", { name: "Shared access provisioning", exact: true });
   await expect(progress).toHaveAttribute("aria-busy", "false");
   const recipientId = objectId();
   // Persist a crossed deadline at the external D1/time boundary. The browser must
   // run the real signed expiry action while the owned File remains readable.
   await workspace.db.batch([
-    workspace.db.prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, 1, 1)")
+    workspace.db
+      .prepare("INSERT INTO accounts (id, share_id, created_at, updated_at) VALUES (?, ?, 1, 1)")
       .bind(recipientId, objectId()),
-    workspace.db.prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_id, target_kind, permission,
+    workspace.db
+      .prepare(`INSERT INTO grants (id, owner_id, recipient_id, target_id, target_kind, permission,
       revision, key_epoch, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 'read_only', 1, 1, 1, 1, 1)`)
       .bind(objectId(), workspace.accountId, recipientId, workspace.rootId),
   ]);
   let release!: () => void, started!: () => void;
-  const held = new Promise<void>((resolve) => { release = resolve; });
-  const processing = new Promise<void>((resolve) => { started = resolve; });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const processing = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   await page.route("**/api/private/grant-provisioning/expire", async (route) => {
     started();
     await held;
@@ -46,5 +55,7 @@ test("automatic shared provisioning preserves an unsaved File draft when private
     await expect(source).toHaveValue(draft);
     await expect(page.getByRole("button", { name: "Download local draft", exact: true })).toBeVisible();
     expect(reloads).toBe(0);
-  } finally { release(); }
+  } finally {
+    release();
+  }
 });

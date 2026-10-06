@@ -74,6 +74,7 @@ export function parseSupportAddress(value: string | undefined): string | null {
   if (address.length > MAX_ADDRESS_LENGTH) return null;
   // Crypto addresses and Lightning identifiers never contain whitespace or
   // control characters; rejecting them keeps QR payloads and page markup clean.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejects whitespace and control characters in operator addresses.
   if (/[\s\u0000-\u001f\u007f]/.test(address)) return null;
   return address;
 }

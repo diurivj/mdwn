@@ -5,24 +5,41 @@ import { FILE_SOURCE_LIMIT, fileSourceBytes } from "~/shared/crypto/file-source"
 import { newOpaqueId } from "~/shared/opaque-id";
 import { loadDirectory, loadFile, rememberListing, type DirectoryListing } from "../shared/tree/client";
 import { rememberFile } from "../shared/tree/file-capability-client";
-import { prepareFileSave, withFileListing, type FileDocument, type FileSavePayload, type FileSaveResult } from "../shared/tree/file-client";
+import {
+  prepareFileSave,
+  withFileListing,
+  type FileDocument,
+  type FileSavePayload,
+  type FileSaveResult,
+} from "../shared/tree/file-client";
 import type { FilesSnapshot } from "./navigation-client";
 import { useFileLease } from "./use-file-lease";
 
 export type SaveStatus = "Unsaved" | "Saving" | "Saved" | "Couldn't save";
 
 /** A serialized tab-local draft. Router mutations never carry Markdown or capability keys. */
-export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
-  onCurrent: (file: FileDocument, listing: DirectoryListing | null) => void, onNavigationStart: () => void) {
+export function useFileDraft(
+  fileId: string,
+  snapshot: FilesSnapshot,
+  onCurrent: (file: FileDocument, listing: DirectoryListing | null) => void,
+  onNavigationStart: () => void,
+) {
   const document = useRef(snapshot.file!);
   const parentKey = document.current.parentId ? snapshot.keys[document.current.parentId]! : snapshot.access.rootKey;
-  const listing = useRef<DirectoryListing | null>(document.current.parentId ? snapshot.listings[document.current.parentId] ?? null : null);
+  const listing = useRef<DirectoryListing | null>(
+    document.current.parentId ? (snapshot.listings[document.current.parentId] ?? null) : null,
+  );
   const draftRef = useRef(document.current.markdown);
   const [draft, setDraft] = useState(draftRef.current);
-  const [status, setStatus] = useState<SaveStatus>(document.current.sourceBytes > FILE_SOURCE_LIMIT ? "Couldn't save" : "Saved");
+  const [status, setStatus] = useState<SaveStatus>(
+    document.current.sourceBytes > FILE_SOURCE_LIMIT ? "Couldn't save" : "Saved",
+  );
   const [navigationFailed, setNavigationFailed] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [overwriteProposal, setOverwriteProposal] = useState<{ document: FileDocument; listing: DirectoryListing | null } | null>(null);
+  const [overwriteProposal, setOverwriteProposal] = useState<{
+    document: FileDocument;
+    listing: DirectoryListing | null;
+  } | null>(null);
   const [conflict, setConflict] = useState(false);
   const conflictRef = useRef(false);
   const [rejected, setRejected] = useState(false);
@@ -30,10 +47,15 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   function composition(active: boolean) {
     composing.current = active;
     if (active) clearTimeout(timer.current);
-    else if (!conflictRef.current && draftRef.current !== document.current.markdown &&
-      fileSourceBytes(draftRef.current) <= FILE_SOURCE_LIMIT) {
+    else if (
+      !conflictRef.current &&
+      draftRef.current !== document.current.markdown &&
+      fileSourceBytes(draftRef.current) <= FILE_SOURCE_LIMIT
+    ) {
       // Resume the retained valid draft even if the eventual composition proposal is rejected.
-      timer.current = setTimeout(() => { void flush(); }, 750);
+      timer.current = setTimeout(() => {
+        void flush();
+      }, 750);
     }
   }
   const fetcher = useFetcher<FileSaveResult>();
@@ -64,30 +86,56 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
     return new Promise((resolve) => {
       const id = newOpaqueId();
       pending.current = { id, resolve };
-      void fetcher.submit({ operationId: id, payload }, {
-        method: "post", encType: "application/json", action: `/f/${fileId}`,
-      });
+      void fetcher.submit(
+        { operationId: id, payload },
+        {
+          method: "post",
+          encType: "application/json",
+          action: `/f/${fileId}`,
+        },
+      );
     });
   }
 
   async function save(): Promise<boolean> {
-    if (!document.current.canEdit || conflictRef.current || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) return false;
-    if (draftRef.current === document.current.markdown) { setStatus("Saved"); return true; }
+    if (!document.current.canEdit || conflictRef.current || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT)
+      return false;
+    if (draftRef.current === document.current.markdown) {
+      setStatus("Saved");
+      return true;
+    }
     setStatus("Saving");
     const source = draftRef.current;
     try {
-      let prepared = await prepareFileSave(snapshot.access, fileId, parentKey, document.current, source, listing.current);
+      let prepared = await prepareFileSave(
+        snapshot.access,
+        fileId,
+        parentKey,
+        document.current,
+        source,
+        listing.current,
+      );
       for (let attempt = 0; attempt < 3; attempt++) {
         if (!mounted.current) return false;
         const result = await submit(prepared.payload);
         if (!mounted.current) return false;
         if (result.state === "conflict") {
-          conflictRef.current = true; setConflict(true); break;
+          conflictRef.current = true;
+          setConflict(true);
+          break;
         }
         if (result.state === "folder-changed") {
           if ("capability" in prepared.payload || !document.current.parentId) break;
-          listing.current = await loadDirectory(snapshot.access, document.current.parentId, parentKey, lifetime.current.signal);
-          prepared = { ...prepared, ...await withFileListing(snapshot.access, fileId, parentKey, prepared.payload, listing.current) };
+          listing.current = await loadDirectory(
+            snapshot.access,
+            document.current.parentId,
+            parentKey,
+            lifetime.current.signal,
+          );
+          prepared = {
+            ...prepared,
+            ...(await withFileListing(snapshot.access, fileId, parentKey, prepared.payload, listing.current)),
+          };
           continue;
         }
         if (result.state === "refresh") {
@@ -95,13 +143,25 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
           // content. Adopt the current File only if this draft is still based on it.
           const latest = await current();
           if (!mounted.current) return false;
-          if (latest.document.revision !== document.current.revision ||
-              latest.document.representationId !== document.current.representationId) {
-            conflictRef.current = true; setConflict(true); break;
+          if (
+            latest.document.revision !== document.current.revision ||
+            latest.document.representationId !== document.current.representationId
+          ) {
+            conflictRef.current = true;
+            setConflict(true);
+            break;
           }
-          document.current = latest.document; listing.current = latest.listing;
+          document.current = latest.document;
+          listing.current = latest.listing;
           onCurrent(document.current, listing.current);
-          prepared = await prepareFileSave(snapshot.access, fileId, parentKey, document.current, source, listing.current);
+          prepared = await prepareFileSave(
+            snapshot.access,
+            fileId,
+            parentKey,
+            document.current,
+            source,
+            listing.current,
+          );
           continue;
         }
         if (result.state !== "saved") break;
@@ -109,17 +169,28 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
         document.current = prepared.document;
         listing.current = prepared.listing;
         if ("capability" in prepared.payload) {
-          rememberFile(snapshot.access.vaultId, fileId, prepared.payload.capability.epoch,
-            result.revision, prepared.payload.representation.fileHead.digest);
+          rememberFile(
+            snapshot.access.vaultId,
+            fileId,
+            prepared.payload.capability.epoch,
+            result.revision,
+            prepared.payload.representation.fileHead.digest,
+          );
         } else if (listing.current && result.entriesRevision !== undefined) {
-          rememberListing(snapshot.access.vaultId, listing.current.directoryId,
-            result.entriesRevision, prepared.payload.listingHead.digest);
+          rememberListing(
+            snapshot.access.vaultId,
+            listing.current.directoryId,
+            result.entriesRevision,
+            prepared.payload.listingHead.digest,
+          );
         }
         onCurrent(document.current, listing.current);
         setStatus(draftRef.current === source ? "Saved" : "Unsaved");
         return true;
       }
-    } catch { /* Generic failure preserves the exact in-memory draft. */ }
+    } catch {
+      /* Generic failure preserves the exact in-memory draft. */
+    }
     if (mounted.current) setStatus("Couldn't save");
     return false;
   }
@@ -129,8 +200,14 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   async function flush(): Promise<boolean> {
     clearTimeout(timer.current);
     if (!lease.owns()) return false;
-    while (inFlight.current) if (!await inFlight.current) return false;
-    if (!mounted.current || composing.current || conflictRef.current || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) return false;
+    while (inFlight.current) if (!(await inFlight.current)) return false;
+    if (
+      !mounted.current ||
+      composing.current ||
+      conflictRef.current ||
+      fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT
+    )
+      return false;
     if (draftRef.current === document.current.markdown) return true;
     const task = save();
     inFlight.current = task;
@@ -139,24 +216,45 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
     return saved && draftRef.current !== document.current.markdown ? flush() : saved;
   }
 
-  const warn = () => composing.current || inFlight.current !== null || status === "Couldn't save" ||
-    draftRef.current !== document.current.markdown || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT;
+  // Latest-flush ref: the blocked-navigation effect must not re-run when this
+  // render's function identity changes.
+  const flushRef = useRef(flush);
+  useEffect(() => {
+    flushRef.current = flush;
+  });
+
+  const warn = () =>
+    composing.current ||
+    inFlight.current !== null ||
+    status === "Couldn't save" ||
+    draftRef.current !== document.current.markdown ||
+    fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT;
   const blocker = useBlocker(({ currentLocation, nextLocation }) => {
     // Invalidate structural continuations synchronously, before a slow next
     // clientLoader starts. Waiting for unmount leaves the old page alive.
     onNavigationStart();
     return currentLocation.pathname !== nextLocation.pathname && warn();
   });
-  useBeforeUnload((event) => { if (warn()) { event.preventDefault(); event.returnValue = ""; } });
+  useBeforeUnload((event) => {
+    if (warn()) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
   useEffect(() => {
-    if (blocker.state !== "blocked") { setNavigationFailed(false); return; }
+    if (blocker.state !== "blocked") {
+      setNavigationFailed(false);
+      return;
+    }
     let active = true;
-    void flush().then((saved) => {
+    void flushRef.current().then((saved) => {
       if (!active) return;
       if (saved) blocker.proceed();
       else setNavigationFailed(true);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [blocker]);
 
   async function current() {
@@ -176,53 +274,94 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
       if (inFlight.current) await inFlight.current;
       const latest = await current();
       if (!mounted.current) return false;
-      document.current = latest.document; listing.current = latest.listing;
+      document.current = latest.document;
+      listing.current = latest.listing;
       onCurrent(document.current, listing.current);
-      draftRef.current = latest.document.markdown; setDraft(draftRef.current);
-      conflictRef.current = false; setConflict(false); setRejected(false); setOverwriteProposal(null);
+      draftRef.current = latest.document.markdown;
+      setDraft(draftRef.current);
+      conflictRef.current = false;
+      setConflict(false);
+      setRejected(false);
+      setOverwriteProposal(null);
       setStatus(latest.document.sourceBytes > FILE_SOURCE_LIMIT ? "Couldn't save" : "Saved");
       return true;
-    } catch { if (mounted.current) setStatus("Couldn't save"); return false; }
-    finally { if (mounted.current) setLoading(false); }
+    } catch {
+      if (mounted.current) setStatus("Couldn't save");
+      return false;
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
   }
 
   async function proposeOverwrite() {
     if (!document.current.canEdit || !lease.editable) return;
-    if (fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) { setRejected(true); return; }
+    if (fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) {
+      setRejected(true);
+      return;
+    }
     setLoading(true);
-    try { const latest = await current(); if (mounted.current) setOverwriteProposal(latest); }
-    catch { if (mounted.current) setStatus("Couldn't save"); }
-    finally { if (mounted.current) setLoading(false); }
+    try {
+      const latest = await current();
+      if (mounted.current) setOverwriteProposal(latest);
+    } catch {
+      if (mounted.current) setStatus("Couldn't save");
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
   }
 
   async function confirmOverwrite() {
-    if (!document.current.canEdit || !lease.editable || !overwriteProposal || fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT) return;
+    if (
+      !document.current.canEdit ||
+      !lease.editable ||
+      !overwriteProposal ||
+      fileSourceBytes(draftRef.current) > FILE_SOURCE_LIMIT
+    )
+      return;
     // The proposal pins the revision being replaced. A later winner still conflicts.
-    document.current = overwriteProposal.document; listing.current = overwriteProposal.listing;
-    conflictRef.current = false; setConflict(false); setOverwriteProposal(null);
+    document.current = overwriteProposal.document;
+    listing.current = overwriteProposal.listing;
+    conflictRef.current = false;
+    setConflict(false);
+    setOverwriteProposal(null);
     await flush();
   }
 
   async function discard() {
     clearTimeout(timer.current);
     while (inFlight.current) await inFlight.current;
-    draftRef.current = document.current.markdown; setDraft(draftRef.current);
-    conflictRef.current = false; setConflict(false); setRejected(false); setOverwriteProposal(null);
+    draftRef.current = document.current.markdown;
+    setDraft(draftRef.current);
+    conflictRef.current = false;
+    setConflict(false);
+    setRejected(false);
+    setOverwriteProposal(null);
     setStatus(document.current.sourceBytes > FILE_SOURCE_LIMIT ? "Couldn't save" : "Saved");
   }
 
   function edit(value: string): boolean {
     if (!document.current.canEdit || !lease.editable || loading || overwriteProposal) return false;
-    const nextBytes = fileSourceBytes(value), previousBytes = fileSourceBytes(draftRef.current);
+    const nextBytes = fileSourceBytes(value),
+      previousBytes = fileSourceBytes(draftRef.current);
     if (nextBytes > FILE_SOURCE_LIMIT && !(previousBytes > FILE_SOURCE_LIMIT && nextBytes < previousBytes)) {
-      setRejected(true); return false;
+      setRejected(true);
+      return false;
     }
     setRejected(false);
-    draftRef.current = value; setDraft(value);
-    setStatus(conflictRef.current || nextBytes > FILE_SOURCE_LIMIT ? "Couldn't save" : value === document.current.markdown ? "Saved" : "Unsaved");
+    draftRef.current = value;
+    setDraft(value);
+    setStatus(
+      conflictRef.current || nextBytes > FILE_SOURCE_LIMIT
+        ? "Couldn't save"
+        : value === document.current.markdown
+          ? "Saved"
+          : "Unsaved",
+    );
     clearTimeout(timer.current);
     if (!conflictRef.current && nextBytes <= FILE_SOURCE_LIMIT && value !== document.current.markdown) {
-      timer.current = setTimeout(() => { void flush(); }, 750);
+      timer.current = setTimeout(() => {
+        void flush();
+      }, 750);
     }
     return true;
   }
@@ -230,14 +369,30 @@ export function useFileDraft(fileId: string, snapshot: FilesSnapshot,
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
-        event.preventDefault(); void flush();
+        event.preventDefault();
+        void flush();
       }
     };
     window.addEventListener("keydown", shortcut);
     return () => window.removeEventListener("keydown", shortcut);
   });
 
-  return { draft, status, conflict, rejected, edit, flush, composition, blocker, navigationFailed,
-    loading, reload, proposeOverwrite, overwriteProposal, confirmOverwrite, lease,
-    cancelOverwrite: () => setOverwriteProposal(null) };
+  return {
+    draft,
+    status,
+    conflict,
+    rejected,
+    edit,
+    flush,
+    composition,
+    blocker,
+    navigationFailed,
+    loading,
+    reload,
+    proposeOverwrite,
+    overwriteProposal,
+    confirmOverwrite,
+    lease,
+    cancelOverwrite: () => setOverwriteProposal(null),
+  };
 }

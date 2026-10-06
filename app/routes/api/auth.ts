@@ -31,9 +31,7 @@ type NormalSession = ActiveSession & {
   authenticatedPasskeyId: string;
 };
 
-type NormalSessionResult =
-  | { session: NormalSession }
-  | { failure: Response };
+type NormalSessionResult = { session: NormalSession } | { failure: Response };
 
 function failure(status: number, headers?: HeadersInit): Response {
   return Response.json({ error: "authentication_failed" }, { status, headers });
@@ -43,10 +41,7 @@ function restrictedSession(): Response {
   return Response.json({ error: "session_restricted" }, { status: 403 });
 }
 
-async function requireNormalSession(
-  request: Request,
-  env: Env,
-): Promise<NormalSessionResult> {
+async function requireNormalSession(request: Request, env: Env): Promise<NormalSessionResult> {
   const session = await getActiveSession(request, env);
   if (!session) return { failure: failure(401) };
   if (session.purpose !== "normal") return { failure: restrictedSession() };
@@ -54,10 +49,7 @@ async function requireNormalSession(
   return { session: session as NormalSession };
 }
 
-async function requireFreshNormalSession(
-  request: Request,
-  env: Env,
-): Promise<NormalSessionResult> {
+async function requireFreshNormalSession(request: Request, env: Env): Promise<NormalSessionResult> {
   const result = await requireNormalSession(request, env);
   if ("failure" in result || !hasFreshAssertion(result.session)) {
     return "failure" in result ? result : { failure: failure(401) };
@@ -86,11 +78,7 @@ export async function loader({ request, context }: Route.LoaderArgs): Promise<Re
       const result = await requireNormalSession(request, env);
       if ("failure" in result) return result.failure;
       return Response.json({
-        passkeys: await listPasskeys(
-          env,
-          result.session.accountId,
-          result.session.authenticatedPasskeyId,
-        ),
+        passkeys: await listPasskeys(env, result.session.accountId, result.session.authenticatedPasskeyId),
       });
     }
     return failure(404);
@@ -130,10 +118,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
     if (pathname === "/api/auth/sign-out") {
       const session = await getActiveSession(request, env);
       if (session) await revokeSession(env, session.accountId, session.id);
-      return Response.json(
-        { ok: true },
-        { headers: { "Set-Cookie": await clearSessionCookie(env) } },
-      );
+      return Response.json({ ok: true }, { headers: { "Set-Cookie": await clearSessionCookie(env) } });
     }
 
     const normal = await requireNormalSession(request, env);
@@ -147,13 +132,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       const parsed = record(body);
       const challengeId = parsed ? string(parsed.challengeId) : null;
       const completed = challengeId
-        ? await completeFreshAssertion(
-          request,
-          env,
-          normal.session,
-          challengeId,
-          parsed?.response,
-        )
+        ? await completeFreshAssertion(request, env, normal.session, challengeId, parsed?.response)
         : false;
       return completed ? Response.json({ ok: true }) : failure(401);
     }
@@ -167,13 +146,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       const parsed = record(body);
       const challengeId = parsed ? string(parsed.challengeId) : null;
       const completed = challengeId
-        ? await completePasskeyRegistration(
-          request,
-          env,
-          normal.session,
-          challengeId,
-          parsed?.response,
-        )
+        ? await completePasskeyRegistration(request, env, normal.session, challengeId, parsed?.response)
         : false;
       return completed ? Response.json({ ok: true }) : failure(401);
     }
@@ -183,9 +156,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       if ("failure" in fresh) return fresh.failure;
       const parsed = record(body);
       const credentialId = parsed ? string(parsed.credentialId) : null;
-      const removed = credentialId
-        ? await removePasskey(env, fresh.session, credentialId)
-        : false;
+      const removed = credentialId ? await removePasskey(env, fresh.session, credentialId) : false;
       if (!removed) return failure(401);
       const signedOut = credentialId === fresh.session.authenticatedPasskeyId;
       const headers = signedOut ? { "Set-Cookie": await clearSessionCookie(env) } : undefined;
@@ -217,10 +188,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Re
       if (!(await revokeAllSessionsForActor(env, normal.session))) {
         return failure(401, { "Set-Cookie": await clearSessionCookie(env) });
       }
-      return Response.json(
-        { ok: true },
-        { headers: { "Set-Cookie": await clearSessionCookie(env) } },
-      );
+      return Response.json({ ok: true }, { headers: { "Set-Cookie": await clearSessionCookie(env) } });
     }
 
     return failure(404);

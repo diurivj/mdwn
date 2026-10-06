@@ -20,8 +20,5 @@ if (!isEnvironment(env)) {
 }
 const { envFlag, extra } = WRANGLER_TARGETS[env];
 
-runWrangler(
-  ["d1", "migrations", "apply", "DB", ...envFlag, ...extra],
-  `${env} migration apply`,
-);
+runWrangler(["d1", "migrations", "apply", "DB", ...envFlag, ...extra], `${env} migration apply`);
 console.log(`✓ migrations applied (${env})`);

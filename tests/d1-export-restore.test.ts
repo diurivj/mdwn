@@ -23,16 +23,16 @@ function regressionExport({ blobBytes = 200 } = {}) {
     `CREATE TABLE IF NOT EXISTS "d1_migrations"(\n\t\tid INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\tname TEXT UNIQUE,\n\t\tapplied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n);`,
     `INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(1,'0000_regression.sql','2026-01-01 00:00:00');`,
     "CREATE TABLE `accounts` (`id` text PRIMARY KEY NOT NULL, `created_at` integer NOT NULL, `updated_at` integer NOT NULL);",
-    "INSERT INTO \"accounts\" (\"id\",\"created_at\",\"updated_at\") VALUES('acct',1,1);",
+    'INSERT INTO "accounts" ("id","created_at","updated_at") VALUES(\'acct\',1,1);',
     "CREATE TABLE `directories` (`node_id` text PRIMARY KEY NOT NULL, `owner_id` text NOT NULL,",
     "\tFOREIGN KEY (`node_id`) REFERENCES `vault_nodes`(`id`) ON UPDATE no action ON DELETE restrict,",
     "\tFOREIGN KEY (`owner_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict);",
-    "INSERT INTO \"directories\" (\"node_id\",\"owner_id\") VALUES('root','acct');",
+    'INSERT INTO "directories" ("node_id","owner_id") VALUES(\'root\',\'acct\');',
     "CREATE TABLE `vault_nodes` (`id` text PRIMARY KEY NOT NULL, `kind` text NOT NULL, `owner_id` text NOT NULL, `parent_node_id` text,",
     "\tFOREIGN KEY (`owner_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict,",
     "\tFOREIGN KEY (`owner_id`,`parent_node_id`) REFERENCES `directories`(`owner_id`,`node_id`)",
     "\t  ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED);",
-    "INSERT INTO \"vault_nodes\" (\"id\",\"kind\",\"owner_id\",\"parent_node_id\") VALUES('root','directory','acct',NULL);",
+    'INSERT INTO "vault_nodes" ("id","kind","owner_id","parent_node_id") VALUES(\'root\',\'directory\',\'acct\',NULL);',
     "CREATE TABLE `blobs` (`id` text PRIMARY KEY NOT NULL, `payload` blob NOT NULL, `note` text NOT NULL);",
     `INSERT INTO "blobs" ("id","payload","note") VALUES('big',X'${hex}','kept');`,
     "CREATE INDEX `blobs_id_idx` ON `blobs` (`id`);",
@@ -90,7 +90,9 @@ describe("buildRestorePlan", () => {
       expect(db.prepare("SELECT count(*) AS n FROM directories").get()).toMatchObject({ n: 1 });
       // The trigger is present after data and materializes a new root once.
       db.exec("INSERT INTO accounts (id, created_at, updated_at) VALUES ('acct-2', 2, 2);");
-      expect(db.prepare("SELECT count(*) AS n FROM vault_nodes WHERE owner_id = 'acct-2'").get()).toMatchObject({ n: 1 });
+      expect(db.prepare("SELECT count(*) AS n FROM vault_nodes WHERE owner_id = 'acct-2'").get()).toMatchObject({
+        n: 1,
+      });
     } finally {
       db.close();
     }
@@ -100,15 +102,17 @@ describe("buildRestorePlan", () => {
     const exportSql = regressionExport({ blobBytes: 5000 });
     const plan = buildRestorePlan(exportSql, { maxStatementBytes: 500 });
     expect(plan.stats.chunkedStatements).toBe(1);
-    for (const statement of plan.preparedSql.split("\n").filter((line) => line.startsWith("INSERT") || line.startsWith("UPDATE"))) {
+    for (const statement of plan.preparedSql
+      .split("\n")
+      .filter((line) => line.startsWith("INSERT") || line.startsWith("UPDATE"))) {
       expect(Buffer.byteLength(statement, "utf8")).toBeLessThanOrEqual(500);
     }
     const db = openOfflineDatabase();
     try {
       applyStatementsInTransaction(db, plan.preparedSql);
-      const row = db.prepare("SELECT length(payload) AS bytes, hex(payload) AS hex, note FROM blobs WHERE id = 'big'").get() as
-        | { bytes: number; hex: string; note: string }
-        | undefined;
+      const row = db
+        .prepare("SELECT length(payload) AS bytes, hex(payload) AS hex, note FROM blobs WHERE id = 'big'")
+        .get() as { bytes: number; hex: string; note: string } | undefined;
       expect(row).toMatchObject({ bytes: 5000, note: "kept" });
       expect(row!.hex).toBe("AB".repeat(5000));
     } finally {
@@ -189,13 +193,15 @@ describe("prepareRestore", () => {
       "CREATE TABLE `notes` (`id` text PRIMARY KEY NOT NULL, `body` text NOT NULL);",
       `INSERT INTO "notes" ("id","body") VALUES('n', '${"x".repeat(400)}');`,
     ].join("\n");
-    expect(() => prepareRestore({
-      exportSql,
-      sourceName: "source",
-      sourceUuid: "00000000-0000-4000-8000-000000000001",
-      maxStatementBytes: 100,
-      fullProbes: false,
-    })).toThrow(/cannot split/i);
+    expect(() =>
+      prepareRestore({
+        exportSql,
+        sourceName: "source",
+        sourceUuid: "00000000-0000-4000-8000-000000000001",
+        maxStatementBytes: 100,
+        fullProbes: false,
+      }),
+    ).toThrow(/cannot split/i);
   });
 });
 

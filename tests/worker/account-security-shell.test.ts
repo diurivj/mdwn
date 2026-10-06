@@ -3,7 +3,9 @@ import { beforeAll, expect, it } from "vitest";
 
 import { seedAccount, seedNormalSession } from "./auth-fixtures";
 
-beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
+beforeAll(async () => {
+  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+});
 
 it("server-renders only the Account security shell, not its private lists", async () => {
   const account = await seedAccount();

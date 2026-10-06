@@ -4,12 +4,12 @@ import { Link, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
 import type { AssertionStart } from "~/auth/contracts";
-import { signDeviceProof } from "~/shared/device/proof";
+import { signDeviceProof, type DeviceProof } from "~/shared/device/proof";
 import { getDevice, updateRegistryEpoch } from "~/shared/device/store";
 
 import type { Route } from "./+types/sign-in";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Sign in — mdwn" }];
 }
 
@@ -19,12 +19,10 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
   if (form.get("intent") !== "sign-in") return { state: "failed" } as const;
 
   try {
-    const start = await authPost<AssertionStart>(
-      "/api/auth/sign-in/options", {}, request.signal, "failed",
-    );
+    const start = await authPost<AssertionStart>("/api/auth/sign-in/options", {}, request.signal, "failed");
     const response = await startAuthentication({ optionsJSON: start.options });
     const submission = { challengeId: start.challengeId, response };
-    let deviceProof;
+    let deviceProof: DeviceProof | undefined;
     const userHandle = response.response.userHandle;
     if (start.sessionBinding && userHandle) {
       try {
@@ -32,8 +30,10 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         const device = await getDevice(accountId);
         if (device) {
           deviceProof = await signDeviceProof(device.assertionKeyPair.privateKey, {
-            sessionBinding: start.sessionBinding, deviceId: device.deviceId,
-            registryEpoch: device.registryEpoch, method: "POST",
+            sessionBinding: start.sessionBinding,
+            deviceId: device.deviceId,
+            registryEpoch: device.registryEpoch,
+            method: "POST",
             url: new URL("/api/auth/sign-in/verify", location.origin).href,
             body: JSON.stringify(submission),
           });
@@ -43,7 +43,10 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
       }
     }
     const result = await authPost<{ ok: true; bound: boolean }>(
-      "/api/auth/sign-in/verify", { ...submission, deviceProof }, request.signal, "failed",
+      "/api/auth/sign-in/verify",
+      { ...submission, deviceProof },
+      request.signal,
+      "failed",
     );
     if (!result.bound) {
       // The Passkey created an unprovisioned Session. If the local device only
@@ -51,15 +54,21 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
       // a *new* Passkey sign-in, never an upgrade of this Session in place.
       try {
         const state = await authGet<{ accountId: string; registryEpoch: number | null }>(
-          "/api/device/state", request.signal,
+          "/api/device/state",
+          request.signal,
         );
         const saved = await getDevice(state.accountId);
         if (saved && state.registryEpoch !== null && state.registryEpoch > saved.registryEpoch) {
           const current = await authGet<{
-            accountId: string; registryEpoch: number | null; candidateActive: boolean;
+            accountId: string;
+            registryEpoch: number | null;
+            candidateActive: boolean;
           }>(`/api/device/state?candidateDeviceId=${encodeURIComponent(saved.deviceId)}`, request.signal);
-          if (current.accountId === state.accountId && current.registryEpoch === state.registryEpoch &&
-              current.candidateActive) {
+          if (
+            current.accountId === state.accountId &&
+            current.registryEpoch === state.registryEpoch &&
+            current.candidateActive
+          ) {
             await updateRegistryEpoch(state.accountId, state.registryEpoch);
             return { state: "registry-refreshed" } as const;
           }
@@ -79,7 +88,9 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
 export default function SignIn() {
   const fetcher = useFetcher<typeof clientAction>();
   const [hydrated, setHydrated] = useState(false);
-  useEffect(() => { setHydrated(true); }, []);
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
   const working = fetcher.state !== "idle";
 
   return (
@@ -97,18 +108,39 @@ export default function SignIn() {
           {working ? "Checking your passkey…" : "Sign in with a passkey"}
         </button>
       </fetcher.Form>
-      {!working && (fetcher.data?.state === "signed-in" || fetcher.data?.state === "unprovisioned" || fetcher.data?.state === "registry-refreshed") ? (
+      {!working &&
+      (fetcher.data?.state === "signed-in" ||
+        fetcher.data?.state === "unprovisioned" ||
+        fetcher.data?.state === "registry-refreshed") ? (
         <p className="mt-4 text-emerald-700">
-          Signed in. <Link className="underline" to="/account/device-access">Check private access</Link> · <Link className="underline" to="/account/security">Manage Sessions</Link>
+          Signed in.{" "}
+          <Link className="underline" to="/account/device-access">
+            Check private access
+          </Link>{" "}
+          ·{" "}
+          <Link className="underline" to="/account/security">
+            Manage Sessions
+          </Link>
           {fetcher.data.state === "unprovisioned" ? (
-            <span className="block text-amber-800">This browser has no active Encryption device. Use an existing device or your recovery phrase to regain private access.</span>
+            <span className="block text-amber-800">
+              This browser has no active Encryption device. Use an existing device or your recovery phrase to regain
+              private access.
+            </span>
           ) : null}
           {fetcher.data.state === "registry-refreshed" ? (
-            <span className="block text-amber-800">Device registry changed. Sign in again with your passkey to check this device's current authority.</span>
+            <span className="block text-amber-800">
+              Device registry changed. Sign in again with your passkey to check this device's current authority.
+            </span>
           ) : null}
         </p>
       ) : null}
-      <p className="mt-4 text-sm text-stone-600">Lost all your passkeys? <Link className="underline" to="/recover">Use an authentication recovery code</Link>.</p>
+      <p className="mt-4 text-sm text-stone-600">
+        Lost all your passkeys?{" "}
+        <Link className="underline" to="/recover">
+          Use an authentication recovery code
+        </Link>
+        .
+      </p>
       {!working && fetcher.data?.state === "failed" ? (
         <p className="mt-4 text-red-700">We could not sign you in. Try again.</p>
       ) : null}

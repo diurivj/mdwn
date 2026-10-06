@@ -24,7 +24,9 @@ test("creates a File using only the keyboard through a labelled dialog", async (
   await page.keyboard.press("Enter");
 
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole("navigation", { name: "Files" }).getByRole("link", { name: "Keyboard.md", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "Files" }).getByRole("link", { name: "Keyboard.md", exact: true }),
+  ).toBeVisible();
 });
 
 test("exposes labelled editor, preview, tree, and comment controls", async ({ page, workspace }) => {

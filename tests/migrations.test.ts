@@ -29,9 +29,7 @@ describe("committed Drizzle migrations", () => {
   });
 
   it("journal records every migration file (schema-drift guard)", () => {
-    const journal = JSON.parse(
-      readFileSync(join(DRIZZLE_DIR, "meta", "_journal.json"), "utf8"),
-    );
+    const journal = JSON.parse(readFileSync(join(DRIZZLE_DIR, "meta", "_journal.json"), "utf8"));
     const tags: string[] = (journal.entries as Array<{ tag: string }>).map((e) => e.tag);
     expect(tags).toHaveLength(migrations.length);
     for (const m of migrations) {
@@ -48,13 +46,22 @@ describe("committed Drizzle migrations", () => {
     expect(sql).toContain("`network_bucket_expires_at` integer");
     expect(sql).toContain("security_events_retention_bounded");
     expect(sql).toContain("security_events_network_bucket_bounded");
-    expect(sql).not.toMatch(/raw_ip|full_url|request_headers|request_body|cookie|user_agent|fingerprint|capability|fragment/i);
+    expect(sql).not.toMatch(
+      /raw_ip|full_url|request_headers|request_body|cookie|user_agent|fingerprint|capability|fragment/i,
+    );
   });
 
   it("adds the signup registry and recovery records without plaintext secrets", () => {
     const sql = readFileSync(join(DRIZZLE_DIR, "0003_colossal_falcon.sql"), "utf8");
-    for (const table of ["account_encryption_identities", "encryption_devices", "key_envelopes",
-      "recovery_capsules", "authentication_recovery_codes", "registration_challenges", "device_proof_uses"]) {
+    for (const table of [
+      "account_encryption_identities",
+      "encryption_devices",
+      "key_envelopes",
+      "recovery_capsules",
+      "authentication_recovery_codes",
+      "registration_challenges",
+      "device_proof_uses",
+    ]) {
       expect(sql).toContain(`CREATE TABLE \`${table}\``);
     }
     expect(sql).toContain("`device_id` text");
@@ -64,12 +71,7 @@ describe("committed Drizzle migrations", () => {
   it("keeps authentication records separate from opaque Account identity", () => {
     const sql = readFileSync(join(DRIZZLE_DIR, "0001_accounts_auth.sql"), "utf8");
 
-    for (const table of [
-      "account_profiles",
-      "passkeys",
-      "webauthn_challenges",
-      "sessions",
-    ]) {
+    for (const table of ["account_profiles", "passkeys", "webauthn_challenges", "sessions"]) {
       expect(sql).toContain(`CREATE TABLE \`${table}\``);
     }
 
@@ -81,13 +83,18 @@ describe("committed Drizzle migrations", () => {
 
   it("adds one Private Comment thread per File with constrained epochs and ciphertext-only Comments", () => {
     const sql = readFileSync(join(DRIZZLE_DIR, "0019_outgoing_tony_stark.sql"), "utf8");
-    for (const table of ["comment_threads", "comment_thread_epochs", "comments", "thread_attributions",
-      "key_rotation_comment_items"]) {
+    for (const table of [
+      "comment_threads",
+      "comment_thread_epochs",
+      "comments",
+      "thread_attributions",
+      "key_rotation_comment_items",
+    ]) {
       expect(sql).toContain(`CREATE TABLE \`${table}\``);
     }
     // Exactly one Private thread per File and one Public thread per Publication.
     expect(sql).toContain("CREATE UNIQUE INDEX `comment_threads_private_file_idx`");
-    expect(sql).toContain("WHERE \"comment_threads\".\"purpose\" = 'private'");
+    expect(sql).toContain('WHERE "comment_threads"."purpose" = \'private\'');
     expect(sql).toContain("CREATE UNIQUE INDEX `comment_threads_public_publication_idx`");
     // The current Private key epoch is a constrained representation: one active
     // epoch per thread, and a thread can only point at its own epoch.
@@ -105,16 +112,25 @@ describe("committed Drizzle migrations", () => {
     const name = migrations.find((migration) => migration.startsWith("0020_"));
     expect(name).toBeDefined();
     const sql = readFileSync(join(DRIZZLE_DIR, name!), "utf8");
-    for (const table of ["publications", "publication_links", "public_representations", "publication_requests",
-      "publication_authors"]) {
+    for (const table of [
+      "publications",
+      "publication_links",
+      "public_representations",
+      "publication_requests",
+      "publication_authors",
+    ]) {
       expect(sql).toContain(`CREATE TABLE \`${table}\``);
     }
     // At most one active-or-deleting Publication per File.
-    expect(sql).toContain("CREATE UNIQUE INDEX `publications_file_idx` ON `publications` (`file_id`) WHERE \"publications\".\"state\" IN ('active', 'deleting')");
+    expect(sql).toContain(
+      "CREATE UNIQUE INDEX `publications_file_idx` ON `publications` (`file_id`) WHERE \"publications\".\"state\" IN ('active', 'deleting')",
+    );
     // The Public representation has the same decoded BLOB bound as a private one.
-    expect(sql).toContain("CHECK(length(\"public_representations\".\"ciphertext\") <= 524288");
+    expect(sql).toContain('CHECK(length("public_representations"."ciphertext") <= 524288');
     // Current pointers are reciprocal and deferred; a sealed Publication never reactivates.
-    expect(sql).toContain("REFERENCES `publication_links`(`id`,`publication_id`)\n\t  ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED");
+    expect(sql).toContain(
+      "REFERENCES `publication_links`(`id`,`publication_id`)\n\t  ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
+    );
     expect(sql).toContain("CREATE TRIGGER publication_seal_irreversible");
     expect(sql).toContain("CREATE TRIGGER publication_created_active");
     // Only the public key is stored; the read capability has no column.
@@ -131,14 +147,16 @@ describe("committed Drizzle migrations", () => {
     }
     // One report per reporter and Comment, retained no longer than 30 days.
     expect(sql).toContain("CREATE UNIQUE INDEX `public_comment_reports_reporter_comment_idx`");
-    expect(sql).toContain('CHECK("public_comment_reports"."category" IN (\'spam\', \'abuse\', \'other\'))');
+    expect(sql).toContain("CHECK(\"public_comment_reports\".\"category\" IN ('spam', 'abuse', 'other'))");
     // Superseded by 0025: the Comment FK is RESTRICT with explicit reports deletion.
     expect(sql).toContain("ON DELETE cascade");
     // A suspension is exactly Account, strike, fixed reason, start and expiry.
     expect(sql).toContain("`strike_count` integer NOT NULL");
     expect(sql).toContain("public_participation_suspensions_reason_valid");
     expect(sql).toContain("public_participation_suspensions_bounded");
-    expect(sql).not.toMatch(/plaintext|body_ciphertext|capability|fragment|raw_ip|user_agent|full_url|cookie|session_token/i);
+    expect(sql).not.toMatch(
+      /plaintext|body_ciphertext|capability|fragment|raw_ip|user_agent|full_url|cookie|session_token/i,
+    );
   });
 
   it("hardens Public Comment reports onto an explicit RESTRICT delete with no database cascade", () => {
@@ -148,7 +166,9 @@ describe("committed Drizzle migrations", () => {
     // The rebuilt table preserves every row, index and constraint; only the
     // Comment FK changes, so each deletion step must remove reports explicitly.
     expect(sql).toContain("CREATE TABLE `__new_public_comment_reports`");
-    expect(sql).toContain("FOREIGN KEY (`comment_id`) REFERENCES `comments`(`id`) ON UPDATE no action ON DELETE restrict");
+    expect(sql).toContain(
+      "FOREIGN KEY (`comment_id`) REFERENCES `comments`(`id`) ON UPDATE no action ON DELETE restrict",
+    );
     expect(sql).not.toContain("ON DELETE cascade");
     expect(sql).toContain("INSERT INTO `__new_public_comment_reports`");
     expect(sql).toContain("DROP TABLE `public_comment_reports`");

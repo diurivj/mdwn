@@ -1,8 +1,14 @@
 // Framework-free contract: the very same checks run in Node, workerd and real browsers.
 import { Aes256Gcm, CipherSuite, DhkemP256HkdfSha256, HkdfSha256 } from "@hpke/core";
 import {
-  createSymmetricWriter, digestEnvelope, EnvelopeError, inspectEnvelope,
-  openForRecipient, openSymmetric, sealToRecipient, type EnvelopeContext,
+  createSymmetricWriter,
+  digestEnvelope,
+  EnvelopeError,
+  inspectEnvelope,
+  openForRecipient,
+  openSymmetric,
+  sealToRecipient,
+  type EnvelopeContext,
 } from "../../app/shared/crypto/enc-v1";
 import {
   createRecoveryMaterial,
@@ -12,10 +18,16 @@ import {
   RecoveryError,
 } from "../../app/shared/crypto/vault";
 import {
-  createPublicationKeyPair, formatPublicationFragment, importPublicationKeyPair, parsePublicationFragment,
+  createPublicationKeyPair,
+  formatPublicationFragment,
+  importPublicationKeyPair,
+  parsePublicationFragment,
 } from "../../app/shared/publications/capability";
 import {
-  openAuthorDeclaration, openPublicRepresentation, publicPresentation, sealPublicRepresentation,
+  openAuthorDeclaration,
+  openPublicRepresentation,
+  publicPresentation,
+  sealPublicRepresentation,
 } from "../../app/shared/publications/content";
 import vector from "../fixtures/enc-v1.json" with { type: "json" };
 import rfc from "../fixtures/rfc9180-p256-aes256.json" with { type: "json" };
@@ -26,7 +38,9 @@ export function bytes(hex: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(hex.match(/../g) ?? [], (pair) => parseInt(pair, 16));
 }
 export function hex(value: Uint8Array | ArrayBuffer): string {
-  return Array.from(value instanceof Uint8Array ? value : new Uint8Array(value), (b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(value instanceof Uint8Array ? value : new Uint8Array(value), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
 }
 function assertEqual(actual: unknown, expected: unknown) {
   if (actual !== expected) throw new Error(`Contract mismatch: expected ${expected}, got ${actual}`);
@@ -53,16 +67,28 @@ async function rejectsRecovery(operation: Promise<unknown>, code: string) {
 
 export const baseKey = bytes(vector.baseKey);
 export const context: EnvelopeContext = {
-  purpose: "file-content", vaultId: "vault-1", objectId: "file-1", keyId: "key-1", keyEpoch: 2, revision: 3,
+  purpose: "file-content",
+  vaultId: "vault-1",
+  objectId: "file-1",
+  keyId: "key-1",
+  keyEpoch: 2,
+  revision: 3,
 };
 const grantContext: EnvelopeContext = { ...context, purpose: "grant", recipientId: "device-1" };
 
 async function vectorKeyPair(publicHex = rfc.pkRm, privateHex = rfc.skRm): Promise<CryptoKeyPair> {
   const publicBytes = bytes(publicHex);
-  const base64url = (value: Uint8Array) => btoa(String.fromCharCode(...value)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  const base64url = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replaceAll("=", "");
   const jwk = {
-    kty: "EC", crv: "P-256", x: base64url(publicBytes.slice(1, 33)),
-    y: base64url(publicBytes.slice(33)), d: base64url(bytes(privateHex)),
+    kty: "EC",
+    crv: "P-256",
+    x: base64url(publicBytes.slice(1, 33)),
+    y: base64url(publicBytes.slice(33)),
+    d: base64url(bytes(privateHex)),
   };
   return {
     privateKey: await crypto.subtle.importKey("jwk", jwk, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]),
@@ -80,19 +106,40 @@ async function vectorKeyPair(publicHex = rfc.pkRm, privateHex = rfc.skRm): Promi
 const HPKE_SUITE_ID = concatBytes(utf8("HPKE"), u16(0x0010), u16(0x0001), u16(0x0002));
 const KEM_SUITE_ID = concatBytes(utf8("KEM"), u16(0x0010));
 const PURPOSE_IDS: Record<string, number> = {
-  "file-content": 3, grant: 5, "device-enrollment": 6, "public-representation": 9, "publication-attribution": 21,
+  "file-content": 3,
+  grant: 5,
+  "device-enrollment": 6,
+  "public-representation": 9,
+  "publication-attribution": 21,
 };
 
-function utf8(value: string): Uint8Array<ArrayBuffer> { return new Uint8Array(new TextEncoder().encode(value)); }
+function utf8(value: string): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(new TextEncoder().encode(value));
+}
 function concatBytes(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let offset = 0;
-  for (const part of parts) { out.set(part, offset); offset += part.length; }
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
   return out;
 }
-function u16(value: number) { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, value); return b; }
-function u32(value: number) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, value); return b; }
-function u64(value: number) { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(value)); return b; }
+function u16(value: number) {
+  const b = new Uint8Array(2);
+  new DataView(b.buffer).setUint16(0, value);
+  return b;
+}
+function u32(value: number) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, value);
+  return b;
+}
+function u64(value: number) {
+  const b = new Uint8Array(8);
+  new DataView(b.buffer).setBigUint64(0, BigInt(value));
+  return b;
+}
 function lengthPrefixed(value: string | undefined) {
   const body = value === undefined || value === "" ? new Uint8Array(0) : utf8(value);
   return concatBytes(u16(body.length), body);
@@ -100,9 +147,14 @@ function lengthPrefixed(value: string | undefined) {
 // Hand-built from docs/enc-v1.md, not from the library's encoder.
 function encodeContextLayout(context: EnvelopeContext): Uint8Array<ArrayBuffer> {
   return concatBytes(
-    Uint8Array.of(PURPOSE_IDS[context.purpose]), u64(context.keyEpoch), u64(context.revision),
-    lengthPrefixed(context.vaultId), lengthPrefixed(context.objectId), lengthPrefixed(context.keyId),
-    lengthPrefixed(context.recipientId), lengthPrefixed(context.publicationId),
+    Uint8Array.of(PURPOSE_IDS[context.purpose]),
+    u64(context.keyEpoch),
+    u64(context.revision),
+    lengthPrefixed(context.vaultId),
+    lengthPrefixed(context.objectId),
+    lengthPrefixed(context.keyId),
+    lengthPrefixed(context.recipientId),
+    lengthPrefixed(context.publicationId),
   );
 }
 
@@ -115,14 +167,19 @@ async function independentRecoveryVector(): Promise<string> {
   const info = concatBytes(label, u16(account.length), account, u64(1));
   const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, ["deriveKey"]);
   const key = await crypto.subtle.deriveKey(
-    { name: "HKDF", hash: "SHA-256", salt, info }, base,
-    { name: "AES-GCM", length: 256 }, false, ["encrypt"],
+    { name: "HKDF", hash: "SHA-256", salt, info },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt"],
   );
   const nonce = bytes("a0a1a2a3a4a5a6a7a8a9aaab");
   const aad = utf8("mdwn/recovery-capsule-vector-aad/v1");
   const plaintext = utf8("mdwn/vault-recovery-capsule/v1\0");
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 }, key, plaintext,
+    { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 },
+    key,
+    plaintext,
   );
   return hex(ciphertext);
 }
@@ -151,9 +208,16 @@ function independentRecoveryPrefix(accountId: string, generation: number): Uint8
   // Purpose 8 is the pinned recovery-capsule purpose ID in the v1 table.
   const objectId = "vault-recovery-capsule";
   return concatBytes(
-    utf8("mdwn/enc-v1\0"), Uint8Array.of(1), Uint8Array.of(8),
-    u64(generation), u64(1), lengthPrefixed(accountId), lengthPrefixed(objectId),
-    lengthPrefixed(objectId), lengthPrefixed(undefined), lengthPrefixed(undefined),
+    utf8("mdwn/enc-v1\0"),
+    Uint8Array.of(1),
+    Uint8Array.of(8),
+    u64(generation),
+    u64(1),
+    lengthPrefixed(accountId),
+    lengthPrefixed(objectId),
+    lengthPrefixed(objectId),
+    lengthPrefixed(undefined),
+    lengthPrefixed(undefined),
   );
 }
 
@@ -179,21 +243,28 @@ async function independentRecoveryCapsuleFixture(): Promise<{
   const nonce = bytes("a0a1a2a3a4a5a6a7a8a9aaab");
   const vaultRootKey = bytes("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
   const plaintext = concatBytes(
-    utf8("mdwn/vault-recovery-capsule/v1\0"), vaultRootKey,
-    u32(INDEPENDENT_RECOVERY_PRIVATE_PKCS8.length), INDEPENDENT_RECOVERY_PRIVATE_PKCS8,
+    utf8("mdwn/vault-recovery-capsule/v1\0"),
+    vaultRootKey,
+    u32(INDEPENDENT_RECOVERY_PRIVATE_PKCS8.length),
+    INDEPENDENT_RECOVERY_PRIVATE_PKCS8,
   );
   const aad = concatBytes(
-    independentRecoveryPrefix(accountId, generation), recoverySalt, nonce,
+    independentRecoveryPrefix(accountId, generation),
+    recoverySalt,
+    nonce,
     u32(plaintext.length + 16),
   );
   const base = await crypto.subtle.importKey("raw", recoverySecret, "HKDF", false, ["deriveKey"]);
   const key = await crypto.subtle.deriveKey(
     { name: "HKDF", hash: "SHA-256", salt: recoverySalt, info: independentRecoveryInfo(accountId, generation) },
-    base, { name: "AES-GCM", length: 256 }, false, ["encrypt"],
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt"],
   );
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 }, key, plaintext,
-  ));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 }, key, plaintext),
+  );
   const capsule = concatBytes(aad, ciphertext);
   assertEqual(hex(capsule), INDEPENDENT_RECOVERY_CAPSULE_HEX);
   return {
@@ -210,10 +281,17 @@ async function hmac(key: Uint8Array<ArrayBuffer>, data: Uint8Array<ArrayBuffer>)
   const handle = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return new Uint8Array(await crypto.subtle.sign("HMAC", handle, data));
 }
-async function hkdfExtract(salt: Uint8Array<ArrayBuffer>, ikm: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+async function hkdfExtract(
+  salt: Uint8Array<ArrayBuffer>,
+  ikm: Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
   return hmac(salt.length ? salt : new Uint8Array(32), ikm);
 }
-async function hkdfExpand(prk: Uint8Array<ArrayBuffer>, info: Uint8Array<ArrayBuffer>, length: number): Promise<Uint8Array<ArrayBuffer>> {
+async function hkdfExpand(
+  prk: Uint8Array<ArrayBuffer>,
+  info: Uint8Array<ArrayBuffer>,
+  length: number,
+): Promise<Uint8Array<ArrayBuffer>> {
   let out: Uint8Array<ArrayBuffer> = new Uint8Array(0);
   let block: Uint8Array<ArrayBuffer> = new Uint8Array(0);
   for (let counter = 1; out.length < length; counter++) {
@@ -222,54 +300,107 @@ async function hkdfExpand(prk: Uint8Array<ArrayBuffer>, info: Uint8Array<ArrayBu
   }
   return out.slice(0, length);
 }
-async function labeledExtract(suiteId: Uint8Array<ArrayBuffer>, salt: Uint8Array<ArrayBuffer>, label: string, ikm: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+async function labeledExtract(
+  suiteId: Uint8Array<ArrayBuffer>,
+  salt: Uint8Array<ArrayBuffer>,
+  label: string,
+  ikm: Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
   return hkdfExtract(salt, concatBytes(utf8("HPKE-v1"), suiteId, utf8(label), ikm));
 }
-async function labeledExpand(suiteId: Uint8Array<ArrayBuffer>, prk: Uint8Array<ArrayBuffer>, label: string, info: Uint8Array<ArrayBuffer>, length: number): Promise<Uint8Array<ArrayBuffer>> {
+async function labeledExpand(
+  suiteId: Uint8Array<ArrayBuffer>,
+  prk: Uint8Array<ArrayBuffer>,
+  label: string,
+  info: Uint8Array<ArrayBuffer>,
+  length: number,
+): Promise<Uint8Array<ArrayBuffer>> {
   return hkdfExpand(prk, concatBytes(u16(length), utf8("HPKE-v1"), suiteId, utf8(label), info), length);
 }
 
 /** Independently seals `plaintext` to a fresh recipient using the documented mdwn/enc-v1 layout. */
-async function independentHpkeSeal(plaintext: Uint8Array<ArrayBuffer>, context: EnvelopeContext): Promise<CryptoKeyPair & { envelope: Uint8Array<ArrayBuffer> }> {
+async function independentHpkeSeal(
+  plaintext: Uint8Array<ArrayBuffer>,
+  context: EnvelopeContext,
+): Promise<CryptoKeyPair & { envelope: Uint8Array<ArrayBuffer> }> {
   const recipient = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
   // Keep the private handle non-extractable, as production requires.
   const recipientKeyPair: CryptoKeyPair = {
-    privateKey: await crypto.subtle.importKey("jwk", await crypto.subtle.exportKey("jwk", recipient.privateKey), { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]),
-    publicKey: await crypto.subtle.importKey("raw", await crypto.subtle.exportKey("raw", recipient.publicKey), { name: "ECDH", namedCurve: "P-256" }, true, []),
+    privateKey: await crypto.subtle.importKey(
+      "jwk",
+      await crypto.subtle.exportKey("jwk", recipient.privateKey),
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      ["deriveBits"],
+    ),
+    publicKey: await crypto.subtle.importKey(
+      "raw",
+      await crypto.subtle.exportKey("raw", recipient.publicKey),
+      { name: "ECDH", namedCurve: "P-256" },
+      true,
+      [],
+    ),
   };
   return { ...recipientKeyPair, envelope: await independentHpkeSealTo(plaintext, context, recipientKeyPair.publicKey) };
 }
 
 /** Sender-only: any holder of a public key (a Publication editor) can do this. */
-async function independentHpkeSealTo(plaintext: Uint8Array<ArrayBuffer>, context: EnvelopeContext,
-  recipientPublicKey: CryptoKey): Promise<Uint8Array<ArrayBuffer>> {
+async function independentHpkeSealTo(
+  plaintext: Uint8Array<ArrayBuffer>,
+  context: EnvelopeContext,
+  recipientPublicKey: CryptoKey,
+): Promise<Uint8Array<ArrayBuffer>> {
   const ephemeral = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
   const enc = new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey));
   const pkRm = new Uint8Array(await crypto.subtle.exportKey("raw", recipientPublicKey));
   const info = concatBytes(utf8("mdwn/enc-v1\u0000"), Uint8Array.of(2), encodeContextLayout(context));
   const aad = concatBytes(info, enc, u32(plaintext.length + 16));
 
-  const dh = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: recipientPublicKey }, ephemeral.privateKey, 256));
+  const dh = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "ECDH", public: recipientPublicKey }, ephemeral.privateKey, 256),
+  );
   const eaePrk = await labeledExtract(KEM_SUITE_ID, new Uint8Array(0), "eae_prk", dh);
   const sharedSecret = await labeledExpand(KEM_SUITE_ID, eaePrk, "shared_secret", concatBytes(enc, pkRm), 32);
   const pskIdHash = await labeledExtract(HPKE_SUITE_ID, new Uint8Array(0), "psk_id_hash", new Uint8Array(0));
   const infoHash = await labeledExtract(HPKE_SUITE_ID, new Uint8Array(0), "info_hash", info);
   const keyScheduleContext = concatBytes(Uint8Array.of(0), pskIdHash, infoHash);
   const secret = await labeledExtract(HPKE_SUITE_ID, sharedSecret, "secret", new Uint8Array(0));
-  const key = await crypto.subtle.importKey("raw", await labeledExpand(HPKE_SUITE_ID, secret, "key", keyScheduleContext, 32), "AES-GCM", false, ["encrypt"]);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    await labeledExpand(HPKE_SUITE_ID, secret, "key", keyScheduleContext, 32),
+    "AES-GCM",
+    false,
+    ["encrypt"],
+  );
   const baseNonce = await labeledExpand(HPKE_SUITE_ID, secret, "base_nonce", keyScheduleContext, 12);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: baseNonce, additionalData: aad, tagLength: 128 }, key, plaintext));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: baseNonce, additionalData: aad, tagLength: 128 },
+      key,
+      plaintext,
+    ),
+  );
   return concatBytes(aad, ciphertext);
 }
 
 function base64url(value: Uint8Array): string {
-  return btoa(String.fromCharCode(...value)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return btoa(String.fromCharCode(...value))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
 }
 
 /** Hand-built from docs/publications.md: presentation and author plaintext framing. */
 function independentPresentation(title: string, markdown: string): Uint8Array<ArrayBuffer> {
-  const titleBytes = utf8(title), markdownBytes = utf8(markdown);
-  return concatBytes(utf8("mdwn/public-presentation/v1\u0000"), u32(titleBytes.length), titleBytes, u32(markdownBytes.length), markdownBytes);
+  const titleBytes = utf8(title),
+    markdownBytes = utf8(markdown);
+  return concatBytes(
+    utf8("mdwn/public-presentation/v1\u0000"),
+    u32(titleBytes.length),
+    titleBytes,
+    u32(markdownBytes.length),
+    markdownBytes,
+  );
 }
 function independentAuthor(pseudonym: string): Uint8Array<ArrayBuffer> {
   const body = utf8(pseudonym);
@@ -281,17 +412,30 @@ export const cases = [
     name: "reads an independently sealed Public representation and author declaration from a fixed link fragment",
     async run() {
       // The CFRG recipient pair stands in for a link key; its scalar is the fragment capability.
-      const publicKey = bytes(rfc.pkRm), fragment = `v1.${base64url(bytes(rfc.skRm))}`;
+      const publicKey = bytes(rfc.pkRm),
+        fragment = `v1.${base64url(bytes(rfc.skRm))}`;
       const publicationId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index));
       const linkId = base64url(Uint8Array.from({ length: 32 }, (_, index) => 255 - index));
       const declarationId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index * 3));
       const recipientId = base64url(publicKey);
-      const recipient = await crypto.subtle.importKey("raw", publicKey, { name: "ECDH", namedCurve: "P-256" }, true, []);
+      const recipient = await crypto.subtle.importKey(
+        "raw",
+        publicKey,
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        [],
+      );
       const shared = { vaultId: publicationId, keyId: linkId, keyEpoch: 1, recipientId, publicationId };
-      const representation = await independentHpkeSealTo(independentPresentation("Plan ☕", "# Week\n\n**Bold**"),
-        { ...shared, purpose: "public-representation", objectId: publicationId, revision: 4 }, recipient);
-      const declaration = await independentHpkeSealTo(independentAuthor("Member Vector"),
-        { ...shared, purpose: "publication-attribution", objectId: declarationId, revision: 2 }, recipient);
+      const representation = await independentHpkeSealTo(
+        independentPresentation("Plan ☕", "# Week\n\n**Bold**"),
+        { ...shared, purpose: "public-representation", objectId: publicationId, revision: 4 },
+        recipient,
+      );
+      const declaration = await independentHpkeSealTo(
+        independentAuthor("Member Vector"),
+        { ...shared, purpose: "publication-attribution", objectId: declarationId, revision: 2 },
+        recipient,
+      );
       const scalar = parsePublicationFragment(`#${fragment}`);
       if (!scalar) throw new Error("Contract mismatch: fragment rejected");
       const pair = await importPublicationKeyPair(scalar, publicKey);
@@ -300,8 +444,14 @@ export const cases = [
       const opened = await openPublicRepresentation(representation, pair, { ...binding, revision: 4 });
       assertEqual(opened.title, "Plan ☕");
       assertEqual(opened.markdown, "# Week\n\n**Bold**");
-      assertEqual(await openAuthorDeclaration(declaration, pair, { ...binding, declarationId, revision: 2 }), "Member Vector");
-      await rejects(openPublicRepresentation(representation, pair, { ...binding, linkId: publicationId, revision: 4 }), "context-mismatch");
+      assertEqual(
+        await openAuthorDeclaration(declaration, pair, { ...binding, declarationId, revision: 2 }),
+        "Member Vector",
+      );
+      await rejects(
+        openPublicRepresentation(representation, pair, { ...binding, linkId: publicationId, revision: 4 }),
+        "context-mismatch",
+      );
       await rejects(openPublicRepresentation(declaration, pair, { ...binding, revision: 2 }), "context-mismatch");
     },
   },
@@ -312,10 +462,17 @@ export const cases = [
       const publicationId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index + 1));
       const linkId = base64url(Uint8Array.from({ length: 32 }, (_, index) => index + 2));
       const binding = { publicationId, linkId, publicKey: keys.publicKey, revision: 1 };
-      const envelope = await sealPublicRepresentation(binding, publicPresentation("---\ntitle: Fresh\nsecret: no\n---\nBody"));
+      const envelope = await sealPublicRepresentation(
+        binding,
+        publicPresentation("---\ntitle: Fresh\nsecret: no\n---\nBody"),
+      );
       const scalar = parsePublicationFragment(formatPublicationFragment(keys.privateKey));
       if (!scalar) throw new Error("Contract mismatch: fragment rejected");
-      const opened = await openPublicRepresentation(envelope, await importPublicationKeyPair(scalar, keys.publicKey), binding);
+      const opened = await openPublicRepresentation(
+        envelope,
+        await importPublicationKeyPair(scalar, keys.publicKey),
+        binding,
+      );
       assertEqual(opened.title, "Fresh");
       assertEqual(opened.markdown, "Body");
     },
@@ -324,9 +481,20 @@ export const cases = [
     name: "opens an envelope produced by an independent RFC 9180 WebCrypto implementation",
     async run() {
       const sealed = await independentHpkeSeal(baseKey, grantContext);
-      const opened = await openForRecipient(sealed.envelope, { privateKey: sealed.privateKey, publicKey: sealed.publicKey }, { context: grantContext });
+      const opened = await openForRecipient(
+        sealed.envelope,
+        { privateKey: sealed.privateKey, publicKey: sealed.publicKey },
+        { context: grantContext },
+      );
       assertEqual(hex(opened), vector.baseKey);
-      await rejects(openForRecipient(sealed.envelope, { privateKey: sealed.privateKey, publicKey: sealed.publicKey }, { context: { ...grantContext, recipientId: "other-device" } }), "context-mismatch");
+      await rejects(
+        openForRecipient(
+          sealed.envelope,
+          { privateKey: sealed.privateKey, publicKey: sealed.publicKey },
+          { context: { ...grantContext, recipientId: "other-device" } },
+        ),
+        "context-mismatch",
+      );
     },
   },
   {
@@ -347,13 +515,15 @@ export const cases = [
       const ephemeral = await vectorKeyPair(rfc.enc, rfc.skEm);
       const sealed = await suite.seal(
         { recipientPublicKey: recipientKey.publicKey, info: bytes(rfc.info), ekm: ephemeral },
-        bytes(rfc.encryption.pt), bytes(rfc.encryption.aad),
+        bytes(rfc.encryption.pt),
+        bytes(rfc.encryption.aad),
       );
       assertEqual(hex(sealed.enc), rfc.enc);
       assertEqual(hex(sealed.ct), rfc.encryption.ct);
       const opened = await suite.open(
         { recipientKey, info: bytes(rfc.info), enc: bytes(rfc.enc) },
-        bytes(rfc.encryption.ct), bytes(rfc.encryption.aad),
+        bytes(rfc.encryption.ct),
+        bytes(rfc.encryption.aad),
       );
       assertEqual(hex(opened), rfc.encryption.pt);
       assertEqual(recipientKey.privateKey.extractable, false);
@@ -363,7 +533,10 @@ export const cases = [
     name: "opens the fixed HPKE Grant envelope and digest with non-extractable keys",
     async run() {
       const envelope = bytes(vector.hpke);
-      assertEqual(hex(await openForRecipient(envelope, await vectorKeyPair(), { context: grantContext })), vector.baseKey);
+      assertEqual(
+        hex(await openForRecipient(envelope, await vectorKeyPair(), { context: grantContext })),
+        vector.baseKey,
+      );
       assertEqual(hex(await digestEnvelope(envelope)), vector.hpkeDigest);
     },
   },
@@ -376,9 +549,15 @@ export const cases = [
       const tampered = hpke.slice();
       tampered[tampered.length - 1] ^= 1;
       await rejects(openForRecipient(tampered, recipient, { context: grantContext }), "authentication-failed");
-      await rejects(openForRecipient(hpke, recipient, { context: { ...grantContext, recipientId: "other-device" } }), "context-mismatch");
+      await rejects(
+        openForRecipient(hpke, recipient, { context: { ...grantContext, recipientId: "other-device" } }),
+        "context-mismatch",
+      );
       await rejects(openSymmetric(symmetric, baseKey, { context: { ...context, keyEpoch: 3 } }), "stale-epoch");
-      await rejects(openSymmetric(symmetric, baseKey, { context: { ...context, publicationId: "other-publication" } }), "context-mismatch");
+      await rejects(
+        openSymmetric(symmetric, baseKey, { context: { ...context, publicationId: "other-publication" } }),
+        "context-mismatch",
+      );
       await rejects(openSymmetric(hpke, baseKey, { context: grantContext }), "unsupported-suite");
       await rejects(openForRecipient(symmetric, recipient, { context }), "unsupported-suite");
       await rejects(openSymmetric(symmetric.slice(0, -1), baseKey, { context }), "malformed");
@@ -458,17 +637,21 @@ export const cases = [
         "105d91dd324a6b2f706e852771d0de27d61c1f373a07bb5af0ec0fe1a1cd3dd3a5feb5c34a27c3073c7e92e359ec7b",
       );
       const independent = await independentRecoveryCapsuleFixture();
-      const independentlyOpened = await openRecoveryCapsule({
-        accountId: independent.accountId,
-        generation: independent.generation,
-        recoverySalt: independent.recoverySalt,
-        capsule: independent.capsule,
-        recoveryVerificationPublicKey: independent.recoveryVerificationPublicKey,
-      }, independent.phrase, {
-        accountId: independent.accountId,
-        generation: independent.generation,
-        recoverySalt: independent.recoverySalt,
-      });
+      const independentlyOpened = await openRecoveryCapsule(
+        {
+          accountId: independent.accountId,
+          generation: independent.generation,
+          recoverySalt: independent.recoverySalt,
+          capsule: independent.capsule,
+          recoveryVerificationPublicKey: independent.recoveryVerificationPublicKey,
+        },
+        independent.phrase,
+        {
+          accountId: independent.accountId,
+          generation: independent.generation,
+          recoverySalt: independent.recoverySalt,
+        },
+      );
       assertEqual(hex(independentlyOpened.vaultRootKey), hex(independent.vaultRootKey));
 
       const material = await createRecoveryMaterial("account-cross-engine", { vaultRootKey: baseKey });
@@ -483,16 +666,22 @@ export const cases = [
 
       const tampered = material.record.capsule.slice();
       tampered[tampered.length - 1] ^= 1;
-      await rejectsRecovery(openRecoveryCapsule({ ...material.record, capsule: tampered }, material.phrase, {
-        accountId: material.accountId,
-        generation: material.generation,
-        recoverySalt: material.record.recoverySalt,
-      }), "authentication-failed");
-      await rejectsRecovery(openRecoveryCapsule(material.record, material.phrase, {
-        accountId: material.accountId,
-        generation: material.generation + 1,
-        recoverySalt: material.record.recoverySalt,
-      }), "superseded-generation");
+      await rejectsRecovery(
+        openRecoveryCapsule({ ...material.record, capsule: tampered }, material.phrase, {
+          accountId: material.accountId,
+          generation: material.generation,
+          recoverySalt: material.record.recoverySalt,
+        }),
+        "authentication-failed",
+      );
+      await rejectsRecovery(
+        openRecoveryCapsule(material.record, material.phrase, {
+          accountId: material.accountId,
+          generation: material.generation + 1,
+          recoverySalt: material.record.recoverySalt,
+        }),
+        "superseded-generation",
+      );
     },
   },
 ];

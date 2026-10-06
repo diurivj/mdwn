@@ -18,13 +18,7 @@ export type SecurityEventReason =
   | "proof_spent"
   | "policy_denied"
   | "capacity_exhausted";
-export type SecuritySizeClass =
-  | "unknown"
-  | "zero"
-  | "under_1_kib"
-  | "1_to_4_kib"
-  | "4_to_16_kib"
-  | "over_16_kib";
+export type SecuritySizeClass = "unknown" | "zero" | "under_1_kib" | "1_to_4_kib" | "4_to_16_kib" | "over_16_kib";
 export type SecurityProofState = "not_applicable" | "issued" | "valid" | "invalid" | "spent";
 export type SecurityCounterState = "not_checked" | "allowed" | "denied";
 

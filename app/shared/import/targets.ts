@@ -18,14 +18,23 @@ export type ImportScopeSnapshot = {
     vaultId: string;
     actorAccountId: string;
   };
-  listings: Record<string, {
-    directoryId: string;
-    keyEpoch?: number;
-    entriesRevision: number;
-    canCreate?: boolean;
-    entries: readonly { nodeId: string; kind: "file" | "directory"; name: string;
-      nameCiphertext: string; orderCiphertext: string; keyEnvelope: string }[];
-  }>;
+  listings: Record<
+    string,
+    {
+      directoryId: string;
+      keyEpoch?: number;
+      entriesRevision: number;
+      canCreate?: boolean;
+      entries: readonly {
+        nodeId: string;
+        kind: "file" | "directory";
+        name: string;
+        nameCiphertext: string;
+        orderCiphertext: string;
+        keyEnvelope: string;
+      }[];
+    }
+  >;
   keys: Record<string, Uint8Array>;
   file?: { parentId: string | null } | null;
 };
@@ -73,18 +82,26 @@ export function eligibleImportTargets(snapshot: ImportScopeSnapshot): EligibleIm
       ownerAccountId: snapshot.access.vaultId,
       actorAccountId: snapshot.access.actorAccountId,
       label: labelsById.get(directoryId) ?? directoryId,
-      siblings: listing.entries.map((entry): ImportCollisionSibling => ({
-        nodeId: entry.nodeId, kind: entry.kind, name: entry.name,
-      })),
-      listing: listing.entries.map((entry): ImportListingEntry => ({
-        nodeId: entry.nodeId, kind: entry.kind,
-        nameCiphertext: entry.nameCiphertext, orderCiphertext: entry.orderCiphertext,
-        keyEnvelope: entry.keyEnvelope,
-      })),
+      siblings: listing.entries.map(
+        (entry): ImportCollisionSibling => ({
+          nodeId: entry.nodeId,
+          kind: entry.kind,
+          name: entry.name,
+        }),
+      ),
+      listing: listing.entries.map(
+        (entry): ImportListingEntry => ({
+          nodeId: entry.nodeId,
+          kind: entry.kind,
+          nameCiphertext: entry.nameCiphertext,
+          orderCiphertext: entry.orderCiphertext,
+          keyEnvelope: entry.keyEnvelope,
+        }),
+      ),
       key,
     });
   }
-  targets.sort((a, b) => a.label < b.label ? -1 : a.label > b.label ? 1 : a.directoryId < b.directoryId ? -1 : 1);
+  targets.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : a.directoryId < b.directoryId ? -1 : 1));
   return targets;
 }
 
@@ -95,7 +112,7 @@ export function preferredImportTarget(
   kind: "file" | "directory",
 ): EligibleImportTarget | null {
   const targets = eligibleImportTargets(snapshot);
-  const candidateId = kind === "directory" ? nodeId : snapshot.file?.parentId ?? null;
+  const candidateId = kind === "directory" ? nodeId : (snapshot.file?.parentId ?? null);
   if (!candidateId) return null;
   return targets.find((target) => target.directoryId === candidateId) ?? null;
 }

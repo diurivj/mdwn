@@ -13,7 +13,10 @@ type Scope = { type: "global" | "network"; ids: string[]; limit: number };
 type CounterStatement = SQL;
 
 async function countScope(db: D1Database, scope: Scope, now: number): Promise<{ n: number; next: number | null }> {
-  const ids = sql.join(scope.ids.map((id) => sql`${id}`), sql`, `);
+  const ids = sql.join(
+    scope.ids.map((id) => sql`${id}`),
+    sql`, `,
+  );
   const row = await createDb(db).get<{ n: number; next: number | null }>(sql`
     SELECT COALESCE(SUM(count), 0) AS n, MIN(expires_at) AS next
     FROM rate_limit_counters WHERE purpose = ${PURPOSE} AND scope_type = ${scope.type}
@@ -34,7 +37,10 @@ function denied(next: number | null, now: number): RateLimitDecision {
  * reservation comes first, before deriving or writing the Network bucket.
  */
 export async function prepareRegistrationSuccess(
-  db: D1Database, request: Request, secret: string | undefined, now: number,
+  db: D1Database,
+  request: Request,
+  secret: string | undefined,
+  now: number,
 ): Promise<{
   statements?: [CounterStatement, CounterStatement];
   decision: () => Promise<RateLimitDecision>;
@@ -66,7 +72,10 @@ export async function prepareRegistrationSuccess(
     const initialDecision = await evaluate();
     if (!initialDecision.allowed) return { decision: evaluate, initialDecision };
     const statementFor = (scope: Scope, previousRequired: boolean): CounterStatement => {
-      const ids = sql.join(scope.ids.map((id) => sql`${id}`), sql`, `);
+      const ids = sql.join(
+        scope.ids.map((id) => sql`${id}`),
+        sql`, `,
+      );
       return sql`
         INSERT INTO rate_limit_counters
           (purpose, scope_type, scope_id, window_ms, time_epoch, count, expires_at)

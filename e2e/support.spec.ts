@@ -18,10 +18,7 @@ test("home footer links to the anonymous support page", async ({ page }) => {
   await expect(page.locator("svg[shape-rendering='crispEdges']")).toHaveCount(CONFIGURED_ASSET_COUNT);
 });
 
-test("support page serves static addresses and locally generated QR codes privately", async ({
-  page,
-  baseURL,
-}) => {
+test("support page serves static addresses and locally generated QR codes privately", async ({ page, baseURL }) => {
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
 
@@ -45,9 +42,7 @@ test("support page serves static addresses and locally generated QR codes privat
   await expect(page.getByText(/domain and any future paid infrastructure/i)).toBeVisible();
   await expect(page.getByText(/runs identically/i)).toBeVisible();
   await expect(page.getByText(/fails closed rather than triggering paid spend/i)).toBeVisible();
-  await expect(
-    page.getByText(/No badge, priority, feature, storage, or service guarantee/i),
-  ).toBeVisible();
+  await expect(page.getByText(/No badge, priority, feature, storage, or service guarantee/i)).toBeVisible();
 
   // No Account, session, or non-essential cookie is set or read.
   expect((await page.context().cookies()).map((cookie) => cookie.name)).toEqual([]);

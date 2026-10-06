@@ -13,7 +13,7 @@
  * creates no session and performs no upload.
  */
 
-import { canonicalizeSegment, keepBothCandidate, NamespaceError } from "~/shared/namespace-v1";
+import { canonicalizeSegment, keepBothCandidate, NamespaceError, type CanonicalSegment } from "~/shared/namespace-v1";
 import { ImportError } from "./limits";
 import { compareUtf8, foldedToken, type ImportSource, type ImportSourceChild } from "./source";
 
@@ -70,7 +70,12 @@ export type ImportReviewNode = {
   sourceBytes: number;
   action: "create" | "replace" | "skip";
   generated: boolean;
-  collision: null | { existingNodeId: string; existingKind: "file" | "directory"; existingName: string; sameSpelling: boolean };
+  collision: null | {
+    existingNodeId: string;
+    existingKind: "file" | "directory";
+    existingName: string;
+    sameSpelling: boolean;
+  };
   /** The existing File this candidate would replace, when `action` is `replace`. */
   existingNodeId: string | null;
   choice: ImportChoice | null;
@@ -135,7 +140,8 @@ function makeNode(child: ImportSourceChild, parent: ImportReviewNode): ImportRev
     blocked: null,
     children: [],
   };
-  if (child.kind === "directory") for (const grandchild of child.children) node.children.push(makeNode(grandchild, node));
+  if (child.kind === "directory")
+    for (const grandchild of child.children) node.children.push(makeNode(grandchild, node));
   return node;
 }
 
@@ -166,16 +172,23 @@ function canonicalRename(name: string): string | null {
  */
 function allocateDirectory(node: ImportReviewNode, existingTokens: ReadonlyMap<string, ImportCollisionSibling>): void {
   const used = new Set<string>(existingTokens.keys());
-  const ordered = node.children.slice().sort((a, b) =>
-    compareSourcePaths(a.sourcePath, b.sourcePath) || compareSourcePaths(a.requestedName, b.requestedName));
+  const ordered = node.children
+    .slice()
+    .sort(
+      (a, b) => compareSourcePaths(a.sourcePath, b.sourcePath) || compareSourcePaths(a.requestedName, b.requestedName),
+    );
   const pendingGenerated: ImportReviewNode[] = [];
 
   for (const child of ordered) {
     const collision = existingTokens.get(token(child.requestedName)) ?? null;
-    child.collision = collision ? {
-      existingNodeId: collision.nodeId, existingKind: collision.kind, existingName: collision.name,
-      sameSpelling: collision.name === child.requestedName,
-    } : null;
+    child.collision = collision
+      ? {
+          existingNodeId: collision.nodeId,
+          existingKind: collision.kind,
+          existingName: collision.name,
+          sameSpelling: collision.name === child.requestedName,
+        }
+      : null;
     if (!collision) {
       // Reserve every explicit sibling name before any generated candidate.
       used.add(token(child.displayName));
@@ -222,7 +235,7 @@ function allocateDirectory(node: ImportReviewNode, existingTokens: ReadonlyMap<s
   for (const child of pendingGenerated) {
     let chosen: string | null = null;
     for (let number = 2; number <= 100_000; number++) {
-      let candidate;
+      let candidate: CanonicalSegment;
       try {
         candidate = keepBothCandidate(child.requestedName, number);
       } catch (error) {
@@ -322,8 +335,13 @@ export function reviewImport(source: ImportSource, target: ImportTarget, choices
   allocateDirectory(tree, existingTokens);
   recomputeDisplayPaths(tree);
   for (const node of flatten(tree)) {
-    if (node.kind === "directory" && node.blocked && node.blocked !== "parent_skipped" &&
-        node.blocked !== "parent_blocked") markParentBlocked(node);
+    if (
+      node.kind === "directory" &&
+      node.blocked &&
+      node.blocked !== "parent_skipped" &&
+      node.blocked !== "parent_blocked"
+    )
+      markParentBlocked(node);
   }
   const nodes = flatten(tree);
 
@@ -343,13 +361,24 @@ export function reviewImport(source: ImportSource, target: ImportTarget, choices
   const generatedNames: string[] = [];
   const blocked: ImportReviewNode[] = [];
   for (const node of nodes) {
-    if (node.blocked === "parent_skipped") { counts.skips += 1; continue; }
+    if (node.blocked === "parent_skipped") {
+      counts.skips += 1;
+      continue;
+    }
     if (node.blocked === "parent_blocked") continue;
-    if (node.action === "skip") { counts.skips += 1; continue; }
-    if (node.blocked) { blocked.push(node); continue; }
+    if (node.action === "skip") {
+      counts.skips += 1;
+      continue;
+    }
+    if (node.blocked) {
+      blocked.push(node);
+      continue;
+    }
     if (node.action === "replace") counts.replaces += 1;
-    else if (node.kind === "file") { counts.createFiles += 1; counts.comments += source.comments.get(node.sourcePath)?.length ?? 0; }
-    else counts.createDirectories += 1;
+    else if (node.kind === "file") {
+      counts.createFiles += 1;
+      counts.comments += source.comments.get(node.sourcePath)?.length ?? 0;
+    } else counts.createDirectories += 1;
     if (node.generated) generatedNames.push(node.displayPath.join("/"));
   }
   const planCount = counts.createFiles + counts.createDirectories + counts.replaces;

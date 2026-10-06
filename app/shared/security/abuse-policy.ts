@@ -66,9 +66,7 @@ export const RATE_LIMIT_POLICIES = {
     { scope: "account", limit: 3, windowMs: hour },
     { scope: "account", limit: 10, windowMs: day },
   ],
-  "session.refresh": [
-    { scope: "session", limit: 12, windowMs: hour },
-  ],
+  "session.refresh": [{ scope: "session", limit: 12, windowMs: hour }],
   "public_comment.mutate": [
     { scope: "global", limit: 30, windowMs: minute },
     { scope: "global", limit: 300, windowMs: day },
@@ -81,10 +79,6 @@ export const RATE_LIMIT_POLICIES = {
     { scope: "account_publication", limit: 3, windowMs: 10 * minute },
     { scope: "account_publication", limit: 20, windowMs: day },
   ],
-  "public_comment.report": [
-    { scope: "account", limit: 3, windowMs: day },
-  ],
-  "publication.mutate": [
-    { scope: "account", limit: 5, windowMs: day },
-  ],
+  "public_comment.report": [{ scope: "account", limit: 3, windowMs: day }],
+  "publication.mutate": [{ scope: "account", limit: 5, windowMs: day }],
 } as const satisfies Record<RateLimitAction, readonly RateLimitRule[]>;

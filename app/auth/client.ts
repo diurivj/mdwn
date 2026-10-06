@@ -32,10 +32,13 @@ export async function authPost<T>(
   signal: AbortSignal,
   unauthorized: "signed-out" | "failed" = "signed-out",
 ): Promise<T> {
-  return authJson<T>(await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  }), unauthorized);
+  return authJson<T>(
+    await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    }),
+    unauthorized,
+  );
 }
