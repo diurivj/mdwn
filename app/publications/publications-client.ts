@@ -1,15 +1,15 @@
-import { readPseudonym } from "~/account/profile-client";
+import { readPseudonym } from "~/shared/account/profile-client";
 import { loadFilePublicEpochs } from "~/comments/public-client";
-import { sealCommentEpochLink } from "~/comments/public-content";
-import { sealVaultRecoveryEnvelope } from "~/crypto/vault";
-import { FILE_SOURCE_LIMIT } from "~/crypto/file-source";
-import { privateRequest, isPublicParticipationSuspended } from "~/device/private-client";
-import { newOpaqueId } from "~/opaque-id";
-import { loadDirectory, loadFile, type FilePublication, type RootAccess } from "~/tree/client";
-import { convertFileCapability } from "~/tree/file-capability-client";
-import { encodeTreeBytes } from "~/tree/wire";
-import { createPublicationKeyPair, newPublicationIdentifier, parsePublicationFragment, publicLinkUrl } from "./capability";
-import { publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } from "./content";
+import { sealCommentEpochLink } from "~/shared/comments/public-content";
+import { sealVaultRecoveryEnvelope } from "~/shared/crypto/vault";
+import { FILE_SOURCE_LIMIT } from "~/shared/crypto/file-source";
+import { privateRequest, isPublicParticipationSuspended } from "~/shared/device/private-client";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { loadDirectory, loadFile, type FilePublication, type RootAccess } from "~/shared/tree/client";
+import { convertFileCapability } from "~/shared/tree/file-capability-client";
+import { encodeTreeBytes } from "~/shared/tree/wire";
+import { createPublicationKeyPair, newPublicationIdentifier, parsePublicationFragment, publicLinkUrl } from "../shared/publications/capability";
+import { publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } from "../shared/publications/content";
 
 export type PublicationState = {
   fileId: string; isOwner: boolean; canEdit: boolean;

@@ -7,24 +7,24 @@ import {
   runPseudonymUpdate,
   type PseudonymBrowser,
 } from "../../app/account/pseudonym-client";
-import { openAttribution, sealAttribution, sealCommentBody } from "../../app/comments/content";
+import { openAttribution, sealAttribution, sealCommentBody } from "../../app/shared/comments/content";
 import {
   openCommentEpochLink,
   openPublicAttribution,
   sealCommentEpochLink,
   sealPublicAttribution,
   sealPublicCommentBody,
-} from "../../app/comments/public-content";
-import { openAccountProfile, sealAccountProfile } from "../../app/crypto/account-profile";
-import { generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
+} from "../../app/shared/comments/public-content";
+import { openAccountProfile, sealAccountProfile } from "../../app/shared/crypto/account-profile";
+import { generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
 import {
   createPublicationKeyPair, importPublicationKeyPair, newPublicationIdentifier,
-} from "../../app/publications/capability";
+} from "../../app/shared/publications/capability";
 import {
   openAuthorDeclaration, publicPresentation, sealAuthorDeclaration, sealPublicRepresentation,
-} from "../../app/publications/content";
-import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+} from "../../app/shared/publications/content";
+import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   addSharingDevice,
   grant, invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild, type SharingAccount,

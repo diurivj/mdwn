@@ -2,10 +2,10 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
-import { createSymmetricWriter, digestEnvelope, inspectEnvelope, openSymmetric } from "../../app/crypto/enc-v1";
-import { createListingHead } from "../../app/tree/listing";
-import { createFileRepresentation } from "../../app/crypto/vault";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+import { createSymmetricWriter, digestEnvelope, inspectEnvelope, openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { createListingHead } from "../../app/shared/tree/listing";
+import { createFileRepresentation } from "../../app/shared/crypto/vault";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import { grant, movePayload, opaqueId, renamePayload, sharingAccount, sharingRequest, treeChild, treeListing, type SharingAccount } from "./sharing-fixtures";
 
 async function conversion(owner: SharingAccount, fileId: string, parentId: string) {

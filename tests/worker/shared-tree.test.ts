@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
-import { createListingHead } from "../../app/tree/listing";
+import { createListingHead } from "../../app/shared/tree/listing";
 import { deletePayload, grant, invite, movePayload, renamePayload, savePayload, sharingAccount, sharingRequest, treeChild, treeListing } from "./sharing-fixtures";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }

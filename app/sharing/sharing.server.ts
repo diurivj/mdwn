@@ -1,8 +1,8 @@
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { newOpaqueId } from "~/opaque-id";
-import { isV7 } from "~/tree/wire";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { isV7 } from "~/shared/tree/wire";
 import { shareHandleLookupToken } from "./address";
 import { liveGrant } from "./grant-lifetime.server";
 import { readGrantKeys, uploadGrantKeys } from "./grant-keys.server";

@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, createArchiveManifest, createPrivateCommentsSidecar,
   serializeArchiveManifest, serializePrivateCommentsSidecar, type HistoricalComment,
-} from "../app/archive/format";
-import { createZip } from "../app/archive/zip";
-import { IMPORT_LIMITS, ImportError } from "../app/import/limits";
-import { analyzeImportSelection, type RawImportInput } from "../app/import/source";
+} from "../app/shared/archive/format";
+import { createZip } from "../app/shared/archive/zip";
+import { IMPORT_LIMITS, ImportError } from "../app/shared/import/limits";
+import { analyzeImportSelection, type RawImportInput } from "../app/shared/import/source";
 
 const encoder = new TextEncoder();
 const at = new Date("2026-10-05T12:00:00.000Z");

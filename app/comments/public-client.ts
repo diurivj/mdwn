@@ -1,17 +1,17 @@
-import { readPseudonym } from "~/account/profile-client";
-import { openVaultRecoveryEnvelope } from "~/crypto/vault";
-import { privateRequest, PrivateAccessError, PrivatePolicyError, isPublicParticipationSuspended } from "~/device/private-client";
-import { getDevice } from "~/device/store";
-import { newOpaqueId } from "~/opaque-id";
-import { openCommentKeyEnvelope, type CommentKeyContext } from "~/sharing/comment-keys";
-import { PUBLIC_PARTICIPATION_SUSPENDED, type ReportCategory } from "~/security/public-participation";
-import { openRoot, type RootAccess } from "~/tree/client";
-import { decodeTreeBytes } from "~/tree/wire";
-import { MAX_COMMENT_KEY_ENVELOPE_BYTES } from "./content";
+import { readPseudonym } from "~/shared/account/profile-client";
+import { openVaultRecoveryEnvelope } from "~/shared/crypto/vault";
+import { privateRequest, PrivateAccessError, PrivatePolicyError, isPublicParticipationSuspended } from "~/shared/device/private-client";
+import { getDevice } from "~/shared/device/store";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { openCommentKeyEnvelope, type CommentKeyContext } from "~/shared/sharing/comment-keys";
+import { PUBLIC_PARTICIPATION_SUSPENDED, type ReportCategory } from "~/shared/security/public-participation";
+import { openRoot, type RootAccess } from "~/shared/tree/client";
+import { decodeTreeBytes } from "~/shared/tree/wire";
+import { MAX_COMMENT_KEY_ENVELOPE_BYTES } from "../shared/comments/content";
 import {
   openCommentEpochLink, openPublicAttribution, openPublicCommentBody,
   sealPublicAttribution, sealPublicCommentBody,
-} from "./public-content";
+} from "../shared/comments/public-content";
 
 /**
  * Browser-only Public Comment access (ticket 23).

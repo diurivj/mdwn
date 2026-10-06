@@ -1,7 +1,7 @@
-import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
-import { inspectEnvelope } from "~/crypto/enc-v1";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
+import { inspectEnvelope } from "~/shared/crypto/enc-v1";
 import { coarseProofTime, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
 const noStore = { "Cache-Control": "no-store" };
 const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers: noStore });

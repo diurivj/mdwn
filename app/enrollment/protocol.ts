@@ -1,4 +1,4 @@
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
 const encoder = new TextEncoder();
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

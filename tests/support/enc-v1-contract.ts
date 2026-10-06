@@ -3,20 +3,20 @@ import { Aes256Gcm, CipherSuite, DhkemP256HkdfSha256, HkdfSha256 } from "@hpke/c
 import {
   createSymmetricWriter, digestEnvelope, EnvelopeError, inspectEnvelope,
   openForRecipient, openSymmetric, sealToRecipient, type EnvelopeContext,
-} from "../../app/crypto/enc-v1";
+} from "../../app/shared/crypto/enc-v1";
 import {
   createRecoveryMaterial,
   generateRecoveryPhrase,
   openRecoveryCapsule,
   recoveryPhraseToSecret,
   RecoveryError,
-} from "../../app/crypto/vault";
+} from "../../app/shared/crypto/vault";
 import {
   createPublicationKeyPair, formatPublicationFragment, importPublicationKeyPair, parsePublicationFragment,
-} from "../../app/publications/capability";
+} from "../../app/shared/publications/capability";
 import {
   openAuthorDeclaration, openPublicRepresentation, publicPresentation, sealPublicRepresentation,
-} from "../../app/publications/content";
+} from "../../app/shared/publications/content";
 import vector from "../fixtures/enc-v1.json" with { type: "json" };
 import rfc from "../fixtures/rfc9180-p256-aes256.json" with { type: "json" };
 
@@ -73,7 +73,7 @@ async function vectorKeyPair(publicHex = rfc.pkRm, privateHex = rfc.skRm): Promi
 /*
  * An independent RFC 9180 base-mode implementation built directly from WebCrypto
  * HMAC/ECDH/AES-GCM, per the documented mdwn framing. It shares no code with
- * app/crypto/enc-v1, so it catches a framing, info, or AAD bug that a
+ * app/shared/crypto/enc-v1, so it catches a framing, info, or AAD bug that a
  * same-library round trip cannot. The RFC KAT above cannot do this because it
  * bypasses our framing deliberately.
  */
@@ -147,7 +147,7 @@ const INDEPENDENT_RECOVERY_CAPSULE_HEX = [
 ].join("");
 
 function independentRecoveryPrefix(accountId: string, generation: number): Uint8Array<ArrayBuffer> {
-  // This is deliberately a separate encoder from app/crypto/enc-v1/format.
+  // This is deliberately a separate encoder from app/shared/crypto/enc-v1/format.
   // Purpose 8 is the pinned recovery-capsule purpose ID in the v1 table.
   const objectId = "vault-recovery-capsule";
   return concatBytes(

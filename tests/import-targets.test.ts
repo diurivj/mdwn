@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { eligibleImportTargets, preferredImportTarget, type ImportScopeSnapshot } from "../app/import/targets";
+import { eligibleImportTargets, preferredImportTarget, type ImportScopeSnapshot } from "../app/shared/import/targets";
 
 function withSealed(entries: readonly { nodeId: string; kind: "file" | "directory"; name: string }[]) {
   return entries.map((entry) => ({ ...entry, nameCiphertext: "bmFtZQ", orderCiphertext: "b3JkZXI", keyEnvelope: "a2V5" }));

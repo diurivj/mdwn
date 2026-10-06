@@ -1,5 +1,5 @@
 import { Link, useFetcher } from "react-router";
-import { readNextProvisioning, resumeGrantProvisioning } from "~/sharing/provisioning-client";
+import { readNextProvisioning, resumeGrantProvisioning } from "~/shared/sharing/provisioning-client";
 import type { Route } from "./+types/account-shared-access";
 
 export function meta() { return [{ title: "Shared access — mdwn" }]; }

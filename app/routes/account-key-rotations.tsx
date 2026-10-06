@@ -1,8 +1,8 @@
 import { Link, useFetcher } from "react-router";
-import { PrivateAccessError, privateRequest } from "~/device/private-client";
-import { resumeKeyRotation } from "~/sharing/rotation-client";
-import type { RotationJob } from "~/sharing/rotation-wire";
-import { isV7 } from "~/tree/wire";
+import { PrivateAccessError, privateRequest } from "~/shared/device/private-client";
+import { resumeKeyRotation } from "~/shared/sharing/rotation-client";
+import type { RotationJob } from "~/shared/sharing/rotation-wire";
+import { isV7 } from "~/shared/tree/wire";
 import type { Route } from "./+types/account-key-rotations";
 
 export function meta() { return [{ title: "Secure access updates — mdwn" }]; }

@@ -1,11 +1,11 @@
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { encodeTreeBytes } from "~/tree/wire";
+import { encodeTreeBytes } from "~/shared/tree/wire";
 import { sharingWriteBlocked } from "./access.server";
-import { verifyCommentKeySignature, type CommentKeyContext } from "./comment-keys";
+import { verifyCommentKeySignature, type CommentKeyContext } from "../shared/sharing/comment-keys";
 import { contextFor } from "./grant-keys.server";
 import { grantRootMatches, requiredGrantComments } from "./capability-coverage.server";
-import type { GrantKeyContext } from "./grant-keys";
+import type { GrantKeyContext } from "../shared/sharing/grant-keys";
 import { retireFulfilledNeeds } from "./provisioning-needs.server";
 import { readDeviceEnvelopePacket } from "./envelope-packet.server";
 import { rotationDeliveryPermit } from "./rotation-data.server";

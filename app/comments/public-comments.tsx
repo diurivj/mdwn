@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { PublicPage } from "~/publications/public-client";
-import { publicParticipationSuspensionNotice } from "~/security/public-participation";
+import { publicParticipationSuspensionNotice } from "~/shared/security/public-participation";
 import { CommentItem } from "./comment-item";
 import { CommentReportControl } from "./comment-report-control";
-import { commentCharacters, MAX_COMMENT_CHARS } from "./content";
+import { commentCharacters, MAX_COMMENT_CHARS } from "../shared/comments/content";
 import {
   deleteLinkPublicComment,
   editLinkPublicComment,

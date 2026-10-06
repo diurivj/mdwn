@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import { prepareRegistrationSuccess } from "../../app/security/registration-success.server";
-import { atomicSqlBatch, sql } from "../../app/db/client.server";
+import { prepareRegistrationSuccess } from "../../app/shared/security/registration-success.server";
+import { atomicSqlBatch, sql } from "../../app/shared/db/client.server";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[]; ABUSE_HMAC_SECRET: string } } }
 beforeAll(async () => applyD1Migrations(env.DB, env.TEST_MIGRATIONS));

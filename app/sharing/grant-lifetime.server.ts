@@ -1,5 +1,5 @@
 import type { SQL } from "drizzle-orm";
-import { sql } from "~/db/client.server";
+import { sql } from "~/shared/db/client.server";
 
 /** Statement-time D1 clock, with the millisecond component preserved. Keep the
  * replacement storage triggers on the identical expression. No request-time cache.

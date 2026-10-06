@@ -1,7 +1,7 @@
 import { getActiveSession } from "~/auth/session.server";
 import { getEnv } from "~/context/env";
-import { createDb, sql } from "~/db/client.server";
-import { sessionBindingDigest } from "~/device/proof";
+import { createDb, sql } from "~/shared/db/client.server";
+import { sessionBindingDigest } from "~/shared/device/proof";
 
 import type { Route } from "./+types/device-state";
 

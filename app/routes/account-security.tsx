@@ -3,7 +3,7 @@ import { Link, redirect, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
 import { confirmFreshPasskey } from "~/auth/fresh-client";
-import { prepareRecoveryCodeSet } from "~/auth/recovery-codes";
+import { prepareRecoveryCodeSet } from "~/shared/auth/recovery-codes";
 import type {
   PasskeySummary,
   RegistrationStart,

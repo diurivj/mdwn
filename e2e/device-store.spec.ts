@@ -32,7 +32,7 @@ const test = appTest.extend<{}, { deviceScript: string }>({
       configFile: false, publicDir: false, logLevel: "error",
       build: {
         write: false, minify: false,
-        lib: { entry: "app/device/store.ts", name: "mdwnDeviceStore", formats: ["iife"] },
+        lib: { entry: "app/shared/device/store.ts", name: "mdwnDeviceStore", formats: ["iife"] },
       },
     });
     for (const output of Array.isArray(result) ? result : [result]) {

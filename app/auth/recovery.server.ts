@@ -4,11 +4,11 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 
-import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import {
   enforceRateLimit, MAX_EVENT_RETENTION_MS, rateLimitResponse,
-} from "~/security/abuse-control.server";
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+} from "~/shared/security/abuse-control.server";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
 import type { RegistrationStart } from "./contracts";
 import {

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useBeforeUnload, useBlocker, useFetcher } from "react-router";
 
-import { FILE_SOURCE_LIMIT, fileSourceBytes } from "~/crypto/file-source";
-import { newOpaqueId } from "~/opaque-id";
-import { loadDirectory, loadFile, rememberListing, type DirectoryListing } from "./client";
-import { rememberFile } from "./file-capability-client";
-import { prepareFileSave, withFileListing, type FileDocument, type FileSavePayload, type FileSaveResult } from "./file-client";
+import { FILE_SOURCE_LIMIT, fileSourceBytes } from "~/shared/crypto/file-source";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { loadDirectory, loadFile, rememberListing, type DirectoryListing } from "../shared/tree/client";
+import { rememberFile } from "../shared/tree/file-capability-client";
+import { prepareFileSave, withFileListing, type FileDocument, type FileSavePayload, type FileSaveResult } from "../shared/tree/file-client";
 import type { FilesSnapshot } from "./navigation-client";
 import { useFileLease } from "./use-file-lease";
 

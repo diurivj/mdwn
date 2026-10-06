@@ -1,24 +1,24 @@
 import type { SQL } from "drizzle-orm";
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
-import { inspectEnvelope, type EnvelopeContext } from "~/crypto/enc-v1";
-import { HPKE_SUITE } from "~/crypto/enc-v1/format";
-import { createDb, sql } from "~/db/client.server";
+import { inspectEnvelope, type EnvelopeContext } from "~/shared/crypto/enc-v1";
+import { HPKE_SUITE } from "~/shared/crypto/enc-v1/format";
+import { createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, type AuthorizedDevice } from "~/device/proof.server";
-import { newOpaqueId } from "~/opaque-id";
-import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/security/abuse-control.server";
-import { activePublicParticipationSuspension, publicParticipationSuspendedResponse } from "~/security/public-participation.server";
+import { newOpaqueId } from "~/shared/opaque-id";
+import { AbuseControlUnavailableError, abuseControlUnavailableResponse, enforceRateLimit, rateLimitResponse } from "~/shared/security/abuse-control.server";
+import { activePublicParticipationSuspension, publicParticipationSuspendedResponse } from "~/shared/security/public-participation.server";
 import { epochInput, epochStatements, readPublicCommentPage, deletedCommentReports, type EpochInput } from "~/comments/public.server";
-import { isCommentEpochLink } from "~/comments/public-content";
+import { isCommentEpochLink } from "~/shared/comments/public-content";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { deletedPseudonymItems } from "~/account/pseudonym-items.server";
 import { shareHandleLookupToken } from "~/sharing/address";
 import { accessPredicate, accountAccessQuery, effectiveAccess, permits, sharingWriteBlocked } from "~/sharing/access.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/tree/wire";
-import { decodePublicationPublicKey, isPublicationIdentifier } from "./capability";
+import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/shared/tree/wire";
+import { decodePublicationPublicKey, isPublicationIdentifier } from "../shared/publications/capability";
 import {
   authorDeclarationContext, MAX_AUTHOR_DECLARATION_BYTES, MAX_PUBLIC_REPRESENTATION_BYTES, MAX_PUBLICATION_AUTHORS,
   publicRepresentationContext,
-} from "./content";
+} from "../shared/publications/content";
 
 /**
  * Publications (ticket 22): Owner-only creation and configuration, Collaborator

@@ -1,5 +1,5 @@
 import type { SQL } from "drizzle-orm";
-import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { expiredGrant, hasExpiredGrants } from "./grant-lifetime.server";
 import { pendingRotationJob, planRotation, rotationSnapshot, startRotation, type RotationTarget } from "./rotation.server";

@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { createPublicationKeyPair, newPublicationIdentifier } from "../app/publications/capability";
-import { digestEnvelope, openSymmetric } from "../app/crypto/enc-v1";
-import { encodeTreeBytes } from "../app/tree/wire";
-import { IMPORT_LIMITS, ImportError } from "../app/import/limits";
-import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../app/import/plan";
-import { encodeImportChunkBody } from "../app/import/staging";
-import { reviewImport, type ImportChoice, type ImportCollisionSibling, type ImportTarget } from "../app/import/review";
-import { analyzeImportSelection, type ImportSource, type ImportSourceFile } from "../app/import/source";
-import type { HistoricalComment } from "../app/archive/format";
+import { createPublicationKeyPair, newPublicationIdentifier } from "../app/shared/publications/capability";
+import { digestEnvelope, openSymmetric } from "../app/shared/crypto/enc-v1";
+import { encodeTreeBytes } from "../app/shared/tree/wire";
+import { IMPORT_LIMITS, ImportError } from "../app/shared/import/limits";
+import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../app/shared/import/plan";
+import { encodeImportChunkBody } from "../app/shared/import/staging";
+import { reviewImport, type ImportChoice, type ImportCollisionSibling, type ImportTarget } from "../app/shared/import/review";
+import { analyzeImportSelection, type ImportSource, type ImportSourceFile } from "../app/shared/import/source";
+import type { HistoricalComment } from "../app/shared/archive/format";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -58,7 +58,7 @@ async function makePlan(paths: readonly string[], options: {
   return { plan, source, targetKey };
 }
 
-import type { ImportSourceChild } from "../app/import/source";
+import type { ImportSourceChild } from "../app/shared/import/source";
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),

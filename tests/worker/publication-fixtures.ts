@@ -1,9 +1,9 @@
 import { SELF } from "cloudflare:test";
-import { sealCommentEpochLink, sealPublicAttribution, sealPublicCommentBody } from "../../app/comments/public-content";
-import { generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
-import { createPublicationKeyPair, formatPublicationFragment, newPublicationIdentifier } from "../../app/publications/capability";
-import { publicPresentation, sealPublicRepresentation } from "../../app/publications/content";
-import { encodeTreeBytes } from "../../app/tree/wire";
+import { sealCommentEpochLink, sealPublicAttribution, sealPublicCommentBody } from "../../app/shared/comments/public-content";
+import { generateVaultRootKey, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
+import { createPublicationKeyPair, formatPublicationFragment, newPublicationIdentifier } from "../../app/shared/publications/capability";
+import { publicPresentation, sealPublicRepresentation } from "../../app/shared/publications/content";
+import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import { opaqueId, sharingRequest, type SharingAccount } from "./sharing-fixtures";
 
 /**

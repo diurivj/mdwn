@@ -1,7 +1,7 @@
 import type { SQL } from "drizzle-orm";
-import { atomicSqlBatch, createDb, deviceProofUses, registrationChallenges, webauthnChallenges, sql } from "~/db/client.server";
+import { atomicSqlBatch, createDb, deviceProofUses, registrationChallenges, webauthnChallenges, sql } from "~/shared/db/client.server";
 import { getActiveSession, type ActiveSession } from "~/auth/session.server";
-import { sessionBindingDigest, verifyDeviceProof, type DeviceProof } from "./proof";
+import { sessionBindingDigest, verifyDeviceProof, type DeviceProof } from "../shared/device/proof";
 
 const COARSE_PROOF_MS = 86_400_000;
 /** Record successful mutation proofs by UTC day; read proofs never write D1. */

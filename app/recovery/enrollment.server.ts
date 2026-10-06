@@ -1,10 +1,10 @@
 import { freshNormalSessionGuard } from "~/auth/fresh-session.server";
 import { assertSessionConfiguration, hasFreshAssertion, SESSION_ABSOLUTE_MS, SESSION_IDLE_MS, signSessionId, type ActiveSession } from "~/auth/session.server";
-import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
-import { digestEnvelope, inspectEnvelope } from "~/crypto/enc-v1";
-import { sealDeviceEnrollmentEnvelope } from "~/crypto/vault";
-import { enforceRateLimit, MAX_EVENT_RETENTION_MS, rateLimitResponse } from "~/security/abuse-control.server";
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
+import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
+import { sealDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
+import { enforceRateLimit, MAX_EVENT_RETENTION_MS, rateLimitResponse } from "~/shared/security/abuse-control.server";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
 import { nextRecoveryMetadataDigest, possessionMessage, recoveryIntentMessage, sha256, type NextRecoveryMetadata, type RecoveryIntent } from "./protocol";
 

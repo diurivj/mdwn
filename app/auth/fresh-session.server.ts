@@ -1,6 +1,6 @@
 import type { SQL } from "drizzle-orm";
 
-import { sql } from "~/db/client.server";
+import { sql } from "~/shared/db/client.server";
 
 import { FRESH_ASSERTION_MS, type ActiveSession } from "./session.server";
 

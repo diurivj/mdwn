@@ -4,8 +4,8 @@ import { Link, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
 import type { AssertionStart } from "~/auth/contracts";
-import { signDeviceProof } from "~/device/proof";
-import { getDevice, updateRegistryEpoch } from "~/device/store";
+import { signDeviceProof } from "~/shared/device/proof";
+import { getDevice, updateRegistryEpoch } from "~/shared/device/store";
 
 import type { Route } from "./+types/sign-in";
 

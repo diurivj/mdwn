@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveNetworkBucket, normalizeEdgeIp } from "../app/security/network-bucket";
+import { deriveNetworkBucket, normalizeEdgeIp } from "../app/shared/security/network-bucket";
 
 const secret = "test-only-key-with-at-least-32-bytes";
 

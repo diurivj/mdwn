@@ -5,7 +5,7 @@ import {
   NamespaceError,
   splitSourcePath,
   sameComparisonKey,
-} from "../../app/namespace-v1";
+} from "../../app/shared/namespace-v1";
 
 export function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");

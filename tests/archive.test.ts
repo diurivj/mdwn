@@ -5,8 +5,8 @@ import {
   createArchiveManifest, createPrivateCommentsSidecar, inspectArchive, parseArchiveManifest,
   parsePrivateCommentsSidecar, serializeArchiveManifest, serializePrivateCommentsSidecar,
   type ArchiveErrorCode, type HistoricalComment,
-} from "../app/archive/format";
-import { createZip, crc32, readZip, ZipError, type ZipEntry } from "../app/archive/zip";
+} from "../app/shared/archive/format";
+import { createZip, crc32, readZip, ZipError, type ZipEntry } from "../app/shared/archive/zip";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

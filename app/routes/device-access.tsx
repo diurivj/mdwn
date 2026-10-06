@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 
-import { privateRequest, PrivateAccessError, type PrivateAccessState } from "~/device/private-client";
-import { ownedProvisioningKind } from "~/device/owned-provision-client";
+import { privateRequest, PrivateAccessError, type PrivateAccessState } from "~/shared/device/private-client";
+import { ownedProvisioningKind } from "~/shared/device/owned-provision-client";
 import { useOwnedProvisioning } from "~/device/owned-provision-hook";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
 

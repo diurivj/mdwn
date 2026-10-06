@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 
-import { createListingHead, openListingHead } from "../../app/tree/listing";
+import { createListingHead, openListingHead } from "../../app/shared/tree/listing";
 
 it("opens only a device-signed current Directory listing and rejects old and same-revision forks", async () => {
   const signing = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);

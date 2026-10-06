@@ -1,12 +1,12 @@
 import { applyD1Migrations, env, SELF } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 import { invite, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
-import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "../../app/sharing/grant-keys";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
+import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "../../app/shared/sharing/grant-keys";
 import type { SharingAccount } from "./sharing-fixtures";
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
 import { opaqueId } from "./sharing-fixtures";
-import { sealToRecipient } from "../../app/crypto/enc-v1";
+import { sealToRecipient } from "../../app/shared/crypto/enc-v1";
 
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });
 

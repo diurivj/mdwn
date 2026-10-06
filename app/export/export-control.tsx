@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import { downloadExport, exportOwnedFiles, type ExportSelection } from "./export-client";
-import { ExportError } from "./collect";
+import { ExportError } from "../shared/export/collect";
 
 type ExportState =
   | { status: "idle" }

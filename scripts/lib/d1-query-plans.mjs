@@ -7,7 +7,7 @@
  * recursive Grant and successor-child queries keep their production INDEXED BY contracts.
  */
 import { SQLiteAsyncDialect } from "drizzle-orm/sqlite-core";
-import { boundedSubtreeQuery } from "../../app/tree/subtree.server.ts";
+import { boundedSubtreeQuery } from "../../app/shared/tree/subtree.server.ts";
 
 // Use the production traversal, with source-controlled synthetic values only.
 const subtreeSql = new SQLiteAsyncDialect().sqlToQuery(boundedSubtreeQuery("root").inlineParams()).sql;
@@ -131,7 +131,7 @@ export const QUERY_PLANS = [
   },
   {
     name: "rolling counter window",
-    source: "app/security/abuse-control.server.ts: activePredicate",
+    source: "app/shared/security/abuse-control.server.ts: activePredicate",
     sql: `SELECT SUM(count), MIN(expires_at) FROM rate_limit_counters WHERE purpose = 'session.refresh'
       AND scope_type = 'session' AND scope_id = 'session:synthetic' AND window_ms = 3600000
       AND time_epoch > 1699996400000 AND expires_at > 1700000000000`,
@@ -155,7 +155,7 @@ export const QUERY_PLANS = [
   },
   {
     name: "bounded subtree deletion enumeration",
-    source: "app/tree/subtree.server.ts: one-child indexed cursor (501 candidates)",
+    source: "app/shared/tree/subtree.server.ts: one-child indexed cursor (501 candidates)",
     sql: subtreeSql,
     covering: ["vault_nodes_parent_idx"],
     allowedScans: ["walk", "w", "budget"],

@@ -6,13 +6,13 @@ import {
 } from "cloudflare:test";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { sealPublicCommentBody } from "../../app/comments/public-content";
+import { sealPublicCommentBody } from "../../app/shared/comments/public-content";
 import {
   activePublicParticipationSuspension,
   applyPublicParticipationSuspension,
   clearPublicParticipationSuspension,
-} from "../../app/security/public-participation.server";
-import { FIRST_SUSPENSION_MS, REPORT_RETENTION_MS, REPEAT_SUSPENSION_MS } from "../../app/security/public-participation";
+} from "../../app/shared/security/public-participation.server";
+import { FIRST_SUSPENSION_MS, REPORT_RETENTION_MS, REPEAT_SUSPENSION_MS } from "../../app/shared/security/public-participation";
 import worker from "../../workers/app";
 import { mutation } from "./auth-fixtures";
 import {

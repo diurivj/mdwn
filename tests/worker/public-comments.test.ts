@@ -1,14 +1,14 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, beforeEach, expect, it } from "vitest";
-import { openPublicCommentBody, openCommentEpochLink, sealPublicCommentBody } from "../../app/comments/public-content";
-import { sealAttribution as sealPrivateAttribution, sealCommentBody as sealPrivateCommentBody } from "../../app/comments/content";
-import { sealVaultRecoveryEnvelope, generateVaultRootKey } from "../../app/crypto/vault";
-import { createPublicationKeyPair, newPublicationIdentifier } from "../../app/publications/capability";
-import { publicPresentation, sealPublicRepresentation } from "../../app/publications/content";
-import { createRecoveryMaterial, sealDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
-import { resumeRotation, type RotationBrowser } from "../../app/sharing/rotation-client";
-import { openCommentKeyEnvelope, createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
-import { decodeTreeBytes, encodeTreeBytes } from "../../app/tree/wire";
+import { openPublicCommentBody, openCommentEpochLink, sealPublicCommentBody } from "../../app/shared/comments/public-content";
+import { sealAttribution as sealPrivateAttribution, sealCommentBody as sealPrivateCommentBody } from "../../app/shared/comments/content";
+import { sealVaultRecoveryEnvelope, generateVaultRootKey } from "../../app/shared/crypto/vault";
+import { createPublicationKeyPair, newPublicationIdentifier } from "../../app/shared/publications/capability";
+import { publicPresentation, sealPublicRepresentation } from "../../app/shared/publications/content";
+import { createRecoveryMaterial, sealDeviceEnrollmentEnvelope } from "../../app/shared/crypto/vault";
+import { resumeRotation, type RotationBrowser } from "../../app/shared/sharing/rotation-client";
+import { openCommentKeyEnvelope, createCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import { invite, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild, type SharingAccount } from "./sharing-fixtures";
 
 import { anonymousComments as anonymous, commentPayload as payload, fileView,

@@ -19,24 +19,24 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
-import { sealCommentEpochLink } from "../../app/comments/public-content";
-import type { EnvelopeContext } from "../../app/crypto/enc-v1";
-import { createSymmetricWriter, openSymmetric } from "../../app/crypto/enc-v1";
-import { FILE_SOURCE_LIMIT } from "../../app/crypto/file-source";
-import { createFileRepresentation, sealVaultRecoveryEnvelope } from "../../app/crypto/vault";
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
-import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../../app/import/plan";
-import { reviewImport, type ImportChoice, type ImportTarget } from "../../app/import/review";
-import { analyzeImportSelection, type ImportSourceFile, type RawImportInput } from "../../app/import/source";
+import { sealCommentEpochLink } from "../../app/shared/comments/public-content";
+import type { EnvelopeContext } from "../../app/shared/crypto/enc-v1";
+import { createSymmetricWriter, openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { FILE_SOURCE_LIMIT } from "../../app/shared/crypto/file-source";
+import { createFileRepresentation, sealVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
+import { prepareImportPlan, type ImportPlan, type ImportReplacementDocument } from "../../app/shared/import/plan";
+import { reviewImport, type ImportChoice, type ImportTarget } from "../../app/shared/import/review";
+import { analyzeImportSelection, type ImportSourceFile, type RawImportInput } from "../../app/shared/import/source";
 import {
   IMPORT_RECORD_KINDS, MAX_IMPORT_SESSION_BODY_BYTES, encodeImportChunkBody, encodeImportSessionBody,
   type ImportSessionKindCount, type ImportSessionMetadata, type StagingRecordKind,
-} from "../../app/import/staging";
-import { createPublicationKeyPair, importPublicationKeyPair, newPublicationIdentifier } from "../../app/publications/capability";
-import { openPublicRepresentation, publicPresentation, sealPublicRepresentation } from "../../app/publications/content";
-import { createFileHead } from "../../app/tree/file-head";
-import { createListingHead } from "../../app/tree/listing";
-import { decodeTreeBytes, encodeTreeBytes, MAX_REPRESENTATION_BYTES } from "../../app/tree/wire";
+} from "../../app/shared/import/staging";
+import { createPublicationKeyPair, importPublicationKeyPair, newPublicationIdentifier } from "../../app/shared/publications/capability";
+import { openPublicRepresentation, publicPresentation, sealPublicRepresentation } from "../../app/shared/publications/content";
+import { createFileHead } from "../../app/shared/tree/file-head";
+import { createListingHead } from "../../app/shared/tree/listing";
+import { decodeTreeBytes, encodeTreeBytes, MAX_REPRESENTATION_BYTES } from "../../app/shared/tree/wire";
 
 const env = process.env;
 const baseUrl = env.PROOF_BASE_URL ?? "";

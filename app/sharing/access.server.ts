@@ -1,9 +1,9 @@
 import type { SQL } from "drizzle-orm";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { expiredGrant, liveGrant } from "./grant-lifetime.server";
 import { privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { committedNodeVisible } from "../import/visibility.server";
-export { committedNodeVisible } from "../import/visibility.server";
+import { committedNodeVisible } from "../shared/import/visibility.server";
+export { committedNodeVisible } from "../shared/import/visibility.server";
 
 export type EffectiveAccess = {
   accountId: string; nodeId: string; ownerId: string; kind: "directory" | "file";

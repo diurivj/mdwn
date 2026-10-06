@@ -6,9 +6,9 @@ import {
   accountProfileContext,
   openAccountProfile,
   sealAccountProfile,
-} from "../app/crypto/account-profile";
-import { inspectEnvelope } from "../app/crypto/enc-v1";
-import { PURPOSES } from "../app/crypto/enc-v1/format";
+} from "../app/shared/crypto/account-profile";
+import { inspectEnvelope } from "../app/shared/crypto/enc-v1";
+import { PURPOSES } from "../app/shared/crypto/enc-v1/format";
 
 const rootKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const expected = {

@@ -1,5 +1,5 @@
 import type { SQL } from "drizzle-orm";
-import { sql } from "~/db/client.server";
+import { sql } from "~/shared/db/client.server";
 
 /**
  * Staged Pseudonym-update items whose attribution context is being removed.

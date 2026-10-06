@@ -1,9 +1,9 @@
-import { newPublicationIdentifier } from "../../app/publications/capability";
+import { newPublicationIdentifier } from "../../app/shared/publications/capability";
 import { applyD1Migrations, env, SELF } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
-import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
-import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "../../app/sharing/grant-keys";
-import { sessionBindingDigest, signDeviceProof } from "../../app/device/proof";
+import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
+import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "../../app/shared/sharing/grant-keys";
+import { sessionBindingDigest, signDeviceProof } from "../../app/shared/device/proof";
 import { addSharingDevice, grant, opaqueId, prepareGrantKeys, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
 
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });

@@ -6,27 +6,27 @@ import {
   attributionKeyContext,
   MAX_ATTRIBUTION_BYTES,
   MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES,
-} from "~/comments/content";
+} from "~/shared/comments/content";
 import { commentEnvelopeWire, readCommentEnvelope } from "~/comments/envelopes.server";
 import {
   publicAttributionContext,
   publicAttributionKeyContext,
   publicCommentEnvelope,
-} from "~/comments/public-content";
-import { accountProfileContext, MAX_ACCOUNT_PROFILE_BYTES } from "~/crypto/account-profile";
-import { inspectEnvelope } from "~/crypto/enc-v1";
-import { HPKE_SUITE } from "~/crypto/enc-v1/format";
-import { createDb, sql } from "~/db/client.server";
+} from "~/shared/comments/public-content";
+import { accountProfileContext, MAX_ACCOUNT_PROFILE_BYTES } from "~/shared/crypto/account-profile";
+import { inspectEnvelope } from "~/shared/crypto/enc-v1";
+import { HPKE_SUITE } from "~/shared/crypto/enc-v1/format";
+import { createDb, sql } from "~/shared/db/client.server";
 import {
   authorizePrivateRequest,
   commitPrivateBatch,
   privateReadGuard,
   type AuthorizedDevice,
 } from "~/device/proof.server";
-import { isPublicationIdentifier } from "~/publications/capability";
-import { authorDeclarationContext, MAX_AUTHOR_DECLARATION_BYTES } from "~/publications/content";
+import { isPublicationIdentifier } from "~/shared/publications/capability";
+import { authorDeclarationContext, MAX_AUTHOR_DECLARATION_BYTES } from "~/shared/publications/content";
 import { accessPredicate } from "~/sharing/access.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
+import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 
 /**
  * Public pseudonym update (ticket 24).

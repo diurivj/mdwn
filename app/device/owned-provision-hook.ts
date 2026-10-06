@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { finishOwnedProvisioning } from "./owned-provision-client";
+import { finishOwnedProvisioning } from "../shared/device/owned-provision-client";
 
 /** Continue an owned-material job while its page remains open and hide status after completion. */
 export function useOwnedProvisioning(needed: boolean): boolean {

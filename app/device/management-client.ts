@@ -1,10 +1,10 @@
 import { confirmFreshPasskey } from "~/auth/fresh-client";
-import { openSymmetric } from "~/crypto/enc-v1";
-import { openDeviceEnrollmentEnvelope } from "~/crypto/vault";
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
+import { openSymmetric } from "~/shared/crypto/enc-v1";
+import { openDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
-import { privateRequest, PrivateAccessError } from "./private-client";
-import { getDevice } from "./store";
+import { privateRequest, PrivateAccessError } from "../shared/device/private-client";
+import { getDevice } from "../shared/device/store";
 
 export type ListedDevice = {
   id: string; label: string; labelCiphertext: string | null;

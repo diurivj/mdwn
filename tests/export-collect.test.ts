@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   ARCHIVE_COMMENTS_PATH, inspectArchive, parseArchiveManifest, parsePrivateCommentsSidecar,
   type HistoricalComment,
-} from "../app/archive/format";
-import { createZip, readZip, type ZipEntry } from "../app/archive/zip";
+} from "../app/shared/archive/format";
+import { createZip, readZip, type ZipEntry } from "../app/shared/archive/zip";
 import {
   allocateExportPaths, buildArchiveFiles, collectExportFile, collectExportTree, ExportError,
   exportFileName, MAX_EXPORT_DIRECTORY_DEPTH, type ArchiveFile, type ExportEntry, type ExportSource,
-} from "../app/export/collect";
+} from "../app/shared/export/collect";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

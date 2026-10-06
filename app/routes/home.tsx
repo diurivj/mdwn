@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 
 import { getEnv } from "~/context/env";
-import { ping } from "~/db/client.server";
+import { ping } from "~/shared/db/client.server";
 
 import type { Route } from "./+types/home";
 

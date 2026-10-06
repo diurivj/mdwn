@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { ImportPlanDescriptor } from "../app/import/plan";
+import type { ImportPlanDescriptor } from "../app/shared/import/plan";
 import {
   MAX_IMPORT_CHUNK_BODY_BYTES, decodeImportChunkBody, decodeImportSessionBody,
   encodeImportChunkBody, encodeImportSessionBody, verifyChunkDigests,
   type ImportSessionMetadata,
-} from "../app/import/staging";
+} from "../app/shared/import/staging";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

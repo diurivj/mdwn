@@ -1,9 +1,9 @@
 import type { SQL } from "drizzle-orm";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import type { AuthorizedDevice } from "~/device/proof.server";
 import { requiredGrantComments } from "~/sharing/capability-coverage.server";
 import { liveGrant } from "~/sharing/grant-lifetime.server";
-import { encodeTreeBytes } from "~/tree/wire";
+import { encodeTreeBytes } from "~/shared/tree/wire";
 
 /**
  * The one read path for a Comment capability envelope, shared by Private

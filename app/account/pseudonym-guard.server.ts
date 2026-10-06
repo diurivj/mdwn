@@ -1,5 +1,5 @@
 import type { SQL } from "drizzle-orm";
-import { sql } from "~/db/client.server";
+import { sql } from "~/shared/db/client.server";
 
 /**
  * Public-pseudonym change policy shared by the profile read, the exclusive

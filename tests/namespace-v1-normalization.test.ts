@@ -6,17 +6,17 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeNfc,
   normalizeNfd,
-} from "../app/namespace-v1";
+} from "../app/shared/namespace-v1";
 import {
   GENERATED_UCD_SHA256,
-} from "../app/namespace-v1/generated";
+} from "../app/shared/namespace-v1/generated";
 import {
   EXPECTED_UCD_SOURCE_SHA256,
   NAMESPACE_IMPLEMENTATION_VERSION,
   UCD_SOURCE_FILES,
   UCD_SOURCE_SHA256,
   UNICODE_VERSION,
-} from "../app/namespace-v1/data-version";
+} from "../app/shared/namespace-v1/data-version";
 
 const UCD_DIRECTORY = new URL("../vendor/unicode/17.0.0/ucd/", import.meta.url);
 

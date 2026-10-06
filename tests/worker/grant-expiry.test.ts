@@ -1,13 +1,13 @@
 import { applyD1Migrations, createScheduledController, env, type D1Migration } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 import { addSharingDevice, grant, opaqueId, renamePayload, sharingAccount, sharingRequest, treeChild } from "./sharing-fixtures";
-import { createGrantKeyEnvelope, type GrantKeyContext } from "../../app/sharing/grant-keys";
-import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/sharing/comment-keys";
+import { createGrantKeyEnvelope, type GrantKeyContext } from "../../app/shared/sharing/grant-keys";
+import { createCommentKeyEnvelope, type CommentKeyContext } from "../../app/shared/sharing/comment-keys";
 import type { SharingAccount } from "./sharing-fixtures";
 import worker from "../../workers/app";
-import { createSymmetricWriter } from "../../app/crypto/enc-v1";
-import { encodeTreeBytes } from "../../app/tree/wire";
-import { rotationResumeContext } from "../../app/sharing/rotation-wire";
+import { createSymmetricWriter } from "../../app/shared/crypto/enc-v1";
+import { encodeTreeBytes } from "../../app/shared/tree/wire";
+import { rotationResumeContext } from "../../app/shared/sharing/rotation-wire";
 
 declare global { namespace Cloudflare { interface Env { TEST_MIGRATIONS: D1Migration[] } } }
 beforeAll(async () => { await applyD1Migrations(env.DB, env.TEST_MIGRATIONS); });

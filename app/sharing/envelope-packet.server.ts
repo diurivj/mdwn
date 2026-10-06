@@ -1,5 +1,5 @@
 import { record } from "~/auth/request.server";
-import { decodeTreeBytes, isV7 } from "~/tree/wire";
+import { decodeTreeBytes, isV7 } from "~/shared/tree/wire";
 
 type DeviceEnvelope = {
   deviceId: string; ciphertext: string; signature: string;

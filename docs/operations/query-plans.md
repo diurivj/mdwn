@@ -410,7 +410,7 @@ SEARCH provisioning_needs USING COVERING INDEX provisioning_needs_device_idx (de
 
 ## rolling counter window
 
-Source: `app/security/abuse-control.server.ts: activePredicate`
+Source: `app/shared/security/abuse-control.server.ts: activePredicate`
 
 ```sql
 SELECT SUM(count), MIN(expires_at) FROM rate_limit_counters WHERE purpose = 'session.refresh'
@@ -456,7 +456,7 @@ SEARCH g USING COVERING INDEX grants_recipient_target_idx (recipient_id=? AND ta
 
 ## bounded subtree deletion enumeration
 
-Source: `app/tree/subtree.server.ts: one-child indexed cursor (501 candidates)`
+Source: `app/shared/tree/subtree.server.ts: one-child indexed cursor (501 candidates)`
 
 ```sql
 WITH RECURSIVE walk(parent_id, cursor_id, stack, id, visited, steps) AS (

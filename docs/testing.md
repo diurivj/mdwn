@@ -9,6 +9,54 @@ npm run test:all     # npm test, a production Worker build, and all browser engi
 npm run verify      # local preflight: every CI check, then all browser engines
 ```
 
+## TypeScript project boundaries
+
+`npm run typecheck` builds the root `tsconfig.json` solution, which references
+two composite projects:
+
+- `tsconfig.node.json` owns the Node tooling target: scripts, Node tests,
+  Playwright specs, and the portable application modules under
+  `app/shared/**/*.ts`.
+- `tsconfig.cloudflare.json` owns the Workers target: the full `app/` tree,
+  `workers/`, generated Worker bindings, and the workerd tests under
+  `tests/worker/`. It also includes `scripts/lib/d1-query-plans.mjs` because
+  `tests/worker/query-plans.test.ts` imports the reviewed plan table; that is a
+  typecheck edge, not deployed code.
+
+Application source is classified by the target that compiles it, not by the
+`.server` suffix alone:
+
+- `app/shared/<feature>/**/*.ts` is the shared layer: `.ts` modules that both
+  the Node tooling target and the Workers/browser application compile. A SQL
+  fragment used by Node query tooling belongs here. Keeping the `.server.ts`
+  suffix on server-only SQL still triggers React Router's client-bundle guard:
+  the suffix means "never import from client code", not "requires Cloudflare
+  `Env`". The shared layer is TypeScript-only; `.tsx` UI stays in the feature
+  directory and is never part of the Node target.
+- The rest of `app/` and all of `workers/` belong to the Workers/browser
+  application only: `app/routes/**`, `app/routes.ts`, `app/context/**`, `.tsx`
+  UI modules, Worker-only `.server.ts` modules that consume the generated `Env`
+  binding or route context, and feature-local browser modules that Node tooling
+  does not import.
+- `scripts/**`, `tests/**` (except `tests/worker/`), and `e2e/**` are Node-only
+  tooling and stay out of the deployed Worker graph. Two typecheck edges cross
+  on purpose: the Workers project compiles `tests/support/**` for its own
+  tests, and both projects compile `scripts/lib/d1-query-plans.mjs` because the
+  Worker query-plan test imports the reviewed plan table.
+
+To add portable application code — including a SQL fragment shared with Node
+tooling — put it under `app/shared/`, normally in the owning feature's
+`app/shared/<feature>/` directory; a module with no feature owner (such as
+`opaque-id.ts`) sits at the shared root. Both projects discover it through
+their existing globs; no per-file tsconfig entry is needed. Worker-only server modules stay next to their feature as `.server.ts`
+and are intentionally absent from the Node project, so a shared module that
+imports one fails the Node typecheck.
+
+`tests/typescript-boundaries.test.ts` guards this contract. It drops a probe
+module into the shared area, resolves both projects through the TypeScript
+compiler's own config parser, and asserts the probe is in both file lists while
+Worker-only entrypoints are not in the Node project.
+
 ## Workers runtime
 
 `npm test` runs both Vitest configurations. The first uses the Node environment

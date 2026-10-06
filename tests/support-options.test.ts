@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { donationOptionsFromEnv, parseSupportAddress } from "../app/support/donations";
+import { donationOptionsFromEnv, parseSupportAddress } from "../app/shared/support/donations";
 
 describe("parseSupportAddress", () => {
   it("keeps a configured address and trims surrounding whitespace", () => {

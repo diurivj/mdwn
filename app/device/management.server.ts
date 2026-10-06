@@ -1,10 +1,10 @@
 import { freshNormalSessionGuard } from "~/auth/fresh-session.server";
 import { hasFreshAssertion, type ActiveSession } from "~/auth/session.server";
-import { atomicSqlBatch, createDb, sql } from "~/db/client.server";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import { coarseProofTime, privateReadGuard, type AuthorizedDevice } from "./proof.server";
-import { sessionBindingDigest, verifyDeviceProof } from "./proof";
-import { decodeBytes, encodeBytes } from "~/signup/protocol";
-import { MAX_EVENT_RETENTION_MS } from "~/security/abuse-control.server";
+import { sessionBindingDigest, verifyDeviceProof } from "../shared/device/proof";
+import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
+import { MAX_EVENT_RETENTION_MS } from "~/shared/security/abuse-control.server";
 
 const noStore = { "Cache-Control": "no-store" };
 const denied = (status = 403, error = "device_proof_required") =>

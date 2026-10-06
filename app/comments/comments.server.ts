@@ -10,15 +10,15 @@ import {
   MAX_COMMENT_BODY_BYTES,
   MAX_COMMENT_KEY_ENVELOPE_BYTES,
   MAX_COMMENTS_PAGE,
-} from "~/comments/content";
+} from "~/shared/comments/content";
 import { commentEnvelopeWire, readCommentEnvelope, type CommentEnvelope } from "~/comments/envelopes.server";
 import { changePublicAudience, createPublicComment, deletePublicComment, editPublicComment, readFilePublicComments, reportPublicComment } from "~/comments/public.server";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
-import { isPublicationIdentifier } from "~/publications/capability";
-import { createDb, sql } from "~/db/client.server";
+import { isPublicationIdentifier } from "~/shared/publications/capability";
+import { createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, commitPrivateBatch, commitPrivateMutation, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
 import { accessPredicate, committedNodeVisible, sharingWriteBlocked } from "~/sharing/access.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
+import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });

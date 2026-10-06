@@ -11,18 +11,18 @@
 
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 
-import { isSignupRecoveryConfirmationPending } from "~/signup/recovery-gate";
+import { isSignupRecoveryConfirmationPending } from "~/shared/signup/recovery-gate";
 import type { FilesSnapshot } from "~/tree/navigation-client";
-import type { TreeKind } from "~/tree/client";
-import { importSigners, inputsFromDataTransfer, inputsFromFiles, loadReplacementDocuments } from "./browser";
-import { IMPORT_LIMITS, ImportError, formatBytes, importProblemMessage } from "./limits";
-import { prepareImportPlan, type ImportPlan } from "./plan";
-import { cancelImport, commitImport, openImportSession, uploadImportChunks, type ImportUploadProgress } from "./staging-client";
+import type { TreeKind } from "~/shared/tree/client";
+import { importSigners, inputsFromDataTransfer, inputsFromFiles, loadReplacementDocuments } from "../shared/import/browser";
+import { IMPORT_LIMITS, ImportError, formatBytes, importProblemMessage } from "../shared/import/limits";
+import { prepareImportPlan, type ImportPlan } from "../shared/import/plan";
+import { cancelImport, commitImport, openImportSession, uploadImportChunks, type ImportUploadProgress } from "../shared/import/staging-client";
 import {
   canReplace, reviewImport, type ImportChoice, type ImportReview, type ImportReviewNode,
-} from "./review";
-import { analyzeImportSelection, type ImportSource, type ImportSourceChild, type ImportSourceFile, type RawImportInput } from "./source";
-import { eligibleImportTargets, preferredImportTarget, type EligibleImportTarget } from "./targets";
+} from "../shared/import/review";
+import { analyzeImportSelection, type ImportSource, type ImportSourceChild, type ImportSourceFile, type RawImportInput } from "../shared/import/source";
+import { eligibleImportTargets, preferredImportTarget, type EligibleImportTarget } from "../shared/import/targets";
 
 export type ImportControlHandle = {
   canAcceptDrop: () => boolean;

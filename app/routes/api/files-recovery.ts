@@ -6,7 +6,7 @@ import {
   type RecoveryCommit,
 } from "~/recovery/enrollment.server";
 import type { RecoveryIntent } from "~/recovery/protocol";
-import { AbuseControlUnavailableError, abuseControlUnavailableResponse } from "~/security/abuse-control.server";
+import { AbuseControlUnavailableError, abuseControlUnavailableResponse } from "~/shared/security/abuse-control.server";
 
 import type { Route } from "./+types/files-recovery";
 

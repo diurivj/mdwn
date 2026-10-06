@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { newPublicationIdentifier } from "../../app/publications/capability";
+import { newPublicationIdentifier } from "../../app/shared/publications/capability";
 import { opaqueId, sharingAccount, treeChild } from "./sharing-fixtures";
 
 /** Storage-boundary dependents for device-lifecycle tests, not an envelope-open

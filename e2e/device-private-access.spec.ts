@@ -10,7 +10,7 @@ import { test as appTest, expect } from "./fixtures";
 type AccessResult = { status: number; proof?: { registryEpoch: number; deviceId: string; proofId: string } };
 declare global {
   interface Window {
-    deviceAccess: typeof import("../app/device/private-client") & typeof import("../app/device/store");
+    deviceAccess: typeof import("../app/shared/device/private-client") & typeof import("../app/shared/device/store");
   }
 }
 

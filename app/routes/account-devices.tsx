@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useRevalidator } from "react-router";
 
-import { PrivateAccessError, type PrivateAccessState } from "~/device/private-client";
+import { PrivateAccessError, type PrivateAccessState } from "~/shared/device/private-client";
 import { DeviceListChangedError, loadDeviceInventory, removeListedDevice,
   type DeviceInventory } from "~/device/management-client";
 

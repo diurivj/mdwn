@@ -1,8 +1,8 @@
 import type { SQL } from "drizzle-orm";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { encodeTreeBytes } from "~/tree/wire";
-import type { RotationEntries, RotationItem, RotationJob, RotationSource } from "./rotation-wire";
+import { encodeTreeBytes } from "~/shared/tree/wire";
+import type { RotationEntries, RotationItem, RotationJob, RotationSource } from "../shared/sharing/rotation-wire";
 import { activeGrantCoverage, requiredGrantComments } from "./capability-coverage.server";
 import { hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
 

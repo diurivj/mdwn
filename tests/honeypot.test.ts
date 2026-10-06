@@ -2,8 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { HONEYPOT_FIELD_NAME, hasFilledHoneypot, honeypotFailureResponse } from "../app/security/honeypot";
-import { HoneypotField } from "../app/security/honeypot-field";
+import { HONEYPOT_FIELD_NAME, hasFilledHoneypot, honeypotFailureResponse } from "../app/shared/security/honeypot";
+import { HoneypotField } from "../app/shared/security/honeypot-field";
 
 describe("registration and Public Comment honeypot", () => {
   it("renders one static, hidden, non-autofillable, non-focusable field", () => {

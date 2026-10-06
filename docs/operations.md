@@ -102,7 +102,7 @@ Reviewed results:
   query use `grants_recipient_target_idx`. Ancestors are bounded to 100 edges /
   101 nodes. Collaborator overflow/unrooted ancestry fails closed.
 - Directory hard deletion uses the production depth-first cursor from
-  `app/tree/subtree.server.ts`: one indexed successor child per step, at most
+  `app/shared/tree/subtree.server.ts`: one indexed successor child per step, at most
   501 candidate nodes (including the root/overflow sentinel) and 1,001 cursor
   states. The recursive queue has one successor; a wide Directory cannot
   enqueue all its children before the output cap. Hidden Import candidates

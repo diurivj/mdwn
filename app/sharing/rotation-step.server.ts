@@ -1,15 +1,15 @@
 import type { SQL } from "drizzle-orm";
 import { attributionKeyContext, commentKeyContext, MAX_ATTRIBUTION_KEY_ENVELOPE_BYTES,
-  MAX_COMMENT_KEY_ENVELOPE_BYTES } from "~/comments/content";
-import { publicAttributionKeyContext, publicCommentEnvelope, publicCommentKeyContext } from "~/comments/public-content";
-import { createDb, sql } from "~/db/client.server";
+  MAX_COMMENT_KEY_ENVELOPE_BYTES } from "~/shared/comments/content";
+import { publicAttributionKeyContext, publicCommentEnvelope, publicCommentKeyContext } from "~/shared/comments/public-content";
+import { createDb, sql } from "~/shared/db/client.server";
 import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { decodeTreeBytes, isV7, treeEnvelope } from "~/tree/wire";
+import { decodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
 import { record } from "~/auth/request.server";
 import { preparePromotion } from "./rotation-promote.server";
 import { currentRotationCoverage, liveRotation, readRotationItem, readRotationSource, rotationCommentItems,
   rotationEntries, rotationSourceSnapshot } from "./rotation-data.server";
-import { rotationResumeContext, rotationSourceVersion, type RotationItem, type RotationJob, type RotationSource } from "./rotation-wire";
+import { rotationResumeContext, rotationSourceVersion, type RotationItem, type RotationJob, type RotationSource } from "../shared/sharing/rotation-wire";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });

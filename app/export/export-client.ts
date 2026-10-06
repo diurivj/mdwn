@@ -9,18 +9,18 @@
  * credentials, sessions, and local drafts are never read or serialized.
  */
 
-import { type ArchiveRoot, type HistoricalComment } from "~/archive/format";
-import { createZip } from "~/archive/zip";
-import { loadAllPrivateComments } from "~/comments/comments-client";
-import { normalizeCommentText } from "~/comments/content";
-import { canonicalizeSegment } from "~/namespace-v1";
+import { type ArchiveRoot, type HistoricalComment } from "~/shared/archive/format";
+import { createZip } from "~/shared/archive/zip";
+import { loadAllPrivateComments } from "~/shared/comments/comments-client";
+import { normalizeCommentText } from "~/shared/comments/content";
+import { canonicalizeSegment } from "~/shared/namespace-v1";
 import {
   loadDirectory, loadFile, openChildDirectory, openRoot, type RootAccess, type TreeEntry,
-} from "~/tree/client";
+} from "~/shared/tree/client";
 import {
   buildArchiveFiles, collectExportFile, collectExportTree, ExportError,
   type CollectedExport, type ExportProgress, type ExportSource,
-} from "./collect";
+} from "../shared/export/collect";
 
 export type ExportSelection =
   | { kind: "all" }

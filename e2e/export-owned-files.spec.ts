@@ -5,8 +5,8 @@ import { seededAccount, shareWithComments, loadFixture } from "./support/provisi
 import { waitForSharedProvisioning } from "./support/navigation";
 import {
   ARCHIVE_COMMENTS_PATH, ARCHIVE_MANIFEST_PATH, parseArchiveManifest, parsePrivateCommentsSidecar,
-} from "../app/archive/format";
-import { readZip } from "../app/archive/zip";
+} from "../app/shared/archive/format";
+import { readZip } from "../app/shared/archive/zip";
 
 const source = "---\ntitle: Exported\n---\n\n# Owned 🚀\n\nExact source stays exact.\n";
 test.use({ initialSource: source });

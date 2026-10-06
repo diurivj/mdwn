@@ -1,9 +1,9 @@
-import { prepareRecoveryCodeSet } from "../../app/auth/recovery-codes";
-import { sealAccountProfile } from "../../app/crypto/account-profile";
-import { createRecoveryMaterial, createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../../app/crypto/vault";
-import { createDevice, updateRegistryEpoch } from "../../app/device/store";
-import { newOpaqueId } from "../../app/opaque-id";
-import { encodeBytes } from "../../app/signup/protocol";
+import { prepareRecoveryCodeSet } from "../../app/shared/auth/recovery-codes";
+import { sealAccountProfile } from "../../app/shared/crypto/account-profile";
+import { createRecoveryMaterial, createVaultKeyHierarchy, sealDeviceEnrollmentEnvelope } from "../../app/shared/crypto/vault";
+import { createDevice, updateRegistryEpoch } from "../../app/shared/device/store";
+import { newOpaqueId } from "../../app/shared/opaque-id";
+import { encodeBytes } from "../../app/shared/signup/protocol";
 
 /** Test-only browser entry: no network, Session, recovery gate, or provisioning. */
 export async function prepareAccount() {

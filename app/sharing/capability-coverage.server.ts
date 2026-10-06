@@ -1,5 +1,5 @@
 import type { SQL } from "drizzle-orm";
-import { sql } from "~/db/client.server";
+import { sql } from "~/shared/db/client.server";
 import type { AuthorizedDevice } from "~/device/proof.server";
 
 /** Correlated relationship s. A next-epoch fence immediately makes source

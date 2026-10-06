@@ -98,7 +98,7 @@ instead of failing the download.
 
 ## Import preflight interaction (ticket 29)
 
-`app/archive/format.ts` exposes `inspectArchive`, the archive-level half of the
+`app/shared/archive/format.ts` exposes `inspectArchive`, the archive-level half of the
 Import preflight: exact metadata set, safe normalized `mdwn/namespace-v1`
 paths, duplicate detection (including folded case and equivalent Unicode),
 resolvable manifest roots, sidecar references to real Files, and the settled

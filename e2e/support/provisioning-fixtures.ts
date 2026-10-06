@@ -4,9 +4,9 @@ import type { TestHarness } from "wrangler";
 import { seedAccount, signInAccount } from "./seeded-account";
 import { primeSyncedPasskey } from "./passkey";
 import { waitForSharedProvisioning } from "./navigation";
-import { newPublicationIdentifier } from "../../app/publications/capability";
-import type { GrantKeyContext } from "../../app/sharing/grant-keys";
-import type { CommentKeyContext } from "../../app/sharing/comment-keys";
+import { newPublicationIdentifier } from "../../app/shared/publications/capability";
+import type { GrantKeyContext } from "../../app/shared/sharing/grant-keys";
+import type { CommentKeyContext } from "../../app/shared/sharing/comment-keys";
 
 export const provisioningNext = "**/api/private/grant-provisioning/next";
 export const sharedMarkdown = "# Shared secret\n\nOnly the target File.";

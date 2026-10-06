@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { RATE_LIMIT_POLICIES } from "../app/security/abuse-policy";
+import { RATE_LIMIT_POLICIES } from "../app/shared/security/abuse-policy";
 import {
   abuseControlUnavailableResponse,
   rateLimitResponse,
-} from "../app/security/abuse-control.server";
+} from "../app/shared/security/abuse-control.server";
 
 const minute = 60_000;
 const hour = 60 * minute;

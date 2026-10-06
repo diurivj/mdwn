@@ -1,7 +1,7 @@
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
-import { createDb, sql } from "~/db/client.server";
+import { createDb, sql } from "~/shared/db/client.server";
 import { authorizePrivateRequest, privateReadGuard, type AuthorizedDevice } from "~/device/proof.server";
-import { encodeTreeBytes } from "~/tree/wire";
+import { encodeTreeBytes } from "~/shared/tree/wire";
 import { sharingWriteBlocked } from "./access.server";
 import { activeRootCoverage, requiredGrantComments } from "./capability-coverage.server";
 import { currentCommentEnvelope, rootDeliveryAuthority } from "./delivery-authority.server";

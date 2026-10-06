@@ -8,7 +8,7 @@ import {
   openForRecipient,
   sealToRecipient,
   type EnvelopeContext,
-} from "../app/crypto/enc-v1";
+} from "../app/shared/crypto/enc-v1";
 
 const key = Uint8Array.from({ length: 32 }, (_, i) => i);
 const plaintext = new TextEncoder().encode("Private Markdown");

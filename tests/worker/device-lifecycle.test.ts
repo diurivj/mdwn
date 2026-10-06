@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { signDeviceProof, sessionBindingDigest } from "../../app/device/proof";
+import { signDeviceProof, sessionBindingDigest } from "../../app/shared/device/proof";
 import { seedAccount, seedNormalSession, recoveryCookie, signedCookie } from "./auth-fixtures";
 
 declare global {

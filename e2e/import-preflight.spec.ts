@@ -5,8 +5,8 @@ import { join } from "node:path";
 import type { Page } from "@playwright/test";
 
 import { test, expect } from "./workspace-fixture";
-import { createArchiveManifest, serializeArchiveManifest, ARCHIVE_MANIFEST_PATH } from "../app/archive/format";
-import { createZip } from "../app/archive/zip";
+import { createArchiveManifest, serializeArchiveManifest, ARCHIVE_MANIFEST_PATH } from "../app/shared/archive/format";
+import { createZip } from "../app/shared/archive/zip";
 
 const encoder = new TextEncoder();
 const markdown = { name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# Notes\n") };
