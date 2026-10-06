@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Blocked by:** none. Coordinate with [41](41-coding-standards.md): mechanical rules go here, judgement calls go there.
+**Blocked by:** [40](40-retro-environment-improvements.md) (PR #49) — it edits the same `package.json`, `.github/workflows/ci.yml`, and `scripts/verify-local.mjs` files. Coordinate with [41](41-coding-standards.md): mechanical rules go here, judgement calls go there.
 
 **Related:** [40: retro environment improvements](40-retro-environment-improvements.md); `docs/testing.md`.
 
@@ -33,7 +33,8 @@ Checked 350 files with `recommended` rules and a repo-tuned formatter:
 - [ ] A standalone formatting-baseline commit applies `biome format --write` across the repo; typecheck, unit/Workers tests, build, smoke, and browser suites pass after it.
 - [ ] Linter config starts from `preset: recommended` with `noNonNullAssertion` disabled; every remaining error is fixed, or carries a `biome-ignore` with a one-line reason; noisy stylistic rules are explicitly off.
 - [ ] `npm run lint` runs `biome check` (lint + format check) and `npm run format` runs `biome format --write`.
-- [ ] `CI` and `npm run verify` run `npm run lint`; `docs/testing.md` documents the commands, the config choices, and how to add an exception.
+- [ ] The `CI` workflow gains a `Lint and format check` step running `npm run lint` (and `npm run verify` gains the same step), so the repo no longer relies on `tsc` alone for static checking. The existing `Typecheck` step stays: Biome is not a type checker, and its inference-based type rules do not replace `tsc -b`.
+- [ ] `docs/testing.md` documents the commands, the config choices, how the lint step relates to `Typecheck`, and how to add an exception.
 - [ ] No `--unsafe` fixes land without individual review; the security and a11y findings are decided explicitly.
 
 ## Scope and pointers
