@@ -206,6 +206,12 @@ export class PublicationLifecycle {
     this.maybeStartTeardown(true);
   }
 
+  /** Drop the module's last error when a panel-owned mutation takes over the
+   * alert; ticket 45 removes this split once every mutation is module-owned. */
+  clearError(): void {
+    if (this.view.error) this.set({ error: null });
+  }
+
   /** Re-read authoritative state through the module's read ordering without
    * touching the shared pending/error coordination. Panel mutations that still
    * own their coordination (ticket 44) await this after their request. */

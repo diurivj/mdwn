@@ -453,6 +453,25 @@ describe("PublicationLifecycle", () => {
     });
   });
 
+  it("clears the module's last error when a panel-owned mutation takes over", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const nextState = stateQueue([activeState("link-1"), activeState("link-1")]);
+    fake.handlers.loadState = async () => nextState();
+    fake.handlers.rotateLink = async () => {
+      throw new PublicationError("rotation-required");
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    await lifecycle.rotateLink();
+    expect(lifecycle.getState().error?.code).toBe("rotation-required");
+
+    lifecycle.clearError();
+    expect(lifecycle.getState().error).toBeNull();
+  });
+
   it("ignores a second module decision while one is still pending", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);

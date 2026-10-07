@@ -83,9 +83,13 @@ export function PublishPanel({
     };
   }, []);
 
+  function describeError(code: PublicationErrorCode, suspendedUntil: number | null): string {
+    return code === "suspended" ? publicParticipationSuspensionNotice(suspendedUntil) : messages[code];
+  }
+
   // A lifecycle-owned action takes over the alert: drop any panel-local error
   // so a stale one cannot mask the module's result.
-  function forward(action: () => void) {
+  function forwardToLifecycle(action: () => void) {
     setMessage("");
     action();
   }
@@ -97,17 +101,14 @@ export function PublishPanel({
     if (!controller || controller.signal.aborted || busy) return;
     setBusy(true);
     setMessage("");
+    lifecycle.clearError();
     try {
       try {
         await action(controller.signal);
       } catch (error) {
         if (controller.signal.aborted) return;
         setMessage(
-          error instanceof PublicationError
-            ? error.code === "suspended"
-              ? publicParticipationSuspensionNotice(error.suspendedUntil)
-              : messages[error.code]
-            : messages.unavailable,
+          error instanceof PublicationError ? describeError(error.code, error.suspendedUntil) : messages.unavailable,
         );
       }
       await lifecycle.reload();
@@ -149,13 +150,7 @@ export function PublishPanel({
   }
 
   const working = busy || view.busy;
-  const shownMessage = message
-    ? message
-    : view.error
-      ? view.error.code === "suspended"
-        ? publicParticipationSuspensionNotice(view.error.suspendedUntil)
-        : messages[view.error.code]
-      : "";
+  const shownMessage = message || (view.error ? describeError(view.error.code, view.error.suspendedUntil) : "");
 
   if (view.panel === "loading")
     return (
@@ -170,7 +165,7 @@ export function PublishPanel({
         <button
           type="button"
           className="mt-2 rounded border px-3 py-1"
-          onClick={() => forward(() => lifecycle.retryLoad())}
+          onClick={() => forwardToLifecycle(() => lifecycle.retryLoad())}
         >
           Retry
         </button>
@@ -204,7 +199,7 @@ export function PublishPanel({
           {state.isOwner && view.teardownFailed && (
             <button
               type="button"
-              onClick={() => forward(() => lifecycle.retryTeardown())}
+              onClick={() => forwardToLifecycle(() => lifecycle.retryTeardown())}
               className="rounded border px-3 py-1 text-sm"
             >
               Continue deleting
@@ -373,7 +368,7 @@ export function PublishPanel({
                 type="button"
                 disabled={working || !parentKey}
                 className="mt-2 rounded border px-3 py-1 text-sm"
-                onClick={() => forward(() => void lifecycle.rotateLink())}
+                onClick={() => forwardToLifecycle(() => void lifecycle.rotateLink())}
               >
                 Rotate link
               </button>
@@ -394,7 +389,7 @@ export function PublishPanel({
                       className="rounded bg-rose-700 px-3 py-1 text-sm text-white"
                       onClick={() => {
                         setConfirming(false);
-                        forward(() => void lifecycle.unpublish());
+                        forwardToLifecycle(() => void lifecycle.unpublish());
                       }}
                     >
                       Unpublish and permanently delete {state.commentCount} Public{" "}
@@ -421,7 +416,7 @@ export function PublishPanel({
                     disabled={working}
                     onClick={() => {
                       setConfirming(true);
-                      forward(() => void lifecycle.refresh());
+                      forwardToLifecycle(() => void lifecycle.refresh());
                     }}
                     className="mt-2 rounded border px-3 py-1 text-sm"
                   >
@@ -478,7 +473,7 @@ export function PublishPanel({
               type="button"
               disabled={working || !fileReady || !parentKey}
               className="rounded bg-stone-900 px-3 py-1 text-white"
-              onClick={() => forward(() => void lifecycle.publish({ includeSelf, audience }))}
+              onClick={() => forwardToLifecycle(() => void lifecycle.publish({ includeSelf, audience }))}
             >
               {working ? "Publishing…" : "Publish File"}
             </button>

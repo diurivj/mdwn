@@ -78,8 +78,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [publishOpen, setPublishOpen] = useState(false);
   // One lifecycle per File page. It retains every prepared candidate for this
   // page's lifetime, orders reads and drives Unpublishing teardown; complete
-  // links stay only in browser memory, never in persistent storage.
-  const [publicationLifecycle] = useState(() => new PublicationLifecycle(createPublicationOperations()));
+  // links stay only in browser memory, never in persistent storage. It is
+  // created in the page's own effect so a development StrictMode remount
+  // starts a live instance instead of leaving a disposed one latched.
+  const [publicationLifecycle, setPublicationLifecycle] = useState<PublicationLifecycle | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const importControl = useRef<ImportControlHandle | null>(null);
   const submission = useRef(false);
@@ -105,10 +107,13 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     };
   }, [snapshot, nodeId]);
   useEffect(() => {
-    if (publicationContext) publicationLifecycle.updateContext(publicationContext);
+    const lifecycle = new PublicationLifecycle(createPublicationOperations());
+    setPublicationLifecycle(lifecycle);
+    return () => lifecycle.dispose();
+  }, []);
+  useEffect(() => {
+    if (publicationContext && publicationLifecycle) publicationLifecycle.updateContext(publicationContext);
   }, [publicationLifecycle, publicationContext]);
-  // Another File, leaving the route or a full reload starts a fresh lifecycle.
-  useEffect(() => () => publicationLifecycle.dispose(), [publicationLifecycle]);
   const onNavigationStart = useCallback(() => {
     lifetime.current?.abort();
     lifetime.current = new AbortController();
@@ -674,7 +679,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             onImported={() => void revalidator.revalidate()}
           />
         </div>
-        {kind === "file" && snapshot.file && publishOpen && (
+        {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (
           <PublishPanel lifecycle={publicationLifecycle} context={publicationContext!} fileReady={fileReady && !busy} />
         )}
         {canChangeStructure && (
