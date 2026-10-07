@@ -16,7 +16,7 @@ import type { FilesSnapshot } from "~/tree/navigation-client";
 import type { TreeKind } from "~/shared/tree/client";
 import { createImportOperations } from "./import-operations";
 import { inputsFromDataTransfer, inputsFromFiles } from "../shared/import/browser";
-import { ImportExecution, type ImportProgress } from "../shared/import/execution";
+import { ImportExecution, type ImportUploadProgress } from "../shared/import/execution";
 import { IMPORT_LIMITS, ImportError, formatBytes, importProblemMessage } from "../shared/import/limits";
 import {
   canReplace,
@@ -54,7 +54,7 @@ type Phase =
       choices: Record<string, ImportChoice>;
       targetId: string;
     }
-  | { status: "uploading"; progress: ImportProgress }
+  | { status: "uploading"; progress: ImportUploadProgress }
   | { status: "done"; created: number; comments: number }
   | { status: "error"; message: string; inputs: RawImportInput[] | null };
 

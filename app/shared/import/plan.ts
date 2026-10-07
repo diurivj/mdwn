@@ -167,15 +167,8 @@ export type ImportReplacementDocument = Pick<
 
 export type ImportListingHead = { ciphertext: string; digest: string; signature: string };
 
-export type PrepareImportPlanOptions = {
-  review: ImportReview;
-  /** File sources keyed by canonical source path. */
-  files: ReadonlyMap<string, ImportSourceFile>;
-  /** Sidecar Historical Comments keyed by canonical source path. */
-  comments?: ReadonlyMap<string, readonly HistoricalComment[]>;
-  targetKey: Uint8Array;
-  /** Current File documents for every Replace candidate, keyed by File node ID. */
-  replacements: ReadonlyMap<string, ImportReplacementDocument>;
+/** The importing browser's signers for one prepared plan. */
+export type ImportSigners = {
   /** Signs a File head with the importing browser's device assertion key. */
   signFileHead: (identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>;
   /** Signs a post-Import Directory listing head with the same device key. */
@@ -187,8 +180,19 @@ export type PrepareImportPlanOptions = {
     revision: number;
     entries: readonly ImportListingEntry[];
   }) => Promise<ImportListingHead>;
-  newId?: () => string;
 };
+
+export type PrepareImportPlanOptions = {
+  review: ImportReview;
+  /** File sources keyed by canonical source path. */
+  files: ReadonlyMap<string, ImportSourceFile>;
+  /** Sidecar Historical Comments keyed by canonical source path. */
+  comments?: ReadonlyMap<string, readonly HistoricalComment[]>;
+  targetKey: Uint8Array;
+  /** Current File documents for every Replace candidate, keyed by File node ID. */
+  replacements: ReadonlyMap<string, ImportReplacementDocument>;
+  newId?: () => string;
+} & ImportSigners;
 
 function metadataContext(vaultId: string, parentId: string, nodeId: string, keyEpoch: number): EnvelopeContext {
   return { purpose: "directory-metadata", vaultId, objectId: nodeId, keyId: parentId, keyEpoch, revision: 1 };

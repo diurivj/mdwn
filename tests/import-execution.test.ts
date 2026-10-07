@@ -4,11 +4,10 @@ import {
   ImportExecution,
   type ImportExecutionOperations,
   type ImportExecutionRequest,
-  type ImportProgress,
-  type ImportSigners,
+  type ImportUploadProgress,
 } from "../app/shared/import/execution";
 import { ImportError } from "../app/shared/import/limits";
-import type { ImportPlan, ImportPlanChunk, ImportReplacementDocument } from "../app/shared/import/plan";
+import type { ImportPlan, ImportPlanChunk, ImportReplacementDocument, ImportSigners } from "../app/shared/import/plan";
 import { reviewImport, type ImportReview, type ImportTarget } from "../app/shared/import/review";
 import { analyzeImportSelection } from "../app/shared/import/source";
 import type { RootAccess } from "../app/shared/tree/client";
@@ -119,7 +118,7 @@ function deferred<T>() {
 describe("ImportExecution", () => {
   it("prepares the complete plan, stages it, and reports the committed counts", async () => {
     const fake = fakeOperations();
-    const progress: ImportProgress[] = [];
+    const progress: ImportUploadProgress[] = [];
     const execution = new ImportExecution(
       { ...(await executionRequest()), onProgress: (update) => progress.push(update) },
       fake.operations,
@@ -151,6 +150,25 @@ describe("ImportExecution", () => {
 
     expect(outcome).toMatchObject({ status: "failed", error: { code: "replacement-unavailable" } });
     expect(fake.calls).toEqual(["replacements"]);
+    expect(fake.cancels).toEqual([]);
+  });
+
+  it("rejects a nonconforming plan at preparation without opening a session", async () => {
+    const fake = fakeOperations();
+    const request = await executionRequest();
+    const target = {
+      ...request.target,
+      siblings: [{ nodeId: "0198c0de-0000-7000-8000-0000000000bb", kind: "file" as const, name: "draft.md" }],
+    };
+    const replace = reviewImport(request.source, target, { "draft.md": { action: "replace" } });
+    const execution = new ImportExecution({ ...request, target, review: replace }, fake.operations);
+
+    const outcome = await execution.run();
+
+    expect(outcome).toMatchObject({ status: "failed", error: { code: "replacement-unavailable" } });
+    expect(fake.calls).toEqual(["replacements", "signers"]);
+    expect(fake.plans).toEqual([]);
+    expect(fake.uploads).toEqual([]);
     expect(fake.cancels).toEqual([]);
   });
 

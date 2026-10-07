@@ -14,35 +14,21 @@
  * single automatic retry; the retry lives here so the attempt has one owner.
  */
 
-import type { FileHead, FileHeadIdentity } from "~/shared/tree/file-head";
 import type { RootAccess } from "~/shared/tree/client";
 import { ImportError } from "./limits";
 import {
   prepareImportPlan,
-  type ImportListingHead,
   type ImportPlan,
   type ImportPlanChunk,
   type ImportReplacementDocument,
+  type ImportSigners,
 } from "./plan";
-import type { ImportListingEntry, ImportReview } from "./review";
+import type { ImportReview } from "./review";
 import type { ImportSource, ImportSourceChild, ImportSourceFile } from "./source";
 import type { EligibleImportTarget } from "./targets";
 
 /** Chunk upload progress for one attempt. */
-export type ImportProgress = { chunksSent: number; chunksTotal: number };
-
-/** The importing browser's device signers for the prepared plan. */
-export type ImportSigners = {
-  signFileHead: (identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>;
-  signListingHead: (input: {
-    parentKey: Uint8Array;
-    vaultId: string;
-    directoryId: string;
-    keyEpoch: number;
-    revision: number;
-    entries: readonly ImportListingEntry[];
-  }) => Promise<ImportListingHead>;
-};
+export type ImportUploadProgress = { chunksSent: number; chunksTotal: number };
 
 export type ImportExecutionRequest = {
   /** The settled review the person confirmed; selection and collision choices
@@ -51,7 +37,7 @@ export type ImportExecutionRequest = {
   source: ImportSource;
   target: EligibleImportTarget;
   access: RootAccess;
-  onProgress?: (progress: ImportProgress) => void;
+  onProgress?: (progress: ImportUploadProgress) => void;
 };
 
 /**
@@ -74,7 +60,11 @@ export type ImportExecutionOperations = {
 };
 
 /** Evidence-based result of one attempt. Cleanup never changes this outcome:
- * a failed cancellation does not claim that nothing was staged. */
+ * a failed cancellation does not claim that nothing was staged. `cancelled`
+ * means this attempt's client work was aborted; like the domain's cancellation
+ * rule, it is not proof that an in-flight commit did not win. `error` carries
+ * the local `ImportError` when preparation or staging produced one, and `null`
+ * for every other failure, which the caller explains with one safe message. */
 export type ImportOutcome =
   | { status: "committed"; created: number; comments: number; entriesRevision?: number }
   | { status: "cancelled" }

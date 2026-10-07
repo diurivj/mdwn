@@ -29,13 +29,14 @@ function asImportError(response: Response, body: { error?: unknown }): ImportErr
   return new ImportError("staging-upload-failed", { reason: typeof body.error === "string" ? body.error : undefined });
 }
 
-/** Confirmation step 1: create the unguessable, Account-bound session. */
+/** Confirmation step 1: create the unguessable, Account-bound session. The
+ * acknowledgment must echo the plan's own Import ID (the Worker routes on it). */
 export async function openImportSession(plan: ImportPlan, signal?: AbortSignal): Promise<void> {
   const body = encodeImportSessionBody(plan.manifest.metadata, plan.manifest.envelope);
   const response = await privateRequest("/api/private/imports", { method: "POST", body, signal });
   const parsed = (await response.json().catch(() => ({}))) as SessionResponse;
   if (!response.ok) throw asImportError(response, parsed);
-  if (typeof parsed.importId !== "string") throw new ImportError("staging-upload-failed");
+  if (parsed.importId !== plan.importId) throw new ImportError("staging-upload-failed");
 }
 
 /** Confirmation step 2: upload one exact chunk; a retry reuses these bytes. */

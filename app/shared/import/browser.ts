@@ -11,9 +11,8 @@ import { getDevice } from "~/shared/device/store";
 import { createFileHead } from "~/shared/tree/file-head";
 import { createListingHead } from "~/shared/tree/listing";
 import { loadFile, type RootAccess } from "~/shared/tree/client";
-import type { ImportSigners } from "./execution";
 import { IMPORT_LIMITS, ImportError } from "./limits";
-import type { ImportReplacementDocument } from "./plan";
+import type { ImportReplacementDocument, ImportSigners } from "./plan";
 import type { ImportReview } from "./review";
 import type { RawImportInput } from "./source";
 
