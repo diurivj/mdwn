@@ -3,8 +3,10 @@ import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "re
 import { ensurePrivateThread } from "~/shared/comments/comments-client";
 import { ExportControl } from "~/export/export-control";
 import { ImportControl, type ImportControlHandle } from "~/import/import-control";
-import { declarePublicationAuthor, type PreparedPublicLink } from "~/publications/publications-client";
+import { createPublicationOperations } from "~/publications/publication-operations";
+import { declarePublicationAuthor } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/publish-panel";
+import { PublicationLifecycle } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
 
@@ -74,10 +76,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
-  // Retain every prepared candidate until this page ends. A later attempt can
-  // lose to an earlier in-flight commit; it must not overwrite that link's key.
-  // Complete links stay only in browser memory, never in persistent storage.
-  const [publicLinks, setPublicLinks] = useState<ReadonlyMap<string, PreparedPublicLink>>(() => new Map());
+  // One lifecycle per File page. It retains every prepared candidate for this
+  // page's lifetime, orders reads and drives Unpublishing teardown; complete
+  // links stay only in browser memory, never in persistent storage.
+  const [publicationLifecycle] = useState(() => new PublicationLifecycle(createPublicationOperations()));
   const [submitting, setSubmitting] = useState(false);
   const importControl = useRef<ImportControlHandle | null>(null);
   const submission = useRef(false);
@@ -90,6 +92,20 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       lifetime.current?.abort();
     };
   }, []);
+  // Same-File revalidation keeps the lifecycle and its retained candidates;
+  // later operations use the current access/context.
+  useEffect(() => {
+    if (!snapshot) return;
+    const parentId = snapshot.file?.parentId ?? null;
+    publicationLifecycle.updateContext({
+      fileId: nodeId,
+      access: snapshot.access,
+      parentId,
+      parentKey: parentId ? (snapshot.keys[parentId] ?? null) : snapshot.access.rootKey,
+    });
+  }, [publicationLifecycle, nodeId, snapshot]);
+  // Another File, leaving the route or a full reload starts a fresh lifecycle.
+  useEffect(() => () => publicationLifecycle.dispose(), [publicationLifecycle]);
   const onNavigationStart = useCallback(() => {
     lifetime.current?.abort();
     lifetime.current = new AbortController();
@@ -513,6 +529,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     );
 
   const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
+  const publicationParentId = snapshot.file?.parentId ?? null;
+  const publicationParentKey = publicationParentId ? snapshot.keys[publicationParentId] : snapshot.access.rootKey;
   const structuralParent = kind === "directory" ? nodeId : snapshot.file?.parentId;
   const canCreate =
     !!structuralParent &&
@@ -657,17 +675,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         </div>
         {kind === "file" && snapshot.file && publishOpen && (
           <PublishPanel
-            fileId={nodeId}
-            snapshot={snapshot}
+            lifecycle={publicationLifecycle}
             fileReady={fileReady && !busy}
-            links={publicLinks}
-            onPrepared={(link) =>
-              setPublicLinks((previous) => {
-                const next = new Map(previous);
-                next.set(link.linkId, link);
-                return next;
-              })
-            }
+            linkReady={!!publicationParentKey}
           />
         )}
         {canChangeStructure && (
