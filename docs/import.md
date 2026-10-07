@@ -7,22 +7,26 @@ creates an Import session, the browser uploads encrypted chunks, and one final
 commit transaction materializes the complete hierarchy and any authorized
 Replace at once.
 
-All modules live in `app/import/`; `staging.ts` is shared by the browser and
-the Worker, `staging.server.ts` is Worker-only, and the rest are browser-only
-except where a test target imports the pure pieces directly:
+Browser-shared modules live in `app/shared/import/`; the Files-chrome React
+control and its production operations adapter live in `app/import/`;
+`staging.server.ts` is Worker-only. `staging.ts` is shared by the browser and
+the Worker, and the rest are browser-only except where a test target imports
+the pure pieces directly:
 
 | Module | Role |
 | --- | --- |
 | `limits.ts` | Settled local bounds, staging envelope bounds, safe `ImportError` codes/messages |
 | `staging.ts` | Binary session/chunk wire format, record-kind table, structural validation |
 | `staging.server.ts` | Session, chunk, commit, cancel; completeness checks; atomic materialization |
-| `staging-client.ts` | Browser session/chunk/commit/cancel calls over the private client |
+| `staging-client.ts` | One-request browser session/chunk/commit/cancel calls over the private client |
+| `execution.ts` | Confirmed-review execution: replacement reads, signing, complete plan preparation, staging, bounded retry, commit and best-effort cleanup |
 | `source.ts` | Normalizes a loose selection or recognized archive into a bounded tree |
 | `review.ts` | Pure collision allocation and review model |
 | `plan.ts` | Encrypted record/chunk plan, Directory listing heads, Historical Comments, `import-staging-manifest` |
 | `targets.ts` | Eligible Import-target derivation from the decrypted snapshot |
 | `browser.ts` | File/DataTransfer inputs, Replace document reads, File/listing head signers |
-| `import-control.tsx` | Files-chrome command, hidden inputs, drop handling, review dialog, upload/commit progress |
+| `import-operations.ts` | Production adapter binding the execution module to the browser reads and staging transport |
+| `import-control.tsx` | Files-chrome command, hidden inputs, drop handling, review dialog; renders execution progress and outcomes |
 
 ## Accepted input and bounds
 
