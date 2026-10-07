@@ -1,8 +1,15 @@
-import type { PublicationContext, PublicationOperations } from "~/shared/publications/lifecycle";
+import { PublicationError, type PublicationContext, type PublicationOperations } from "~/shared/publications/lifecycle";
+import { loadFile } from "~/shared/tree/client";
 import {
+  addAccountAuthor,
+  addSelfAuthor,
+  changeCommentAudience,
   continuePublicationTeardown,
   loadPublicationState,
   publishFile,
+  removeAuthor,
+  removePublicationRequest,
+  requestPublication,
   rotatePublicationLink,
   unpublishPublication,
 } from "./publications-client";
@@ -16,7 +23,8 @@ function parentKey(context: PublicationContext): Uint8Array {
 
 /**
  * Production implementation of the lifecycle's internal operations seam. It
- * wraps the feature-local browser client; the shared lifecycle module never
+ * wraps the feature-local browser client and reuses its cryptographic and
+ * business-rule operations unchanged; the shared lifecycle module never
  * imports it.
  */
 export function createPublicationOperations(): PublicationOperations {
@@ -51,5 +59,47 @@ export function createPublicationOperations(): PublicationOperations {
     },
 
     continueTeardown: (context, signal) => continuePublicationTeardown(context.fileId, signal),
+
+    async changeAudience(context, input, signal) {
+      const file = await loadFile(context.access, context.fileId, parentKey(context), signal);
+      if (!file.publication || file.publication.publicationId !== input.expectedPublicationId)
+        throw new PublicationError("changed");
+      await changeCommentAudience(
+        context.access,
+        context.fileId,
+        {
+          publicationId: file.publication.publicationId,
+          linkId: file.publication.linkId,
+          publicKey: file.publication.publicKey,
+          expectedEpochId: input.expectedEpochId,
+          threadId: input.threadId,
+        },
+        input.audience,
+        input.linkFor(file.publication.linkId),
+        signal,
+      );
+    },
+
+    async addSelfAuthor(context, signal) {
+      const file = await loadFile(context.access, context.fileId, parentKey(context), signal);
+      if (!file.publication) throw new PublicationError("changed");
+      await addSelfAuthor(context.access, context.fileId, file.publication, signal);
+    },
+
+    async addAccountAuthor(context, input, signal) {
+      await addAccountAuthor(context.fileId, input.publicationId, input.address, signal);
+    },
+
+    async removeAuthor(context, input, signal) {
+      await removeAuthor(context.fileId, input.declarationId, signal);
+    },
+
+    async requestPublication(context, signal) {
+      await requestPublication(context.fileId, signal);
+    },
+
+    async removePublicationRequest(context, input, signal) {
+      await removePublicationRequest(context.fileId, input.requestId, signal);
+    },
   };
 }

@@ -4,7 +4,7 @@
 
 **Type:** maintenance
 
-**Status:** ready-for-human
+**Status:** done
 
 **Blocked by:** none.
 
@@ -21,12 +21,12 @@
 
 ## Acceptance criteria
 
-- [ ] `AGENTS.md` carries the CI-watch rule, the reference-docs pointers, and a pointer to `CODING_STANDARDS.md` once ticket 41 lands.
-- [ ] `~/.pi/agent/AGENTS.md` maps `~/oasis` to `eldiegallo` and everywhere else to `diurivj`, with the `gh auth switch` step.
-- [ ] `docs/operations/d1-scripting.md` records the verified Wrangler/D1 semantics and is pointed to from `AGENTS.md`.
-- [ ] `npm run db:restore:local` passes locally and in CI, leaves no temp state on success, and keeps it on failure for inspection.
-- [ ] `runWranglerJson` exists and is used by the restore CLI/runner; `npm run typecheck:node` exists and is documented.
-- [ ] Quota guidance is in `docs/operations.md`.
+- [x] `AGENTS.md` carries the CI-watch rule, the reference-docs pointers, and a pointer to `CODING_STANDARDS.md` once ticket 41 lands.
+- [x] `~/.pi/agent/AGENTS.md` maps `~/oasis` to `eldiegallo` and everywhere else to `diurivj`, with the `gh auth switch` step.
+- [x] `docs/operations/d1-scripting.md` records the verified Wrangler/D1 semantics and is pointed to from `AGENTS.md`.
+- [x] `npm run db:restore:local` passes locally and in CI, leaves no temp state on success, and keeps it on failure for inspection.
+- [x] `runWranglerJson` exists and is used by the restore CLI/runner; `npm run typecheck:node` exists and is documented.
+- [x] Quota guidance is in `docs/operations.md`.
 - [ ] Focused tests, `npm run typecheck`, the full suite, and the clean-head `npm run verify` gate pass; Standards/Spec and the RR8 gate report on the diff.
 
 ## Scope and pointers
@@ -39,3 +39,4 @@
 ## Comments
 
 - 2026-10-06: Raised from the MVP retro. Implemented on `chore/retro-environment-improvements`; see the PR for the verification evidence. The grilling session for ticket 41 and the Biome rollout in ticket 42 are deliberately separate.
+- 2026-10-07: Status reconciled to **done**: PR #49 merged as `31a4ccf`. Ticked the six evidenced criteria (AGENTS.md CI-watch rule and reference pointers, the user-wide `gh` mapping, `docs/operations/d1-scripting.md`, `db:restore:local` in CI and `npm run verify`, `runWranglerJson`/`typecheck:node`, quota guidance). The `CODING_STANDARDS.md` pointer from the first bullet remains pending ticket 41, which is still open. The final bullet stays unticked for the same reason as ticket 36: no in-repo record of a Standards/Spec/RR8 report was found for PR #49.
