@@ -7,7 +7,6 @@ import { privateRequest, isPublicParticipationSuspended } from "~/shared/device/
 import { newOpaqueId } from "~/shared/opaque-id";
 import {
   PublicationError,
-  type ActivePublication,
   type CommentAudience,
   type PreparedPublicLink,
   type PublicationState,
@@ -268,7 +267,7 @@ export async function removePublicationRequest(fileId: string, requestId: string
 export async function addSelfAuthor(
   access: RootAccess,
   fileId: string,
-  publication: ActivePublication,
+  publication: FilePublication,
   signal?: AbortSignal,
 ) {
   const declarationId = newPublicationIdentifier();

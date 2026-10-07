@@ -3,9 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   PublicationError,
   PublicationLifecycle,
-  type ActivePublication,
-  type AddSelfAuthorInput,
-  type ChangeAudienceInput,
   type PreparedPublicLink,
   type PublicationContext,
   type PublicationOperations,
@@ -87,18 +84,8 @@ function fakeOperations() {
     loadState: async (_signal: AbortSignal): Promise<PublicationState> => {
       throw new Error("unexpected loadState");
     },
-    loadActivePublication: async (_signal: AbortSignal): Promise<ActivePublication | null> => null,
     publish: async (_input: PublishInput, _signal: AbortSignal): Promise<void> => {},
     rotateLink: async (_input: RotateLinkInput, _signal: AbortSignal): Promise<void> => {},
-    changeAudience: async (_input: ChangeAudienceInput, _signal: AbortSignal): Promise<void> => {},
-    addSelfAuthor: async (_input: AddSelfAuthorInput, _signal: AbortSignal): Promise<void> => {},
-    addAccountAuthor: async (
-      _input: { publicationId: string; address: string },
-      _signal: AbortSignal,
-    ): Promise<void> => {},
-    removeAuthor: async (_input: { declarationId: string }, _signal: AbortSignal): Promise<void> => {},
-    requestPublication: async (_signal: AbortSignal): Promise<void> => {},
-    removePublicationRequest: async (_input: { requestId: string }, _signal: AbortSignal): Promise<void> => {},
     unpublish: async (_signal: AbortSignal): Promise<void> => {},
     continueTeardown: async (_signal: AbortSignal): Promise<TeardownProgress> => ({
       done: true,
@@ -111,10 +98,6 @@ function fakeOperations() {
       record("loadState", context, signal);
       return handlers.loadState(signal);
     },
-    loadActivePublication: (context, signal) => {
-      record("loadActivePublication", context, signal);
-      return handlers.loadActivePublication(signal);
-    },
     publish: (context, input, signal) => {
       record("publish", context, signal);
       return handlers.publish(input, signal);
@@ -122,30 +105,6 @@ function fakeOperations() {
     rotateLink: (context, input, signal) => {
       record("rotateLink", context, signal);
       return handlers.rotateLink(input, signal);
-    },
-    changeAudience: (context, input, signal) => {
-      record("changeAudience", context, signal);
-      return handlers.changeAudience(input, signal);
-    },
-    addSelfAuthor: (context, input, signal) => {
-      record("addSelfAuthor", context, signal);
-      return handlers.addSelfAuthor(input, signal);
-    },
-    addAccountAuthor: (context, input, signal) => {
-      record("addAccountAuthor", context, signal);
-      return handlers.addAccountAuthor(input, signal);
-    },
-    removeAuthor: (context, input, signal) => {
-      record("removeAuthor", context, signal);
-      return handlers.removeAuthor(input, signal);
-    },
-    requestPublication: (context, signal) => {
-      record("requestPublication", context, signal);
-      return handlers.requestPublication(signal);
-    },
-    removePublicationRequest: (context, input, signal) => {
-      record("removePublicationRequest", context, signal);
-      return handlers.removePublicationRequest(input, signal);
     },
     unpublish: (context, signal) => {
       record("unpublish", context, signal);
@@ -254,6 +213,26 @@ describe("PublicationLifecycle", () => {
     expect(lifecycle.getState().completeLink).toBeNull();
   });
 
+  it("exposes a retained complete link only under its active-link identity", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const nextState = stateQueue([baseState(), activeState("link-1")]);
+    fake.handlers.loadState = async () => nextState();
+    const link = linkFor("link-1", "one");
+    fake.handlers.publish = async (input) => {
+      input.onPrepared(link);
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    await lifecycle.publish({ includeSelf: false, audience: "public" });
+
+    expect(lifecycle.completeLinkFor("link-1")).toBe(link.url);
+    expect(lifecycle.completeLinkFor("link-2")).toBeNull();
+    expect(lifecycle.completeLinkFor(null)).toBeNull();
+  });
+
   it("ignores an older active-state read that arrives after Unpublishing", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);
@@ -342,6 +321,67 @@ describe("PublicationLifecycle", () => {
     expect(lifecycle.getState().state?.publication).toBeNull();
   });
 
+  it("restarts teardown when retry arrives while the failure reload is in flight", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const failedReload = deferred<PublicationState>();
+    let reads = 0;
+    fake.handlers.loadState = async () => {
+      reads += 1;
+      if (reads === 1) return deletingState();
+      if (reads === 2) return failedReload.promise;
+      return baseState();
+    };
+    let attempts = 0;
+    fake.handlers.continueTeardown = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("network lost");
+      return { done: true, commentTotal: 4, commentsRemaining: 0 };
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(attempts).toBe(1);
+    expect(lifecycle.getState().teardownFailed).toBe(true);
+
+    lifecycle.retryTeardown();
+    failedReload.resolve(deletingState());
+    await tick();
+    expect(attempts).toBe(2);
+    expect(lifecycle.getState().state?.publication).toBeNull();
+  });
+
+  it("retries a failed load and resumes teardown", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const nextState = stateQueue([deletingState(), deletingState(), baseState()]);
+    let reads = 0;
+    fake.handlers.loadState = async () => {
+      reads += 1;
+      if (reads === 2) throw new Error("load failed");
+      return nextState();
+    };
+    let attempts = 0;
+    fake.handlers.continueTeardown = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("network lost");
+      return { done: true, commentTotal: 4, commentsRemaining: 0 };
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState().panel).toBe("failed");
+    expect(lifecycle.getState().teardownFailed).toBe(true);
+
+    lifecycle.retryLoad();
+    await tick();
+    expect(attempts).toBe(2);
+    expect(lifecycle.getState()).toMatchObject({ panel: "ready", teardownFailed: false });
+    expect(lifecycle.getState().state?.publication).toBeNull();
+  });
+
   it("disposes on navigation so late results cannot update a new view", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);
@@ -390,147 +430,65 @@ describe("PublicationLifecycle", () => {
     expect(lifecycle.getState().completeLink).toBe(rotated.url);
   });
 
-  it("uses the retained candidate matching the active link, otherwise the typed link", async () => {
-    const fake = fakeOperations();
-    const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([baseState(), activeState("link-1")]);
-    fake.handlers.loadState = async () => nextState();
-    const retained = linkFor("link-1", "one");
-    fake.handlers.publish = async (input) => {
-      input.onPrepared(retained);
-    };
-    const changes: ChangeAudienceInput[] = [];
-    fake.handlers.loadActivePublication = async () => ({
-      publicationId: "pub-1",
-      linkId: "link-1",
-      publicKey: new Uint8Array(65),
-    });
-    fake.handlers.changeAudience = async (input) => {
-      changes.push(input);
-    };
-
-    lifecycle.updateContext(context());
-    lifecycle.attachPanel();
-    await tick();
-    expect(await lifecycle.publish({ includeSelf: false, audience: "public" })).toBe(true);
-
-    expect(await lifecycle.changeAudience("collaborators_only", " https://mdwn.test/p/typed#v1.typed ")).toBe(true);
-    expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({
-      audience: "collaborators_only",
-      completeLink: retained.url,
-      expectedEpochId: null,
-      expectedThreadId: null,
-    });
-  });
-
-  it("falls back to the typed complete link when no candidate matches", async () => {
-    const fake = fakeOperations();
-    const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([baseState(), activeState("link-2")]);
-    fake.handlers.loadState = async () => nextState();
-    fake.handlers.publish = async (input) => {
-      input.onPrepared(linkFor("link-1", "one"));
-    };
-    const changes: ChangeAudienceInput[] = [];
-    fake.handlers.loadActivePublication = async () => ({
-      publicationId: "pub-1",
-      linkId: "link-2",
-      publicKey: new Uint8Array(65),
-    });
-    fake.handlers.changeAudience = async (input) => {
-      changes.push(input);
-    };
-
-    lifecycle.updateContext(context());
-    lifecycle.attachPanel();
-    await tick();
-    await lifecycle.publish({ includeSelf: false, audience: "public" });
-
-    expect(await lifecycle.changeAudience("public", " https://mdwn.test/p/typed#v1.typed ")).toBe(true);
-    expect(changes[0]?.completeLink).toBe("https://mdwn.test/p/typed#v1.typed");
-  });
-
-  it("rejects an audience change when the authoritative Publication identity changed", async () => {
+  it("shares pending and error coordination across module operations", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);
     const nextState = stateQueue([activeState("link-1"), activeState("link-1")]);
     fake.handlers.loadState = async () => nextState();
-    fake.handlers.loadActivePublication = async () => ({
-      publicationId: "pub-2",
-      linkId: "link-1",
-      publicKey: new Uint8Array(65),
-    });
-
-    lifecycle.updateContext(context());
-    lifecycle.attachPanel();
-    await tick();
-
-    expect(await lifecycle.changeAudience("collaborators_only", "")).toBe(false);
-    expect(fake.calls).not.toContain("changeAudience");
-    expect(lifecycle.getState().error?.code).toBe("changed");
-  });
-
-  it("shares pending and error coordination across panel requests", async () => {
-    const fake = fakeOperations();
-    const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([baseState({ isOwner: false }), baseState({ isOwner: false })]);
-    fake.handlers.loadState = async () => nextState();
     let busyDuringRequest = false;
-    fake.handlers.requestPublication = async () => {
+    fake.handlers.rotateLink = async () => {
       busyDuringRequest = lifecycle.getState().busy;
-      throw new PublicationError("limited");
+      throw new PublicationError("rotation-required");
     };
 
     lifecycle.updateContext(context());
     lifecycle.attachPanel();
     await tick();
-    expect(await lifecycle.requestPublication()).toBe(false);
+    expect(await lifecycle.rotateLink()).toBe(false);
     expect(busyDuringRequest).toBe(true);
-    expect(fake.calls).toEqual(["loadState", "requestPublication", "loadState"]);
+    expect(fake.calls).toEqual(["loadState", "rotateLink", "loadState"]);
     expect(lifecycle.getState()).toMatchObject({
       busy: false,
-      error: { code: "limited", suspendedUntil: null },
+      error: { code: "rotation-required", suspendedUntil: null },
     });
   });
 
-  it("ignores a second decision while one is still pending", async () => {
+  it("ignores a second module decision while one is still pending", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([baseState({ isOwner: false }), baseState({ isOwner: false })]);
+    const nextState = stateQueue([baseState(), activeState("link-1")]);
     fake.handlers.loadState = async () => nextState();
     const held = deferred<void>();
-    fake.handlers.requestPublication = async () => {
+    fake.handlers.rotateLink = async (input) => {
+      input.onPrepared(linkFor("link-1", "one"));
       await held.promise;
     };
 
     lifecycle.updateContext(context());
     lifecycle.attachPanel();
     await tick();
-    const first = lifecycle.requestPublication();
+    const first = lifecycle.rotateLink();
     await tick();
-    expect(await lifecycle.requestPublication()).toBe(false);
+    expect(await lifecycle.rotateLink()).toBe(false);
     held.resolve();
     expect(await first).toBe(true);
-    expect(fake.calls.filter((call) => call === "requestPublication")).toHaveLength(1);
+    expect(fake.calls.filter((call) => call === "rotateLink")).toHaveLength(1);
   });
 
-  it("credits a collaborator through the module's current Publication identity", async () => {
+  it("preserves a suspension's fixed automatic end", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([activeState("link-1"), activeState("link-1")]);
+    const nextState = stateQueue([baseState(), baseState()]);
     fake.handlers.loadState = async () => nextState();
-    const credited: { publicationId: string; address: string }[] = [];
-    fake.handlers.addAccountAuthor = async (input) => {
-      credited.push(input);
+    fake.handlers.publish = async () => {
+      throw new PublicationError("suspended", 1_800_000_000_000);
     };
 
     lifecycle.updateContext(context());
     lifecycle.attachPanel();
     await tick();
-    expect(await lifecycle.addAccountAuthor("collaborator")).toBe(true);
-    expect(credited).toEqual([{ publicationId: "pub-1", address: "collaborator" }]);
-    expect(fake.calls).toEqual(["loadState", "addAccountAuthor", "loadState"]);
+    expect(await lifecycle.publish({ includeSelf: false, audience: "public" })).toBe(false);
+    expect(lifecycle.getState().error).toEqual({ code: "suspended", suspendedUntil: 1_800_000_000_000 });
   });
 
   it("waits for the page's first context before reading authoritative state", async () => {
@@ -564,21 +522,5 @@ describe("PublicationLifecycle", () => {
     expect(await lifecycle.refresh()).toBe(true);
     expect(lifecycle.getState().state?.commentCount).toBe(250);
     expect(fake.calls).toEqual(["loadState", "loadState"]);
-  });
-
-  it("preserves a suspension's fixed automatic end", async () => {
-    const fake = fakeOperations();
-    const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([baseState({ isOwner: false }), baseState({ isOwner: false })]);
-    fake.handlers.loadState = async () => nextState();
-    fake.handlers.requestPublication = async () => {
-      throw new PublicationError("suspended", 1_800_000_000_000);
-    };
-
-    lifecycle.updateContext(context());
-    lifecycle.attachPanel();
-    await tick();
-    expect(await lifecycle.requestPublication()).toBe(false);
-    expect(lifecycle.getState().error).toEqual({ code: "suspended", suspendedUntil: 1_800_000_000_000 });
   });
 });

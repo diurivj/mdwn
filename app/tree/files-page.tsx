@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/shared/comments/comments-client";
 import { ExportControl } from "~/export/export-control";
@@ -6,7 +6,7 @@ import { ImportControl, type ImportControlHandle } from "~/import/import-control
 import { createPublicationOperations } from "~/publications/publication-operations";
 import { declarePublicationAuthor } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/publish-panel";
-import { PublicationLifecycle } from "~/shared/publications/lifecycle";
+import { PublicationLifecycle, type PublicationContext } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
 
@@ -94,16 +94,19 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   }, []);
   // Same-File revalidation keeps the lifecycle and its retained candidates;
   // later operations use the current access/context.
-  useEffect(() => {
-    if (!snapshot) return;
+  const publicationContext = useMemo<PublicationContext | null>(() => {
+    if (!snapshot) return null;
     const parentId = snapshot.file?.parentId ?? null;
-    publicationLifecycle.updateContext({
+    return {
       fileId: nodeId,
       access: snapshot.access,
       parentId,
       parentKey: parentId ? (snapshot.keys[parentId] ?? null) : snapshot.access.rootKey,
-    });
-  }, [publicationLifecycle, nodeId, snapshot]);
+    };
+  }, [snapshot, nodeId]);
+  useEffect(() => {
+    if (publicationContext) publicationLifecycle.updateContext(publicationContext);
+  }, [publicationLifecycle, publicationContext]);
   // Another File, leaving the route or a full reload starts a fresh lifecycle.
   useEffect(() => () => publicationLifecycle.dispose(), [publicationLifecycle]);
   const onNavigationStart = useCallback(() => {
@@ -529,8 +532,6 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     );
 
   const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
-  const publicationParentId = snapshot.file?.parentId ?? null;
-  const publicationParentKey = publicationParentId ? snapshot.keys[publicationParentId] : snapshot.access.rootKey;
   const structuralParent = kind === "directory" ? nodeId : snapshot.file?.parentId;
   const canCreate =
     !!structuralParent &&
@@ -676,8 +677,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         {kind === "file" && snapshot.file && publishOpen && (
           <PublishPanel
             lifecycle={publicationLifecycle}
+            fileId={nodeId}
+            snapshot={snapshot}
             fileReady={fileReady && !busy}
-            linkReady={!!publicationParentKey}
           />
         )}
         {canChangeStructure && (

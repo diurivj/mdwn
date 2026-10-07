@@ -34,10 +34,6 @@ export type PublicationState = {
  * the final batch removes the rest of the public material. */
 export type TeardownProgress = { done: boolean; commentTotal: number; commentsRemaining: number };
 
-/** The authoritative active Publication as an operation needs it: identity and
- * the public key, never the read capability. */
-export type ActivePublication = { publicationId: string; linkId: string; publicKey: Uint8Array };
-
 export type PublicationErrorCode =
   | "changed"
   | "exists"
@@ -81,16 +77,6 @@ export type PublishInput = {
 
 export type RotateLinkInput = { onPrepared: (link: PreparedPublicLink) => void };
 
-export type ChangeAudienceInput = {
-  audience: CommentAudience;
-  completeLink: string | null;
-  publication: ActivePublication;
-  expectedEpochId: string | null;
-  expectedThreadId: string | null;
-};
-
-export type AddSelfAuthorInput = { publication: ActivePublication };
-
 /**
  * The single internal operations seam. The production adapter wraps the
  * feature-local browser client; deterministic tests control responses here.
@@ -99,23 +85,8 @@ export type AddSelfAuthorInput = { publication: ActivePublication };
  */
 export type PublicationOperations = {
   loadState(context: PublicationContext, signal: AbortSignal): Promise<PublicationState>;
-  loadActivePublication(context: PublicationContext, signal: AbortSignal): Promise<ActivePublication | null>;
   publish(context: PublicationContext, input: PublishInput, signal: AbortSignal): Promise<void>;
   rotateLink(context: PublicationContext, input: RotateLinkInput, signal: AbortSignal): Promise<void>;
-  changeAudience(context: PublicationContext, input: ChangeAudienceInput, signal: AbortSignal): Promise<void>;
-  addSelfAuthor(context: PublicationContext, input: AddSelfAuthorInput, signal: AbortSignal): Promise<void>;
-  addAccountAuthor(
-    context: PublicationContext,
-    input: { publicationId: string; address: string },
-    signal: AbortSignal,
-  ): Promise<void>;
-  removeAuthor(context: PublicationContext, input: { declarationId: string }, signal: AbortSignal): Promise<void>;
-  requestPublication(context: PublicationContext, signal: AbortSignal): Promise<void>;
-  removePublicationRequest(
-    context: PublicationContext,
-    input: { requestId: string },
-    signal: AbortSignal,
-  ): Promise<void>;
   unpublish(context: PublicationContext, signal: AbortSignal): Promise<void>;
   continueTeardown(context: PublicationContext, signal: AbortSignal): Promise<TeardownProgress>;
 };
@@ -161,6 +132,7 @@ export class PublicationLifecycle {
   private panelEpoch = 0;
   private readGeneration = 0;
   private teardownEpoch: number | null = null;
+  private teardownRestart = false;
   private controller: AbortController | null = null;
   private disposed = false;
 
@@ -190,11 +162,8 @@ export class PublicationLifecycle {
    * while the Publication is still deleting. */
   attachPanel(): void {
     if (this.disposed) return;
+    this.endPanelWork();
     this.panelActive = true;
-    this.panelEpoch += 1;
-    this.readGeneration += 1;
-    this.teardownEpoch = null;
-    this.controller?.abort();
     this.controller = new AbortController();
     this.set(initialView());
     void this.reload();
@@ -204,13 +173,9 @@ export class PublicationLifecycle {
    * retained candidates survive for the File page. */
   detachPanel(): void {
     this.panelActive = false;
-    this.panelEpoch += 1;
-    this.readGeneration += 1;
-    this.teardownEpoch = null;
-    this.controller?.abort();
-    this.controller = null;
+    this.endPanelWork();
     // No mounted listener observes this reset; the next attach starts fresh.
-    this.set(initialView(), false);
+    this.set(initialView(), { notify: false });
   }
 
   /** Another File, leaving the route or a full reload disposes the lifecycle;
@@ -219,23 +184,24 @@ export class PublicationLifecycle {
     if (this.disposed) return;
     this.disposed = true;
     this.panelActive = false;
-    this.panelEpoch += 1;
-    this.readGeneration += 1;
-    this.teardownEpoch = null;
-    this.controller?.abort();
-    this.controller = null;
+    this.endPanelWork();
     this.candidates.clear();
     this.listeners.clear();
   }
 
   retryLoad(): void {
     if (this.disposed || !this.panelActive) return;
-    this.set({ panel: "loading", state: null, completeLink: null, error: null });
+    // A fresh load may discover the Publication is still deleting, so it also
+    // clears a failed teardown and lets the reload resume it.
+    this.set({ panel: "loading", state: null, completeLink: null, error: null, teardownFailed: false });
     void this.reload();
   }
 
   retryTeardown(): void {
     if (this.disposed || !this.panelActive) return;
+    // A click can arrive while a failed loop is still reloading; remember the
+    // request so the loop restarts as soon as it finishes.
+    this.teardownRestart = true;
     this.set({ teardownFailed: false });
     this.maybeStartTeardown(true);
   }
@@ -258,55 +224,10 @@ export class PublicationLifecycle {
     );
   }
 
-  changeAudience(audience: CommentAudience, typedLink: string): Promise<boolean> {
-    return this.run(async (context, signal) => {
-      const state = this.view.state;
-      const publication = state?.publication;
-      if (!publication) throw new PublicationError("changed");
-      const active = await this.operations.loadActivePublication(context, signal);
-      if (!active || active.publicationId !== publication.publicationId) throw new PublicationError("changed");
-      const retained = this.candidates.get(active.linkId)?.url ?? null;
-      const completeLink = retained ?? (typedLink.trim() || null);
-      await this.operations.changeAudience(
-        context,
-        {
-          audience,
-          completeLink,
-          publication: active,
-          expectedEpochId: state.comments?.epochId ?? null,
-          expectedThreadId: state.comments?.threadId ?? null,
-        },
-        signal,
-      );
-    });
-  }
-
-  addSelfAuthor(): Promise<boolean> {
-    return this.run(async (context, signal) => {
-      const publication = await this.operations.loadActivePublication(context, signal);
-      if (!publication) throw new PublicationError("changed");
-      await this.operations.addSelfAuthor(context, { publication }, signal);
-    });
-  }
-
-  addAccountAuthor(address: string): Promise<boolean> {
-    return this.run((context, signal) => {
-      const publication = this.view.state?.publication;
-      if (!publication) throw new PublicationError("changed");
-      return this.operations.addAccountAuthor(context, { publicationId: publication.publicationId, address }, signal);
-    });
-  }
-
-  removeAuthor(declarationId: string): Promise<boolean> {
-    return this.run((context, signal) => this.operations.removeAuthor(context, { declarationId }, signal));
-  }
-
-  requestPublication(): Promise<boolean> {
-    return this.run((context, signal) => this.operations.requestPublication(context, signal));
-  }
-
-  removePublicationRequest(requestId: string): Promise<boolean> {
-    return this.run((context, signal) => this.operations.removePublicationRequest(context, { requestId }, signal));
+  /** The complete link retained for one authoritative active-link identity;
+   * used by panel mutations that still own their own coordination. */
+  completeLinkFor(linkId: string | null | undefined): string | null {
+    return linkId ? (this.candidates.get(linkId)?.url ?? null) : null;
   }
 
   unpublish(): Promise<boolean> {
@@ -326,12 +247,12 @@ export class PublicationLifecycle {
       await action(context, controller.signal);
     } catch (error) {
       ok = false;
-      if (this.active(epoch, controller)) this.set({ error: failure(error) });
+      if (this.isActive(epoch, controller)) this.set({ error: failure(error) });
     }
-    if (!this.active(epoch, controller)) return false;
+    if (!this.isActive(epoch, controller)) return false;
     await this.reload();
-    if (this.active(epoch, controller)) this.set({ busy: false });
-    return ok && this.active(epoch, controller);
+    if (this.isActive(epoch, controller)) this.set({ busy: false });
+    return ok && this.isActive(epoch, controller);
   }
 
   /** Last-issued read wins: an overlapping refresh can never replace a newer
@@ -344,7 +265,7 @@ export class PublicationLifecycle {
     const generation = ++this.readGeneration;
     try {
       const state = await this.operations.loadState(context, controller.signal);
-      if (!this.active(epoch, controller) || generation !== this.readGeneration) return;
+      if (!this.isActive(epoch, controller) || generation !== this.readGeneration) return;
       const deleting = state.isOwner && state.publication?.state === "deleting";
       this.set({
         panel: "ready",
@@ -354,7 +275,7 @@ export class PublicationLifecycle {
       });
       if (deleting) this.maybeStartTeardown(options.resumeTeardown);
     } catch {
-      if (!this.active(epoch, controller) || generation !== this.readGeneration) return;
+      if (!this.isActive(epoch, controller) || generation !== this.readGeneration) return;
       this.set({ panel: "failed", state: null, completeLink: null });
     }
   }
@@ -362,8 +283,7 @@ export class PublicationLifecycle {
   /** The displayed complete link matches the authoritative active-link
    * identity; a failed or superseded candidate is never presented. */
   private completeLink(state: PublicationState): string | null {
-    const linkId = state.publication?.linkId;
-    return linkId ? (this.candidates.get(linkId)?.url ?? null) : null;
+    return this.completeLinkFor(state.publication?.linkId);
   }
 
   /** Retain every prepared candidate immediately; the request that follows may
@@ -384,6 +304,7 @@ export class PublicationLifecycle {
     if (!state.isOwner || state.publication?.state !== "deleting") return;
     if (this.teardownEpoch === this.panelEpoch) return;
     this.teardownEpoch = this.panelEpoch;
+    this.teardownRestart = false;
     void this.driveTeardown(context, controller, this.panelEpoch);
   }
 
@@ -392,28 +313,44 @@ export class PublicationLifecycle {
   private async driveTeardown(context: PublicationContext, controller: AbortController, epoch: number): Promise<void> {
     try {
       let progress = await this.operations.continueTeardown(context, controller.signal);
-      while (this.active(epoch, controller) && !progress.done) {
+      while (this.isActive(epoch, controller) && !progress.done) {
         this.set({ progress });
         progress = await this.operations.continueTeardown(context, controller.signal);
       }
-      if (!this.active(epoch, controller)) return;
+      if (!this.isActive(epoch, controller)) return;
       this.set({ progress });
       await this.reload({ resumeTeardown: false });
     } catch {
-      if (!this.active(epoch, controller)) return;
+      if (!this.isActive(epoch, controller)) return;
       this.set({ teardownFailed: true });
       await this.reload({ resumeTeardown: false });
     } finally {
-      if (this.teardownEpoch === epoch) this.teardownEpoch = null;
+      if (this.teardownEpoch === epoch) {
+        this.teardownEpoch = null;
+        if (this.teardownRestart) {
+          this.teardownRestart = false;
+          this.maybeStartTeardown(true);
+        }
+      }
     }
   }
 
-  private active(epoch: number, controller: AbortController): boolean {
+  private isActive(epoch: number, controller: AbortController): boolean {
     return !this.disposed && this.panelActive && epoch === this.panelEpoch && !controller.signal.aborted;
   }
 
-  private set(update: Partial<PublicationLifecycleState>, notify = true): void {
+  /** Invalidates the current panel epoch and aborts its cancellable work. */
+  private endPanelWork(): void {
+    this.panelEpoch += 1;
+    this.readGeneration += 1;
+    this.teardownEpoch = null;
+    this.teardownRestart = false;
+    this.controller?.abort();
+    this.controller = null;
+  }
+
+  private set(update: Partial<PublicationLifecycleState>, options: { notify?: boolean } = {}): void {
     this.view = { ...this.view, ...update };
-    if (notify) for (const listener of this.listeners) listener();
+    if (options.notify ?? true) for (const listener of this.listeners) listener();
   }
 }

@@ -1,7 +1,22 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import type { CommentAudience, PublicationErrorCode, PublicationLifecycle } from "~/shared/publications/lifecycle";
+import {
+  PublicationError,
+  type CommentAudience,
+  type PublicationErrorCode,
+  type PublicationLifecycle,
+} from "~/shared/publications/lifecycle";
 import { publicParticipationSuspensionNotice } from "~/shared/security/public-participation";
+import { loadFile } from "~/shared/tree/client";
+import type { FilesSnapshot } from "~/tree/navigation-client";
+import {
+  addAccountAuthor,
+  addSelfAuthor,
+  changeCommentAudience,
+  removeAuthor,
+  removePublicationRequest,
+  requestPublication,
+} from "./publications-client";
 
 const messages: Record<Exclude<PublicationErrorCode, "suspended">, string> = {
   changed: "This File’s publication changed on another device. Refresh and try again.",
@@ -22,27 +37,39 @@ const messages: Record<Exclude<PublicationErrorCode, "suspended">, string> = {
 /**
  * Contextual Publication management. The Owner publishes (which approves any
  * pending requests), sees the one-time complete link, and opts in to authors;
- * a Collaborator can only request publication. This adapter renders the
- * lifecycle's state and forwards the person's decisions; the lifecycle module
- * owns candidate retention, read ordering and Unpublishing teardown. No panel
- * state is persisted.
+ * a Collaborator can only request publication. The lifecycle module owns
+ * candidate retention, read ordering and Unpublishing teardown; this adapter
+ * renders that state and forwards the person's decisions. Author changes,
+ * Comment audience changes and Publication requests still keep their own
+ * panel coordination until ticket 45 unifies them. No panel state is persisted.
  */
 export function PublishPanel({
   lifecycle,
+  fileId,
+  snapshot,
   fileReady,
-  linkReady,
 }: {
   lifecycle: PublicationLifecycle;
+  fileId: string;
+  snapshot: FilesSnapshot;
   fileReady: boolean;
-  linkReady: boolean;
 }) {
   const view = useSyncExternalStore(lifecycle.subscribe, lifecycle.getState, lifecycle.getState);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
   const [includeSelf, setIncludeSelf] = useState(false);
   const [audience, setAudience] = useState<CommentAudience>("public");
   const [linkInput, setLinkInput] = useState("");
   const [address, setAddress] = useState("");
   const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const lifetime = useRef<AbortController | null>(null);
+  const accessRef = useRef(snapshot.access);
+  useEffect(() => {
+    accessRef.current = snapshot.access;
+  }, [snapshot.access]);
+  const parentId = snapshot.file?.parentId ?? null;
+  const parentKey = parentId ? snapshot.keys[parentId] : snapshot.access.rootKey;
 
   // The panel's own lifetime: closing aborts its cancellable work, reopening
   // reloads authoritative state and resumes teardown while still deleting.
@@ -50,13 +77,80 @@ export function PublishPanel({
     lifecycle.attachPanel();
     return () => lifecycle.detachPanel();
   }, [lifecycle]);
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => {
+      controller.abort();
+      lifetime.current = null;
+    };
+  }, []);
 
-  const busy = view.busy;
-  const message = view.error
-    ? view.error.code === "suspended"
-      ? publicParticipationSuspensionNotice(view.error.suspendedUntil)
-      : messages[view.error.code]
-    : "";
+  // Pending/error/refresh coordination for the mutations ticket 44 leaves in
+  // the panel; ticket 45 folds these into the lifecycle module.
+  async function run(action: (signal: AbortSignal) => Promise<void>) {
+    const controller = lifetime.current;
+    if (!controller || controller.signal.aborted || busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await action(controller.signal);
+      await lifecycle.refresh();
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setMessage(
+        error instanceof PublicationError
+          ? error.code === "suspended"
+            ? publicParticipationSuspensionNotice(error.suspendedUntil)
+            : messages[error.code]
+          : messages.unavailable,
+      );
+      await lifecycle.refresh();
+    } finally {
+      if (!controller.signal.aborted) setBusy(false);
+    }
+  }
+
+  async function changeAudience(next: CommentAudience, signal: AbortSignal) {
+    const file = await loadFile(accessRef.current, fileId, parentKey!, signal);
+    if (!file.publication || file.publication.publicationId !== view.state?.publication?.publicationId)
+      throw new PublicationError("changed");
+    const link = lifecycle.completeLinkFor(file.publication.linkId) ?? linkInput.trim() ?? "";
+    await changeCommentAudience(
+      accessRef.current,
+      fileId,
+      {
+        publicationId: file.publication.publicationId,
+        linkId: file.publication.linkId,
+        publicKey: file.publication.publicKey,
+        expectedEpochId: view.state?.comments?.epochId ?? null,
+        threadId: view.state?.comments?.threadId ?? null,
+      },
+      next,
+      link || null,
+      signal,
+    );
+    setLinkInput("");
+  }
+
+  async function copy() {
+    if (!view.completeLink) return;
+    try {
+      await navigator.clipboard.writeText(view.completeLink);
+      setCopied("copied");
+    } catch {
+      setCopied("failed");
+    }
+  }
+
+  const working = busy || view.busy;
+  const shownMessage = message
+    ? message
+    : view.error
+      ? view.error.code === "suspended"
+        ? publicParticipationSuspensionNotice(view.error.suspendedUntil)
+        : messages[view.error.code]
+      : "";
 
   if (view.panel === "loading")
     return (
@@ -81,22 +175,12 @@ export function PublishPanel({
   const teardown = view.progress ?? state.teardown ?? { commentTotal: 0, commentsRemaining: 0 };
   const completeLink = view.completeLink;
 
-  async function copy() {
-    if (!completeLink) return;
-    try {
-      await navigator.clipboard.writeText(completeLink);
-      setCopied("copied");
-    } catch {
-      setCopied("failed");
-    }
-  }
-
   return (
     <section aria-label="Publish" className="mt-4 space-y-3 rounded border border-stone-200 bg-white p-4">
       <h2 className="font-medium">{state.isOwner ? "Publish" : "Publication"}</h2>
-      {message && (
+      {shownMessage && (
         <p role="alert" className="text-rose-700">
-          {message}
+          {shownMessage}
         </p>
       )}
       {publication?.state === "deleting" ? (
@@ -172,7 +256,7 @@ export function PublishPanel({
                   Complete public link
                   <input
                     value={linkInput}
-                    disabled={busy}
+                    disabled={working}
                     onChange={(event) => setLinkInput(event.target.value)}
                     className="mt-1 block w-full rounded border border-stone-300 p-1 font-mono text-xs"
                     placeholder="https://…/p/…#v1.…"
@@ -183,26 +267,18 @@ export function PublishPanel({
                 {state.comments?.audience === "public" ? (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={working}
                     className="rounded border px-3 py-1 text-sm"
-                    onClick={() =>
-                      void lifecycle.changeAudience("collaborators_only", linkInput).then((ok) => {
-                        if (ok) setLinkInput("");
-                      })
-                    }
+                    onClick={() => void run((signal) => changeAudience("collaborators_only", signal))}
                   >
                     Make comments collaborators only
                   </button>
                 ) : (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={working}
                     className="rounded border px-3 py-1 text-sm"
-                    onClick={() =>
-                      void lifecycle.changeAudience("public", linkInput).then((ok) => {
-                        if (ok) setLinkInput("");
-                      })
-                    }
+                    onClick={() => void run((signal) => changeAudience("public", signal))}
                   >
                     {state.comments ? "Make comments public" : "Set up public comments"}
                   </button>
@@ -221,8 +297,8 @@ export function PublishPanel({
                       </span>
                       <button
                         type="button"
-                        disabled={busy}
-                        onClick={() => void lifecycle.removeAuthor(author.declarationId)}
+                        disabled={working}
+                        onClick={() => void run((signal) => removeAuthor(fileId, author.declarationId, signal))}
                         className="underline"
                       >
                         Remove
@@ -239,8 +315,14 @@ export function PublishPanel({
                 {!publication.authors.some((author) => author.self) && (
                   <button
                     type="button"
-                    disabled={busy}
-                    onClick={() => void lifecycle.addSelfAuthor()}
+                    disabled={working}
+                    onClick={() =>
+                      void run(async (signal) => {
+                        const file = await loadFile(accessRef.current, fileId, parentKey!, signal);
+                        if (!file.publication) throw new PublicationError("changed");
+                        await addSelfAuthor(accessRef.current, fileId, file.publication, signal);
+                      })
+                    }
                     className="rounded border px-3 py-1 text-sm"
                   >
                     Show my Public pseudonym
@@ -252,8 +334,9 @@ export function PublishPanel({
                 onSubmit={(event) => {
                   event.preventDefault();
                   if (!address) return;
-                  void lifecycle.addAccountAuthor(address).then((ok) => {
-                    if (ok) setAddress("");
+                  void run(async (signal) => {
+                    await addAccountAuthor(fileId, publication.publicationId, address, signal);
+                    setAddress("");
                   });
                 }}
               >
@@ -261,12 +344,12 @@ export function PublishPanel({
                   Credit a collaborator by share handle or share identifier
                   <input
                     value={address}
-                    disabled={busy}
+                    disabled={working}
                     onChange={(event) => setAddress(event.target.value)}
                     className="mt-1 block w-72 max-w-full rounded border border-stone-300 p-1"
                   />
                 </label>
-                <button type="submit" disabled={busy || !address} className="rounded border px-3 py-1 text-sm">
+                <button type="submit" disabled={working || !address} className="rounded border px-3 py-1 text-sm">
                   Add author
                 </button>
               </form>
@@ -279,7 +362,7 @@ export function PublishPanel({
               </p>
               <button
                 type="button"
-                disabled={busy || !linkReady}
+                disabled={working || !parentKey}
                 className="mt-2 rounded border px-3 py-1 text-sm"
                 onClick={() => void lifecycle.rotateLink()}
               >
@@ -298,7 +381,7 @@ export function PublishPanel({
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={working}
                       className="rounded bg-rose-700 px-3 py-1 text-sm text-white"
                       onClick={() => {
                         setConfirming(false);
@@ -310,7 +393,7 @@ export function PublishPanel({
                     </button>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={working}
                       onClick={() => setConfirming(false)}
                       className="rounded border px-3 py-1 text-sm"
                     >
@@ -326,7 +409,7 @@ export function PublishPanel({
                   </p>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={working}
                     onClick={() => {
                       setConfirming(true);
                       void lifecycle.refresh();
@@ -360,9 +443,11 @@ export function PublishPanel({
                       Request {index + 1}
                       <button
                         type="button"
-                        disabled={busy}
+                        disabled={working}
                         className="underline"
-                        onClick={() => void lifecycle.removePublicationRequest(request.requestId)}
+                        onClick={() =>
+                          void run((signal) => removePublicationRequest(fileId, request.requestId, signal))
+                        }
                       >
                         Deny
                       </button>
@@ -375,18 +460,18 @@ export function PublishPanel({
               <input
                 type="checkbox"
                 checked={includeSelf}
-                disabled={busy}
+                disabled={working}
                 onChange={(event) => setIncludeSelf(event.target.checked)}
               />{" "}
               Show my Public pseudonym as an author
             </label>
             <button
               type="button"
-              disabled={busy || !fileReady || !linkReady}
+              disabled={working || !fileReady || !parentKey}
               className="rounded bg-stone-900 px-3 py-1 text-white"
               onClick={() => void lifecycle.publish({ includeSelf, audience })}
             >
-              {busy ? "Publishing…" : "Publish File"}
+              {working ? "Publishing…" : "Publish File"}
             </button>
             <fieldset className="text-sm">
               <legend>Comments audience</legend>
@@ -395,7 +480,7 @@ export function PublishPanel({
                   type="radio"
                   name="audience"
                   checked={audience === "public"}
-                  disabled={busy}
+                  disabled={working}
                   onChange={() => setAudience("public")}
                 />{" "}
                 Public
@@ -405,7 +490,7 @@ export function PublishPanel({
                   type="radio"
                   name="audience"
                   checked={audience === "collaborators_only"}
-                  disabled={busy}
+                  disabled={working}
                   onChange={() => setAudience("collaborators_only")}
                 />{" "}
                 Collaborators only
@@ -429,9 +514,9 @@ export function PublishPanel({
           <p role="status">You asked the Owner to publish this File. A request creates no public link.</p>
           <button
             type="button"
-            disabled={busy}
+            disabled={working}
             className="rounded border px-3 py-1"
-            onClick={() => void lifecycle.removePublicationRequest(ownRequest.requestId)}
+            onClick={() => void run((signal) => removePublicationRequest(fileId, ownRequest.requestId, signal))}
           >
             Cancel request
           </button>
@@ -441,9 +526,9 @@ export function PublishPanel({
           <p className="text-sm text-stone-600">Only this File’s Owner can publish it. You can ask them to.</p>
           <button
             type="button"
-            disabled={busy}
+            disabled={working}
             className="rounded border px-3 py-1"
-            onClick={() => void lifecycle.requestPublication()}
+            onClick={() => void run((signal) => requestPublication(fileId, signal))}
           >
             Send request
           </button>
