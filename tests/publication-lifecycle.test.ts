@@ -508,6 +508,29 @@ describe("PublicationLifecycle", () => {
     expect(lifecycle.getState().panel).toBe("ready");
   });
 
+  it("reloads authoritative state without taking over the panel's pending state", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const held = deferred<PublicationState>();
+    let reads = 0;
+    fake.handlers.loadState = async () => {
+      reads += 1;
+      return reads === 1 ? baseState({ commentCount: 3 }) : held.promise;
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState().state?.commentCount).toBe(3);
+
+    const reloading = lifecycle.reload();
+    await tick();
+    expect(lifecycle.getState().busy).toBe(false);
+    held.resolve(baseState({ commentCount: 250 }));
+    await reloading;
+    expect(lifecycle.getState().state?.commentCount).toBe(250);
+  });
+
   it("re-reads authoritative state for a confirmation through the shared coordination", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);

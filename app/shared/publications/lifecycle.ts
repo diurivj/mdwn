@@ -155,7 +155,7 @@ export class PublicationLifecycle {
     this.context = context;
     // A panel can attach before the page supplies its first context (for
     // example a child effect that runs before the page's own effect).
-    if (firstContext && this.panelActive && this.view.panel === "loading") void this.reload();
+    if (firstContext && this.panelActive && this.view.panel === "loading") void this.readState();
   }
 
   /** Opening the panel starts a fresh authoritative read and resumes teardown
@@ -166,7 +166,7 @@ export class PublicationLifecycle {
     this.panelActive = true;
     this.controller = new AbortController();
     this.set(initialView());
-    void this.reload();
+    void this.readState();
   }
 
   /** Closing the panel stops scheduling and aborts its cancellable work while
@@ -193,8 +193,8 @@ export class PublicationLifecycle {
     if (this.disposed || !this.panelActive) return;
     // A fresh load may discover the Publication is still deleting, so it also
     // clears a failed teardown and lets the reload resume it.
-    this.set({ panel: "loading", state: null, completeLink: null, error: null, teardownFailed: false });
-    void this.reload();
+    this.set({ panel: "loading", state: null, completeLink: null, error: null, progress: null, teardownFailed: false });
+    void this.readState();
   }
 
   retryTeardown(): void {
@@ -204,6 +204,13 @@ export class PublicationLifecycle {
     this.teardownRestart = true;
     this.set({ teardownFailed: false });
     this.maybeStartTeardown(true);
+  }
+
+  /** Re-read authoritative state through the module's read ordering without
+   * touching the shared pending/error coordination. Panel mutations that still
+   * own their coordination (ticket 44) await this after their request. */
+  async reload(): Promise<void> {
+    await this.readState({ resumeTeardown: true });
   }
 
   /** Re-read authoritative state through the shared coordination, for decisions
@@ -250,14 +257,14 @@ export class PublicationLifecycle {
       if (this.isActive(epoch, controller)) this.set({ error: failure(error) });
     }
     if (!this.isActive(epoch, controller)) return false;
-    await this.reload();
+    await this.readState();
     if (this.isActive(epoch, controller)) this.set({ busy: false });
     return ok && this.isActive(epoch, controller);
   }
 
   /** Last-issued read wins: an overlapping refresh can never replace a newer
    * state (for example the post-unpublish read) with a stale active panel. */
-  private async reload(options: { resumeTeardown: boolean } = { resumeTeardown: true }): Promise<void> {
+  private async readState(options: { resumeTeardown: boolean } = { resumeTeardown: true }): Promise<void> {
     const context = this.context;
     const controller = this.controller;
     if (this.disposed || !this.panelActive || !context || !controller || controller.signal.aborted) return;
@@ -319,11 +326,11 @@ export class PublicationLifecycle {
       }
       if (!this.isActive(epoch, controller)) return;
       this.set({ progress });
-      await this.reload({ resumeTeardown: false });
+      await this.readState({ resumeTeardown: false });
     } catch {
       if (!this.isActive(epoch, controller)) return;
       this.set({ teardownFailed: true });
-      await this.reload({ resumeTeardown: false });
+      await this.readState({ resumeTeardown: false });
     } finally {
       if (this.teardownEpoch === epoch) {
         this.teardownEpoch = null;
