@@ -4,7 +4,7 @@
 
 **Type:** maintenance
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** [40](40-retro-environment-improvements.md) (PR #49) — it edits the same `package.json`, `.github/workflows/ci.yml`, and `scripts/verify-local.mjs` files. Coordinate with [41](41-coding-standards.md): mechanical rules go here, judgement calls go there.
 
@@ -29,13 +29,13 @@ Checked 350 files with `recommended` rules and a repo-tuned formatter:
 
 ## Acceptance criteria
 
-- [ ] `@biomejs/biome` is a pinned devDependency with a committed `biome.json` (formatter matching the repo style: 2-space indent, double quotes, semicolons, trailing commas, 120 columns; Tailwind CSS parsing; repo ignores).
-- [ ] A standalone formatting-baseline commit applies `biome format --write` across the repo; typecheck, unit/Workers tests, build, smoke, and browser suites pass after it.
-- [ ] Linter config starts from `preset: recommended` with `noNonNullAssertion` disabled; every remaining error is fixed, or carries a `biome-ignore` with a one-line reason; noisy stylistic rules are explicitly off.
-- [ ] `npm run lint` runs `biome check` (lint + format check) and `npm run format` runs `biome format --write`.
-- [ ] The `CI` workflow gains a `Lint and format check` step running `npm run lint` (and `npm run verify` gains the same step), so the repo no longer relies on `tsc` alone for static checking. The existing `Typecheck` step stays: Biome is not a type checker, and its inference-based type rules do not replace `tsc -b`.
-- [ ] `docs/testing.md` documents the commands, the config choices, how the lint step relates to `Typecheck`, and how to add an exception.
-- [ ] No `--unsafe` fixes land without individual review; the security and a11y findings are decided explicitly.
+- [x] `@biomejs/biome` is a pinned devDependency with a committed `biome.json` (formatter matching the repo style: 2-space indent, double quotes, semicolons, trailing commas, 120 columns; Tailwind CSS parsing; repo ignores).
+- [x] A standalone formatting-baseline commit applies `biome format --write` across the repo; typecheck, unit/Workers tests, build, smoke, and browser suites pass after it.
+- [x] Linter config starts from `preset: recommended` with `noNonNullAssertion` disabled; every remaining error is fixed, or carries a `biome-ignore` with a one-line reason; noisy stylistic rules are explicitly off.
+- [x] `npm run lint` runs `biome check` (lint + format check) and `npm run format` runs `biome format --write`.
+- [x] The `CI` workflow gains a `Lint and format check` step running `npm run lint` (and `npm run verify` gains the same step), so the repo no longer relies on `tsc` alone for static checking. The existing `Typecheck` step stays: Biome is not a type checker, and its inference-based type rules do not replace `tsc -b`.
+- [x] `docs/testing.md` documents the commands, the config choices, how the lint step relates to `Typecheck`, and how to add an exception.
+- [x] No `--unsafe` fixes land without individual review; the security and a11y findings are decided explicitly.
 
 ## Scope and pointers
 
@@ -48,3 +48,4 @@ Checked 350 files with `recommended` rules and a repo-tuned formatter:
 
 - 2026-10-06: Raised from the MVP retro with the spike baseline above. Deliberately a separate PR from ticket 40 so the 301-file formatting baseline does not bury the steering changes.
 - 2026-10-06: Decision note — **Biome over oxlint**. oxlint is the faster linter (roughly 3x Biome on lint-only; both finish this 350-file repo in milliseconds, and `biome check` already ran in ~135 ms), but the decisive factors here are: (1) the 301-file formatting baseline needs a stable formatter, and oxfmt is still beta (0.65.0, not 1.0) while Biome's formatter is stable 2.x; (2) oxlint's real advantage — type-aware rules delegated to the Go `tsc` via `oxlint-tsgolint` (59 of 61 typescript-eslint type-aware rules) — requires TypeScript 7.0+ and a separate install, and this repo is on TypeScript 5.9, whereas Biome's inference-based type rules need no compiler; (3) Biome is one dependency and one config, which fits a repo with no existing ESLint config, plugins, or custom rules to preserve. Revisit when CI lint latency matters (thousands of files), or once oxfmt reaches 1.0 and the repo moves to TypeScript 7 — both tools are config-file based and the formatting baseline is a one-time cost, so switching later is cheap.
+- 2026-10-07: Status reconciled to **done**: PR #50 merged as `a827ab9`. All seven criteria are evidenced in the merged work: pinned `@biomejs/biome` 2.5.15 with `biome.json`, the standalone formatting-baseline commit (`795922e`), recommended preset with the noisy rules off and every remaining finding fixed or suppressed with a reason, `lint`/`format` scripts, the CI and `npm run verify` lint step beside `Typecheck`, and `docs/testing.md`. PR #50 records the two-axis review (the hook-dependency regression risk it caught was fixed before merge) and a separate RR8 pass; the scoped `--unsafe` `noUnusedImports` run was individually reviewed.

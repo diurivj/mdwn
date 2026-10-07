@@ -4,25 +4,25 @@
 
 **Type:** refactor
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** None (can start immediately).
 
 **Related:** [43: Architecture deepening specification](43-architecture-deepening-spec.md); `docs/architecture-deepening.md` (Publication implementation decisions, lifetime matrix, Publication acceptance evidence); `.scratch/mdwn/architecture-deepening-design.md` (Q4–Q7). This is the first of the spec's three separately reviewed changes.
 
-- [ ] One module owns prepared-link retention, active-link matching, read ordering, the panel/File-page lifetime split and teardown sequencing. Publish and rotate no longer take a caller-supplied prepared-link callback, and the Files page no longer holds the candidate map.
-- [ ] A candidate is retained before its request can commit. A lost response, a reopened panel or a losing later attempt cannot replace a winning complete link.
-- [ ] The displayed complete link matches authoritative active-link identity; a failed or superseded candidate is never presented as the active Public link.
-- [ ] An older active-state read cannot supersede newer state — in particular a delayed read arriving after Unpublishing.
-- [ ] Closing the panel stops scheduling and aborts cancellable panel work while retaining candidates. Reopening reloads authoritative state and resumes teardown while the Publication is still deleting.
-- [ ] Successful same-File revalidation retains candidates and uses current access/context. Another File, leaving the route or a full reload disposes the old lifecycle and rejects its late UI results.
-- [ ] Teardown finishes only when the existing protocol reports final completion, not when remaining Comments reach zero. Immediate sealing and Owner-only resumption are unchanged.
-- [ ] Complete Public links remain in browser memory only — no new persistent store, route submission, log or server-visible bearer secret.
-- [ ] The React adapter keeps form inputs, confirmation rendering and clipboard interaction; the coordination module carries no React dependency and is instance-scoped, not global.
-- [ ] Focused deterministic tests cross the same module interface production callers use, with controlled responses at one internal operations-adapter seam: lost responses retaining the winning link, competing candidates, delayed reads after Unpublishing, close/reopen during teardown with resumption, final completion after the zero-Comments batch, same-File revalidation, and disposal on navigation/reload.
-- [ ] Existing real-browser Publication scenarios and Worker publication/privacy tests are retained and pass, including Owner/Collaborator permission checks, Public-participation policy behavior and Public-link fragment privacy.
-- [ ] Before/after evidence shows caller knowledge decreased: neither the Files page nor the Publish panel names candidates, refresh generations or teardown steps.
-- [ ] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
+- [x] One module owns prepared-link retention, active-link matching, read ordering, the panel/File-page lifetime split and teardown sequencing. Publish and rotate no longer take a caller-supplied prepared-link callback, and the Files page no longer holds the candidate map.
+- [x] A candidate is retained before its request can commit. A lost response, a reopened panel or a losing later attempt cannot replace a winning complete link.
+- [x] The displayed complete link matches authoritative active-link identity; a failed or superseded candidate is never presented as the active Public link.
+- [x] An older active-state read cannot supersede newer state — in particular a delayed read arriving after Unpublishing.
+- [x] Closing the panel stops scheduling and aborts cancellable panel work while retaining candidates. Reopening reloads authoritative state and resumes teardown while the Publication is still deleting.
+- [x] Successful same-File revalidation retains candidates and uses current access/context. Another File, leaving the route or a full reload disposes the old lifecycle and rejects its late UI results.
+- [x] Teardown finishes only when the existing protocol reports final completion, not when remaining Comments reach zero. Immediate sealing and Owner-only resumption are unchanged.
+- [x] Complete Public links remain in browser memory only — no new persistent store, route submission, log or server-visible bearer secret.
+- [x] The React adapter keeps form inputs, confirmation rendering and clipboard interaction; the coordination module carries no React dependency and is instance-scoped, not global.
+- [x] Focused deterministic tests cross the same module interface production callers use, with controlled responses at one internal operations-adapter seam: lost responses retaining the winning link, competing candidates, delayed reads after Unpublishing, close/reopen during teardown with resumption, final completion after the zero-Comments batch, same-File revalidation, and disposal on navigation/reload.
+- [x] Existing real-browser Publication scenarios and Worker publication/privacy tests are retained and pass, including Owner/Collaborator permission checks, Public-participation policy behavior and Public-link fragment privacy.
+- [x] Before/after evidence shows caller knowledge decreased: neither the Files page nor the Publish panel names candidates, refresh generations or teardown steps.
+- [x] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
 
 ## Scope and pointers
 
@@ -34,3 +34,4 @@
 ## Comments
 
 - 2026-10-06: Published from the approved spec (43) as the first implementation ticket, per the confirmed delivery order Publication → Import → Comment-dependent Hard deletion.
+- 2026-10-07: Status reconciled to **done**: PR #51 merged as `bf1588d`. The merged `app/shared/publications/lifecycle.ts`, its production operations adapter, the focused interface tests, the retained browser/Worker suites, and PR #51's review record (Standards pass, Spec pass, separate RR8 pass with one disclosed Low pre-existing display finding) evidence all thirteen criteria.
