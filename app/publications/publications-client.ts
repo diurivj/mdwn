@@ -5,6 +5,13 @@ import { sealVaultRecoveryEnvelope } from "~/shared/crypto/vault";
 import { FILE_SOURCE_LIMIT } from "~/shared/crypto/file-source";
 import { privateRequest, isPublicParticipationSuspended } from "~/shared/device/private-client";
 import { newOpaqueId } from "~/shared/opaque-id";
+import {
+  PublicationError,
+  type CommentAudience,
+  type PreparedPublicLink,
+  type PublicationState,
+  type TeardownProgress,
+} from "~/shared/publications/lifecycle";
 import { loadDirectory, loadFile, type FilePublication, type RootAccess } from "~/shared/tree/client";
 import { convertFileCapability } from "~/shared/tree/file-capability-client";
 import { encodeTreeBytes } from "~/shared/tree/wire";
@@ -15,25 +22,6 @@ import {
   publicLinkUrl,
 } from "../shared/publications/capability";
 import { publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } from "../shared/publications/content";
-
-export type PublicationState = {
-  fileId: string;
-  isOwner: boolean;
-  canEdit: boolean;
-  publication: null | {
-    publicationId: string;
-    state: "active" | "deleting";
-    linkId?: string | null;
-    createdAt: number;
-    authors: { declarationId: string; ordinal: number; self: boolean; declared: boolean }[];
-  };
-  comments: { threadId: string; epochId: string; audience: "public" | "collaborators_only" } | null;
-  commentCount: number;
-  teardown: null | { commentTotal: number; commentsRemaining: number };
-  requests: { requestId: string; own: boolean; createdAt: number }[];
-};
-
-export type CommentAudience = "public" | "collaborators_only";
 
 /** One fresh audience epoch: an Owner recovery envelope and, for a public
  * epoch, the symmetric wrapper to the Publication capability (fragment only). */
@@ -86,30 +74,6 @@ async function commentEpoch(
   };
 }
 
-/** A bounded, non-revealing failure the Publish panel can explain. A
- * Public-participation suspension carries only its fixed automatic end. */
-export class PublicationError extends Error {
-  constructor(
-    readonly code:
-      | "changed"
-      | "exists"
-      | "file-changed"
-      | "limited"
-      | "not-found"
-      | "suspended"
-      | "too-large"
-      | "author-exists"
-      | "author-limit"
-      | "link-required"
-      | "pseudonym-pending"
-      | "rotation-required"
-      | "unavailable",
-    readonly suspendedUntil: number | null = null,
-  ) {
-    super(code);
-  }
-}
-
 async function publicationRequest(
   path: string,
   method: "POST" | "PUT" | "DELETE",
@@ -156,9 +120,6 @@ async function publicationRequest(
 export async function loadPublicationState(fileId: string, signal?: AbortSignal): Promise<PublicationState> {
   return (await publicationRequest(fileId, "POST", undefined, signal)).json() as Promise<PublicationState>;
 }
-
-/** Browser-memory-only material, never a route submission or server value. */
-export type PreparedPublicLink = { publicationId: string; linkId: string; url: string };
 
 /**
  * The Owner's browser publishes the latest saved representation. It creates the
@@ -397,10 +358,6 @@ export async function declarePublicationAuthor(
 // ---------------------------------------------------------------------------
 // Link rotation and unpublish teardown (ticket 25)
 // ---------------------------------------------------------------------------
-
-/** Bounded teardown progress; `commentsRemaining` reaches zero one batch before
- * the final batch removes the rest of the public material. */
-export type TeardownProgress = { done: boolean; commentTotal: number; commentsRemaining: number };
 
 /**
  * The Owner's browser replaces the active link: it re-encrypts the current

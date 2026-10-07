@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/shared/comments/comments-client";
 import { ExportControl } from "~/export/export-control";
 import { ImportControl, type ImportControlHandle } from "~/import/import-control";
-import { declarePublicationAuthor, type PreparedPublicLink } from "~/publications/publications-client";
+import { createPublicationOperations } from "~/publications/publication-operations";
+import { declarePublicationAuthor } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/publish-panel";
+import { PublicationLifecycle, type PublicationContext } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
 
@@ -74,10 +76,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
-  // Retain every prepared candidate until this page ends. A later attempt can
-  // lose to an earlier in-flight commit; it must not overwrite that link's key.
-  // Complete links stay only in browser memory, never in persistent storage.
-  const [publicLinks, setPublicLinks] = useState<ReadonlyMap<string, PreparedPublicLink>>(() => new Map());
+  // One lifecycle per File page. It retains every prepared candidate for this
+  // page's lifetime, orders reads and drives Unpublishing teardown; complete
+  // links stay only in browser memory, never in persistent storage. It is
+  // created in the page's own effect so a development StrictMode remount
+  // starts a live instance instead of leaving a disposed one latched.
+  const [publicationLifecycle, setPublicationLifecycle] = useState<PublicationLifecycle | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const importControl = useRef<ImportControlHandle | null>(null);
   const submission = useRef(false);
@@ -90,6 +94,26 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       lifetime.current?.abort();
     };
   }, []);
+  // Same-File revalidation keeps the lifecycle and its retained candidates;
+  // later operations use the current access/context.
+  const publicationContext = useMemo<PublicationContext | null>(() => {
+    if (!snapshot) return null;
+    const parentId = snapshot.file?.parentId ?? null;
+    return {
+      fileId: nodeId,
+      access: snapshot.access,
+      parentId,
+      parentKey: parentId ? (snapshot.keys[parentId] ?? null) : snapshot.access.rootKey,
+    };
+  }, [snapshot, nodeId]);
+  useEffect(() => {
+    const lifecycle = new PublicationLifecycle(createPublicationOperations());
+    setPublicationLifecycle(lifecycle);
+    return () => lifecycle.dispose();
+  }, []);
+  useEffect(() => {
+    if (publicationContext && publicationLifecycle) publicationLifecycle.updateContext(publicationContext);
+  }, [publicationLifecycle, publicationContext]);
   const onNavigationStart = useCallback(() => {
     lifetime.current?.abort();
     lifetime.current = new AbortController();
@@ -655,20 +679,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             onImported={() => void revalidator.revalidate()}
           />
         </div>
-        {kind === "file" && snapshot.file && publishOpen && (
-          <PublishPanel
-            fileId={nodeId}
-            snapshot={snapshot}
-            fileReady={fileReady && !busy}
-            links={publicLinks}
-            onPrepared={(link) =>
-              setPublicLinks((previous) => {
-                const next = new Map(previous);
-                next.set(link.linkId, link);
-                return next;
-              })
-            }
-          />
+        {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (
+          <PublishPanel lifecycle={publicationLifecycle} context={publicationContext!} fileReady={fileReady && !busy} />
         )}
         {canChangeStructure && (
           <div className="mt-3 flex flex-wrap gap-2">
