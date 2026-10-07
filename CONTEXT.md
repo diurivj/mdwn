@@ -238,7 +238,7 @@ One bounded binary unit of encrypted prospective Import data, identified within 
 _Avoid_: File chunk, partial File
 
 **Import session**:
-A short-lived, initiating-Account-bound private staging operation for one preflighted import. It binds an Import target and holds only encrypted prospective records; an exact sequence-and-digest retry is idempotent, while a mismatched retry fails the session. Atomic commit creates an owned hierarchy for that target Directory’s Owner, while expiry or cancellation never creates Files.
+A short-lived, initiating-Account-bound private staging operation for one preflighted import, binding an Import target and holding only encrypted prospective records; an exact sequence-and-digest retry is idempotent, while a mismatched retry fails the session. Atomic commit creates an owned hierarchy for the target Directory’s Owner; expiry or successful cancellation before commit creates no Files, and cancellation cannot undo an existing Import commit marker.
 _Avoid_: Draft tree, partial import, upload session
 
 **Import commit marker**:
