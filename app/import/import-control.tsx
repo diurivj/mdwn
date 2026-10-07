@@ -5,8 +5,8 @@
  * preflight: normalize the selection, allocate collision choices, display the
  * settled review (counts, sizes, target, ownership, every generated Keep-both
  * name), then measure the complete encrypted record/chunk plan. Nothing is
- * uploaded; confirmation is the boundary where ticket 30's staging protocol
- * takes over.
+ * uploaded; confirmation is the boundary where the confirmed review drives the
+ * execution module's staging, commit and cleanup (ticket 46).
  */
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
@@ -14,21 +14,10 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { isSignupRecoveryConfirmationPending } from "~/shared/signup/recovery-gate";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import type { TreeKind } from "~/shared/tree/client";
-import {
-  importSigners,
-  inputsFromDataTransfer,
-  inputsFromFiles,
-  loadReplacementDocuments,
-} from "../shared/import/browser";
+import { createImportOperations } from "./import-operations";
+import { inputsFromDataTransfer, inputsFromFiles } from "../shared/import/browser";
+import { ImportExecution, type ImportUploadProgress } from "../shared/import/execution";
 import { IMPORT_LIMITS, ImportError, formatBytes, importProblemMessage } from "../shared/import/limits";
-import { prepareImportPlan, type ImportPlan } from "../shared/import/plan";
-import {
-  cancelImport,
-  commitImport,
-  openImportSession,
-  uploadImportChunks,
-  type ImportUploadProgress,
-} from "../shared/import/staging-client";
 import {
   canReplace,
   reviewImport,
@@ -36,13 +25,7 @@ import {
   type ImportReview,
   type ImportReviewNode,
 } from "../shared/import/review";
-import {
-  analyzeImportSelection,
-  type ImportSource,
-  type ImportSourceChild,
-  type ImportSourceFile,
-  type RawImportInput,
-} from "../shared/import/source";
+import { analyzeImportSelection, type ImportSource, type RawImportInput } from "../shared/import/source";
 import { eligibleImportTargets, preferredImportTarget } from "../shared/import/targets";
 
 export type ImportControlHandle = {
@@ -71,16 +54,9 @@ type Phase =
       choices: Record<string, ImportChoice>;
       targetId: string;
     }
-  | { status: "uploading"; plan: ImportPlan; progress: ImportUploadProgress }
-  | { status: "done"; created: number; comments: number; entriesRevision?: number }
+  | { status: "uploading"; progress: ImportUploadProgress }
+  | { status: "done"; created: number; comments: number }
   | { status: "error"; message: string; inputs: RawImportInput[] | null };
-
-function collectSourceFiles(children: readonly ImportSourceChild[], files: Map<string, ImportSourceFile>): void {
-  for (const child of children) {
-    if (child.kind === "file") files.set(child.path.join("/"), child);
-    else collectSourceFiles(child.children, files);
-  }
-}
 
 function blockedMessage(node: ImportReviewNode): string {
   switch (node.blocked) {
@@ -113,7 +89,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
   const [phase, setPhase] = useState<Phase>({ status: "idle" });
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
-  const importAbort = useRef<AbortController | null>(null);
+  const importExecution = useRef<ImportExecution | null>(null);
   const targets = useMemo(() => eligibleImportTargets(snapshot), [snapshot]);
   const targetsById = useMemo(() => new Map(targets.map((target) => [target.directoryId, target])), [targets]);
   const recoveryPending = isSignupRecoveryConfirmationPending();
@@ -180,65 +156,42 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
     [disabled, recoveryPending, phase.status],
   );
 
-  async function runImport(plan: ImportPlan): Promise<void> {
-    const controller = new AbortController();
-    importAbort.current = controller;
-    setPhase({ status: "uploading", plan, progress: { chunksSent: 0, chunksTotal: plan.chunks.length } });
-    let importId: string | null = null;
-    try {
-      importId = await openImportSession(plan, controller.signal);
-      await uploadImportChunks(
-        plan,
-        importId,
-        (progress) => setPhase((previous) => (previous.status === "uploading" ? { ...previous, progress } : previous)),
-        controller.signal,
-      );
-      const result = await commitImport(importId, controller.signal);
-      importId = null;
-      setPhase({
-        status: "done",
-        created: plan.review.counts.createFiles + plan.review.counts.createDirectories + plan.review.counts.replaces,
-        comments: plan.review.counts.comments,
-        entriesRevision: result.entriesRevision,
-      });
-      onImported?.();
-    } catch (error) {
-      if (importId) await cancelImport(importId);
-      if (controller.signal.aborted) {
-        setPhase({ status: "idle" });
-        return;
-      }
-      setPhase({ status: "error", message: failureMessage(error), inputs: null });
-    } finally {
-      importAbort.current = null;
-    }
-  }
-
-  function cancelUpload(): void {
-    importAbort.current?.abort();
-  }
-
   async function confirm(current: ImportReview, source: ImportSource): Promise<void> {
     const target = targetsById.get(current.target.directoryId);
     if (!target || !current.canConfirm) return;
     setPhase({ status: "preparing", label: "Measuring the encrypted plan…" });
-    try {
-      const files = new Map<string, ImportSourceFile>();
-      collectSourceFiles(source.roots, files);
-      const replacements = await loadReplacementDocuments(snapshot.access, target.key, current);
-      const signers = await importSigners(snapshot.access);
-      const plan = await prepareImportPlan({
+    const execution = new ImportExecution(
+      {
         review: current,
-        files,
-        comments: source.comments,
-        targetKey: target.key,
-        replacements,
-        ...signers,
-      });
-      await runImport(plan);
-    } catch (error) {
-      setPhase({ status: "error", message: failureMessage(error), inputs: null });
+        source,
+        target,
+        access: snapshot.access,
+        onProgress: (progress) =>
+          setPhase((previous) =>
+            previous.status === "preparing" || previous.status === "uploading"
+              ? { status: "uploading", progress }
+              : previous,
+          ),
+      },
+      createImportOperations(),
+    );
+    importExecution.current = execution;
+    const outcome = await execution.run();
+    importExecution.current = null;
+    if (outcome.status === "committed") {
+      setPhase({ status: "done", created: outcome.created, comments: outcome.comments });
+      onImported?.();
+      return;
     }
+    if (outcome.status === "cancelled") {
+      setPhase({ status: "idle" });
+      return;
+    }
+    setPhase({ status: "error", message: failureMessage(outcome.error), inputs: null });
+  }
+
+  function cancelUpload(): void {
+    importExecution.current?.cancel();
   }
 
   function reset(): void {

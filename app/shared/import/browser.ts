@@ -8,12 +8,11 @@
  */
 
 import { getDevice } from "~/shared/device/store";
-import { createFileHead, type FileHead, type FileHeadIdentity } from "~/shared/tree/file-head";
-import { createListingHead, type ListingHead } from "~/shared/tree/listing";
+import { createFileHead } from "~/shared/tree/file-head";
+import { createListingHead } from "~/shared/tree/listing";
 import { loadFile, type RootAccess } from "~/shared/tree/client";
 import { IMPORT_LIMITS, ImportError } from "./limits";
-import type { ImportReplacementDocument } from "./plan";
-import type { ImportListingEntry } from "./review";
+import type { ImportReplacementDocument, ImportSigners } from "./plan";
 import type { ImportReview } from "./review";
 import type { RawImportInput } from "./source";
 
@@ -103,17 +102,7 @@ export async function inputsFromDataTransfer(dataTransfer: DataTransfer): Promis
 }
 
 /** The importing browser's device signer for new File and Directory listing heads. */
-export async function importSigners(access: RootAccess): Promise<{
-  signFileHead: (identity: Omit<FileHeadIdentity, "deviceId">) => Promise<FileHead>;
-  signListingHead: (input: {
-    parentKey: Uint8Array;
-    vaultId: string;
-    directoryId: string;
-    keyEpoch: number;
-    revision: number;
-    entries: readonly ImportListingEntry[];
-  }) => Promise<ListingHead>;
-}> {
+export async function importSigners(access: RootAccess): Promise<ImportSigners> {
   const device = await getDevice(access.actorAccountId);
   if (!device) throw new ImportError("replacement-unavailable", { reason: "device-unavailable", action: "fix" });
   return {
