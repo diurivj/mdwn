@@ -77,11 +77,31 @@ export type PublishInput = {
 
 export type RotateLinkInput = { onPrepared: (link: PreparedPublicLink) => void };
 
+export type ChangeAudienceInput = {
+  audience: CommentAudience;
+  /** Publication identity from the panel's authoritative state; a fresh read
+   * that disagrees is a `changed` failure. */
+  expectedPublicationId: string | null;
+  expectedEpochId: string | null;
+  threadId: string | null;
+  /** Resolves the complete link for a fresh authoritative active link: the
+   * retained candidate by identity, else the person's pasted link. Matching
+   * and fallback ordering stay inside the lifecycle. */
+  linkFor: (linkId: string | null) => string | null;
+};
+
+export type AddAccountAuthorInput = { publicationId: string; address: string };
+
+export type RemoveAuthorInput = { declarationId: string };
+
+export type RemovePublicationRequestInput = { requestId: string };
+
 /**
  * The single internal operations seam. The production adapter wraps the
  * feature-local browser client; deterministic tests control responses here.
  * A `publish`/`rotateLink` implementation must call `onPrepared` before its
- * request can commit.
+ * request can commit, and `changeAudience` must use the lifecycle's
+ * `linkFor` resolver rather than matching candidates itself.
  */
 export type PublicationOperations = {
   loadState(context: PublicationContext, signal: AbortSignal): Promise<PublicationState>;
@@ -89,6 +109,16 @@ export type PublicationOperations = {
   rotateLink(context: PublicationContext, input: RotateLinkInput, signal: AbortSignal): Promise<void>;
   unpublish(context: PublicationContext, signal: AbortSignal): Promise<void>;
   continueTeardown(context: PublicationContext, signal: AbortSignal): Promise<TeardownProgress>;
+  changeAudience(context: PublicationContext, input: ChangeAudienceInput, signal: AbortSignal): Promise<void>;
+  addSelfAuthor(context: PublicationContext, signal: AbortSignal): Promise<void>;
+  addAccountAuthor(context: PublicationContext, input: AddAccountAuthorInput, signal: AbortSignal): Promise<void>;
+  removeAuthor(context: PublicationContext, input: RemoveAuthorInput, signal: AbortSignal): Promise<void>;
+  requestPublication(context: PublicationContext, signal: AbortSignal): Promise<void>;
+  removePublicationRequest(
+    context: PublicationContext,
+    input: RemovePublicationRequestInput,
+    signal: AbortSignal,
+  ): Promise<void>;
 };
 
 export type PublicationFailure = { code: PublicationErrorCode; suspendedUntil: number | null };
@@ -103,6 +133,9 @@ export type PublicationLifecycleState = {
   progress: TeardownProgress | null;
   teardownFailed: boolean;
   completeLink: string | null;
+  /** True once the current context can run capability-bearing operations (its
+   * parent key is available). */
+  canOperate: boolean;
 };
 
 const initialView = (): PublicationLifecycleState => ({
@@ -113,6 +146,7 @@ const initialView = (): PublicationLifecycleState => ({
   progress: null,
   teardownFailed: false,
   completeLink: null,
+  canOperate: false,
 });
 
 function failure(error: unknown): PublicationFailure {
@@ -153,6 +187,8 @@ export class PublicationLifecycle {
     if (this.disposed) return;
     const firstContext = this.context === null;
     this.context = context;
+    const canOperate = this.contextCanOperate();
+    if (this.view.canOperate !== canOperate) this.set({ canOperate });
     // A panel can attach before the page supplies its first context (for
     // example a child effect that runs before the page's own effect).
     if (firstContext && this.panelActive && this.view.panel === "loading") void this.readState();
@@ -165,7 +201,9 @@ export class PublicationLifecycle {
     this.endPanelWork();
     this.panelActive = true;
     this.controller = new AbortController();
-    this.set(initialView());
+    // Resetting the panel view must not forget whether the current context can
+    // operate: capability readiness belongs to the File page, not the panel.
+    this.set({ ...initialView(), canOperate: this.contextCanOperate() });
     void this.readState();
   }
 
@@ -206,19 +244,6 @@ export class PublicationLifecycle {
     this.maybeStartTeardown(true);
   }
 
-  /** Drop the module's last error when a panel-owned mutation takes over the
-   * alert; ticket 45 removes this split once every mutation is module-owned. */
-  clearError(): void {
-    if (this.view.error) this.set({ error: null });
-  }
-
-  /** Re-read authoritative state through the module's read ordering without
-   * touching the shared pending/error coordination. Panel mutations that still
-   * own their coordination (ticket 44) await this after their request. */
-  async reload(): Promise<void> {
-    await this.readState({ resumeTeardown: true });
-  }
-
   /** Re-read authoritative state through the shared coordination, for decisions
    * that must show the current opaque count (the Unpublish confirmation). */
   refresh(): Promise<boolean> {
@@ -237,14 +262,52 @@ export class PublicationLifecycle {
     );
   }
 
-  /** The complete link retained for one authoritative active-link identity;
-   * used by panel mutations that still own their own coordination. */
-  completeLinkFor(linkId: string | null | undefined): string | null {
-    return linkId ? (this.candidates.get(linkId)?.url ?? null) : null;
-  }
-
   unpublish(): Promise<boolean> {
     return this.run((context, signal) => this.operations.unpublish(context, signal));
+  }
+
+  /** Person decisions for author, Comment audience and Publication-request
+   * mutations. Every one shares the same pending/error/refresh coordination as
+   * the lifecycle-owned requests, and their business rules stay in the
+   * operations seam. */
+  changeAudience(audience: CommentAudience, pastedLink: string | null): Promise<boolean> {
+    const state = this.view.state;
+    if (!state) return Promise.resolve(false);
+    return this.run((context, signal) =>
+      this.operations.changeAudience(
+        context,
+        {
+          audience,
+          expectedPublicationId: state.publication?.publicationId ?? null,
+          expectedEpochId: state.comments?.epochId ?? null,
+          threadId: state.comments?.threadId ?? null,
+          linkFor: (linkId) => this.retainedLink(linkId) ?? pastedLink,
+        },
+        signal,
+      ),
+    );
+  }
+
+  addSelfAuthor(): Promise<boolean> {
+    return this.run((context, signal) => this.operations.addSelfAuthor(context, signal));
+  }
+
+  addAccountAuthor(address: string): Promise<boolean> {
+    const publicationId = this.view.state?.publication?.publicationId;
+    if (!publicationId) return Promise.resolve(false);
+    return this.run((context, signal) => this.operations.addAccountAuthor(context, { publicationId, address }, signal));
+  }
+
+  removeAuthor(declarationId: string): Promise<boolean> {
+    return this.run((context, signal) => this.operations.removeAuthor(context, { declarationId }, signal));
+  }
+
+  requestPublication(): Promise<boolean> {
+    return this.run((context, signal) => this.operations.requestPublication(context, signal));
+  }
+
+  removePublicationRequest(requestId: string): Promise<boolean> {
+    return this.run((context, signal) => this.operations.removePublicationRequest(context, { requestId }, signal));
   }
 
   /** Shared pending/error/refresh coordination for every panel mutation. */
@@ -296,7 +359,13 @@ export class PublicationLifecycle {
   /** The displayed complete link matches the authoritative active-link
    * identity; a failed or superseded candidate is never presented. */
   private completeLink(state: PublicationState): string | null {
-    return this.completeLinkFor(state.publication?.linkId);
+    return this.retainedLink(state.publication?.linkId);
+  }
+
+  /** The complete link retained for one authoritative active-link identity;
+   * only exact identity matches are usable. */
+  private retainedLink(linkId: string | null | undefined): string | null {
+    return linkId ? (this.candidates.get(linkId)?.url ?? null) : null;
   }
 
   /** Retain every prepared candidate immediately; the request that follows may
@@ -346,6 +415,10 @@ export class PublicationLifecycle {
         }
       }
     }
+  }
+
+  private contextCanOperate(): boolean {
+    return this.context !== null && this.context.parentKey !== null;
   }
 
   private isActive(epoch: number, controller: AbortController): boolean {

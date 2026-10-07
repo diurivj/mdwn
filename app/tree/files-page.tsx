@@ -680,7 +680,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           />
         </div>
         {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (
-          <PublishPanel lifecycle={publicationLifecycle} context={publicationContext!} fileReady={fileReady && !busy} />
+          <PublishPanel lifecycle={publicationLifecycle} fileReady={fileReady && !busy} />
         )}
         {canChangeStructure && (
           <div className="mt-3 flex flex-wrap gap-2">
