@@ -11,12 +11,12 @@
 **Related:** [43: Architecture deepening specification](43-architecture-deepening-spec.md); `docs/architecture-deepening.md` (Import implementation decisions 8–11, Import acceptance evidence, outcome-evidence table); `.scratch/mdwn/architecture-deepening-design.md` (Import protocol facts, Q10). The spec requires regression evidence before changing this behavior.
 
 - [ ] A regression test reproduces the current misclassification first: an aborted or lost commit is reported as though nothing was imported.
-- [ ] An acknowledged commit succeeds even when the idempotent response omits `entriesRevision`, and revalidates the active context.
+- [x] An acknowledged commit succeeds even when the idempotent response omits `entriesRevision`, and revalidates the active context.
 - [ ] A lost commit acknowledgment, or cancellation racing an in-flight commit, exposes an unconfirmed outcome that states the Import may have committed. It never claims success, rollback or non-commit.
 - [ ] The unconfirmed path refreshes the target through the existing revalidation path and gives check-before-retry guidance. It starts no new Import, opens no new session, and adds no status endpoint, schema or wire format.
-- [ ] Commit is never used as a read-only status probe.
-- [ ] Explicit conflict, expiry and authority rejections still require the existing fresh review; no automatic collision repair or subset Import follows a failure.
-- [ ] Cleanup failure never masks the primary outcome.
+- [x] Commit is never used as a read-only status probe.
+- [x] Explicit conflict, expiry and authority rejections still require the existing fresh review; no automatic collision repair or subset Import follows a failure.
+- [x] Cleanup failure never masks the primary outcome.
 - [ ] Focused deterministic tests cover acknowledged-without-revision, lost commit response, and a commit winning a cancellation race. Real-browser evidence covers the user-visible uncertain-outcome presentation where feasible.
 - [ ] Existing Worker proofs (pre-commit invisibility, exact-byte idempotency, mismatched replay failure, cleanup) and browser Import flows remain green.
 - [ ] Before/after evidence shows the evidence-based outcome classification at the module interface.
@@ -31,3 +31,4 @@
 ## Comments
 
 - 2026-10-06: Published from the approved spec (43). The second of the two narrowly approved Import correctness corrections. Blocked by 47 for the cancellation-race classification; the `entriesRevision` success case is otherwise independent.
+- 2026-10-08: Reconciled the four already-delivered acceptance criteria against ticket 46 (`e85d3d1`/`4a5a428`, merged in PR #53 at `42de770`): acknowledged optional-revision success plus active-view revalidation, no commit-as-status probe, explicit rejection without plan repair, and cleanup preserving the primary failure. Ticket 47 additionally freezes the primary outcome before asynchronous cleanup and guards inactive-view delivery. The core uncertain-outcome presentation, active-target refresh/guidance and its regression evidence remain unimplemented, so this ticket stays open and dependent on 47's delivery.

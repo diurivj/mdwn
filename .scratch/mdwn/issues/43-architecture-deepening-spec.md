@@ -21,8 +21,9 @@ The maintainer confirmed all twelve design decisions, test seams and consolidate
 
 ## Next step
 
-Decompose the approved spec into self-contained implementation tickets with real blocking edges where needed. This is a specification entry, not one combined implementation ticket; no application implementation or implementation-ticket split has been performed here.
+The approved spec was decomposed into tickets 44–50 in `8291f0d`. Tickets 44–46 have merged; ticket 47 is implemented, reviewed and locally verified on its issue branch (`ec3590a`), with current-head CI and merge still pending. Tickets 48–50 remain open (48 depends on 47; 50 depends on 49; 49 is independently unblocked). This remains the parent specification, not a single combined implementation ticket; parent completion awaits the remaining children.
 
 ## Comments
 
 - 2026-10-06: Published after the architecture exploration and five interview rounds. The maintainer confirmed the final shared understanding and requested the spec. Reference application snapshot: `a827ab93596e58b7c140bd19b936cca4630d2a0b`. The confirmed reasoning and pinned source evidence remain in the [design record](../architecture-deepening-design.md). Documentation checks are required for this publication; application test results must be produced during implementation, not inferred from design inspection.
+- 2026-10-08: Replaced the obsolete undecomposed/unimplemented next-step text with actual child-ticket delivery state. Publication lifecycle/panel changes and the Import execution extraction are merged (`bf1588d`, `58a3982`, `42de770`); the parent is not complete while the remaining corrections and Comment-dependent deletion work are open.

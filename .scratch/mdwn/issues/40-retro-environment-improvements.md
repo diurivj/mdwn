@@ -21,7 +21,8 @@
 
 ## Acceptance criteria
 
-- [x] `AGENTS.md` carries the CI-watch rule, the reference-docs pointers, and a pointer to `CODING_STANDARDS.md` once ticket 41 lands.
+- [x] `AGENTS.md` carries the CI-watch rule and the reference-docs pointers.
+- [ ] `AGENTS.md` points to `CODING_STANDARDS.md` once ticket 41 lands.
 - [x] `~/.pi/agent/AGENTS.md` maps `~/oasis` to `eldiegallo` and everywhere else to `diurivj`, with the `gh auth switch` step.
 - [x] `docs/operations/d1-scripting.md` records the verified Wrangler/D1 semantics and is pointed to from `AGENTS.md`.
 - [x] `npm run db:restore:local` passes locally and in CI, leaves no temp state on success, and keeps it on failure for inspection.
@@ -40,3 +41,4 @@
 
 - 2026-10-06: Raised from the MVP retro. Implemented on `chore/retro-environment-improvements`; see the PR for the verification evidence. The grilling session for ticket 41 and the Biome rollout in ticket 42 are deliberately separate.
 - 2026-10-07: Status reconciled to **done**: PR #49 merged as `31a4ccf`. Ticked the six evidenced criteria (AGENTS.md CI-watch rule and reference pointers, the user-wide `gh` mapping, `docs/operations/d1-scripting.md`, `db:restore:local` in CI and `npm run verify`, `runWranglerJson`/`typecheck:node`, quota guidance). The `CODING_STANDARDS.md` pointer from the first bullet remains pending ticket 41, which is still open. The final bullet stays unticked for the same reason as ticket 36: no in-repo record of a Standards/Spec/RR8 report was found for PR #49.
+- 2026-10-08: Split the composite first criterion so the still-missing `CODING_STANDARDS.md` pointer is visibly unchecked rather than hidden inside a checked bullet. Ticket 41 still needs maintainer ratification and has no standards artifact. This is a pending follow-up/evidence gap, not pending implementation merge or CI for PR #49.

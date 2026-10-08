@@ -46,7 +46,7 @@ type ImportControlProps = {
 type Phase =
   | { status: "idle" }
   | { status: "choosing"; inputs: RawImportInput[]; message: string }
-  | { status: "preparing"; label: string }
+  | { status: "preparing"; label: string; executing?: boolean }
   | {
       status: "review";
       inputs: RawImportInput[];
@@ -90,6 +90,15 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const importExecution = useRef<ImportExecution | null>(null);
+  useEffect(() => {
+    return () => {
+      const execution = importExecution.current;
+      // Invalidate delivery before aborting: a late acknowledgment must not
+      // revalidate a different route or clear a newer attempt's reference.
+      importExecution.current = null;
+      execution?.cancel();
+    };
+  }, []);
   const targets = useMemo(() => eligibleImportTargets(snapshot), [snapshot]);
   const targetsById = useMemo(() => new Map(targets.map((target) => [target.directoryId, target])), [targets]);
   const recoveryPending = isSignupRecoveryConfirmationPending();
@@ -159,24 +168,28 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
   async function confirm(current: ImportReview, source: ImportSource): Promise<void> {
     const target = targetsById.get(current.target.directoryId);
     if (!target || !current.canConfirm) return;
-    setPhase({ status: "preparing", label: "Measuring the encrypted plan…" });
+    importExecution.current?.cancel();
+    setPhase({ status: "preparing", label: "Measuring the encrypted plan…", executing: true });
     const execution = new ImportExecution(
       {
         review: current,
         source,
         target,
         access: snapshot.access,
-        onProgress: (progress) =>
+        onProgress: (progress) => {
+          if (importExecution.current !== execution) return;
           setPhase((previous) =>
             previous.status === "preparing" || previous.status === "uploading"
               ? { status: "uploading", progress }
               : previous,
-          ),
+          );
+        },
       },
       createImportOperations(),
     );
     importExecution.current = execution;
     const outcome = await execution.run();
+    if (importExecution.current !== execution) return;
     importExecution.current = null;
     if (outcome.status === "committed") {
       setPhase({ status: "done", created: outcome.created, comments: outcome.comments });
@@ -190,7 +203,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
     setPhase({ status: "error", message: failureMessage(outcome.error), inputs: null });
   }
 
-  function cancelUpload(): void {
+  function cancelAttempt(): void {
     importExecution.current?.cancel();
   }
 
@@ -302,9 +315,11 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
               </>
             )}
             {phase.status === "preparing" && (
-              <p role="status" data-testid="import-preparing">
-                {phase.label}
-              </p>
+              <>
+                <p role="status" data-testid="import-preparing">
+                  {phase.label}
+                </p>
+              </>
             )}
             {phase.status === "error" && (
               <>
@@ -368,17 +383,19 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
                   Uploading encrypted chunks {phase.progress.chunksSent} of {phase.progress.chunksTotal}… Nothing is
                   visible until the final commit.
                 </p>
-                <div className="mt-5 flex justify-end">
-                  <button
-                    type="button"
-                    className="rounded border px-3 py-1"
-                    onClick={cancelUpload}
-                    data-testid="import-cancel-upload"
-                  >
-                    Cancel Import
-                  </button>
-                </div>
               </>
+            )}
+            {(phase.status === "uploading" || (phase.status === "preparing" && phase.executing)) && (
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded border px-3 py-1"
+                  onClick={cancelAttempt}
+                  data-testid="import-cancel-upload"
+                >
+                  Cancel Import
+                </button>
+              </div>
             )}
             {phase.status === "done" && (
               <>
