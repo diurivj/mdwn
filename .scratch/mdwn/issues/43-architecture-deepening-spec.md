@@ -21,7 +21,7 @@ The maintainer confirmed all twelve design decisions, test seams and consolidate
 
 ## Next step
 
-The approved spec was decomposed into tickets 44–50 in `8291f0d`. Tickets 44–46 have merged; ticket 47 is implemented on its issue branch with review/verification and PR/CI/merge gates still in progress. Tickets 48–50 remain open (48 depends on 47; 50 depends on 49; 49 is independently unblocked). This remains the parent specification, not a single combined implementation ticket; parent completion awaits the remaining children.
+The approved spec was decomposed into tickets 44–50 in `8291f0d`. Tickets 44–46 have merged; ticket 47 is implemented, reviewed and locally verified on its issue branch (`ec3590a`), with current-head CI and merge still pending. Tickets 48–50 remain open (48 depends on 47; 50 depends on 49; 49 is independently unblocked). This remains the parent specification, not a single combined implementation ticket; parent completion awaits the remaining children.
 
 ## Comments
 
