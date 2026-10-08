@@ -240,6 +240,52 @@ describe("ImportExecution", () => {
     expect(fake.cancels).toEqual([]);
   });
 
+  it("reports an unconfirmed outcome when both commit acknowledgments are lost", async () => {
+    const fake = fakeOperations();
+    fake.handlers.commit = async () => {
+      throw new TypeError("commit acknowledgment lost");
+    };
+    const execution = new ImportExecution(await executionRequest(), fake.operations);
+
+    const outcome = await execution.run();
+
+    expect(outcome).toEqual({ status: "unconfirmed" });
+    expect(fake.calls).toEqual(["replacements", "signers", "open", "upload", "commit", "commit", "cancel"]);
+    expect(fake.cancels).toEqual([fake.plans[0]!.importId]);
+  });
+
+  it("does not treat a rejected retry as proof that the earlier unacknowledged commit did not win", async () => {
+    const fake = fakeOperations();
+    let attempts = 0;
+    fake.handlers.commit = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError("commit acknowledgment lost");
+      throw new ImportError("staging-upload-failed", { reason: "authority-denied" });
+    };
+    const execution = new ImportExecution(await executionRequest(), fake.operations);
+
+    expect(await execution.run()).toEqual({ status: "unconfirmed" });
+    expect(fake.calls).toEqual(["replacements", "signers", "open", "upload", "commit", "commit", "cancel"]);
+  });
+
+  it("keeps an unconfirmed commit outcome through failed cleanup and a later cancellation", async () => {
+    const fake = fakeOperations();
+    const { entered, held, block } = operationGate();
+    fake.handlers.commit = async () => {
+      throw new ImportError("commit-unconfirmed");
+    };
+    fake.handlers.cancelSession = block;
+    const execution = new ImportExecution(await executionRequest(), fake.operations);
+
+    const outcome = execution.run();
+    await entered.promise;
+    execution.cancel();
+    held.reject(new TypeError("cleanup network lost"));
+
+    expect(await outcome).toEqual({ status: "unconfirmed" });
+    expect(fake.calls).toEqual(["replacements", "signers", "open", "upload", "commit", "cancel"]);
+  });
+
   it("does not retry an explicit protocol rejection and still attempts cleanup", async () => {
     const fake = fakeOperations();
     fake.handlers.uploadChunk = async () => {
@@ -253,6 +299,27 @@ describe("ImportExecution", () => {
     expect(fake.calls).toEqual(["replacements", "signers", "open", "upload", "cancel"]);
     expect(fake.cancels).toEqual([fake.plans[0]!.importId]);
   });
+
+  it.each(["staging-changed", "import-expired", "staging-upload-failed"] as const)(
+    "preserves an explicit %s commit rejection even when cancellation races it",
+    async (code) => {
+      const fake = fakeOperations();
+      const { entered, held, block } = operationGate();
+      fake.handlers.commit = async () => {
+        await block();
+        throw new ImportError(code);
+      };
+      const execution = new ImportExecution(await executionRequest(), fake.operations);
+
+      const outcome = execution.run();
+      await entered.promise;
+      execution.cancel();
+      held.resolve();
+
+      expect(await outcome).toMatchObject({ status: "failed", error: { code } });
+      expect(fake.calls).toEqual(["replacements", "signers", "open", "upload", "commit", "cancel"]);
+    },
+  );
 
   it("keeps the primary failure when best-effort cleanup also fails", async () => {
     const fake = fakeOperations();
@@ -388,7 +455,7 @@ describe("ImportExecution", () => {
     execution.cancel();
     held.reject(new TypeError("request aborted"));
 
-    expect(await outcome).toEqual({ status: "cancelled" });
+    expect(await outcome).toEqual({ status: stage === "commit" ? "unconfirmed" : "cancelled" });
     expect(fake.calls).toEqual([
       "replacements",
       "signers",
@@ -426,6 +493,53 @@ describe("ImportExecution", () => {
     ]);
     expect(fake.plans[0]!.chunks.length).toBeGreaterThan(1);
     expect(progress).toEqual([{ chunksSent: 0, chunksTotal: fake.plans[0]!.chunks.length }]);
+  });
+
+  it.each(["lost", "acknowledged"] as const)(
+    "classifies a commit winning cancellation from its %s acknowledgment",
+    async (acknowledgment) => {
+      const fake = fakeOperations();
+      const { entered, held, block } = operationGate();
+      fake.handlers.commit = async () => {
+        await block();
+        return {};
+      };
+      const execution = new ImportExecution(await executionRequest(), fake.operations);
+
+      const outcome = execution.run();
+      await entered.promise;
+      execution.cancel();
+      if (acknowledgment === "lost") held.reject(new TypeError("committed response lost"));
+      else held.resolve();
+
+      expect(await outcome).toEqual(
+        acknowledgment === "lost" ? { status: "unconfirmed" } : { status: "committed", created: 1, comments: 0 },
+      );
+      expect(fake.calls).toEqual([
+        "replacements",
+        "signers",
+        "open",
+        "upload",
+        "commit",
+        ...(acknowledgment === "lost" ? ["cancel"] : []),
+      ]);
+    },
+  );
+
+  it("does not mark cancellation just before commit as an unconfirmed outcome", async () => {
+    const fake = fakeOperations();
+    const execution = new ImportExecution(
+      {
+        ...(await executionRequest()),
+        onProgress: (progress) => {
+          if (progress.chunksSent === progress.chunksTotal) execution.cancel();
+        },
+      },
+      fake.operations,
+    );
+
+    expect(await execution.run()).toEqual({ status: "cancelled" });
+    expect(fake.calls).toEqual(["replacements", "signers", "open", "upload", "cancel"]);
   });
 
   it("does not attempt cleanup when no session could exist", async () => {

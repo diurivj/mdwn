@@ -216,6 +216,33 @@ input fails before review; a blocked collision keeps the review open until the
 person resolves it. Cleanup after an interrupted upload is best effort, not a
 promise of staging deletion or proof that an in-flight commit did not win.
 
+### Commit outcomes
+
+`ImportExecution` classifies the result from the available evidence:
+
+- An acknowledged commit is `committed`, including an idempotent acknowledgment
+  without the optional `entriesRevision`. A genuine acknowledgment still wins
+  over a concurrent browser cancellation.
+- A lost commit acknowledgment after the existing bounded retry, or cancellation
+  while a commit may be in flight, is `unconfirmed`. Unreadable/missing success
+  acknowledgments and server failures also leave commitment unconfirmed; these
+  HTTP/shape failures retain their existing no-automatic-retry behavior.
+- An explicit conflict, expiry or authority rejection remains a failure requiring
+  fresh review, not automatic collision repair or a subset Import. A rejection
+  of a retry cannot disprove an earlier unacknowledged commitment.
+- Cancellation before any commit attempt remains `cancelled`. Cleanup cannot
+  promote an unconfirmed outcome to cancellation or replace the primary result.
+
+The React control presents `unconfirmed` separately from success and failure:
+**the Import may have committed**. It refreshes the active target through the
+same router revalidation callback as success and tells the person to check the
+latest Files in that folder before deliberately starting another Import. A
+refreshed Directory is not proof of this attempt's result; the message remains
+unconfirmed even when the File appears. Closing the message starts nothing.
+There is no new session, status endpoint, commit-as-read probe or persistent
+recovery state. A disposed or superseded view receives neither the result nor
+its refresh callback.
+
 ### Attempt lifetime
 
 One `ImportExecution` lifetime covers replacement reads, signing, encrypted
@@ -234,7 +261,8 @@ never deletes committed Files, never guarantees deletion after a network
 failure and cannot replace the primary rejection with an error or a late
 cancellation. A genuine commit acknowledgment still means success even if
 client cancellation raced it; a disposed view does not deliver that result.
-A browser abort alone is not evidence of domain cancellation.
+A browser abort alone is not evidence of domain cancellation; a commit without
+an acknowledgment remains unconfirmed.
 
 ## Verification seams
 
@@ -254,7 +282,8 @@ A browser abort alone is not evidence of domain cancellation.
 - `tests/import-execution.test.ts` — confirmed-review execution, complete
   preparation before staging, exact-byte bounded retry, lost-open cleanup,
   cancellation throughout preparation/staging, late acknowledgments and
-  primary-outcome preservation through failed cleanup.
+  primary-outcome preservation through failed cleanup, acknowledged optional
+  revisions, lost commit responses and cancellation racing commit.
 - `tests/import-staging.test.ts` — binary session/chunk codec, descriptors,
   payload framing, bounds and digest identity.
 - `tests/worker/import-staging.test.ts` — full session → chunks → commit flow,
@@ -273,6 +302,11 @@ A browser abort alone is not evidence of domain cancellation.
   preparation; SPA route disposal during preparation, opening, upload and
   commit; late real Worker acknowledgments and superseded attempts cannot
   stage further or refresh/overwrite a newer view in any browser engine.
+- `e2e/import-outcome.spec.ts` — lost, malformed and unavailable acknowledgments
+  after real Worker commits; check-before-retry presentation and active-target
+  refresh without declaring success; a real commit winning cancellation with
+  lost or genuine acknowledgment; optional-revision idempotent success; a real
+  authority rejection; and no uncertain-result delivery to a disposed view.
 
 ## Release gate: disposable remote proof
 

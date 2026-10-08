@@ -9,7 +9,7 @@
  * already-encrypted plan bytes.
  */
 
-import { privateRequest } from "~/shared/device/private-client";
+import { PrivateAccessError, privateRequest } from "~/shared/device/private-client";
 import { ImportError } from "./limits";
 import type { ImportPlan, ImportPlanChunk } from "./plan";
 import { encodeImportChunkBody, encodeImportSessionBody } from "./staging";
@@ -55,10 +55,23 @@ export async function uploadImportChunk(importId: string, chunk: ImportPlanChunk
 
 /** Confirmation step 3: the atomic visibility commit (idempotent for a session). */
 export async function commitImport(importId: string, signal?: AbortSignal): Promise<{ entriesRevision?: number }> {
-  const response = await privateRequest(`/api/private/imports/${importId}/commit`, { method: "POST", signal });
+  let response: Response;
+  try {
+    response = await privateRequest(`/api/private/imports/${importId}/commit`, { method: "POST", signal });
+  } catch (error) {
+    // The private client distinguishes a definite authority rejection from a
+    // lost/aborted request (`unavailable`). An earlier lost commit stays uncertain.
+    if (error instanceof PrivateAccessError && error.state !== "unavailable") {
+      throw new ImportError("staging-changed", { reason: error.state });
+    }
+    throw error;
+  }
+  // A server failure or unreadable/missing acknowledgment is not a rejection.
+  // Keep HTTP/shape failures non-retryable, as before, without claiming rollback.
+  if (response.status >= 500) throw new ImportError("commit-unconfirmed");
   const parsed = (await response.json().catch(() => ({}))) as CommitResponse;
   if (!response.ok) throw asImportError(response, parsed);
-  if (parsed.committed !== true) throw new ImportError("staging-upload-failed");
+  if (parsed.committed !== true) throw new ImportError("commit-unconfirmed");
   return typeof parsed.entriesRevision === "number" ? { entriesRevision: parsed.entriesRevision } : {};
 }
 

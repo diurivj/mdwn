@@ -1,5 +1,5 @@
 /**
- * One confirmed-review Import attempt (tickets 46–47).
+ * One confirmed-review Import attempt (tickets 46–48).
  *
  * The Import control settles an Import review; from that boundary this module
  * owns execution: replacement reads, this browser's signing keys, the complete
@@ -55,18 +55,22 @@ export type ImportExecutionOperations = {
   importSigners(access: RootAccess): Promise<ImportSigners>;
   openSession(plan: ImportPlan, signal: AbortSignal): Promise<void>;
   uploadChunk(importId: string, chunk: ImportPlanChunk, signal: AbortSignal): Promise<void>;
+  /** Resolve only for an acknowledged commit. Explicit rejections use
+   * ImportError; ambiguous HTTP/shape failures use `commit-unconfirmed` (no
+   * retry). Lost transport acknowledgments retain the existing single retry. */
   commit(importId: string, signal: AbortSignal): Promise<{ entriesRevision?: number }>;
   cancelSession(importId: string): Promise<void>;
 };
 
-/** Evidence-based result of one attempt. Cleanup never changes this outcome:
- * a failed cancellation does not claim that nothing was staged. `cancelled`
- * means this attempt's client work was aborted; like the domain's cancellation
- * rule, it is not proof that an in-flight commit did not win. `error` carries
- * the local `ImportError` when preparation or staging produced one, and `null`
- * for every other failure, which the caller explains with one safe message. */
+/** Evidence-based result of one attempt. Cleanup never changes this outcome.
+ * `unconfirmed` means commit may have run without an acknowledgment; neither
+ * cleanup nor a refreshed Directory can establish this attempt's outcome.
+ * `cancelled` stops client work before commit was attempted, not a staging
+ * deletion guarantee. `error` carries a safe local/protocol rejection, or
+ * `null` for other failures. */
 export type ImportOutcome =
   | { status: "committed"; created: number; comments: number; entriesRevision?: number }
+  | { status: "unconfirmed" }
   | { status: "cancelled" }
   | { status: "failed"; error: ImportError | null };
 
@@ -100,6 +104,8 @@ export class ImportExecution {
   async run(): Promise<ImportOutcome> {
     const { review, source, target, access, onProgress } = this.request;
     let importId: string | null = null;
+    let commitAttempted = false;
+    let commitResponseLost = false;
     try {
       this.controller.signal.throwIfAborted();
       const replacements = await this.operations.loadReplacementDocuments(access, target.key, review);
@@ -127,9 +133,16 @@ export class ImportExecution {
         this.controller.signal.throwIfAborted();
         onProgress?.({ chunksSent: chunk.sequence + 1, chunksTotal: plan.chunks.length });
       }
-      const { entriesRevision } = await this.retryOnce(() =>
-        this.operations.commit(plan.importId, this.controller.signal),
-      );
+      const { entriesRevision } = await this.retryOnce(async () => {
+        commitAttempted = true;
+        try {
+          return await this.operations.commit(plan.importId, this.controller.signal);
+        } catch (error) {
+          // A later rejected retry cannot rule out an earlier winning request.
+          if (!(error instanceof ImportError) || error.code === "commit-unconfirmed") commitResponseLost = true;
+          throw error;
+        }
+      });
       importId = null;
       return {
         status: "committed",
@@ -140,9 +153,14 @@ export class ImportExecution {
     } catch (error) {
       // Classify before cleanup: a later abort or cleanup failure cannot turn
       // the primary rejection into a false cancellation acknowledgment.
-      const outcome: ImportOutcome = this.controller.signal.aborted
-        ? { status: "cancelled" }
-        : { status: "failed", error: error instanceof ImportError ? error : null };
+      const failure: ImportOutcome = { status: "failed", error: error instanceof ImportError ? error : null };
+      const outcome: ImportOutcome = commitAttempted
+        ? commitResponseLost
+          ? { status: "unconfirmed" }
+          : failure
+        : this.controller.signal.aborted
+          ? { status: "cancelled" }
+          : failure;
       if (importId) await this.cleanup(importId);
       return outcome;
     }

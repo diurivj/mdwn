@@ -676,7 +676,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             nodeId={nodeId}
             kind={kind}
             disabled={busy || recoveryPending}
-            onImported={() => void revalidator.revalidate()}
+            onRefresh={() => void revalidator.revalidate()}
           />
         </div>
         {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (

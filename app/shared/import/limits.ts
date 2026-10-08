@@ -74,6 +74,7 @@ export type ImportErrorCode =
   | "plan-record-too-large"
   | "plan-too-large"
   | "staging-upload-failed"
+  | "commit-unconfirmed"
   | "staging-changed"
   | "import-expired";
 
@@ -95,6 +96,10 @@ export class ImportError extends Error {
     this.name = "ImportError";
   }
 }
+
+/** Uncertainty is not a rejection or proof of rollback. */
+export const IMPORT_UNCONFIRMED_MESSAGE =
+  "The Import may have committed, but its outcome could not be confirmed. Check the latest Files in the target folder before starting another Import.";
 
 /** The user-visible failure message for one review problem. */
 export function importProblemMessage(error: ImportError): string {
@@ -140,6 +145,8 @@ export function importProblemMessage(error: ImportError): string {
       return "The encrypted import plan exceeds the bounded staging envelope. Remove files or split the selection and retry.";
     case "staging-upload-failed":
       return "The upload was interrupted before the final step. Check the folder; if the import is not visible, you can retry it safely.";
+    case "commit-unconfirmed":
+      return IMPORT_UNCONFIRMED_MESSAGE;
     case "staging-changed":
       return "This Import changed on the server, so it was not committed. Refresh the folder, review again, and retry.";
     case "import-expired":
