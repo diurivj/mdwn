@@ -225,8 +225,9 @@ promise of staging deletion or proof that an in-flight commit did not win.
   over a concurrent browser cancellation.
 - A lost commit acknowledgment after the existing bounded retry, or cancellation
   while a commit may be in flight, is `unconfirmed`. Unreadable/missing success
-  acknowledgments and server failures also leave commitment unconfirmed; these
-  HTTP/shape failures retain their existing no-automatic-retry behavior.
+  acknowledgments (including JSON `null`) and unrecognized HTTP failures also
+  leave commitment unconfirmed. HTTP/shape failures do not schedule another
+  commit; only the existing eligible transport failures get one bounded retry.
 - An explicit conflict, expiry or authority rejection remains a failure requiring
   fresh review, not automatic collision repair or a subset Import. A rejection
   of a retry cannot disprove an earlier unacknowledged commitment.
@@ -302,11 +303,12 @@ an acknowledgment remains unconfirmed.
   preparation; SPA route disposal during preparation, opening, upload and
   commit; late real Worker acknowledgments and superseded attempts cannot
   stage further or refresh/overwrite a newer view in any browser engine.
-- `e2e/import-outcome.spec.ts` — lost, malformed and unavailable acknowledgments
-  after real Worker commits; check-before-retry presentation and active-target
-  refresh without declaring success; a real commit winning cancellation with
-  lost or genuine acknowledgment; optional-revision idempotent success; a real
-  authority rejection; and no uncertain-result delivery to a disposed view.
+- `e2e/import-outcome.spec.ts` — lost, malformed, null and unrecognized HTTP
+  acknowledgments after real Worker commits; check-before-retry presentation
+  and active-target refresh without declaring success; a real commit winning
+  cancellation with lost or genuine acknowledgment; optional-revision
+  idempotent success; real authority/conflict/expiry rejections; and no
+  uncertain-result delivery to a disposed view.
 
 ## Release gate: disposable remote proof
 

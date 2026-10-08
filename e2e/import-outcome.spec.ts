@@ -3,7 +3,70 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./workspace-fixture";
 import { waitForSharedProvisioning } from "./support/navigation";
 
-for (const acknowledgment of ["lost", "malformed", "unavailable"] as const) {
+type CommitAcknowledgment =
+  | "lost"
+  | "malformed"
+  | "null"
+  | "unavailable"
+  | "timeout"
+  | "rate-limited"
+  | "acknowledged"
+  | "lose-once";
+
+/** Control only the acknowledgment after a real Worker commit. Optional holding
+ * deliberately ignores abort: client cancellation cannot undo this commit. */
+async function controlCommitAcknowledgments(page: Page, acknowledgment: CommitAcknowledgment, hold = false) {
+  return page.evaluateHandle(
+    ({ acknowledgment, hold }) => {
+      const fetch = window.fetch.bind(window);
+      const replies: unknown[] = [];
+      let entered!: () => void;
+      let release!: () => void;
+      let signal: AbortSignal | null = null;
+      const reached = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      window.fetch = async (input, init) => {
+        const url = new URL(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+          location.origin,
+        );
+        const response = await fetch(input, init);
+        if (/\/api\/private\/imports\/[^/]+\/commit$/.test(url.pathname) && response.ok) {
+          const body = await response.clone().json();
+          if (!body || typeof body !== "object" || !("committed" in body) || body.committed !== true) {
+            throw new Error("Expected a real committed Import");
+          }
+          replies.push(body);
+          response.json = async () => body;
+          if (hold) {
+            signal = init?.signal ?? (input instanceof Request ? input.signal : null);
+            entered();
+            await held;
+          }
+          if (acknowledgment === "malformed") {
+            return new Response("{", { headers: { "Content-Type": "application/json" } });
+          }
+          if (acknowledgment === "null") return Response.json(null);
+          if (acknowledgment === "unavailable") return new Response("unavailable", { status: 503 });
+          if (acknowledgment === "timeout") return new Response("upstream timed out", { status: 408 });
+          if (acknowledgment === "rate-limited") return new Response("upstream rate limit", { status: 429 });
+          if (acknowledgment === "lost" || (acknowledgment === "lose-once" && replies.length === 1)) {
+            throw new TypeError("commit acknowledgment lost");
+          }
+        }
+        return response;
+      };
+      return { reached, release, replies, aborted: () => signal?.aborted ?? false };
+    },
+    { acknowledgment, hold },
+  );
+}
+
+for (const acknowledgment of ["lost", "malformed", "null", "unavailable", "timeout", "rate-limited"] as const) {
   test(`${acknowledgment} commit acknowledgments refresh Files but leave the Import outcome unconfirmed`, async ({
     page,
     workspace,
@@ -15,27 +78,10 @@ for (const acknowledgment of ["lost", "malformed", "unavailable"] as const) {
       if (path.startsWith("/api/private/imports")) writes.push({ method: request.method(), path });
       if (path === `/api/private/tree/directories/${workspace.rootId}`) targetRefreshes += 1;
     });
-    // Let the real Worker commit finish, then lose or corrupt its acknowledgment
-    // at the browser transport boundary. Neither encryption nor D1 is mocked.
-    await page.evaluate((acknowledgment) => {
-      const fetch = window.fetch.bind(window);
-      window.fetch = async (input, init) => {
-        const url = new URL(
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-          location.origin,
-        );
-        const response = await fetch(input, init);
-        if (/\/api\/private\/imports\/[^/]+\/commit$/.test(url.pathname) && response.ok) {
-          await response.arrayBuffer();
-          if (acknowledgment === "malformed") {
-            return new Response("{", { headers: { "Content-Type": "application/json" } });
-          }
-          if (acknowledgment === "unavailable") return new Response("unavailable", { status: 503 });
-          throw new TypeError("commit acknowledgment lost");
-        }
-        return response;
-      };
-    }, acknowledgment);
+    // Neither encryption nor D1 is mocked. The fetch wrapper remains installed
+    // after its observation handle is disposed.
+    const controlled = await controlCommitAcknowledgments(page, acknowledgment);
+    await controlled.dispose();
 
     await page.getByTestId("import-files-input").setInputFiles({
       name: "uncertain.md",
@@ -99,41 +145,42 @@ test("an explicit authority rejection requires a fresh review, not an unconfirme
   expect(opened).toBe(1);
 });
 
-/** Hold a real committed response even after abort; release either its genuine
- * acknowledgment or a lost one. Client cancellation cannot undo this commit. */
-async function holdCommitAcknowledgment(page: Page, acknowledgment: "lost" | "acknowledged") {
-  return page.evaluateHandle((acknowledgment) => {
-    const fetch = window.fetch.bind(window);
-    let entered!: () => void;
-    let release!: () => void;
-    let signal: AbortSignal | null = null;
-    const reached = new Promise<void>((resolve) => {
-      entered = resolve;
+for (const rejection of ["conflict", "expiry"] as const) {
+  test(`an explicit ${rejection} rejection preserves fresh-review guidance`, async ({ page, workspace }) => {
+    const writes: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/private/imports")) writes.push(request.method());
     });
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    window.fetch = async (input, init) => {
-      const url = new URL(
-        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-        location.origin,
-      );
-      const response = await fetch(input, init);
-      if (/\/api\/private\/imports\/[^/]+\/commit$/.test(url.pathname) && response.ok) {
-        signal = init?.signal ?? (input instanceof Request ? input.signal : null);
-        const body = await response.clone().json();
-        if (!body || typeof body !== "object" || !("committed" in body) || body.committed !== true) {
-          throw new Error("Expected a real committed Import");
-        }
-        response.json = async () => body;
-        entered();
-        await held;
-        if (acknowledgment === "lost") throw new TypeError("committed acknowledgment lost after abort");
+    await page.route("**/api/private/imports/*/commit", async (route) => {
+      if (rejection === "conflict") {
+        await workspace.db
+          .prepare("UPDATE directories SET entries_revision = entries_revision + 1 WHERE node_id = ?")
+          .bind(workspace.rootId)
+          .run();
+      } else {
+        const importId = new URL(route.request().url()).pathname.split("/").at(-2)!;
+        await workspace.db
+          .prepare("UPDATE import_sessions SET expires_at = created_at + 1 WHERE id = ?")
+          .bind(importId)
+          .run();
       }
-      return response;
-    };
-    return { reached, release, aborted: () => signal?.aborted ?? false };
-  }, acknowledgment);
+      await route.continue();
+    });
+    await page.getByTestId("import-files-input").setInputFiles({
+      name: "rejected.md",
+      mimeType: "text/markdown",
+      buffer: Buffer.from("# Rejected\n"),
+    });
+    await page.getByTestId("import-confirm").click();
+
+    await expect(page.getByTestId("import-error")).toContainText(
+      rejection === "conflict" ? "Refresh the folder, review again" : "expired before it committed",
+    );
+    await expect(page.getByTestId("import-unconfirmed")).toHaveCount(0);
+    await expect(page.getByTestId("import-complete")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "rejected.md", exact: true })).toHaveCount(0);
+    expect(writes).toEqual(["POST", "PUT", "POST", "DELETE"]);
+  });
 }
 
 for (const acknowledgment of ["lost", "acknowledged"] as const) {
@@ -141,7 +188,7 @@ for (const acknowledgment of ["lost", "acknowledged"] as const) {
     page,
     workspace,
   }) => {
-    const held = await holdCommitAcknowledgment(page, acknowledgment);
+    const held = await controlCommitAcknowledgments(page, acknowledgment, true);
     const writes: string[] = [];
     let targetRefreshes = 0;
     page.on("request", (request) => {
@@ -187,23 +234,7 @@ test("an idempotent acknowledgment without a listing revision succeeds and refre
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === `/api/private/tree/directories/${workspace.rootId}`) targetRefreshes += 1;
   });
-  const acknowledgments = await page.evaluateHandle(() => {
-    const fetch = window.fetch.bind(window);
-    const replies: { committed?: boolean; alreadyCommitted?: boolean; entriesRevision?: number }[] = [];
-    window.fetch = async (input, init) => {
-      const url = new URL(
-        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-        location.origin,
-      );
-      const response = await fetch(input, init);
-      if (/\/api\/private\/imports\/[^/]+\/commit$/.test(url.pathname) && response.ok) {
-        replies.push(await response.clone().json());
-        if (replies.length === 1) throw new TypeError("first commit acknowledgment lost");
-      }
-      return response;
-    };
-    return replies;
-  });
+  const acknowledgments = await controlCommitAcknowledgments(page, "lose-once");
   try {
     await page.getByTestId("import-files-input").setInputFiles({
       name: "acknowledged.md",
@@ -217,7 +248,7 @@ test("an idempotent acknowledgment without a listing revision succeeds and refre
     await expect(page.getByRole("link", { name: "acknowledged.md", exact: true })).toBeVisible();
     await waitForSharedProvisioning(page);
     expect(targetRefreshes).toBe(1);
-    const replies = await acknowledgments.jsonValue();
+    const replies = await acknowledgments.evaluate((transport) => transport.replies);
     expect(replies).toHaveLength(2);
     expect(replies[1]).toMatchObject({ committed: true, alreadyCommitted: true });
     expect(replies[1]).not.toHaveProperty("entriesRevision");
@@ -227,7 +258,7 @@ test("an idempotent acknowledgment without a listing revision succeeds and refre
 });
 
 test("a disposed unconfirmed attempt cannot refresh or replace a newer view", async ({ page, workspace }) => {
-  const held = await holdCommitAcknowledgment(page, "lost");
+  const held = await controlCommitAcknowledgments(page, "lost", true);
   let targetRefreshes = 0;
   const writes: string[] = [];
   page.on("request", (request) => {
