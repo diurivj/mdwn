@@ -10,5 +10,5 @@ export * from "../../app/shared/sharing/rotation-client";
 export * from "../../app/shared/device/owned-provision-client";
 export * from "../../app/shared/sharing/provisioning-client";
 export { openDeviceEnrollmentEnvelope } from "../../app/shared/crypto/vault";
-export { createSymmetricWriter } from "../../app/shared/crypto/enc-v1";
+export { createSymmetricWriter, inspectEnvelope } from "../../app/shared/crypto/enc-v1";
 export { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";

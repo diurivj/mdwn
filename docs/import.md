@@ -213,8 +213,28 @@ Replace preserves that File's current Private/Public thread.
 value, configured limit — never file content. `importProblemMessage` maps each
 code to a concrete next step. Unsupported, invalid, ambiguous, or over-limit
 input fails before review; a blocked collision keeps the review open until the
-person resolves it; an interrupted upload cancels the session and tells the
-person to check the folder before retrying.
+person resolves it. Cleanup after an interrupted upload is best effort, not a
+promise of staging deletion or proof that an in-flight commit did not win.
+
+### Attempt lifetime
+
+One `ImportExecution` lifetime covers replacement reads, signing, encrypted
+plan preparation, opening, upload and commit. **Cancel Import** is available
+while measuring the encrypted plan as well as during staging. Cancellation
+checks each asynchronous boundary and suppresses later stages, retries and
+progress; an already-running browser calculation may finish and be discarded.
+
+Route disposal invalidates result delivery before cancelling the attempt. The
+React adapter also ignores superseded attempts, so their late progress or
+outcome cannot overwrite a newer view or trigger its router revalidation.
+Same-view revalidation does not dispose the current attempt.
+
+If opening may have run, cleanup uses the browser-known Import ID. Cleanup
+never deletes committed Files, never guarantees deletion after a network
+failure and cannot replace the primary rejection with an error or a late
+cancellation. A genuine commit acknowledgment still means success even if
+client cancellation raced it; a disposed view does not deliver that result.
+A browser abort alone is not evidence of domain cancellation.
 
 ## Verification seams
 
@@ -231,6 +251,12 @@ person to check the folder before retrying.
   eligibility and ownership.
 - `tests/import-browser.test.ts` — File and DataTransfer input reading,
   empty-folder preservation, fallback to `DataTransfer.files`, expanded guard.
+- `tests/import-execution.test.ts` — confirmed-review execution, complete
+  preparation before staging, exact-byte bounded retry, lost-open cleanup,
+  cancellation throughout preparation/staging, late acknowledgments and
+  primary-outcome preservation through failed cleanup.
+- `tests/import-staging.test.ts` — binary session/chunk codec, descriptors,
+  payload framing, bounds and digest identity.
 - `tests/worker/import-staging.test.ts` — full session → chunks → commit flow,
   tree visibility, exact-retry idempotency, mismatched-retry permanent
   failure, malformed/over-count framing, D1 `CHECK` bounds (including the
@@ -243,6 +269,10 @@ person to check the folder before retrying.
   and WebKit. The synthetic drop is skipped in WebKit because its constructed
   `FileSystemEntry` cannot produce a File; the `DataTransfer.files` fallback is
   covered in unit tests.
+- `e2e/import-lifetime.spec.ts` — cancellation during real encrypted
+  preparation; SPA route disposal during preparation, opening, upload and
+  commit; late real Worker acknowledgments and superseded attempts cannot
+  stage further or refresh/overwrite a newer view in any browser engine.
 
 ## Release gate: disposable remote proof
 

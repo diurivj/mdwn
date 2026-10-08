@@ -1,5 +1,5 @@
 /**
- * One confirmed-review Import attempt (ticket 46).
+ * One confirmed-review Import attempt (tickets 46–47).
  *
  * The Import control settles an Import review; from that boundary this module
  * owns execution: replacement reads, this browser's signing keys, the complete
@@ -90,7 +90,9 @@ export class ImportExecution {
     private readonly operations: ImportExecutionOperations,
   ) {}
 
-  /** Stop this attempt's later stages; cleanup stays best effort. */
+  /** Stop later stages and retries, including after an uninterruptible browser
+   * calculation. Route disposal uses the same stop boundary; the adapter also
+   * invalidates outcome delivery. Cleanup stays best effort, not rollback. */
   cancel(): void {
     this.controller.abort();
   }
@@ -99,8 +101,11 @@ export class ImportExecution {
     const { review, source, target, access, onProgress } = this.request;
     let importId: string | null = null;
     try {
+      this.controller.signal.throwIfAborted();
       const replacements = await this.operations.loadReplacementDocuments(access, target.key, review);
+      this.controller.signal.throwIfAborted();
       const signers = await this.operations.importSigners(access);
+      this.controller.signal.throwIfAborted();
       const plan = await prepareImportPlan({
         review,
         files: collectSourceFiles(source.roots),
@@ -109,13 +114,17 @@ export class ImportExecution {
         replacements,
         ...signers,
       });
+      this.controller.signal.throwIfAborted();
+      onProgress?.({ chunksSent: 0, chunksTotal: plan.chunks.length });
+      this.controller.signal.throwIfAborted();
       // Retained before the open request: opening is not idempotent, so a lost
       // acknowledgment can only be cleaned up, never retried.
       importId = plan.importId;
-      onProgress?.({ chunksSent: 0, chunksTotal: plan.chunks.length });
       await this.operations.openSession(plan, this.controller.signal);
+      this.controller.signal.throwIfAborted();
       for (const chunk of plan.chunks) {
         await this.retryOnce(() => this.operations.uploadChunk(plan.importId, chunk, this.controller.signal));
+        this.controller.signal.throwIfAborted();
         onProgress?.({ chunksSent: chunk.sequence + 1, chunksTotal: plan.chunks.length });
       }
       const { entriesRevision } = await this.retryOnce(() =>
@@ -129,9 +138,13 @@ export class ImportExecution {
         ...(entriesRevision === undefined ? {} : { entriesRevision }),
       };
     } catch (error) {
+      // Classify before cleanup: a later abort or cleanup failure cannot turn
+      // the primary rejection into a false cancellation acknowledgment.
+      const outcome: ImportOutcome = this.controller.signal.aborted
+        ? { status: "cancelled" }
+        : { status: "failed", error: error instanceof ImportError ? error : null };
       if (importId) await this.cleanup(importId);
-      if (this.controller.signal.aborted) return { status: "cancelled" };
-      return { status: "failed", error: error instanceof ImportError ? error : null };
+      return outcome;
     }
   }
 
@@ -146,12 +159,13 @@ export class ImportExecution {
   }
 
   /** The existing bounded retry: one automatic retry at eligible failure
-   * points, always with the identical prepared request. */
+   * points while still active, always with the identical prepared request. */
   private async retryOnce<T>(request: () => Promise<T>): Promise<T> {
+    this.controller.signal.throwIfAborted();
     try {
       return await request();
     } catch (error) {
-      if (error instanceof ImportError) throw error;
+      if (error instanceof ImportError || this.controller.signal.aborted) throw error;
       return await request();
     }
   }

@@ -31,8 +31,13 @@ function signers(): ImportSigners {
   };
 }
 
-async function executionRequest(): Promise<ImportExecutionRequest> {
-  const source = await analyzeImportSelection([{ path: "draft.md", bytes: encoder.encode("# Draft\n") }]);
+async function executionRequest(fileCount = 1): Promise<ImportExecutionRequest> {
+  const source = await analyzeImportSelection(
+    Array.from({ length: fileCount }, (_, index) => ({
+      path: index === 0 ? "draft.md" : `draft-${index}.md`,
+      bytes: encoder.encode("# Draft\n"),
+    })),
+  );
   const target: ImportTarget = {
     directoryId: TARGET_ID,
     keyEpoch: 1,
@@ -252,6 +257,90 @@ describe("ImportExecution", () => {
     expect(fake.cancels).toEqual([fake.plans[0]!.importId]);
   });
 
+  it("preserves the original rejection if cancellation arrives while failed cleanup is pending", async () => {
+    const fake = fakeOperations();
+    const entered = deferred<void>();
+    const held = deferred<void>();
+    fake.handlers.uploadChunk = async () => {
+      throw new ImportError("staging-changed");
+    };
+    fake.handlers.cancelSession = async () => {
+      entered.resolve();
+      await held.promise;
+    };
+    const execution = new ImportExecution(await executionRequest(), fake.operations);
+
+    const outcome = execution.run();
+    await entered.promise;
+    execution.cancel();
+    held.reject(new TypeError("cleanup network lost"));
+
+    expect(await outcome).toMatchObject({ status: "failed", error: { code: "staging-changed" } });
+    expect(fake.cancels).toEqual([fake.plans[0]!.importId]);
+  });
+
+  it("discards preparation cancelled before replacement reads finish without opening a session", async () => {
+    const fake = fakeOperations();
+    const entered = deferred<void>();
+    const held = deferred<ReadonlyMap<string, ImportReplacementDocument>>();
+    const progress: ImportUploadProgress[] = [];
+    fake.handlers.loadReplacementDocuments = async () => {
+      entered.resolve();
+      return held.promise;
+    };
+    const execution = new ImportExecution(
+      { ...(await executionRequest()), onProgress: (update) => progress.push(update) },
+      fake.operations,
+    );
+
+    const outcome = execution.run();
+    await entered.promise;
+    execution.cancel();
+    held.resolve(new Map());
+
+    expect(await outcome).toEqual({ status: "cancelled" });
+    expect(fake.calls).toEqual(["replacements"]);
+    expect(progress).toEqual([]);
+  });
+
+  it.each(["signers", "encrypted plan"])(
+    "discards cancellation during %s preparation before staging",
+    async (stage) => {
+      const fake = fakeOperations();
+      const entered = deferred<void>();
+      const held = deferred<void>();
+      fake.handlers.importSigners = async () => {
+        const prepared = signers();
+        if (stage === "signers") {
+          entered.resolve();
+          await held.promise;
+        } else {
+          prepared.signFileHead = async (identity) => {
+            entered.resolve();
+            await held.promise;
+            return signers().signFileHead(identity);
+          };
+        }
+        return prepared;
+      };
+      const progress: ImportUploadProgress[] = [];
+      const execution = new ImportExecution(
+        { ...(await executionRequest()), onProgress: (update) => progress.push(update) },
+        fake.operations,
+      );
+
+      const outcome = execution.run();
+      await entered.promise;
+      execution.cancel();
+      held.resolve();
+
+      expect(await outcome).toEqual({ status: "cancelled" });
+      expect(fake.calls).toEqual(["replacements", "signers"]);
+      expect(progress).toEqual([]);
+      expect(fake.cancels).toEqual([]);
+    },
+  );
+
   it("stops a cancelled attempt, cleans up, and reports cancellation without an error", async () => {
     const fake = fakeOperations();
     const held = deferred<void>();
@@ -267,6 +356,73 @@ describe("ImportExecution", () => {
 
     expect(await outcome).toEqual({ status: "cancelled" });
     expect(fake.cancels).toEqual([fake.plans[0]!.importId]);
+  });
+
+  it.each(["opening", "upload", "commit"])("never retries an interrupted %s after cancellation", async (stage) => {
+    const fake = fakeOperations();
+    const entered = deferred<void>();
+    const held = deferred<void>();
+    const block = async () => {
+      entered.resolve();
+      await held.promise;
+    };
+    if (stage === "opening") fake.handlers.openSession = block;
+    else if (stage === "upload") fake.handlers.uploadChunk = block;
+    else
+      fake.handlers.commit = async () => {
+        await block();
+        return {};
+      };
+    const execution = new ImportExecution(await executionRequest(), fake.operations);
+
+    const outcome = execution.run();
+    await entered.promise;
+    execution.cancel();
+    held.reject(new TypeError("request aborted"));
+
+    expect(await outcome).toEqual({ status: "cancelled" });
+    expect(fake.calls).toEqual([
+      "replacements",
+      "signers",
+      "open",
+      ...(stage === "opening" ? [] : ["upload"]),
+      ...(stage === "commit" ? ["commit"] : []),
+      "cancel",
+    ]);
+    expect(fake.cancels).toEqual([fake.plans[0]!.importId]);
+  });
+
+  it.each(["opening", "upload"])("discards a late %s acknowledgment after cancellation", async (stage) => {
+    const fake = fakeOperations();
+    const entered = deferred<void>();
+    const held = deferred<void>();
+    const block = async () => {
+      entered.resolve();
+      await held.promise;
+    };
+    if (stage === "opening") fake.handlers.openSession = block;
+    else fake.handlers.uploadChunk = block;
+    const progress: ImportUploadProgress[] = [];
+    const execution = new ImportExecution(
+      { ...(await executionRequest(8)), onProgress: (update) => progress.push(update) },
+      fake.operations,
+    );
+
+    const outcome = execution.run();
+    await entered.promise;
+    execution.cancel();
+    held.resolve();
+
+    expect(await outcome).toEqual({ status: "cancelled" });
+    expect(fake.calls).toEqual([
+      "replacements",
+      "signers",
+      "open",
+      ...(stage === "upload" ? ["upload"] : []),
+      "cancel",
+    ]);
+    expect(fake.plans[0]!.chunks.length).toBeGreaterThan(1);
+    expect(progress).toEqual([{ chunksSent: 0, chunksTotal: fake.plans[0]!.chunks.length }]);
   });
 
   it("does not attempt cleanup when no session could exist", async () => {
