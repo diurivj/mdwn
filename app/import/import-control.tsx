@@ -203,7 +203,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
     setPhase({ status: "error", message: failureMessage(outcome.error), inputs: null });
   }
 
-  function cancelUpload(): void {
+  function cancelAttempt(): void {
     importExecution.current?.cancel();
   }
 
@@ -319,18 +319,6 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
                 <p role="status" data-testid="import-preparing">
                   {phase.label}
                 </p>
-                {phase.executing && (
-                  <div className="mt-5 flex justify-end">
-                    <button
-                      type="button"
-                      className="rounded border px-3 py-1"
-                      onClick={cancelUpload}
-                      data-testid="import-cancel-upload"
-                    >
-                      Cancel Import
-                    </button>
-                  </div>
-                )}
               </>
             )}
             {phase.status === "error" && (
@@ -395,17 +383,19 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
                   Uploading encrypted chunks {phase.progress.chunksSent} of {phase.progress.chunksTotal}… Nothing is
                   visible until the final commit.
                 </p>
-                <div className="mt-5 flex justify-end">
-                  <button
-                    type="button"
-                    className="rounded border px-3 py-1"
-                    onClick={cancelUpload}
-                    data-testid="import-cancel-upload"
-                  >
-                    Cancel Import
-                  </button>
-                </div>
               </>
+            )}
+            {(phase.status === "uploading" || (phase.status === "preparing" && phase.executing)) && (
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded border px-3 py-1"
+                  onClick={cancelAttempt}
+                  data-testid="import-cancel-upload"
+                >
+                  Cancel Import
+                </button>
+              </div>
             )}
             {phase.status === "done" && (
               <>

@@ -120,6 +120,19 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function operationGate() {
+  const entered = deferred<void>();
+  const held = deferred<void>();
+  return {
+    entered,
+    held,
+    block: async () => {
+      entered.resolve();
+      await held.promise;
+    },
+  };
+}
+
 describe("ImportExecution", () => {
   it("prepares the complete plan, stages it, and reports the committed counts", async () => {
     const fake = fakeOperations();
@@ -360,12 +373,7 @@ describe("ImportExecution", () => {
 
   it.each(["opening", "upload", "commit"])("never retries an interrupted %s after cancellation", async (stage) => {
     const fake = fakeOperations();
-    const entered = deferred<void>();
-    const held = deferred<void>();
-    const block = async () => {
-      entered.resolve();
-      await held.promise;
-    };
+    const { entered, held, block } = operationGate();
     if (stage === "opening") fake.handlers.openSession = block;
     else if (stage === "upload") fake.handlers.uploadChunk = block;
     else
@@ -394,12 +402,7 @@ describe("ImportExecution", () => {
 
   it.each(["opening", "upload"])("discards a late %s acknowledgment after cancellation", async (stage) => {
     const fake = fakeOperations();
-    const entered = deferred<void>();
-    const held = deferred<void>();
-    const block = async () => {
-      entered.resolve();
-      await held.promise;
-    };
+    const { entered, held, block } = operationGate();
     if (stage === "opening") fake.handlers.openSession = block;
     else fake.handlers.uploadChunk = block;
     const progress: ImportUploadProgress[] = [];

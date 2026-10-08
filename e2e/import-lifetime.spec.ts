@@ -1,9 +1,15 @@
-import type { Page } from "@playwright/test";
+import type { Page, Response } from "@playwright/test";
 
 import { test, expect } from "./workspace-fixture";
 import { waitForSharedProvisioning } from "./support/navigation";
 
 type HeldStage = "preparation" | "opening" | "upload" | "commit";
+
+function isImportCleanup(response: Response): boolean {
+  return (
+    response.request().method() === "DELETE" && new URL(response.url()).pathname.startsWith("/api/private/imports/")
+  );
+}
 
 /** Hold a real final browser calculation or a real Worker acknowledgment. The
  * transport deliberately delivers its late response even after abort: stopping
@@ -110,12 +116,7 @@ for (const stage of ["preparation", "opening", "upload", "commit"] as const) {
       if (path.startsWith("/api/private/imports")) writes.push({ method: request.method(), path });
     });
     page.on("response", (response) => {
-      if (
-        response.request().method() === "DELETE" &&
-        new URL(response.url()).pathname.startsWith("/api/private/imports/")
-      ) {
-        cleanups.push(response.url());
-      }
+      if (isImportCleanup(response)) cleanups.push(response.url());
     });
     const held = await holdImportStage(page, stage);
     try {
@@ -169,11 +170,7 @@ test("a superseded attempt cannot clear the new attempt's success", async ({ pag
   const held = await holdImportStage(page, "opening");
   let cleanups = 0;
   page.on("response", (response) => {
-    if (
-      response.request().method() === "DELETE" &&
-      new URL(response.url()).pathname.startsWith("/api/private/imports/")
-    )
-      cleanups += 1;
+    if (isImportCleanup(response)) cleanups += 1;
   });
   try {
     await page.getByTestId("import-files-input").setInputFiles({
