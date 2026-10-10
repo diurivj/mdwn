@@ -17,7 +17,13 @@ import type { TreeKind } from "~/shared/tree/client";
 import { createImportOperations } from "./import-operations";
 import { inputsFromDataTransfer, inputsFromFiles } from "../shared/import/browser";
 import { ImportExecution, type ImportUploadProgress } from "../shared/import/execution";
-import { IMPORT_LIMITS, ImportError, formatBytes, importProblemMessage } from "../shared/import/limits";
+import {
+  IMPORT_LIMITS,
+  IMPORT_UNCONFIRMED_MESSAGE,
+  ImportError,
+  formatBytes,
+  importProblemMessage,
+} from "../shared/import/limits";
 import {
   canReplace,
   reviewImport,
@@ -39,8 +45,9 @@ type ImportControlProps = {
   kind: TreeKind;
   /** Busy or recovery-confirmation-pending; Import must stay closed. */
   disabled: boolean;
-  /** Called once an Import commit becomes visible, so the page refreshes. */
-  onImported?: () => void;
+  /** Refresh the active target after an acknowledged or unconfirmed commit.
+   * A fresh listing is not proof of this attempt's outcome. */
+  onRefresh?: () => void;
 };
 
 type Phase =
@@ -56,6 +63,7 @@ type Phase =
     }
   | { status: "uploading"; progress: ImportUploadProgress }
   | { status: "done"; created: number; comments: number }
+  | { status: "unconfirmed" }
   | { status: "error"; message: string; inputs: RawImportInput[] | null };
 
 function blockedMessage(node: ImportReviewNode): string {
@@ -83,7 +91,7 @@ function failureMessage(error: unknown): string {
 }
 
 export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>(function ImportControl(
-  { snapshot, nodeId, kind, disabled, onImported },
+  { snapshot, nodeId, kind, disabled, onRefresh },
   ref,
 ) {
   const [phase, setPhase] = useState<Phase>({ status: "idle" });
@@ -193,7 +201,12 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
     importExecution.current = null;
     if (outcome.status === "committed") {
       setPhase({ status: "done", created: outcome.created, comments: outcome.comments });
-      onImported?.();
+      onRefresh?.();
+      return;
+    }
+    if (outcome.status === "unconfirmed") {
+      setPhase({ status: "unconfirmed" });
+      onRefresh?.();
       return;
     }
     if (outcome.status === "cancelled") {
@@ -396,6 +409,19 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
                   Cancel Import
                 </button>
               </div>
+            )}
+            {phase.status === "unconfirmed" && (
+              <>
+                <h2 className="text-lg font-semibold">Import outcome unconfirmed</h2>
+                <p className="mt-2 text-amber-800" role="alert" data-testid="import-unconfirmed">
+                  {IMPORT_UNCONFIRMED_MESSAGE}
+                </p>
+                <div className="mt-5 flex justify-end">
+                  <button type="button" className="rounded border px-3 py-1" onClick={reset}>
+                    Close
+                  </button>
+                </div>
+              </>
             )}
             {phase.status === "done" && (
               <>

@@ -9,19 +9,12 @@
  * already-encrypted plan bytes.
  */
 
-import { privateRequest } from "~/shared/device/private-client";
+import { PrivateAccessError, privateRequest } from "~/shared/device/private-client";
 import { ImportError } from "./limits";
 import type { ImportPlan, ImportPlanChunk } from "./plan";
 import { encodeImportChunkBody, encodeImportSessionBody } from "./staging";
 
 type SessionResponse = { importId?: unknown; error?: unknown };
-type CommitResponse = {
-  importId?: unknown;
-  committed?: unknown;
-  alreadyCommitted?: unknown;
-  entriesRevision?: unknown;
-  error?: unknown;
-};
 
 function asImportError(response: Response, body: { error?: unknown }): ImportError {
   if (response.status === 409) return new ImportError("staging-changed");
@@ -55,11 +48,36 @@ export async function uploadImportChunk(importId: string, chunk: ImportPlanChunk
 
 /** Confirmation step 3: the atomic visibility commit (idempotent for a session). */
 export async function commitImport(importId: string, signal?: AbortSignal): Promise<{ entriesRevision?: number }> {
-  const response = await privateRequest(`/api/private/imports/${importId}/commit`, { method: "POST", signal });
-  const parsed = (await response.json().catch(() => ({}))) as CommitResponse;
-  if (!response.ok) throw asImportError(response, parsed);
-  if (parsed.committed !== true) throw new ImportError("staging-upload-failed");
-  return typeof parsed.entriesRevision === "number" ? { entriesRevision: parsed.entriesRevision } : {};
+  let response: Response;
+  try {
+    response = await privateRequest(`/api/private/imports/${importId}/commit`, { method: "POST", signal });
+  } catch (error) {
+    // The private client distinguishes a definite authority rejection from a
+    // lost/aborted request (`unavailable`). An earlier lost commit stays uncertain.
+    if (error instanceof PrivateAccessError && error.state !== "unavailable") {
+      throw new ImportError("staging-changed", { reason: error.state });
+    }
+    throw error;
+  }
+  // A server failure or unreadable/missing acknowledgment is not a rejection.
+  // Keep HTTP/shape failures non-retryable, as before, without claiming rollback.
+  if (response.status >= 500) throw new ImportError("commit-unconfirmed");
+  const parsed: unknown = await response.json().catch(() => null);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new ImportError("commit-unconfirmed");
+  if (!response.ok) {
+    const protocolError = "error" in parsed ? parsed.error : null;
+    const rejected =
+      (response.status === 400 && protocolError === "invalid_import_request") ||
+      (response.status === 404 && protocolError === "not_found") ||
+      (response.status === 409 && (protocolError === "import_changed" || protocolError === "import_incomplete")) ||
+      (response.status === 410 && protocolError === "import_expired");
+    if (rejected) throw asImportError(response, { error: protocolError });
+    throw new ImportError("commit-unconfirmed");
+  }
+  if (!("committed" in parsed) || parsed.committed !== true) throw new ImportError("commit-unconfirmed");
+  return "entriesRevision" in parsed && typeof parsed.entriesRevision === "number"
+    ? { entriesRevision: parsed.entriesRevision }
+    : {};
 }
 
 /** Cancel an open session; the execution module treats this as best effort. */
