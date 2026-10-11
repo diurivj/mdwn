@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Blocked by:** None. Ticket 49 delivered the shared module in `app/comments/dependents.server.ts`; ticket 50 (Publication teardown scope) is independent and must not gain this removal.
+**Blocked by:** None. Ticket 49 delivered the shared module in `app/comments/dependents.server.ts`, merged on `main` by PR #56 (merge `58f8842`); ticket 50 (Publication teardown scope) is independent and must not gain this removal.
 
 **Related:** [49: Shared Comment-dependent module for File and Directory Hard deletion](49-shared-comment-dependent-deletion.md); [27: Hard-deletion completeness](27-hard-deletion-completeness.md); [30: Import staging and commit](30-import-staging-and-commit.md); [43: Architecture deepening specification](43-architecture-deepening-spec.md) and `docs/architecture-deepening.md` (shared constraint 1: an existing correctness gap needs explicit regression evidence). Reference docs: `docs/comments.md` (Historical Comment envelopes), `docs/import.md`, `docs/acceptance.md` (File/Directory hard deletion removes every dependent record atomically).
 

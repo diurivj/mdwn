@@ -4,9 +4,9 @@
 
 **Type:** refactor
 
-**Status:** in-progress
+**Status:** done
 
-**Implementation:** complete — reviewed and locally verified; current-head CI and merge remain pending.
+**Implementation:** complete — merged on `main` via PR #56 (merge `58f8842`).
 
 **Blocked by:** None (can start immediately).
 
@@ -22,7 +22,7 @@
 - [x] Tests prefer the existing authorized Worker routes as the highest seam, supplemented by real-D1 module integration tests for atomic storage invariants and failure injection. No mocked SQL and no test-only production routes.
 - [x] Existing hard-deletion completeness, private-tree, Directory-cap and injected late-failure rollback suites are retained and pass, including suspension-independent deletion.
 - [x] Before/after evidence shows the tree deletion caller lost dependent-graph knowledge.
-- [ ] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
+- [x] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
 
 ## Scope and pointers
 
@@ -39,3 +39,4 @@
 - 2026-10-11: Pinned review `815c891...4b52ee1` (parallel Standards + Spec sub-agents), with one comment-only follow-up `80e74c2`. **Standards: Pass** — zero documented-standard violations; the initial judgement calls (caller-authored SQL scope, duplicated staging fixtures, ticket-50 forward reference, "capacities" wording, report-helper home, missing docs evidence) were fixed, leaving only low-severity naming/duplication notes. **Spec: Pass** — no missing/partial, unasked-for or wrong behavior; the module's statements table-diff identical to the removed ones, the value-shaped scope preserves the node set and parameter bound, and `import_comment_meta` remains File-scope-only. **Separate RR8/stack: Pass** on the same pinned diff, reported separately from both axes: no route, loader, action, UI, binding or schema touchpoint (the RR8 data-API portion is Not applicable), while the changed Worker/D1 boundary keeps the fresh `commit_token` marker on every statement, child-before-parent order, and at most 6 bound parameters per statement against D1's 100 limit.
 - 2026-10-11: Full clean-tree `npm run verify` **passed at `80e74c2`** — whose only delta from the reviewed `4b52ee1` is one module doc-comment sentence on the deferred-FK precondition — covering lint/format, typecheck, namespace drift, 306 Node + 377 Workers tests, production build, fresh-D1 migration smoke, local D1 export/restore round trip, client secret scan, and 431 passing Chromium/Firefox/WebKit browser cases (one existing synthetic WebKit-drop skip, no retries). Log: `/tmp/mdwn-49-final-verify.log`.
 - 2026-10-11: Disclosed boundary (pre-existing, not introduced or changed here). `import_comment_envelopes.thread_id` has a RESTRICT foreign key to `comment_threads.id`, and no production statement deletes that table — on `main` too. Hard-deleting an imported File whose Historical Comments have staged envelopes therefore fails at commit and rolls back the whole batch; a real-workerd reproduction (private thread plus one `import_comment_envelopes` row, then the authorized DELETE route) returns 400. Ticket 49 is behavior-preserving, so the module keeps that exact behavior; the acceptance suites do not cover imported-thread deletion. Filed as [ticket 51](51-imported-comment-envelope-deletion.md) with the reproduction and root cause.
+- 2026-10-11: Status reconciled to **done**: PR #56 merged on `main` as `58f8842` (2026-10-10) after every `CI` job passed at the PR's head `01cb5ca` — typecheck/test/build/migration-smoke/secrets plus Chromium, Firefox and WebKit browser E2E. Application and test code are the reviewed and verified state; the merge-time commits changed only ticket markdown. Ticket 50 is now unblocked, and [ticket 51](51-imported-comment-envelope-deletion.md) stays open for the disclosed imported-envelope bug.

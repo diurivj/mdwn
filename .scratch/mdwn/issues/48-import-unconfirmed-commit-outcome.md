@@ -4,9 +4,9 @@
 
 **Type:** bug
 
-**Status:** in-progress
+**Status:** done
 
-**Implementation:** complete — reviewed and locally verified; current-head CI and merge remain pending.
+**Implementation:** complete — merged on `main` via PR #55 (merge `815c891`).
 
 **Blocked by:** None — 47's attempt lifetime is delivered on `main` by PR #54 (`8a9d633`).
 
@@ -22,7 +22,7 @@
 - [x] Focused deterministic tests cover acknowledged-without-revision, lost commit response, and a commit winning a cancellation race. Real-browser evidence covers the user-visible uncertain-outcome presentation where feasible.
 - [x] Existing Worker proofs (pre-commit invisibility, exact-byte idempotency, mismatched replay failure, cleanup) and browser Import flows remain green.
 - [x] Before/after evidence shows the evidence-based outcome classification at the module interface.
-- [ ] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
+- [x] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
 
 ## Scope and pointers
 
@@ -41,3 +41,4 @@
 - 2026-10-08: Review corrections are regression-backed: real Chromium 408/429 cases failed with the old safe-retry claim; a `null` acknowledgment failed by sending a second commit. Logs: `/tmp/mdwn-48-review-http-red.log` and `/tmp/mdwn-48-review-null-red.log`. Commit parsing now validates its object and recognizes only matching existing protocol-rejection status/body pairs; other acknowledgments remain unconfirmed without another HTTP/shape retry. The test-only commit-response controller consolidates the duplicated interception shape. All three engines now pass 71 focused Import browser cases (one existing skip), including real conflict/expiry/authority rejections; typecheck and Biome pass. Final pinned re-review, RR8/stack and clean-tree verification are pending.
 - 2026-10-08: Final reviewed implementation is `db6ecb1` (after `5852485`), pinned diff `8a9d633...db6ecb1`. **Standards: Pass** — zero documented violations or remaining heuristic nits. **Spec: Pass** — zero missing/partial, wrong-behavior or scope-creep findings; both initial transport findings are fixed and regression-backed. **Separate RR8/stack: Pass** on the same pinned diff: `ImportControl` → browser execution/device-proof staging transport → unchanged same-origin resource action/Worker/Drizzle-D1 boundary, and `onRefresh` → native `useRevalidator().revalidate()` → private browser `clientLoader` with public SSR fallback. Installed router/adapter 8.4.0 types and current official client-data/fetcher/race-condition docs were checked. Active-attempt guards exclude disposed/superseded results before delivery or refresh; controls remain busy through router revalidation. The complete preflight executes the private-shell/privacy, real workerd/D1 and all-three-engine evidence; no client-abort-as-rollback claim, server import, binding, route, schema or persistent store was added.
 - 2026-10-08: Full clean-tree `npm run verify` **passed at `db6ecb1`**: lint/format, typecheck, namespace drift, 306 Node tests, 374 Workers tests, production Worker build, fresh-D1 migration smoke, local D1 export/restore round trip, client secret scan, and 431 passing Chromium/Firefox/WebKit browser cases (one existing synthetic WebKit-drop skip, no retries). Log: `/tmp/mdwn-48-final-verify.log`. The subsequent evidence commit changes only this ticket; application/test code remains the reviewed and verified `db6ecb1` state. The self-hosted runner was online and CI active before publication. Current-head CI and merge remain delivery gates, so the compound final acceptance checkbox intentionally stays open.
+- 2026-10-11: Status reconciled to **done**: merged on `main` via PR #55 (merge `815c891`, 2026-10-10) after current-head `CI` passed. The reviewed implementation `db6ecb1` is the code state in that merge; the intervening commit changed only this ticket's markdown. This reconciliation changed only the stale `Status:`/`Implementation:` lines and the compound acceptance checkbox.

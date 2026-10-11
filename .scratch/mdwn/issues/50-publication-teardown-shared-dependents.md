@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Blocked by:** 49 (Shared Comment-dependent module for File and Directory Hard deletion) — this ticket adds the Publication scope to that module and rewires the second caller.
+**Blocked by:** None — 49 is delivered on `main` by PR #56 (merge `58f8842`). This ticket adds the Publication scope to that module and rewires the second caller.
 
 **Related:** [43: Architecture deepening specification](43-architecture-deepening-spec.md); `docs/architecture-deepening.md` (Comment-dependent Hard deletion implementation decisions 4–8, Hard deletion acceptance evidence); `.scratch/mdwn/architecture-deepening-design.md` (Q9, Q12).
 
