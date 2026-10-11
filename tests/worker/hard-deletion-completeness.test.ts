@@ -7,6 +7,7 @@ import { newPublicationIdentifier } from "../../app/shared/publications/capabili
 import { applyPublicParticipationSuspension } from "../../app/shared/security/public-participation.server";
 import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import { commentPayload, publish, sealedAttribution, sealedComment, type Publication } from "./publication-fixtures";
+import { count, stageCommentRotation, stageImportCommentMeta, stagePseudonymItems } from "./deletion-fixtures";
 import {
   deletePayload,
   grant,
@@ -43,12 +44,6 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM public_participation_suspensions"),
   ]);
 });
-
-async function count(table: string, where = "1", ...values: unknown[]) {
-  return (await env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`)
-    .bind(...values)
-    .first<{ n: number }>())!.n;
-}
 
 type PrivateThread = { threadId: string; epochId: string; capabilityId: string; capability: Uint8Array<ArrayBuffer> };
 
@@ -130,35 +125,6 @@ async function publicComment(owner: SharingAccount, fileId: string, publication:
 const report = (account: SharingAccount, commentId: string) =>
   sharingRequest(account, "/api/private/comments/reports", "POST", { commentId, category: "spam" });
 
-/** A pending Pseudonym-update job staging the given attribution contexts. */
-async function stagePseudonymItems(
-  account: SharingAccount,
-  items: { kind: "thread" | "publication"; recordId: string }[],
-) {
-  const now = Date.now(),
-    jobId = opaqueId();
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO crypto_jobs (id, account_id, device_id, kind, state, progress, created_at, updated_at)
-      VALUES (?, ?, ?, 'pseudonym_update', 'pending', 0, ?, ?)`).bind(
-      jobId,
-      account.accountId,
-      account.deviceId,
-      now,
-      now,
-    ),
-    ...items.map((item) =>
-      item.kind === "thread"
-        ? env.DB.prepare(`INSERT INTO pseudonym_update_items
-        (job_id, kind, record_id, revision, ciphertext, content_key_envelope, content_key_epoch, created_at)
-        VALUES (?, 'thread', ?, 1, X'01', X'01', 1, ?)`).bind(jobId, item.recordId, now)
-        : env.DB.prepare(`INSERT INTO pseudonym_update_items
-        (job_id, kind, record_id, revision, ciphertext, content_key_envelope, content_key_epoch, created_at)
-        VALUES (?, 'publication', ?, 1, X'01', NULL, NULL, ?)`).bind(jobId, item.recordId, now),
-    ),
-  ]);
-  return jobId;
-}
-
 type FileDependents = {
   fileId: string;
   privateThread: PrivateThread;
@@ -170,6 +136,7 @@ type FileDependents = {
   authorDeclarationId: string;
   grantId: string;
   pseudonymJobId: string;
+  rotationJobId: string;
 };
 
 async function publishFileWithDependents(
@@ -202,6 +169,10 @@ async function publishFileWithDependents(
     { kind: "thread", recordId: publicPosted.attributionId },
     { kind: "publication", recordId: authorDeclarationId },
   ]);
+  // A pending Key-rotation job targeting the File stages Comment items, and
+  // imported Historical Comment metadata is an explicit dependent of its Comment.
+  const rotationJobId = await stageCommentRotation(owner, fileId, thread.threadId, privatePosted.commentId);
+  await stageImportCommentMeta(owner, thread.threadId, privatePosted.commentId);
   return {
     fileId,
     privateThread: thread,
@@ -213,6 +184,7 @@ async function publishFileWithDependents(
     authorDeclarationId,
     grantId,
     pseudonymJobId,
+    rotationJobId,
   };
 }
 
@@ -308,6 +280,10 @@ describe("hard-deletion completeness", () => {
         `record_id IN (?, ?, ?)`,
         [scope.privateAttributionId, scope.publicAttributionId, scope.authorDeclarationId],
       ],
+      ["import_comment_meta", `comment_id = ?`, [scope.privateCommentId]],
+      ["key_rotation_comment_items", `job_id = ?`, [scope.rotationJobId]],
+      ["key_rotation_items", `job_id = ?`, [scope.rotationJobId]],
+      ["crypto_jobs", `id = ?`, [scope.rotationJobId]],
     ] as const) {
       expect(await count(table, where as string, ...(values as unknown[])), table).toBe(0);
     }
@@ -378,6 +354,10 @@ describe("hard-deletion completeness", () => {
         scope.authorDeclarationId,
       ),
     ).toBe(0);
+    expect(await count("import_comment_meta", "comment_id = ?", scope.privateCommentId)).toBe(0);
+    expect(await count("key_rotation_comment_items", "job_id = ?", scope.rotationJobId)).toBe(0);
+    expect(await count("key_rotation_items", "job_id = ?", scope.rotationJobId)).toBe(0);
+    expect(await count("crypto_jobs", "id = ?", scope.rotationJobId)).toBe(0);
     expect(await count("key_envelopes", `object_id IN (?, ?, ?, ?, ?)`, fileId, ...threadIds, ...epochIds)).toBe(0);
     expect((await sharingRequest(collaborator, `/api/private/tree/files/${fileId}`)).status).toBe(404);
   });

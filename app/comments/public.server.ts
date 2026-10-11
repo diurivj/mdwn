@@ -9,6 +9,7 @@ import {
   MAX_COMMENTS_PAGE,
 } from "~/shared/comments/content";
 import { commentEnvelopeWire, readCommentEnvelopes } from "~/comments/envelopes.server";
+import { deletedCommentReports } from "~/comments/dependents.server";
 import {
   isCommentEpochLink,
   MAX_PUBLIC_EPOCH_LINK_BYTES,
@@ -872,13 +873,6 @@ export async function editPublicComment(
   if (committed) return Response.json({ revision }, { headers });
   const row = await commentContext(env, auth, target, threadId, commentId);
   return row && row.author_id !== auth.accountId ? failure("not_comment_author", 403) : changed();
-}
-
-/** The category-only reports of any set of Comments. The Comment foreign key
- * is RESTRICT, so every Comment-removal path deletes reports explicitly in the
- * same transaction; this helper is the one place that delete shape lives. */
-export function deletedCommentReports(comments: SQL, marker: SQL): SQL {
-  return sql`DELETE FROM public_comment_reports WHERE comment_id IN (${comments}) AND ${marker}`;
 }
 
 export async function deletePublicComment(

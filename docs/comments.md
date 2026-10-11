@@ -231,7 +231,11 @@ ciphertext. `tests/worker/public-comments.test.ts` covers creation defaults, the
 anonymous page, signed-in visitor posting, audience transitions in both
 directions, retained history for eligible devices, unauthorized signed-in
 denial, Private-thread absence and the revocation rotation of a current
-Collaborators-only epoch. `tests/worker/publication-lifecycle.test.ts` covers
+Collaborators-only epoch. `tests/worker/hard-deletion-completeness.test.ts`
+drives File and Directory deletion of rich Comment graphs through the
+authorized routes, and `tests/worker/comment-dependent-deletion.test.ts` pins
+the shared Comment-dependent module's scope containment, transaction-marker
+guard and rollback in real D1. `tests/worker/publication-lifecycle.test.ts` covers
 link rotation and the sealed, Owner-resumable teardown with bounded batches. `tests/comment-content.test.ts` and
 `tests/public-comment-content.test.ts` cover the browser envelope shapes, link
 wrappers and bounds. `tests/worker/public-abuse-response.test.ts` proves the
