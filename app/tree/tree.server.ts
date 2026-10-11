@@ -1,6 +1,5 @@
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
-import { deletedPseudonymItems } from "~/account/pseudonym-items.server";
-import { deletedCommentReports } from "~/comments/public.server";
+import { deletedCommentDependents } from "~/comments/dependents.server";
 import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
 import { SYMMETRIC_SUITE } from "~/shared/crypto/enc-v1/format";
 import { createDb, sql } from "~/shared/db/client.server";
@@ -995,9 +994,9 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
       [{ directoryId: input.parentId, expectedRevision: input.expectedRevision, head }],
       eligible,
       (committed) => [
-        sql`DELETE FROM key_rotation_comment_items WHERE (thread_id IN
-        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})
-        OR job_id IN (SELECT id FROM crypto_jobs WHERE target_id IN (${ids}))) AND ${committed}`,
+        // The shared Comment-dependent module owns the applicable dependents
+        // and their foreign-key-safe order.
+        ...deletedCommentDependents({ ownerId, nodeIds: ids }, committed),
         sql`DELETE FROM key_rotation_entries WHERE (child_id IN (${ids}) OR directory_id IN (${ids})
         OR job_id IN (SELECT id FROM crypto_jobs WHERE target_id IN (${ids}))) AND ${committed}`,
         sql`DELETE FROM key_rotation_items WHERE (object_id IN (${ids}) OR file_id IN (${ids})
@@ -1008,48 +1007,8 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
         (SELECT id FROM shares WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
         sql`DELETE FROM grant_key_envelopes WHERE relationship_id IN
         (SELECT id FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
-        sql`DELETE FROM share_comment_key_envelopes WHERE object_id IN
-        (SELECT object_id FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
-        sql`DELETE FROM grant_comment_key_envelopes WHERE object_id IN
-        (SELECT object_id FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
         sql`DELETE FROM provisioning_needs WHERE grant_id IN
         (SELECT id FROM grants WHERE target_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
-        sql`DELETE FROM sharing_comment_capabilities WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
-        // Public Comment reports and staged pseudonym-update items are explicit
-        // dependents; neither relies on a database cascade.
-        deletedCommentReports(
-          sql`SELECT id FROM comments WHERE thread_id IN
-        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})`,
-          committed,
-        ),
-        deletedPseudonymItems(
-          "thread",
-          sql`SELECT id FROM thread_attributions WHERE thread_id IN
-        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})`,
-          committed,
-        ),
-        sql`DELETE FROM import_comment_meta WHERE comment_id IN
-        (SELECT id FROM comments WHERE thread_id IN
-          (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})) AND ${committed}`,
-        sql`DELETE FROM comments WHERE thread_id IN
-        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
-        sql`DELETE FROM thread_attributions WHERE thread_id IN
-        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
-        // Public audience epochs carry an Owner recovery envelope per epoch and,
-        // for public epochs, one Publication-capability link wrapper.
-        sql`DELETE FROM key_envelopes WHERE object_id IN
-        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId})
-        AND account_id = ${ownerId} AND ${committed}`,
-        sql`DELETE FROM key_envelopes WHERE object_id IN
-        (SELECT e.id FROM comment_thread_epochs e JOIN comment_threads t ON t.id = e.thread_id
-          WHERE t.file_id IN (${ids}) AND t.owner_id = ${ownerId})
-        AND account_id = ${ownerId} AND ${committed}`,
-        sql`DELETE FROM public_comment_epoch_links WHERE epoch_id IN
-        (SELECT e.id FROM comment_thread_epochs e JOIN comment_threads t ON t.id = e.thread_id
-          WHERE t.file_id IN (${ids}) AND t.owner_id = ${ownerId}) AND ${committed}`,
-        sql`DELETE FROM comment_thread_epochs WHERE thread_id IN
-        (SELECT id FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId}) AND ${committed}`,
-        sql`DELETE FROM comment_threads WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
         // Deleting a File revokes and deletes its Publication without a separate unpublish.
         ...deletedFilePublications(ownerId, ids, committed),
         retireDeletedScopeNeeds(ownerId, nodeId, committed),
