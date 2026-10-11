@@ -43,10 +43,12 @@ import {
   writeSensitive,
 } from "./lib/restore-cli-support.mjs";
 import { runWranglerJson, spawnWrangler } from "./lib/wrangler-targets.mjs";
+import { createScriptLifecycle } from "./lib/script-lifecycle.mjs";
 
 const LOCAL_TARGET_ID = "00000000-0000-4000-8000-000000000038";
 const DISPOSABLE_NAME_PREFIX = "mdwn-restore-";
 const INCOMPLETE_TABLE = "_restore_incomplete";
+const lifecycle = createScriptLifecycle({ label: "D1 restoration" });
 
 /**
  * Names and UUIDs that this tool must never target: the committed local dev,
@@ -72,6 +74,8 @@ function prepareCommand(flags) {
   const sourceUuid = flag(flags, "source-uuid");
   const out = flag(flags, "out");
   const manifestPath = flag(flags, "manifest");
+  lifecycle.artifact(out, { retain: true });
+  lifecycle.artifact(manifestPath, { retain: true });
   const expectedHead = optionalFlag(flags, "source-schema-head");
   const maxStatementBytes = Number(optionalFlag(flags, "max-statement-bytes") ?? 100_000);
   if (!Number.isInteger(maxStatementBytes) || maxStatementBytes < 1024) {
@@ -110,7 +114,12 @@ function resolveTarget(flags, manifest) {
   const targetMode = optionalFlag(flags, "target") ?? "local";
   if (targetMode !== "local" && targetMode !== "remote") throw new Error("--target must be local or remote");
   if (targetMode === "local") {
-    return createRestoreTarget({ mode: "local", databaseName: "mdwn-restore-local", databaseId: LOCAL_TARGET_ID });
+    return createRestoreTarget({
+      mode: "local",
+      databaseName: "mdwn-restore-local",
+      databaseId: LOCAL_TARGET_ID,
+      onDirectory: (directory) => lifecycle.artifact(directory, { retain: true }),
+    });
   }
   const targetName = flag(flags, "target-name");
   const targetUuid = flag(flags, "target-uuid");
@@ -124,7 +133,12 @@ function resolveTarget(flags, manifest) {
       `Refusing unknown target name ${targetName}; create the disposable database with a ${DISPOSABLE_NAME_PREFIX} prefix`,
     );
   }
-  const target = createRestoreTarget({ mode: "remote", databaseName: targetName, databaseId: targetUuid });
+  const target = createRestoreTarget({
+    mode: "remote",
+    databaseName: targetName,
+    databaseId: targetUuid,
+    onDirectory: (directory) => lifecycle.artifact(directory, { retain: true }),
+  });
   /** @type {{ uuid?: string, database_id?: string, id?: string }} */
   let resolved;
   try {
@@ -152,6 +166,7 @@ function restoreCommand(flags, verifyOnly) {
     throw new Error("Prepared SQL does not match the manifest digest; refusing to restore a modified file");
   }
   const statusPath = optionalFlag(flags, "status") ?? `${manifestPath}.status.json`;
+  for (const path of [preparedPath, manifestPath, statusPath]) lifecycle.artifact(path, { retain: true });
   const target = resolveTarget(flags, manifest);
   const runner = createWranglerRunner({ mode: target.mode, configPath: target.configPath });
 
@@ -235,8 +250,15 @@ function restoreCommand(flags, verifyOnly) {
     } catch {
       remaining = null;
     }
-    writeStatus(statusPath, statusPayload("failed", { error: message, remainingTables: remaining }));
-    console.error(`✘ Restore failed: ${message}`);
+    try {
+      writeStatus(statusPath, statusPayload("failed", { error: message, remainingTables: remaining }));
+    } catch (statusError) {
+      throw new AggregateError(
+        [error, new Error(`Cannot write failure status: ${statusPath}`, { cause: statusError })],
+        "Restore operation and failure reporting failed",
+        { cause: error },
+      );
+    }
     console.error(
       `✘ ${target.databaseName} is not a verified restore${remaining ? ` (${remaining.length} tables present, including any ${INCOMPLETE_TABLE} marker)` : ""}; status: ${statusPath}`,
     );
@@ -247,11 +269,12 @@ function restoreCommand(flags, verifyOnly) {
         `  Delete and recreate the disposable database, then restore again: npx wrangler d1 delete ${target.databaseName}`,
       );
     }
-    process.exitCode = 1;
+    throw error;
   }
 }
 
 const [, , command, ...rest] = process.argv;
+let failure = null;
 try {
   const flags = parseFlags(rest);
   if (command === "prepare") prepareCommand(flags);
@@ -271,6 +294,7 @@ try {
     process.exitCode = 2;
   }
 } catch (error) {
-  console.error(`✘ ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+  failure = error;
+} finally {
+  if (!lifecycle.finish(failure).ok) process.exitCode = 1;
 }

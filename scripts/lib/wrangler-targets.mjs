@@ -10,6 +10,7 @@
  * `deploy:*`/`db:*` script names in package.json.
  */
 import { spawnSync } from "node:child_process";
+import { PublicOperationalError } from "./script-errors.mjs";
 
 export const ENVIRONMENTS = ["local", "preview", "production"];
 
@@ -25,34 +26,43 @@ export function isEnvironment(name) {
   return ENVIRONMENTS.includes(name);
 }
 
+/** Avoid unmanaged raw diagnostic artifacts; see
+ * docs/operations/d1-scripting.md#resource-identities-and-command-output.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function protectedWranglerEnv(env = process.env) {
+  return { ...env, WRANGLER_WRITE_LOGS: "false" };
+}
+
 /**
  * Spawn the project's local wrangler. Returns the spawnSync result; stdout
- * and stderr are piped (use stdio:"inherit" via runWranglerInherit for CI UX).
+ * and stderr are piped (use runWrangler for inherited progress output).
+ * Buffer rationale: docs/operations/d1-scripting.md#node-process-pitfalls.
  * @param {string[]} args
  */
 export function spawnWrangler(args) {
   return spawnSync("npx", ["--no-install", "wrangler", ...args], {
     stdio: "pipe",
     encoding: "utf8",
-    // Digest verification pages can legitimately return tens of MB of quoted
-    // ciphertext; the 1 MB spawnSync default truncates them into invalid JSON.
+    env: protectedWranglerEnv(),
+    // Digest pages need the larger buffer; see the scripting reference above.
     maxBuffer: 64 * 1024 * 1024,
   });
 }
 
 /**
- * Run wrangler with inherited stdio (progress visible); exit non-zero on
- * failure.
+ * Run Wrangler with inherited stdio (progress visible); throw on failure so
+ * the calling command owns cleanup and exit status.
  * @param {string[]} args
  * @param {string} label
  */
 export function runWrangler(args, label) {
   const r = spawnSync("npx", ["--no-install", "wrangler", ...args], {
     stdio: "inherit",
+    env: protectedWranglerEnv(),
   });
   if (r.status !== 0) {
-    console.error(`✘ ${label} failed`);
-    process.exit(r.status ?? 1);
+    throw new PublicOperationalError(`${label} failed (exit ${r.status ?? 1})`, { cause: r.error });
   }
   return r;
 }
@@ -66,11 +76,11 @@ export function runWrangler(args, label) {
 export function runWranglerJson(args, label) {
   const result = spawnWrangler([...args, "--json"]);
   if (result.status !== 0) {
-    throw new Error(`${label} failed: ${(result.stderr || result.stdout || "").trim()}`);
+    throw new PublicOperationalError(`${label} failed (exit ${result.status ?? 1})`, { cause: result.error });
   }
   try {
     return JSON.parse(result.stdout);
   } catch {
-    throw new Error(`${label} returned non-JSON output: ${result.stdout.slice(0, 200)}`);
+    throw new PublicOperationalError(`${label} returned non-JSON output`);
   }
 }

@@ -61,6 +61,38 @@ digest page of max-size ciphertexts) truncates into invalid JSON.
 `scripts/lib/wrangler-targets.mjs` raises it to 64 MB for this reason. Prefer
 its `spawnWrangler` helper over a fresh `spawnSync` call.
 
+## Resource identities and command output
+
+- `d1 create <name> --update-config=false` leaves the repository config alone
+  and emits a binding snippet containing `database_id`. Treat only a successful
+  command with one unambiguous UUID as confirmed creation. A failed command or
+  missing/ambiguous identifier may have left a resource behind: report the
+  attempted name for operator reconciliation, but do not resolve it from a
+  later list and assume ownership.
+- `d1 delete DB --config <private-config> -y` resolves a binding with a declared
+  `database_id` to that UUID. Deleting by a freshly looked-up name can select a
+  replacement resource. Disposable cleanup therefore uses a temporary binding
+  containing the current run's confirmed UUID. Verified against the installed
+  Wrangler 4.135.0 `d1` command help and `getDatabaseByNameOrBinding`/delete
+  implementation; no live deletion was needed for this check.
+- Wrangler export writes the `--output` file itself. The calling command must
+  protect that path **before** starting Wrangler, run under a restrictive
+  umask, and protect partial output on failure; chmod after a successful export
+  alone leaves a disclosure window. `withSensitiveOutput` owns this boundary.
+- Subprocess stdout/stderr can contain SQL, payloads, URLs or credentials.
+  Shared piped runners report a command label and exit status rather than
+  embedding raw output in lifecycle messages. Offline preparation errors may
+  contain SQL too: unclassified error details are retained only in private
+  diagnostic artifacts, never interpolated into lifecycle messages. Helpers throw; commands finish
+  cleanup before setting their own exit status. Operational runners also set
+  `WRANGLER_WRITE_LOGS=false` to avoid unmanaged raw debug logs in the global
+  Wrangler config directory. This switch was verified against Wrangler 4.135.0
+  `shouldLogToDisk`; a raw diagnostic file retained by another tool must be
+  protected and lifecycle-managed like an export, not just hidden from stdout.
+
+See [operations.md](../operations.md#operational-script-lifecycle-and-sensitive-artifacts)
+for ownership, retention, failure reporting and artifact disposal.
+
 ## Export shape
 
 `wrangler d1 export` writes `PRAGMA defer_foreign_keys=TRUE;`, then each

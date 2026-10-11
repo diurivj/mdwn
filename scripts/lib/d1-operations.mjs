@@ -1,4 +1,4 @@
-import { spawnWrangler } from "./wrangler-targets.mjs";
+import { runWranglerJson } from "./wrangler-targets.mjs";
 import { QUERY_PLANS, assertQueryPlan, coveringProbeSql } from "./d1-query-plans.mjs";
 
 /** Execute read-only, source-controlled operational SQL. No request inputs.
@@ -6,9 +6,7 @@ import { QUERY_PLANS, assertQueryPlan, coveringProbeSql } from "./d1-query-plans
  * @returns {Array<{results?: Array<Record<string, unknown>>}>}
  */
 function execute(bindArgs, sql) {
-  const result = spawnWrangler(["d1", "execute", "DB", ...bindArgs, "--json", "--command", sql]);
-  if (result.status !== 0) throw new Error(`D1 operational query failed: ${result.stderr}`);
-  return JSON.parse(result.stdout);
+  return runWranglerJson(["d1", "execute", "DB", ...bindArgs, "--command", sql], "D1 operational query");
 }
 
 /** Check effective enforcement, not just REFERENCES declarations.

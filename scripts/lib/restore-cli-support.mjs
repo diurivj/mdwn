@@ -5,11 +5,21 @@
  * drift in how they parse flags, bind a target, or spawn Wrangler.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  ftruncateSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runWranglerJson, spawnWrangler } from "./wrangler-targets.mjs";
+import { PublicOperationalError } from "./script-errors.mjs";
 
 /** Prepared SQL, manifests, status files, and evidence are sensitive. */
 export const SENSITIVE_FILE_MODE = 0o600;
@@ -54,10 +64,67 @@ export function readText(path) {
   }
 }
 
+/** @param {string} path @returns {number} */
+function openSensitiveFile(path) {
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, SENSITIVE_FILE_MODE);
+  try {
+    // Protect the opened inode before truncating or writing existing contents.
+    fchmodSync(fd, SENSITIVE_FILE_MODE);
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+
 /** @param {string} path @param {string} contents @param {number} [mode] */
 export function writeSensitive(path, contents, mode = SENSITIVE_FILE_MODE) {
-  writeFileSync(path, contents, { mode });
-  chmodSync(path, mode);
+  if (mode !== SENSITIVE_FILE_MODE) throw new Error("Sensitive artifacts require mode 0600");
+  const fd = openSensitiveFile(path);
+  try {
+    ftruncateSync(fd, 0);
+    writeFileSync(fd, contents, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Protect raw output before and after a synchronous producer, even on failure.
+ * Only synchronous producers are supported: the restrictive umask is process-global.
+ * @template T
+ * @param {string} path
+ * @param {() => T} produce
+ * @returns {T}
+ */
+export function withSensitiveOutput(path, produce) {
+  const originalUmask = process.umask(0o077);
+  try {
+    closeSync(openSensitiveFile(path));
+    /** @type {{ ok: true, value: T } | { ok: false, error: unknown }} */
+    let production;
+    try {
+      production = { ok: true, value: produce() };
+    } catch (error) {
+      production = { ok: false, error };
+    }
+    try {
+      closeSync(openSensitiveFile(path));
+    } catch (error) {
+      if (!production.ok) {
+        throw new AggregateError(
+          [production.error, error],
+          "Sensitive output production and permission cleanup failed",
+          { cause: production.error },
+        );
+      }
+      throw error;
+    }
+    if (!production.ok) throw production.error;
+    return production.value;
+  } finally {
+    process.umask(originalUmask);
+  }
 }
 
 /** @param {string} text */
@@ -71,15 +138,15 @@ export function sha256(text) {
 export function runWranglerOrThrow(args, label) {
   const result = spawnWrangler(args);
   if (result.status !== 0) {
-    throw new Error(`${label} failed: ${(result.stderr || result.stdout || "").trim()}`);
+    throw new PublicOperationalError(`${label} failed (exit ${result.status ?? 1})`, { cause: result.error });
   }
   return result;
 }
 
 /**
- * A synchronous D1 runner. Both modes use the query endpoint's `--command`
- * path: a multi-statement command is one atomic transaction there, unlike the
- * `--file` import endpoint, which commits internal batches.
+ * A synchronous D1 runner using `--command` for restoration transaction boundaries.
+ * See docs/operations/d1-scripting.md#transport-which-command-path-is-atomic
+ * for the verified transport semantics.
  * @param {{ mode: "local" | "remote", configPath: string }} options
  */
 export function createWranglerRunner({ mode, configPath }) {
@@ -100,10 +167,12 @@ export function createWranglerRunner({ mode, configPath }) {
  * Create a private temporary Wrangler config that binds DB to exactly one
  * target. Local mode keeps its state inside the same temporary directory, so
  * it can never touch the repository's development state.
- * @param {{ mode: "local" | "remote", databaseName: string, databaseId: string }} options
+ * The command registers ownership before any config write can fail.
+ * @param {{ mode: "local" | "remote", databaseName: string, databaseId: string, onDirectory: (directory: string) => void }} options
  */
-export function createRestoreTarget({ mode, databaseName, databaseId }) {
+export function createRestoreTarget({ mode, databaseName, databaseId, onDirectory }) {
   const directory = mkdtempSync(join(tmpdir(), "mdwn-restore-"));
+  onDirectory(directory);
   const configPath = join(directory, "wrangler.jsonc");
   writeSensitive(
     configPath,
