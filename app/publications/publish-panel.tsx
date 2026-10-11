@@ -6,7 +6,7 @@ import { cx } from "~/ui/cx";
 import { CheckIcon, CopyIcon, ExternalLinkIcon, GlobeIcon, RefreshIcon } from "~/ui/icons";
 import { buttonClass, fieldClass, labelClass, noticeClass, textButtonClass } from "~/ui/styles";
 
-const panelClass = "mt-5 animate-fade rounded-3xl bg-paper p-5 ring-1 ring-line sm:p-7";
+const panelClass = "mt-5 animate-fade border border-line bg-cream p-5 sm:p-7";
 
 const messages: Record<Exclude<PublicationErrorCode, "suspended">, string> = {
   changed: "This File’s publication changed on another device. Refresh and try again.",
@@ -110,10 +110,12 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="eyebrow text-accent">Public page</p>
-          <h2 className="mt-1 font-serif text-[1.9rem] leading-tight">{state.isOwner ? "Publish" : "Publication"}</h2>
+          <h2 className="mt-1 font-display text-[1.9rem] font-light leading-tight tracking-tight">
+            {state.isOwner ? "Publish" : "Publication"}
+          </h2>
         </div>
         {publication && publication.state !== "deleting" && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-3 py-1 text-[12px] font-medium text-success">
+          <span className="eyebrow inline-flex items-center gap-1.5 border border-success/25 bg-success-soft px-3 py-1.5 text-success">
             <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
             Live
           </span>
@@ -148,7 +150,7 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
               Published. Anyone with the complete link can read the latest saved version of this File.
             </p>
             {completeLink ? (
-              <div className="space-y-3 rounded-2xl bg-cream/70 p-4 ring-1 ring-line">
+              <div className="space-y-3 border border-line bg-paper p-4">
                 <label className={labelClass}>
                   Public link
                   <input
@@ -196,7 +198,7 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
             )}
             <div className="grid gap-6 border-t border-line pt-6 md:grid-cols-2">
               <div>
-                <h3 className="text-sm font-semibold">Comments</h3>
+                <h3 className="eyebrow text-ink">Comments</h3>
                 <p className="mt-1 text-sm text-ink-soft">
                   Audience:{" "}
                   <span className="font-medium text-ink">
@@ -242,13 +244,13 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-semibold">Authors</h3>
+                <h3 className="eyebrow text-ink">Authors</h3>
                 {publication.authors.length ? (
-                  <ul aria-label="Authors" className="mt-2 space-y-2">
+                  <ul aria-label="Authors" className="mt-2 border-t border-line">
                     {publication.authors.map((author) => (
                       <li
                         key={author.declarationId}
-                        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-cream/70 px-3 py-2 text-sm"
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line py-3 text-sm"
                       >
                         <span className="font-medium">
                           {author.self ? "You (your Public pseudonym)" : `Collaborator ${author.ordinal}`}
@@ -308,7 +310,7 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
             </div>
             <div className="grid gap-6 border-t border-line pt-6 md:grid-cols-2">
               <div>
-                <h3 className="text-sm font-semibold">Public link</h3>
+                <h3 className="eyebrow text-ink">Public link</h3>
                 <p className="mt-1 text-sm leading-relaxed text-ink-soft">
                   Rotating creates a new link and immediately retires the current one. This File’s Public Comments and
                   history stay, and the new link shows them.
@@ -324,7 +326,7 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
                 </button>
               </div>
               <div>
-                <h3 className="text-sm font-semibold">Unpublish</h3>
+                <h3 className="eyebrow text-ink">Unpublish</h3>
                 {confirming ? (
                   <div className="mt-2 space-y-3">
                     <p role="alert" className={noticeClass("danger")}>
@@ -409,9 +411,9 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
                 </ul>
               </div>
             )}
-            <div className="flex flex-col gap-4 rounded-2xl bg-cream/70 p-4 ring-1 ring-line sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-8">
+            <div className="flex flex-col gap-4 border border-line bg-paper p-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-8">
               <fieldset className="text-sm">
-                <legend className="font-medium text-ink">Comments audience</legend>
+                <legend className="eyebrow text-ink">Comments audience</legend>
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-ink-soft">
                   <label className="flex items-center gap-2">
                     <input

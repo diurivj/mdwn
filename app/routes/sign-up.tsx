@@ -112,7 +112,7 @@ export default function SignUp() {
       </PageIntro>
       {(stage === "ready" || stage === "working" || stage === "failed") && (
         <>
-          <ul className="mt-8 space-y-4 rounded-3xl bg-paper p-6 text-sm ring-1 ring-line sm:p-8">
+          <ul className="mt-8 divide-y divide-line border-y border-line bg-paper text-sm">
             {(
               [
                 [LockIcon, "Your recovery phrase", "24 words that can restore your Files. mdwn never receives them."],
@@ -120,8 +120,8 @@ export default function SignUp() {
                 [KeyIcon, "Your passkey", "Your browser creates it last. There is no password, ever."],
               ] as const
             ).map(([Icon, title, body]) => (
-              <li key={title} className="flex gap-4">
-                <span className="grid size-10 shrink-0 place-items-center rounded-full bg-cream text-accent ring-1 ring-line">
+              <li key={title} className="flex gap-4 py-5">
+                <span className="grid size-10 shrink-0 place-items-center border border-line bg-cream text-ink">
                   <Icon />
                 </span>
                 <span>
@@ -158,11 +158,11 @@ export default function SignUp() {
       )}
       {stage === "phrase" && secrets && (
         <section className="mt-10">
-          <h2 className="font-serif text-3xl leading-tight">Save your recovery phrase</h2>
+          <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Save your recovery phrase</h2>
           <p className="mt-2 text-ink-soft">
             Write these 24 words down and keep them somewhere safe. They cannot be recovered for you.
           </p>
-          <ol className="mt-6 grid grid-cols-2 gap-x-6 rounded-3xl bg-paper px-6 py-4 ring-1 ring-line sm:grid-cols-3 md:grid-cols-4">
+          <ol className="mt-6 grid grid-cols-2 gap-x-6 border border-line bg-cream px-6 py-4 sm:grid-cols-3 md:grid-cols-4">
             {secrets.phrase.split(" ").map((word, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: the phrase is a fixed, never-reordered list, and duplicate words are possible.
               <li key={index} className="flex items-baseline gap-2 border-b border-line/70 py-2 font-mono text-[15px]">
@@ -170,7 +170,7 @@ export default function SignUp() {
               </li>
             ))}
           </ol>
-          <form onSubmit={checkWords} className="mt-8 rounded-3xl bg-cream/60 p-6 ring-1 ring-line sm:p-8">
+          <form onSubmit={checkWords} className="mt-8 border border-line bg-sand p-6 sm:p-8">
             <p className="font-medium">Verify your copy by entering these words:</p>
             <div className="mt-4 grid gap-4 sm:grid-cols-3">
               {indices.map((index, position) => (
@@ -205,18 +205,18 @@ export default function SignUp() {
       )}
       {stage === "codes" && secrets && (
         <section className="mt-10">
-          <h2 className="font-serif text-3xl leading-tight">Save your recovery codes</h2>
+          <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Save your recovery codes</h2>
           <p className="mt-2 text-ink-soft">
             These ten one-time codes are shown only now. Store them separately from your recovery phrase and passkey.
             Add a second passkey in Account security when you finish.
           </p>
           <p className="mt-4 text-sm text-ink-soft">
             Save this non-secret recovery identifier alongside your codes:{" "}
-            <span className="break-all rounded-md bg-cream px-1.5 py-0.5 font-mono text-ink">
+            <span className="break-all bg-cream px-1.5 py-0.5 font-mono text-ink">
               {prepared?.transcriptBase.accountId}
             </span>
           </p>
-          <ol className="mt-6 grid gap-x-6 rounded-3xl bg-paper px-6 py-4 ring-1 ring-line sm:grid-cols-2">
+          <ol className="mt-6 grid gap-x-6 border border-line bg-cream px-6 py-4 sm:grid-cols-2">
             {secrets.recoveryCodes.map((code, index) => (
               <li key={code} className="flex items-baseline gap-2 border-b border-line/70 py-2 font-mono text-sm">
                 <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted">{index + 1}.</span>{" "}

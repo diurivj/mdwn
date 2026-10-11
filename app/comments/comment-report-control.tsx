@@ -54,12 +54,9 @@ export function CommentReportControl({ commentId }: { commentId: string }) {
   }
 
   return (
-    <form
-      className="mt-2 w-full space-y-3 rounded-2xl bg-cream/70 p-4 ring-1 ring-line"
-      onSubmit={(event) => void submit(event)}
-    >
+    <form className="mt-2 w-full space-y-3 border border-line bg-cream p-4" onSubmit={(event) => void submit(event)}>
       <fieldset>
-        <legend className="font-medium text-ink">Report this comment</legend>
+        <legend className="eyebrow text-ink">Report this comment</legend>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
           {REPORT_CATEGORIES.map((value) => (
             <label key={value} className="flex items-center gap-2 text-ink-soft">

@@ -70,7 +70,7 @@ export function PublicComments({
     if (!view.threadId) return null;
     return (
       <section aria-label="Public comments" className="mt-16 border-t border-line pt-10">
-        <h2 className="font-serif text-3xl leading-tight">Comments</h2>
+        <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Comments</h2>
         <p className="mt-2 text-ink-soft">Sign in to see or add comments if you have access to this file.</p>
       </section>
     );
@@ -114,13 +114,13 @@ export function PublicComments({
   const tooLong = commentCharacters(draft) > MAX_COMMENT_CHARS;
   return (
     <section aria-label="Public comments" className="mt-16 border-t border-line pt-10">
-      <h2 className="font-serif text-3xl leading-tight">Comments</h2>
+      <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Comments</h2>
       {message && (
         <p role="alert" className={cx(noticeClass("danger"), "mt-4")}>
           {message}
         </p>
       )}
-      <ol aria-label="Public comments" className="mt-6 space-y-3">
+      <ol aria-label="Public comments" className="mt-6 border-t border-line">
         {thread.comments.map((comment) => (
           <CommentItem
             key={comment.id}
@@ -169,9 +169,7 @@ export function PublicComments({
           />
         ))}
         {!thread.comments.length && (
-          <li className="rounded-2xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
-            No comments yet.
-          </li>
+          <li className="border-b border-line px-4 py-6 text-center text-sm text-muted">No comments yet.</li>
         )}
       </ol>
       {thread.nextCursor !== null && (
@@ -209,7 +207,7 @@ export function PublicComments({
         </button>
       )}
       {thread.postingState === "signed-out" && (
-        <p className="mt-6 rounded-2xl bg-cream/70 px-4 py-3 text-sm text-ink-soft ring-1 ring-line">
+        <p className="mt-6 border border-line bg-cream px-4 py-3 text-sm text-ink-soft">
           <a href="/sign-in" className={linkClass}>
             Sign in
           </a>{" "}
@@ -217,13 +215,13 @@ export function PublicComments({
         </p>
       )}
       {thread.postingState === "unprovisioned" && (
-        <p className="mt-6 rounded-2xl bg-cream/70 px-4 py-3 text-sm text-ink-soft ring-1 ring-line">
+        <p className="mt-6 border border-line bg-cream px-4 py-3 text-sm text-ink-soft">
           This browser isn’t set up to post comments. Finish device setup in your Account settings.
         </p>
       )}
       {thread.postingState === "ready" && (
         <form
-          className="mt-6 rounded-3xl bg-paper p-5 ring-1 ring-line"
+          className="mt-6 border-y border-line bg-paper py-5"
           onSubmit={(event) => {
             event.preventDefault();
             if (!draft || tooLong) return;
@@ -246,7 +244,7 @@ export function PublicComments({
             />
           </label>
           <div className="mt-2 flex items-center justify-between gap-2">
-            <p role="status" className={cx("text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
+            <p role="status" className={cx("font-mono text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
               {commentCharacters(draft)} / 2,000
             </p>
             <button type="submit" disabled={busy || !draft || tooLong} className={buttonClass("primary", "sm")}>

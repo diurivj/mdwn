@@ -105,7 +105,7 @@ export default function SignIn() {
       <PageIntro eyebrow="Welcome back" title="Sign in">
         <p>Use a passkey to sign in to your Account.</p>
       </PageIntro>
-      <div className="mt-8 rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
+      <div className="mt-8 border border-line bg-cream p-6 sm:p-8">
         <fetcher.Form method="post">
           <button
             className={cx(buttonClass("primary", "lg"), "w-full")}

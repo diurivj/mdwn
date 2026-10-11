@@ -31,7 +31,8 @@ export function HydrateFallback() {
   );
 }
 
-const tileClass = "group flex flex-col rounded-3xl p-6 transition";
+const tileClass =
+  "group flex min-w-0 flex-col border-b border-line p-6 transition-colors last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0";
 
 export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
   const { state } = loaderData;
@@ -50,23 +51,25 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
                 : "Setting up your Files securely…"}
             </p>
           )}
-          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <div className="mt-8 grid border-y border-line sm:grid-cols-2">
             {loaderData.rootId && (
               <Link to={`/d/${loaderData.rootId}`} className={cx(tileClass, "bg-ink text-paper hover:bg-ink-soft")}>
-                <FolderIcon className="size-6 text-petal" />
-                <span className="mt-6 font-serif text-3xl leading-tight">Open Files</span>
+                <FolderIcon className="size-6 text-paper" />
+                <span className="mt-6 font-display text-3xl font-light leading-tight tracking-tight">Open Files</span>
                 <span className="mt-1 text-sm text-paper/70">Write, organize and publish.</span>
-                <ArrowRightIcon className="mt-6 size-5 transition group-hover:translate-x-1" />
+                <ArrowRightIcon className="mt-6 size-5" />
               </Link>
             )}
-            <Link to="/enroll-device/approve" className={cx(tileClass, "bg-paper ring-1 ring-line hover:ring-ink/20")}>
+            <Link to="/enroll-device/approve" className={cx(tileClass, "bg-paper hover:bg-cream")}>
               <QrIcon className="size-6 text-accent" />
-              <span className="mt-6 font-serif text-3xl leading-tight">Approve another device</span>
+              <span className="mt-6 font-display text-3xl font-light leading-tight tracking-tight">
+                Approve another device
+              </span>
               <span className="mt-1 text-sm text-ink-soft">Scan the QR code shown on your new browser.</span>
-              <ArrowRightIcon className="mt-6 size-5 text-muted transition group-hover:translate-x-1" />
+              <ArrowRightIcon className="mt-6 size-5 text-muted" />
             </Link>
           </div>
-          <div className="mt-6 rounded-3xl bg-cream/60 p-6 text-sm ring-1 ring-line">
+          <div className="mt-6 border-y border-line bg-cream p-6 text-sm">
             <SharedProvisioning />
           </div>
         </>
@@ -89,14 +92,16 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
                 : "This Session has no active Encryption device. A passkey alone cannot open private material."}
             </p>
           </PageIntro>
-          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <div className="mt-8 grid border-y border-line sm:grid-cols-2">
             <Link to="/enroll-device" className={cx(tileClass, "bg-ink text-paper hover:bg-ink-soft")}>
-              <QrIcon className="size-6 text-petal" />
-              <span className="mt-6 font-serif text-3xl leading-tight">Enroll this device</span>
+              <QrIcon className="size-6 text-paper" />
+              <span className="mt-6 font-display text-3xl font-light leading-tight tracking-tight">
+                Enroll this device
+              </span>
               <span className="mt-1 text-sm text-paper/70">Approve it from a device you already use.</span>
-              <ArrowRightIcon className="mt-6 size-5 transition group-hover:translate-x-1" />
+              <ArrowRightIcon className="mt-6 size-5" />
             </Link>
-            <div className={cx(tileClass, "bg-paper ring-1 ring-line")}>
+            <div className={cx(tileClass, "bg-paper")}>
               <KeyIcon className="size-6 text-accent" />
               <p className="mt-6 text-sm leading-relaxed text-ink-soft">
                 Use an existing active device for enrollment, or{" "}

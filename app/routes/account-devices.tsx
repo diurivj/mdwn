@@ -81,28 +81,26 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
       </PageIntro>
       {inventory ? (
         <>
-          <ul className="mt-10 grid gap-4 md:grid-cols-2">
+          <ul className="mt-10 border-t border-line">
             {inventory.devices.map((device) => (
               <li
                 className={cx(
-                  "flex flex-col rounded-3xl p-6 ring-1",
-                  device.state === "active" ? "bg-paper ring-line" : "bg-cream/50 text-ink-soft ring-line/70",
+                  "flex min-w-0 flex-col border-b border-line p-6",
+                  device.state === "active" ? "bg-paper" : "bg-cream text-ink-soft",
                 )}
                 key={device.id}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <span className="grid size-11 place-items-center rounded-full bg-cream text-accent ring-1 ring-line">
+                  <span className="grid size-11 shrink-0 place-items-center border border-line bg-cream text-ink">
                     <DevicesIcon className="size-5" />
                   </span>
                   <span className="flex flex-wrap justify-end gap-1.5">
                     {device.id === inventory.currentDeviceId && (
-                      <span className="rounded-full bg-ink px-2.5 py-1 text-[11px] font-medium text-paper">
-                        This browser
-                      </span>
+                      <span className="eyebrow bg-ink px-2.5 py-1 text-paper">This browser</span>
                     )}
                     <span
                       className={cx(
-                        "rounded-full px-2.5 py-1 text-[11px] font-medium",
+                        "eyebrow px-2.5 py-1",
                         device.state === "active" ? "bg-success-soft text-success" : "bg-sand text-muted",
                       )}
                     >
@@ -110,8 +108,8 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
                     </span>
                   </span>
                 </div>
-                <p className="mt-5 font-serif text-2xl leading-tight">{device.label}</p>
-                <dl className="mt-3 space-y-1 text-sm text-ink-soft">
+                <p className="mt-5 font-display text-2xl font-light leading-tight tracking-tight">{device.label}</p>
+                <dl className="mt-3 space-y-1 text-sm text-ink-soft [&_dt]:font-mono [&_dt]:text-[12px] [&_dt]:uppercase [&_dt]:tracking-[0.12em]">
                   <div className="flex gap-2">
                     <dt className="text-muted">Added</dt>
                     <dd>{new Date(device.createdAt).toLocaleString()}</dd>
@@ -143,10 +141,12 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
           </ul>
           {confirming && (
             <section
-              className="mt-6 animate-fade rounded-3xl bg-danger-soft/50 p-6 ring-1 ring-danger/25 sm:p-8"
+              className="mt-6 animate-fade border border-danger/25 bg-danger-soft/50 p-6 sm:p-8"
               aria-label="Confirm device removal"
             >
-              <h2 className="font-serif text-3xl leading-tight">Remove {confirming.label}?</h2>
+              <h2 className="font-display text-3xl font-light leading-tight tracking-tight">
+                Remove {confirming.label}?
+              </h2>
               <p className="mt-2 text-sm text-ink-soft">
                 This stops future private access for this device, but cannot recall anything it already cached.
               </p>

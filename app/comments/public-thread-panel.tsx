@@ -199,7 +199,7 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
           {message}
         </p>
       )}
-      <ol aria-label="Public comments" className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+      <ol aria-label="Public comments" className="mt-3 min-h-0 flex-1 overflow-y-auto border-t border-line pr-1">
         {thread.comments.map((comment) => (
           <CommentItem
             key={comment.id}
@@ -249,9 +249,7 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
           />
         ))}
         {!thread.comments.length && (
-          <li className="rounded-2xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
-            No public comments yet.
-          </li>
+          <li className="border-b border-line px-4 py-6 text-center text-sm text-muted">No public comments yet.</li>
         )}
       </ol>
       {thread.nextCursor !== null && (
@@ -288,7 +286,7 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
           />
         </label>
         <div className="mt-2 flex items-center justify-between gap-2">
-          <p role="status" className={cx("text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
+          <p role="status" className={cx("font-mono text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
             {commentCharacters(draft)} / 2,000
           </p>
           <button type="submit" disabled={busy || !draft || tooLong} className={buttonClass("primary", "sm")}>

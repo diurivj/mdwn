@@ -168,7 +168,7 @@ export default function EnrollDevice({ loaderData }: Route.ComponentProps) {
           <PageIntro eyebrow="New device" title="Enroll this device">
             <p>Confirm with your passkey, then scan the QR code using an existing active device.</p>
           </PageIntro>
-          <div className="mt-8 rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
+          <div className="mt-8 border border-line bg-cream p-6 sm:p-8">
             <label htmlFor="enrollment-label" className={labelClass}>
               Device label (optional)
             </label>
@@ -205,12 +205,12 @@ export default function EnrollDevice({ loaderData }: Route.ComponentProps) {
               on your existing device and scan this code.
             </p>
           </PageIntro>
-          <div className="mt-8 rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
+          <div className="mt-8 border border-line bg-cream p-6 sm:p-8">
             <canvas
               ref={canvas}
               role="img"
               aria-label="Device pairing QR code"
-              className="mx-auto block aspect-square w-full max-w-xs rounded-2xl bg-white p-2 ring-1 ring-line"
+              className="mx-auto block aspect-square w-full max-w-xs border border-line bg-white p-2"
             />
             <label htmlFor="pairing-link" className={cx(labelClass, "mt-6")}>
               Pairing link

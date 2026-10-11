@@ -34,12 +34,12 @@ function RightPaneToggle({
   onShowComments: () => void;
 }) {
   return (
-    <div className="hidden items-center rounded-full bg-cream p-0.5 ring-1 ring-line lg:flex">
+    <div className="hidden max-w-full flex-wrap items-center border border-line bg-cream lg:flex">
       <button
         type="button"
         aria-pressed={view !== "comments"}
         onClick={onShowPreview}
-        className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium text-ink-soft transition aria-pressed:bg-paper aria-pressed:text-ink aria-pressed:shadow-sm"
+        className="eyebrow inline-flex items-center gap-1.5 px-3 py-2 text-ink-soft transition-colors hover:bg-paper aria-pressed:bg-ink aria-pressed:text-paper"
       >
         <EyeIcon className="size-3.5" />
         Preview
@@ -48,7 +48,7 @@ function RightPaneToggle({
         type="button"
         aria-pressed={view === "comments"}
         onClick={onShowComments}
-        className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium text-ink-soft transition aria-pressed:bg-paper aria-pressed:text-ink aria-pressed:shadow-sm"
+        className="eyebrow inline-flex items-center gap-1.5 px-3 py-2 text-ink-soft transition-colors hover:bg-paper aria-pressed:bg-ink aria-pressed:text-paper"
       >
         <CommentIcon className="size-3.5" />
         Comments
@@ -133,7 +133,7 @@ export function FileEditor({
           role="status"
           aria-label="File save status"
           className={cx(
-            "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-medium transition-colors",
+            "eyebrow inline-flex items-center gap-2 border border-current/20 px-3 py-1.5 transition-colors",
             statusTone[status],
           )}
         >
@@ -144,17 +144,14 @@ export function FileEditor({
           {status}
         </p>
         {!canEdit && (
-          <p
-            role="status"
-            className="rounded-full bg-cream px-3 py-1 text-[12px] font-medium text-ink-soft ring-1 ring-line"
-          >
+          <p role="status" className="eyebrow border border-line bg-cream px-3 py-1.5 text-ink-soft">
             Read-only — you can comment
           </p>
         )}
         {canEdit && !lease.editable && (
           <div
             role="status"
-            className="inline-flex flex-wrap items-center gap-x-3 gap-y-1 rounded-full bg-cream px-3 py-1 text-[12px] text-ink-soft ring-1 ring-line"
+            className="inline-flex flex-wrap items-center gap-x-3 gap-y-1 border border-line bg-cream px-3 py-1.5 font-mono text-[12px] text-ink-soft"
           >
             {lease.state === "unavailable"
               ? "Editing unavailable. This browser could not coordinate File editing."
@@ -226,16 +223,16 @@ export function FileEditor({
         </section>
       )}
       <div className="mt-4 grid gap-4 lg:grid-cols-2 lg:gap-5">
-        <section className={view === "edit" ? "" : "hidden lg:block"} aria-label="Editor">
+        <section className={view === "edit" ? "min-w-0" : "hidden min-w-0 lg:block"} aria-label="Editor">
           <div
             className={cx(
-              "flex flex-col overflow-hidden rounded-3xl ring-1 ring-line transition-shadow focus-within:ring-ink/25 focus-within:shadow-[0_18px_40px_-28px_rgb(29_24_21/0.4)]",
-              editingBlocked ? "bg-cream/70" : "bg-white/75",
+              "flex flex-col overflow-hidden border border-line transition-colors focus-within:border-ink focus-within:ring-1 focus-within:ring-ink",
+              editingBlocked ? "bg-sand" : "bg-cream",
             )}
           >
-            <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line px-5">
+            <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line px-5 py-2">
               <h2 className="eyebrow text-muted">Markdown source</h2>
-              <span className="text-[11px] tabular-nums text-muted">
+              <span className="font-mono text-[12px] tabular-nums text-muted">
                 {previewSource.length ? `${words.toLocaleString("en-US")} words` : "Empty"}
               </span>
             </div>
@@ -297,15 +294,15 @@ export function FileEditor({
           )}
         </section>
         <section
-          className={view === "comments" ? "hidden" : view === "preview" ? "" : "hidden lg:block"}
+          className={view === "comments" ? "hidden" : view === "preview" ? "min-w-0" : "hidden min-w-0 lg:block"}
           aria-label="Preview"
         >
-          <div className="flex flex-col overflow-hidden rounded-3xl bg-paper ring-1 ring-line">
-            <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line px-5">
+          <div className="flex flex-col overflow-hidden border border-line bg-cream">
+            <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line px-5 py-2">
               <h2 className="eyebrow text-muted">Preview</h2>
               <RightPaneToggle view={view} onShowPreview={onShowPreview} onShowComments={onShowComments} />
             </div>
-            <div className="prose-editorial h-[62vh] min-h-[22rem] overflow-y-auto px-6 py-5 sm:px-8 sm:py-7">
+            <div className="prose-markdown h-[62vh] min-h-[22rem] overflow-y-auto px-6 py-5 sm:px-8 sm:py-7">
               {previewSource.trim() ? (
                 <Preview source={previewSource} />
               ) : (
@@ -315,9 +312,9 @@ export function FileEditor({
           </div>
         </section>
         {view === "comments" && (
-          <section aria-label="Comment inspector">
-            <div className="flex flex-col overflow-hidden rounded-3xl bg-paper ring-1 ring-line">
-              <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line px-5">
+          <section aria-label="Comment inspector" className="min-w-0">
+            <div className="flex flex-col overflow-hidden border border-line bg-cream">
+              <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line px-5 py-2">
                 <h2 className="eyebrow text-muted">Comments</h2>
                 <RightPaneToggle view={view} onShowPreview={onShowPreview} onShowComments={onShowComments} />
               </div>
@@ -332,7 +329,7 @@ export function FileEditor({
         <div role="dialog" aria-modal="true" aria-label="Transfer editing" className="modal-backdrop z-[70]">
           <div className="modal-panel max-w-md">
             <p className="eyebrow text-accent">Editing</p>
-            <p className="mt-2 font-serif text-2xl leading-snug">
+            <p className="mt-2 font-display text-2xl font-light leading-snug tracking-tight">
               Another tab requested editing. Save your work or explicitly discard it before transferring.
             </p>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
@@ -353,7 +350,7 @@ export function FileEditor({
         <div role="dialog" aria-modal="true" aria-label="Confirm overwrite" className="modal-backdrop z-[70]">
           <div className="modal-panel max-w-md">
             <p className="eyebrow text-accent">Overwrite</p>
-            <p className="mt-2 font-serif text-2xl leading-snug">
+            <p className="mt-2 font-display text-2xl font-light leading-snug tracking-tight">
               Replace the current File with your local draft? Nothing will be merged.
             </p>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
@@ -377,7 +374,7 @@ export function FileEditor({
           <div role="dialog" aria-modal="true" aria-label="Unsaved File" className="modal-backdrop z-[70]">
             <div className="modal-panel max-w-md">
               <p className="eyebrow text-accent">Unsaved File</p>
-              <p className="mt-2 font-serif text-2xl leading-snug">
+              <p className="mt-2 font-display text-2xl font-light leading-snug tracking-tight">
                 Your draft couldn't be saved. Keep editing, or explicitly discard it before leaving.
               </p>
               <div className="mt-6 flex flex-wrap justify-end gap-2">

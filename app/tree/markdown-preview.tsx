@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 
 /**
  * Browser-only rendering. Never parse raw HTML; sanitize plugin output as defense in depth.
- * Typography comes from the surrounding `.prose-editorial` container (app/app.css).
+ * Typography comes from the surrounding `.prose-markdown` container (app/app.css).
  */
 export function MarkdownPreview({ source }: { source: string }) {
   return (

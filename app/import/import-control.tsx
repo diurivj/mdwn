@@ -244,7 +244,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
   const dialogOpen = phase.status !== "idle";
   return (
     <>
-      <div className="flex flex-col gap-3 rounded-3xl bg-cream/60 p-5 ring-1 ring-line" data-testid="import-control">
+      <div className="flex min-w-0 flex-col gap-3 bg-sand p-5" data-testid="import-control">
         <span className="eyebrow inline-flex items-center gap-2 text-muted">
           <UploadIcon className="size-3.5 text-accent" />
           Import
@@ -305,7 +305,9 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
           <div className="modal-panel max-w-2xl">
             {phase.status === "choosing" && (
               <>
-                <h2 className="font-serif text-3xl leading-tight">Choose an Import folder</h2>
+                <h2 className="font-display text-3xl font-light leading-tight tracking-tight">
+                  Choose an Import folder
+                </h2>
                 <p className={cx(noticeClass("warning"), "mt-3")} role="alert">
                   {phase.message}
                 </p>
@@ -340,7 +342,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "error" && (
               <>
-                <h2 className="font-serif text-3xl leading-tight">Import review</h2>
+                <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Import review</h2>
                 <p className={cx(noticeClass("danger"), "mt-3")} role="alert" data-testid="import-error">
                   {phase.message}
                 </p>
@@ -363,7 +365,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             {phase.status === "review" && review && (
               <>
                 <p className="eyebrow text-accent">Nothing uploads until you confirm</p>
-                <h2 className="mt-2 font-serif text-3xl leading-tight">Import review</h2>
+                <h2 className="mt-2 font-display text-3xl font-light leading-tight tracking-tight">Import review</h2>
                 <ReviewSummary review={review} />
                 <CollisionChoices
                   review={review}
@@ -396,7 +398,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "uploading" && (
               <>
-                <h2 className="font-serif text-3xl leading-tight">Importing</h2>
+                <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Importing</h2>
                 <p className="mt-3 text-sm text-ink-soft" role="status" data-testid="import-uploading">
                   Uploading encrypted chunks {phase.progress.chunksSent} of {phase.progress.chunksTotal}… Nothing is
                   visible until the final commit.
@@ -417,7 +419,9 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "unconfirmed" && (
               <>
-                <h2 className="font-serif text-3xl leading-tight">Import outcome unconfirmed</h2>
+                <h2 className="font-display text-3xl font-light leading-tight tracking-tight">
+                  Import outcome unconfirmed
+                </h2>
                 <p className={cx(noticeClass("warning"), "mt-3")} role="alert" data-testid="import-unconfirmed">
                   {IMPORT_UNCONFIRMED_MESSAGE}
                 </p>
@@ -430,7 +434,7 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "done" && (
               <>
-                <h2 className="font-serif text-3xl leading-tight">Import complete</h2>
+                <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Import complete</h2>
                 <p className={cx(noticeClass("success"), "mt-3")} role="status" data-testid="import-complete">
                   Added {phase.created} {phase.created === 1 ? "item" : "items"}
                   {phase.comments > 0
@@ -458,7 +462,7 @@ function ReviewSummary({ review }: { review: ImportReview }) {
   return (
     <>
       <dl
-        className="mt-5 grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 rounded-2xl bg-cream/70 p-4 text-sm ring-1 ring-line [&>dt]:text-muted [&>dd]:font-medium [&>dd]:text-ink"
+        className="mt-5 grid grid-cols-2 gap-x-6 gap-y-2 border-y border-line bg-sand p-4 text-sm sm:grid-cols-[auto_minmax(0,1fr)] [&>dt]:font-mono [&>dt]:text-[12px] [&>dt]:uppercase [&>dt]:tracking-[0.12em] [&>dt]:text-muted [&>dd]:font-medium [&>dd]:text-ink"
         data-testid="import-summary"
       >
         <dt>Source items</dt>
@@ -499,7 +503,7 @@ function ReviewSummary({ review }: { review: ImportReview }) {
       </p>
       {review.generatedNames.length > 0 && (
         <section className="mt-4" aria-label="Generated Keep-both names" data-testid="import-generated-names">
-          <h3 className="text-sm font-semibold">Keep-both names</h3>
+          <h3 className="eyebrow text-ink">Keep-both names</h3>
           <ul className="mt-1 list-inside list-disc text-sm text-ink-soft marker:text-accent">
             {review.generatedNames.map((name) => (
               <li key={name}>{name}</li>
@@ -529,12 +533,12 @@ function CollisionChoices({
   if (!collisions.length) return null;
   return (
     <section className="mt-5" aria-label="Name conflicts">
-      <h3 className="text-sm font-semibold">Name conflicts</h3>
-      <ul className="mt-2 space-y-3">
+      <h3 className="eyebrow text-ink">Name conflicts</h3>
+      <ul className="mt-2 border-t border-line">
         {collisions.map((node) => (
           <li
             key={node.sourcePath}
-            className="rounded-2xl bg-white/60 p-4 text-sm text-ink-soft ring-1 ring-line"
+            className="border-b border-line py-4 text-sm text-ink-soft"
             data-testid={`import-collision-${node.sourcePath}`}
           >
             <p>

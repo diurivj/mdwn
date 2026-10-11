@@ -13,14 +13,31 @@ test("opens Files from site navigation, retains account navigation and fits a na
   await mainNav.getByRole("link", { name: "Account", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Account security", exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Account", exact: true })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  expect(await page.getByRole("heading", { level: 1 }).evaluate((node) => getComputedStyle(node).fontFamily)).toContain(
+    "Inter Tight Variable",
+  );
+  await page.screenshot({ path: testInfo.outputPath("account-desktop.png"), fullPage: true, animations: "disabled" });
   await mainNav.getByRole("link", { name: "Files", exact: true }).click();
   await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md" }).click();
-  await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toBeEditable();
+  const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
+  await expect(source).toBeEditable();
   await page.evaluate(() => document.fonts.ready);
+  expect(await source.evaluate((node) => getComputedStyle(node).fontFamily)).toContain("Courier Prime");
+  await expect(source).toHaveCSS("border-radius", "0px");
   await page.screenshot({ path: testInfo.outputPath("workspace-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 375, height: 812 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("workspace-mobile.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("button", { name: "Open menu", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Menu", exact: true })
+    .getByRole("link", { name: "Account", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: "Account security", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Menu", exact: true })).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("account-mobile.png"), fullPage: true, animations: "disabled" });
 });
 
 test("fetches the File while the verified parent listing is still in flight", async ({ page, workspace }) => {
@@ -46,6 +63,13 @@ test("fetches the File while the verified parent listing is still in flight", as
     await expect.poll(() => listingRequested && fileRequested).toBe(true);
     // Fetching ciphertext early must not expose an unverified File.
     await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveCount(0);
+    const placeholder = page.getByRole("main").locator(".skeleton").first();
+    await expect(placeholder).toBeVisible();
+    const colors = await placeholder.evaluate((node) => ({
+      fill: getComputedStyle(node).backgroundColor,
+      surface: getComputedStyle(node.parentElement!).backgroundColor,
+    }));
+    expect(colors.fill).not.toBe(colors.surface);
     release();
     await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
     await expect(page.getByRole("main")).toHaveCount(1);

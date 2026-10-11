@@ -79,7 +79,7 @@ export function ExportControl({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-3xl bg-cream/60 p-5 ring-1 ring-line">
+    <div className="flex min-w-0 flex-col gap-3 bg-sand p-5">
       <span className="eyebrow inline-flex items-center gap-2 text-muted">
         <DownloadIcon className="size-3.5 text-accent" />
         Export

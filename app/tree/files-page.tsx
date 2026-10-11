@@ -499,10 +499,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         <div key={entry.nodeId}>
           <div
             className={cx(
-              "flex items-center rounded-xl pr-2 text-sm transition-colors",
+              "flex items-center border-l-2 pr-2 text-sm transition-colors",
               current
-                ? "bg-paper text-ink shadow-[inset_2px_0_0_var(--color-accent)] ring-1 ring-line"
-                : "text-ink-soft hover:bg-paper/70 hover:text-ink",
+                ? "border-ink bg-paper text-ink"
+                : "border-transparent text-ink-soft hover:bg-paper hover:text-ink",
               pending && "bg-paper/70 text-ink",
             )}
             style={{ paddingLeft: `${depth * 14 + 2}px` }}
@@ -513,7 +513,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                 aria-label={`${open ? "Collapse" : "Expand"} ${entry.name}`}
                 aria-expanded={open}
                 onClick={() => void toggle(entry)}
-                className="grid size-7 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-ink/5 hover:text-ink"
+                className="grid size-7 shrink-0 place-items-center text-muted transition-colors hover:bg-ink/5 hover:text-ink"
               >
                 <ChevronRightIcon className={cx("size-3.5 transition-transform duration-200", open && "rotate-90")} />
               </button>
@@ -560,7 +560,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   if (status === "provisioning")
     return (
       <EmptyState icon={KeyIcon}>
-        <p role="status" className="font-serif text-3xl leading-tight text-ink text-balance sm:text-4xl">
+        <p
+          role="status"
+          className="font-display text-3xl font-light leading-tight tracking-tight text-ink text-balance sm:text-4xl"
+        >
           Shared content is being securely provisioned
         </p>
         <p className="mt-3">
@@ -618,7 +621,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       <aside
         className={cx(
           drawer ? "flex" : "hidden",
-          "fixed inset-y-0 left-0 z-50 w-[19rem] max-w-[86vw] flex-col overflow-y-auto overscroll-contain border-r border-line bg-cream shadow-2xl transition-[translate] duration-300 ease-out max-lg:starting:-translate-x-full lg:sticky lg:top-16 lg:z-auto lg:flex lg:h-[calc(100dvh-4rem)] lg:w-auto lg:max-w-none lg:bg-cream/60 lg:shadow-none",
+          "fixed inset-y-0 left-0 z-50 w-[19rem] max-w-[86vw] flex-col overflow-y-auto overscroll-contain border-r border-line bg-sand transition-[translate] duration-300 ease-out max-lg:starting:-translate-x-full lg:sticky lg:top-16 lg:z-auto lg:flex lg:h-[calc(100dvh-4rem)] lg:w-auto lg:max-w-none",
         )}
         aria-label="Files tree"
       >
@@ -634,13 +637,13 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`}
             onClick={() => setDrawer(false)}
             className={cx(
-              "mb-3 block rounded-xl px-2 font-serif text-[1.7rem] leading-tight transition hover:text-accent",
+              "mb-4 block border-b border-line px-2 pb-4 font-display text-[1.7rem] font-light leading-tight tracking-tight transition-colors hover:text-ink",
               nodeId === snapshot.access.rootId ? "text-ink" : "text-ink-soft",
             )}
           >
             {snapshot.access.rootKind === "file" ? "Shared File" : "Files"}
           </Link>
-          <nav aria-label="Files" className="space-y-0.5">
+          <nav aria-label="Files" className="space-y-px">
             {directoryItems(snapshot.access.rootId)}
           </nav>
           {snapshot.access.rootKind !== "file" && snapshot.listings[snapshot.access.rootId]?.entries.length === 0 && (
@@ -705,7 +708,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                   <Link
                     to={`/${index === snapshot.crumbs.length - 1 && kind === "file" ? "f" : "d"}/${crumb.id}`}
                     className={cx(
-                      "truncate rounded-md px-1.5 py-0.5 transition hover:bg-ink/5 hover:text-ink",
+                      "truncate px-1.5 py-0.5 transition-colors hover:bg-ink/5 hover:text-ink",
                       index === snapshot.crumbs.length - 1 && "text-ink-soft",
                     )}
                   >
@@ -726,7 +729,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         <div className="mt-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
           <div className="min-w-0 max-w-full">
             <p className="eyebrow text-muted">{kind === "file" ? "Markdown File" : "Folder"}</p>
-            <h1 className="mt-2 break-words font-serif text-4xl leading-[1.05] tracking-tight sm:text-[2.75rem]">
+            <h1 className="mt-2 break-words font-display text-4xl font-light leading-[1.05] tracking-tight sm:text-[2.75rem]">
               {selected}
             </h1>
           </div>
@@ -829,7 +832,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         )}
         {kind === "file" ? (
           <>
-            <div className="mt-6 inline-flex rounded-full bg-cream p-1 ring-1 ring-line lg:hidden">
+            <div className="mt-6 inline-flex max-w-full flex-wrap border border-line bg-sand lg:hidden">
               {(
                 [
                   ["edit", "Edit", () => setView("edit")],
@@ -842,7 +845,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                   type="button"
                   onClick={show}
                   aria-pressed={view === value}
-                  className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink-soft transition aria-pressed:bg-paper aria-pressed:text-ink aria-pressed:shadow-sm"
+                  className="eyebrow px-4 py-2.5 text-ink-soft transition-colors hover:bg-paper aria-pressed:bg-ink aria-pressed:text-paper"
                 >
                   {label}
                 </button>
@@ -882,7 +885,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         ) : (
           <FolderContents entries={folderEntries} canCreate={canCreate} pendingPath={pendingPath} />
         )}
-        <div className="mt-12 grid gap-4 border-t border-line pt-8 md:grid-cols-2">
+        <div className="mt-12 grid divide-y divide-line border-y border-line md:grid-cols-2 md:divide-x md:divide-y-0">
           <ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} />
           <ImportControl
             ref={importControl}
@@ -909,7 +912,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             className="modal-panel max-w-md"
           >
             <p className="eyebrow text-accent">{dialog.kind === "file" ? "File" : "Folder"}</p>
-            <h2 className="mt-2 font-serif text-3xl leading-tight">
+            <h2 className="mt-2 font-display text-3xl font-light leading-tight tracking-tight">
               {dialog.operation === "create"
                 ? `New ${dialog.kind === "file" ? "File" : "folder"}`
                 : dialogLabels[dialog.operation].heading}
@@ -954,14 +957,14 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                             review: undefined,
                           })
                         }
-                        className="rounded-md px-1.5 py-0.5 text-ink-soft transition hover:bg-ink/5 hover:text-ink"
+                        className="px-1.5 py-0.5 text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink"
                       >
                         {folder.name}
                       </button>
                     </span>
                   ))}
                 </nav>
-                <div className="mt-3 flex max-h-56 flex-col items-stretch gap-1 overflow-y-auto rounded-2xl bg-cream/70 p-2 ring-1 ring-line">
+                <div className="mt-3 flex max-h-56 flex-col items-stretch divide-y divide-line overflow-y-auto border border-line bg-cream">
                   {snapshot.listings[dialog.destinationId]?.entries
                     .filter((entry) => entry.kind === "directory" && entry.nodeId !== nodeId)
                     .map((entry) => (
@@ -971,7 +974,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                         disabled={busy}
                         onClick={() => void chooseFolder(entry)}
                         aria-label={`Open destination ${entry.name}`}
-                        className="flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-ink-soft transition hover:bg-paper hover:text-ink"
+                        className="flex min-w-0 items-center gap-2 px-3 py-3 text-left text-sm text-ink-soft transition-colors hover:bg-paper hover:text-ink"
                       >
                         <FolderIcon className="text-accent/80" />
                         <span className="truncate">{entry.name}</span>
@@ -1001,7 +1004,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                     or Files first. Nothing was deleted.
                   </p>
                 ) : (
-                  <label className="flex items-start gap-3 rounded-2xl bg-danger-soft/60 px-4 py-3 text-ink">
+                  <label className="flex items-start gap-3 border border-danger/25 bg-danger-soft/60 px-4 py-3 text-ink">
                     <input
                       type="checkbox"
                       className="mt-1 size-4"
@@ -1083,10 +1086,10 @@ function EmptyState({
 }) {
   return (
     <main className="container-page flex min-h-[calc(100dvh-4rem)] animate-fade flex-col items-center justify-center py-20 text-center">
-      <span className="grid size-14 place-items-center rounded-full bg-cream ring-1 ring-line">
+      <span className="grid size-14 place-items-center border border-line bg-cream">
         <Icon className="size-6 text-muted" />
       </span>
-      {title && <h1 className="mt-6 font-serif text-5xl leading-tight tracking-tight">{title}</h1>}
+      {title && <h1 className="mt-6 font-display text-5xl font-light leading-tight tracking-tight">{title}</h1>}
       <div className={cx("max-w-md text-ink-soft", title ? "mt-3" : "mt-6")}>{children}</div>
     </main>
   );
@@ -1104,11 +1107,11 @@ function FolderContents({
 }) {
   if (!entries.length)
     return (
-      <div className="mt-8 flex flex-col items-center rounded-3xl border border-dashed border-line px-6 py-16 text-center">
-        <span className="grid size-12 place-items-center rounded-full bg-cream ring-1 ring-line">
+      <div className="mt-8 flex flex-col items-center border-y border-line px-6 py-16 text-center">
+        <span className="grid size-12 place-items-center border border-line bg-cream">
           <FolderIcon className="size-5 text-muted" />
         </span>
-        <p className="mt-4 font-serif text-2xl">This folder is empty</p>
+        <p className="mt-4 font-display text-2xl font-light tracking-tight">This folder is empty</p>
         <p className="mt-2 max-w-sm text-sm text-ink-soft">
           {canCreate
             ? "Create a File or a folder, or drop Markdown here to import it."
@@ -1117,8 +1120,8 @@ function FolderContents({
       </div>
     );
   return (
-    <ul aria-label="Folder contents" className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {entries.map((entry) => {
+    <ul aria-label="Folder contents" className="mt-8 divide-y divide-line border-y border-ink">
+      {entries.map((entry, index) => {
         const to = `/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`;
         return (
           <li key={entry.nodeId}>
@@ -1126,25 +1129,25 @@ function FolderContents({
               to={to}
               aria-label={`${entry.name}, ${entry.kind === "directory" ? "folder" : "File"}`}
               className={cx(
-                "group flex items-center gap-4 rounded-2xl bg-paper p-4 ring-1 ring-line transition hover:-translate-y-0.5 hover:shadow-[0_14px_30px_-18px_rgb(29_24_21/0.35)] hover:ring-ink/15",
-                pendingPath === to && "ring-accent/40",
+                "group flex min-w-0 items-center gap-3 px-2 py-4 transition-colors hover:bg-cream sm:gap-4 sm:px-4",
+                pendingPath === to && "bg-cream",
               )}
             >
-              <span
-                className={cx(
-                  "grid size-11 shrink-0 place-items-center rounded-xl",
-                  entry.kind === "directory" ? "bg-petal/70 text-accent" : "bg-cream text-muted",
-                )}
-              >
+              <span aria-hidden="true" className="w-6 shrink-0 font-mono text-[12px] tabular-nums text-muted sm:w-10">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <span className="grid size-11 shrink-0 place-items-center border border-line bg-cream text-ink-soft">
                 {entry.kind === "directory" ? <FolderIcon className="size-5" /> : <FileIcon className="size-5" />}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium text-ink">{entry.name}</span>
-                <span className="mt-0.5 block text-xs text-muted">
+                <span className="block truncate font-display text-xl font-light tracking-tight text-ink">
+                  {entry.name}
+                </span>
+                <span className="eyebrow mt-1 block text-muted">
                   {entry.kind === "directory" ? "Folder" : "Markdown File"}
                 </span>
               </span>
-              <ChevronRightIcon className="size-4 text-muted transition group-hover:translate-x-0.5 group-hover:text-ink" />
+              <ChevronRightIcon className="size-4 text-muted transition-colors group-hover:text-ink" />
             </Link>
           </li>
         );

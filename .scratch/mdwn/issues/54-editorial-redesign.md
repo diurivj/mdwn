@@ -1,6 +1,6 @@
-# 54: Adopt the Editorial design system, add a landing page and site navigation, and make the workspace fast
+# 54: Adopt the Laboratorio design system, add a landing page and site navigation, and make the workspace fast
 
-**What to build:** mdwn is functionally ready but reads as a prototype: unstyled pages, no landing page, no way to move between Files, Account and devices, and a Files workspace that feels slow. Adopt the Editorial design system archived in `../demon-mvp` (variant A: cream paper, wine accent, Instrument Serif display type over Geist text) across every page, add a public landing page and persistent navigation, and remove the avoidable network waterfall behind workspace navigation.
+**What to build:** mdwn is functionally ready but reads as a prototype: unstyled pages, no landing page, no way to move between Files, Account and devices, and a Files workspace that feels slow. Adopt the Laboratorio design system archived in `../demon-mvp` (variant D: warm-gray paper, thin ink rules, light Inter Tight headings and Courier Prime labels) across every page, add a public landing page and persistent navigation, and remove the avoidable network waterfall behind workspace navigation.
 
 **Type:** feature
 
@@ -8,15 +8,17 @@
 
 **Blocked by:** none.
 
-**Related:** [15: editor and preview workspace](15-editor-and-preview-workspace.md); [45: Publish panel](45-publish-panel-mutations-unified.md); `docs/serving-and-security.md` (SSR shell boundary); `../demon-mvp` Editorial style guide (design source, not a dependency).
+**Related:** [15: editor and preview workspace](15-editor-and-preview-workspace.md); [45: Publish panel](45-publish-panel-mutations-unified.md); `docs/serving-and-security.md` (SSR shell boundary); `../demon-mvp` Laboratorio prototype (design source, not a dependency).
 
 ## Design system
 
-Design source: `../demon-mvp/.prototypes/style-variants-2026-10-10.tgz`, confirmed by that project's README. Archive members `src/app/globals.css`, `src/components/home/hero.tsx`, `src/components/section-heading.tsx`, and `src/app/_style-prototype/style-prototype.tsx` define variant A (Editorial). The adaptation retains all 16 used palette values, the serif/sans pairing, responsive page measure, eyebrows, rounded controls, drawers, and reduced-motion treatment; retail imagery/copy is replaced with Markdown-specific illustrations and content.
+Design source: `../demon-mvp/.prototypes/style-variants-2026-10-10.tgz`, confirmed by that project's README. Archive members `src/app/_style-prototype/variant-d-laboratorio.tsx`, `prototype.css`, and `style-prototype.tsx` define variant D (Laboratorio). The user explicitly corrected the original Editorial selection to Laboratorio after reviewing all four variants. Preserve the existing navigation, performance and safety fixes; change presentation only. Keep this ticket/branch path for PR continuity, with the earlier Editorial review history below intact.
 
-- Tokens, typography and component recipes live in `app/app.css` (`@theme` colors, `eyebrow`, `container-page`, `.prose-editorial`, drawer/popover/modal/skeleton recipes) and `app/ui/` (`styles.ts` button/field/notice classes, line icons, layouts, header, footer, logo).
-- Instrument Serif and Geist are pinned `@fontsource` packages served as first-party assets; CSP `font-src 'self'` is unchanged and nothing loads from a CDN.
-- Pages compose `PageIntro`, `FocusLayout` (sign-in, sign-up, recovery, enrollment) and `AccountLayout` (Account pages with an Account section nav). Reduced-motion users get no decorative motion.
+- Use warm gray `#eeece6`, ink `#151515`, secondary paper `#f7f6f2`, inset panels `#e6e3db`, thin rules, square controls, flat panels, numbered sections/index rows and specimen-style diagrams. No wine/pink palette, serif display type, pastel feature cards, floating shadows or rotating badge. Semantic status colors remain.
+- Light Inter Tight headings with tight tracking; Courier Prime uppercase labels. Inter Tight and Courier Prime are pinned `@fontsource` packages served first-party; CSP `font-src 'self'` stays unchanged, with no font/style CDN. Editor source and code retain monospace; Markdown emphasis and readable Public-page typography remain.
+- Tokens and recipes live in `app/app.css` (`@theme`, `eyebrow`, `container-page`, `.prose-markdown`, drawer/popover/modal/skeleton) and `app/ui/`. Actual status dots may stay round; controls and panels are square.
+- Landing content adapts the guide/index/formula/specimen visual language to Markdown, not perfume-shopping behavior: a three-step getting-started guide, numbered feature index, encryption formula and Public-link specimen. No fake working editor, scent quiz, store or new product capabilities.
+- Pages compose `PageIntro`, `FocusLayout` and `AccountLayout`. Preserve responsive layouts, browser-only private data, native navigation/dialog semantics, accessible names and reduced-motion support.
 
 ## Navigation and pages
 
@@ -36,13 +38,13 @@ Design source: `../demon-mvp/.prototypes/style-variants-2026-10-10.tgz`, confirm
 
 ## Acceptance criteria
 
-- [x] Every page uses the Editorial tokens, type, and components; no page keeps the prototype stone/rose styling.
+- [x] Every page uses Laboratorio tokens, type and components, including Account pages, workspace, dialogs, editor/preview and standalone Public reader; no Editorial serif/pastel/rounded-card remnants.
 - [x] Landing page at `/`; persistent header/footer navigation; Account section navigation; mobile drawer; `/files` entry point.
 - [x] Private plaintext and Account data stay out of SSR; the header reads only the Session boolean after hydration.
 - [x] Files navigation sends independent private requests concurrently without weakening per-operation proofs, cancellation boundaries, or the fresh registry read for sequential operations.
 - [x] Hydrated private routes contain one page, not the server fallback plus the page.
 - [x] Existing accessible names, roles and texts used by the browser suite are preserved.
-- [x] Standards/Spec review and a separate RR8/stack gate cover the final pinned implementation.
+- [x] Standards/Spec review and a separate RR8/stack gate cover the final Laboratorio diff.
 - [ ] Merge gate: clean-head `npm run verify` evidence is recorded with the PR, and every current-head `CI` job must pass before merge. Recording that evidence in the PR avoids changing the already-verified commit.
 
 ## Scope and pointers
@@ -55,6 +57,12 @@ Design source: `../demon-mvp/.prototypes/style-variants-2026-10-10.tgz`, confirm
 Out of scope: share-management UI (no UI creates or manages Shares today, so the landing page does not advertise sharing), indexing (every response stays `noindex` by spec), immutable caching headers for hashed static assets.
 
 ## Comments
+
+- 2026-10-11: Final Laboratorio review: base `c0d072891c33bbf6599282006461781e11f4a10c`, implementation tree `d7048787eef6ebeec5e5a7e9c1766fb50b6a15b4`. **Standards: Pass; Spec: Pass**, no remaining findings. Spec initially caught invisible sidebar skeletons (sand on sand); a held-listing browser regression failed before switching placeholders to the darker neutral line token, then passed all three engines. Both reviewers checked that final delta. **Separate RR8/stack gate: Not applicable — no changed RR8 data-flow or Worker/D1 boundaries in this presentation-only follow-up.** Reviewed all 13 changed page-route contracts (AST comparison confirms loader/action/clientLoader/clientAction/handle/hydrate declarations unchanged), root/font links, header/Account consumers, editor/preview/comments and Import/Export/Publish UI. No resource routes, route map, Session subscription, private-client/navigation flows, Worker bindings or database code changed. Checked RR 8.4.0, config, spec §3, serving §1, testing docs and ADR-0002; there is no new API-contract claim. Browser-only data and native Forms remain intact. Node 406 + Workers 382 passed, along with the focused 51 browser checks and 39 publication/Session checks; final clean-head preflight will be recorded in PR #61 after committing this review record.
+
+- 2026-10-11: Laboratorio conversion implemented across the shell, landing guide/index/formula, Account and authentication pages, workspace, comments, dialogs and Public reader. Fonts are pinned first-party Inter Tight and Courier Prime. Visual regressions now live in `e2e/laboratorio-*.spec.ts`; existing Session and unsaved-draft checks remain. The new mobile Account check reproduced a 970px intrinsic navigation width at a 375px viewport; `min-w-0` on the navigation grid child confines scrolling to its tab strip. After that correction, 51 focused Chromium/Firefox/WebKit checks passed. Standards/Spec/RR8 review and clean-head preflight follow; the PR will record final verification.
+
+- 2026-10-11: User corrected the requested variant to **D — Laboratorio**. Continuing on PR #61 from `c0d072891c33bbf6599282006461781e11f4a10c`, retaining the existing navigation and performance behavior. The entries below document the earlier Editorial iteration, not verification of the new presentation.
 
 - 2026-10-11: Resumed the uncommitted implementation in `../mdwn-editorial` on `issue/54-editorial-redesign`, preserving unrelated ticket-53 files in the main checkout. Verified the archived design palette and inspected desktop/mobile landing and workspace screenshots. Installed the locked font dependencies with `npm ci`.
 - 2026-10-11: Added browser coverage for first-party fonts, landing sections, keyboard-operated mobile navigation, `/files`, Account navigation, responsive workspace layout, and parallel File/listing reads before verified rendering. Reproduced and fixed header sign-out bypassing the unsaved-File blocker (navigation `Form` rather than a fetcher), stale Session responses overriding completed sign-out, and the existing provisioning test waiting for the obsolete split-module filename. Those focused checks passed in Chromium, Firefox, and WebKit.

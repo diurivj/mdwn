@@ -65,9 +65,9 @@ function Update({ job }: { job: RotationJob }) {
   const fetcher = useFetcher<typeof clientAction>();
   const busy = fetcher.state !== "idle";
   return (
-    <li className="rounded-3xl bg-paper p-6 ring-1 ring-line">
+    <li className="border-b border-line bg-paper p-6">
       <div className="flex items-center gap-3">
-        <span className="grid size-10 place-items-center rounded-full bg-cream text-accent ring-1 ring-line">
+        <span className="grid size-10 shrink-0 place-items-center border border-line bg-cream text-ink">
           <KeyIcon />
         </span>
         <p className="font-medium">
@@ -124,7 +124,7 @@ export default function KeyRotations({ loaderData }: Route.ComponentProps) {
       {loaderData.state === "ready" ? (
         <>
           {loaderData.jobs.length ? (
-            <ul className="mt-8 grid gap-4 md:grid-cols-2">
+            <ul className="mt-8 border-t border-line">
               {loaderData.jobs.map((job) => (
                 <Update key={job.jobId} job={job} />
               ))}

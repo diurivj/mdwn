@@ -201,11 +201,11 @@ export default function AccountSecurity({ loaderData, actionData }: Route.Compon
                 Add passkey
               </button>
             </fetcher.Form>
-            <ul className="mt-5 divide-y divide-line rounded-2xl ring-1 ring-line">
+            <ul className="mt-5 divide-y divide-line border-y border-line">
               {loaderData.passkeys.map((passkey) => (
-                <li className="flex flex-wrap items-center justify-between gap-4 bg-white/50 p-4" key={passkey.id}>
+                <li className="flex flex-wrap items-center justify-between gap-4 bg-paper py-4" key={passkey.id}>
                   <div className="flex items-center gap-3">
-                    <span className="grid size-10 place-items-center rounded-full bg-cream text-accent ring-1 ring-line">
+                    <span className="grid size-10 shrink-0 place-items-center border border-line bg-cream text-ink">
                       <KeyIcon />
                     </span>
                     <div>
@@ -236,9 +236,7 @@ export default function AccountSecurity({ loaderData, actionData }: Route.Compon
               <>
                 <p>
                   Save this non-secret recovery identifier with your offline codes:{" "}
-                  <span className="break-all rounded-md bg-cream px-1.5 py-0.5 font-mono text-ink">
-                    {loaderData.identifier}
-                  </span>
+                  <span className="break-all bg-cream px-1.5 py-0.5 font-mono text-ink">{loaderData.identifier}</span>
                 </p>
                 <p>
                   Replacing your codes invalidates every unused code in the previous set. Confirm with a passkey first.
@@ -336,9 +334,9 @@ export default function AccountSecurity({ loaderData, actionData }: Route.Compon
               </button>
             </fetcher.Form>
 
-            <ul className="mt-6 divide-y divide-line rounded-2xl ring-1 ring-line">
+            <ul className="mt-6 divide-y divide-line border-y border-line">
               {loaderData.sessions.map((session) => (
-                <li className="flex flex-wrap items-center justify-between gap-4 bg-white/50 p-4" key={session.id}>
+                <li className="flex flex-wrap items-center justify-between gap-4 bg-paper py-4" key={session.id}>
                   <div>
                     <p className="flex items-center gap-2 font-medium">
                       {session.current ? "Current session" : "Another session"}

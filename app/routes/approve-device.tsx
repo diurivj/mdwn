@@ -92,18 +92,18 @@ export default function ApproveDevice() {
       <PageIntro eyebrow="Devices" title="Approve a device">
         <p>Use this active device to scan the QR code shown on your new browser.</p>
       </PageIntro>
-      <div className="mt-8 max-w-xl rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
-        <ol className="space-y-2 text-sm text-ink-soft">
-          <li className="flex gap-3">
-            <span className="font-serif text-lg leading-none text-accent">1</span>
+      <div className="mt-8 max-w-xl border border-line bg-cream p-6 sm:p-8">
+        <ol className="divide-y divide-line border-y border-line text-sm text-ink-soft">
+          <li className="flex gap-3 py-3">
+            <span className="font-mono text-[12px] text-muted">1</span>
             On the new browser, sign in and choose Enroll this device.
           </li>
-          <li className="flex gap-3">
-            <span className="font-serif text-lg leading-none text-accent">2</span>
+          <li className="flex gap-3 py-3">
+            <span className="font-mono text-[12px] text-muted">2</span>
             Scan its QR code here, or paste its pairing link.
           </li>
-          <li className="flex gap-3">
-            <span className="font-serif text-lg leading-none text-accent">3</span>
+          <li className="flex gap-3 py-3">
+            <span className="font-mono text-[12px] text-muted">3</span>
             Approve, then finish setup on the new browser.
           </li>
         </ol>
@@ -126,7 +126,7 @@ export default function ApproveDevice() {
             muted
             playsInline
             aria-label="QR code camera preview"
-            className="mt-5 w-full rounded-2xl bg-ink ring-1 ring-line"
+            className="mt-5 w-full border border-line bg-ink"
           />
         )}
         <label htmlFor="approval-link" className={cx(labelClass, "mt-6")}>

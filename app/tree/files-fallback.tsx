@@ -10,7 +10,7 @@ export function FilesFallback() {
       aria-busy="true"
       className="w-full lg:grid lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-[17.5rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)]"
     >
-      <div className="hidden border-r border-line bg-cream/60 px-6 py-8 lg:block">
+      <div className="hidden border-r border-line bg-sand px-6 py-8 lg:block">
         <div className="skeleton h-7 w-24" />
         <SkeletonLines lines={6} className="mt-6" />
       </div>
@@ -20,8 +20,8 @@ export function FilesFallback() {
         </p>
         <div className="skeleton mt-6 h-11 w-2/3 max-w-md" />
         <div className="mt-8 grid gap-4 lg:grid-cols-2 lg:gap-5">
-          <div className="skeleton h-[50vh] rounded-3xl" />
-          <div className="skeleton hidden h-[50vh] rounded-3xl lg:block" />
+          <div className="skeleton h-[50vh]" />
+          <div className="skeleton hidden h-[50vh] lg:block" />
         </div>
       </div>
     </main>

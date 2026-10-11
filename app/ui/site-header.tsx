@@ -78,7 +78,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
   return (
     // A solid background rather than a translucent blur: blurring whatever scrolls
     // underneath costs a GPU pass on every frame and made scrolling stutter.
-    <header className="sticky top-0 z-40 border-b border-line bg-paper">
+    <header className="sticky top-0 z-40 border-b border-ink bg-paper">
       <div
         className={cx(
           "grid h-16 grid-cols-[1fr_auto_1fr] items-center gap-4 lg:flex lg:justify-between",
@@ -88,18 +88,18 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
         <button
           type="button"
           onClick={() => menu.current?.showModal()}
-          className="-ml-2 grid size-10 place-items-center rounded-full transition hover:bg-ink/5 active:scale-90 lg:hidden"
+          className="-ml-2 grid size-10 place-items-center transition-colors hover:bg-sand lg:hidden"
           aria-haspopup="dialog"
           aria-label="Open menu"
         >
           <MenuIcon className="size-5" />
         </button>
 
-        <div className="justify-self-center lg:flex lg:items-center lg:gap-10">
+        <div className="justify-self-center lg:flex lg:items-center lg:gap-6 xl:gap-10">
           <Logo />
           <nav aria-label="Main" className="hidden lg:block">
-            <ul className="flex items-center gap-1 text-sm">
-              {nav.map((item) => {
+            <ul className="flex items-center gap-1 font-mono text-[11px] uppercase tracking-[0.06em] xl:gap-3">
+              {nav.map((item, index) => {
                 const current = item.current?.(pathname) ?? false;
                 return (
                   <li key={item.to}>
@@ -107,10 +107,13 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
                       to={item.to}
                       aria-current={current ? "page" : undefined}
                       className={cx(
-                        "rounded-full px-3 py-2 transition hover:bg-ink/5 hover:text-ink",
-                        current ? "bg-ink/[0.04] text-ink" : "text-ink-soft",
+                        "border-b px-2 py-2 transition-colors hover:border-ink hover:text-ink",
+                        current ? "border-ink text-ink" : "border-transparent text-ink-soft",
                       )}
                     >
+                      <span aria-hidden="true" className="mr-2 hidden text-muted xl:inline">
+                        0{index + 1}
+                      </span>
                       {item.label}
                     </SectionLink>
                   </li>
@@ -132,7 +135,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
               <button
                 type="button"
                 popoverTarget="account-menu"
-                className="grid size-10 place-items-center rounded-full bg-cream text-ink-soft ring-1 ring-line transition hover:bg-sand hover:text-ink active:scale-90"
+                className="grid size-10 place-items-center border border-ink/40 text-ink-soft transition-colors hover:border-ink hover:bg-sand hover:text-ink"
                 aria-label="Account menu"
               >
                 <UserIcon className="size-[18px]" />
@@ -164,7 +167,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
                   to={to}
                   onClick={closeAccountMenu}
                   aria-current={pathname === to ? "page" : undefined}
-                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft transition hover:bg-cream hover:text-ink aria-[current=page]:bg-cream aria-[current=page]:text-ink"
+                  className="flex items-center gap-3 px-3 py-2.5 text-sm text-ink-soft transition-colors hover:bg-sand hover:text-ink aria-[current=page]:bg-sand aria-[current=page]:text-ink"
                 >
                   <Icon className="size-4 text-muted" />
                   {label}
@@ -179,7 +182,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
               name="intent"
               value="sign-out"
               onClick={closeAccountMenu}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-ink-soft transition hover:bg-cream hover:text-ink"
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-ink-soft transition-colors hover:bg-sand hover:text-ink"
             >
               <SignOutIcon className="size-4 text-muted" />
               Sign out
@@ -201,7 +204,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
             <button
               type="button"
               onClick={closeMenu}
-              className="-ml-2 grid size-10 place-items-center rounded-full transition hover:bg-ink/5 active:scale-90"
+              className="-ml-2 grid size-10 place-items-center transition-colors hover:bg-sand"
               aria-label="Close menu"
             >
               <CloseIcon className="size-5" />
@@ -211,14 +214,17 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
 
           <nav aria-label="Main" className="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6">
             <ul className="divide-y divide-line">
-              {nav.map((item) => (
+              {nav.map((item, index) => (
                 <li key={item.to}>
                   <SectionLink
                     to={item.to}
                     onClick={closeMenu}
                     aria-current={item.current?.(pathname) ? "page" : undefined}
-                    className="block py-4 font-serif text-[1.75rem] leading-tight transition active:text-accent aria-[current=page]:text-accent"
+                    className="flex items-baseline gap-4 py-4 text-[1.75rem] font-light leading-tight transition-colors hover:bg-sand aria-[current=page]:underline"
                   >
+                    <span aria-hidden="true" className="eyebrow text-muted">
+                      0{index + 1}
+                    </span>
                     {item.label}
                   </SectionLink>
                 </li>
@@ -231,7 +237,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
                     <Link
                       to={to}
                       onClick={closeMenu}
-                      className="flex items-center gap-3 rounded-xl py-2 text-sm text-ink-soft transition hover:text-ink"
+                      className="flex items-center gap-3 py-2 text-sm text-ink-soft transition-colors hover:text-ink"
                     >
                       <Icon className="size-4 text-muted" />
                       {label}

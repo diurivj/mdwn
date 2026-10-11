@@ -2,7 +2,9 @@ import { test, expect } from "./fixtures";
 
 // Exercise the public shell against the built Worker, including native dialog
 // behavior and first-party font loading in each supported browser engine.
-test("lands on the editorial page and navigates its sections without document reloads", async ({ page }, testInfo) => {
+test("lands on the Laboratorio page and navigates its sections without document reloads", async ({
+  page,
+}, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -10,9 +12,18 @@ test("lands on the editorial page and navigates its sections without document re
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Write in Markdown. Keep the key.");
   await expect(page.getByRole("main")).toHaveCount(1);
   await page.evaluate(() => document.fonts.ready);
-  expect(await page.getByRole("heading", { level: 1 }).evaluate((node) => getComputedStyle(node).fontFamily)).toContain(
-    "Instrument Serif",
+  const heading = page.getByRole("heading", { level: 1 });
+  expect(await heading.evaluate((node) => getComputedStyle(node).fontFamily)).toContain("Inter Tight Variable");
+  await expect(heading).toHaveCSS("font-weight", "300");
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(238, 236, 230)");
+  const label = page.getByText("01 — Private Markdown", { exact: true });
+  expect(await label.evaluate((node) => getComputedStyle(node).fontFamily)).toContain("Courier Prime");
+  await expect(page.getByRole("main").getByRole("link", { name: "Create your account" }).first()).toHaveCSS(
+    "border-radius",
+    "0px",
   );
+  expect(await page.evaluate(() => document.fonts.check('300 16px "Inter Tight Variable"'))).toBe(true);
+  expect(await page.evaluate(() => document.fonts.check('400 12px "Courier Prime"'))).toBe(true);
   const fonts = await page.evaluate(() =>
     performance
       .getEntriesByType("resource")
@@ -60,6 +71,23 @@ test("mobile menu supports keyboard dismissal, section links and account entry",
   await expect(menu).toBeHidden();
   await expect(page.getByRole("main")).toHaveCount(1);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+});
+
+test("Laboratorio landing and navigation fit mobile, tablet and desktop widths", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => document.fonts.ready);
+  for (const width of [320, 375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    for (const element of [page.getByRole("banner"), page.getByRole("heading", { level: 1 })]) {
+      const bounds = await element.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    }
+    const call = page.getByRole("main").getByRole("link", { name: "Create your account" }).first();
+    expect(await call.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  }
 });
 
 test("Files entry explains device access instead of leaving a signed-out visitor on a skeleton", async ({ page }) => {

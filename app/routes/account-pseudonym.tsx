@@ -116,7 +116,7 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
       </PageIntro>
       <section
         aria-label="Current Public pseudonym"
-        className="mt-8 max-w-xl rounded-3xl bg-wine px-7 py-8 font-serif text-4xl leading-tight text-petal sm:text-5xl"
+        className="mt-8 max-w-xl border-y border-ink bg-sand px-7 py-8 font-display text-4xl font-light leading-tight tracking-tight text-ink sm:text-5xl"
       >
         {publicPseudonym}
       </section>

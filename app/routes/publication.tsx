@@ -53,9 +53,9 @@ clientLoader.hydrate = true as const;
 function ReaderShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-[46rem] flex-col px-5 sm:px-8">
-      <header className="flex items-center justify-between gap-4 py-6">
+      <header className="flex items-center justify-between gap-4 border-b border-line py-6">
         <Logo className="text-[24px]" />
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-cream px-3 py-1 text-[12px] font-medium text-ink-soft ring-1 ring-line">
+        <span className="eyebrow inline-flex items-center gap-1.5 border border-line bg-cream px-3 py-1.5 text-ink-soft">
           <LockIcon className="size-3.5 text-accent" />
           Read-only
         </span>
@@ -119,7 +119,7 @@ export default function PublicationRoute({ loaderData, params }: Route.Component
       <ReaderShell>
         <main className="flex-1 pb-16 pt-6 sm:pt-10">
           <p className="eyebrow text-accent">Public page</p>
-          <h1 className="mt-3 font-serif text-5xl leading-tight tracking-tight">Published File</h1>
+          <h1 className="mt-3 font-display text-5xl font-light leading-tight tracking-tight">Published File</h1>
           <p role="alert" className="mt-4 max-w-xl leading-relaxed text-ink-soft">
             {unavailable[page.status]}
           </p>
@@ -131,13 +131,13 @@ export default function PublicationRoute({ loaderData, params }: Route.Component
       <main className="flex-1 pb-16 pt-6 sm:pt-10">
         <article aria-label="Published File" className="animate-fade">
           {page.title && (
-            <h1 className="font-serif text-[2.75rem] leading-[1.05] tracking-tight text-balance [overflow-wrap:anywhere] sm:text-6xl">
+            <h1 className="font-display text-[2.75rem] font-light leading-[1.05] tracking-tight text-balance [overflow-wrap:anywhere] sm:text-6xl">
               {page.title}
             </h1>
           )}
           {page.authors.length > 0 && <p className="mt-4 text-sm text-muted">By {page.authors.join(", ")}</p>}
           <div
-            className={`prose-editorial prose-reader [overflow-wrap:anywhere] ${page.title || page.authors.length ? "mt-10 border-t border-line pt-10" : ""}`}
+            className={`prose-markdown prose-reader [overflow-wrap:anywhere] ${page.title || page.authors.length ? "mt-10 border-t border-line pt-10" : ""}`}
           >
             <MarkdownPreview source={page.markdown} />
           </div>

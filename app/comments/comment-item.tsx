@@ -59,9 +59,9 @@ export function CommentItem({
 }) {
   const edit = editing && editing.id === comment.id ? editing : null;
   return (
-    <li className="rounded-2xl bg-white/60 px-4 py-3.5 ring-1 ring-line">
-      <p className="text-[12px] text-muted">
-        <span className="text-[13px] font-medium text-ink">
+    <li className="border-b border-line px-4 py-4">
+      <p className="font-mono text-[12px] text-muted">
+        <span className="font-sans text-[14px] font-medium text-ink">
           {pseudonym ?? (comment.authorId === viewerAccountId ? "You" : "Unknown author")}
         </span>
         {" · "}
@@ -90,7 +90,7 @@ export function CommentItem({
               className={cx(fieldClass("sm"), "mt-2 resize-none font-normal")}
             />
           </label>
-          <p className="mt-1 text-xs tabular-nums text-muted">{commentCharacters(edit.text)} / 2,000</p>
+          <p className="mt-1 font-mono text-xs tabular-nums text-muted">{commentCharacters(edit.text)} / 2,000</p>
           <div className="mt-2 flex gap-2">
             <button
               type="submit"

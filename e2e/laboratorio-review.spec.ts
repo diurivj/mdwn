@@ -117,6 +117,11 @@ workspaceTest(
     const panel = page.getByRole("region", { name: "Publish", exact: true });
     await panel.getByRole("button", { name: "Publish File", exact: true }).click();
     await expect(panel.getByText("Published.", { exact: false })).toBeVisible();
+    expect(
+      await panel
+        .getByRole("textbox", { name: "Public link", exact: true })
+        .evaluate((node) => getComputedStyle(node).fontFamily),
+    ).toContain("Courier Prime");
     await panel.getByRole("button", { name: "Unpublish…", exact: true }).click();
     const confirmation = panel.getByRole("button", {
       name: "Unpublish and permanently delete 0 Public Comments",

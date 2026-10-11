@@ -112,7 +112,7 @@ export default function Recover({ loaderData }: Route.ComponentProps) {
           add a replacement passkey.
         </p>
       </PageIntro>
-      <div className="mt-6 space-y-3 border-l-2 border-accent/40 pl-4 text-sm leading-relaxed text-ink-soft">
+      <div className="mt-6 space-y-3 border-l border-ink pl-4 text-sm leading-relaxed text-ink-soft">
         <p>
           If you have lost every passkey and every code, your Account cannot be recovered. There is no support or
           operator override.
@@ -165,7 +165,7 @@ export default function Recover({ loaderData }: Route.ComponentProps) {
               </button>
             </fetcher.Form>
           ) : (
-            <fetcher.Form method="post" className="mt-8 space-y-5 rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
+            <fetcher.Form method="post" className="mt-8 space-y-5 border border-line bg-cream p-6 sm:p-8">
               <label className={labelClass}>
                 Recovery identifier
                 <input

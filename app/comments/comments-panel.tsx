@@ -207,7 +207,7 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
           {message}
         </p>
       )}
-      <ol aria-label="Private comments" className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+      <ol aria-label="Private comments" className="mt-3 min-h-0 flex-1 overflow-y-auto border-t border-line pr-1">
         {thread.comments.map((comment) => (
           <CommentItem
             key={comment.id}
@@ -251,9 +251,7 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
           />
         ))}
         {!thread.comments.length && (
-          <li className="rounded-2xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
-            No comments yet.
-          </li>
+          <li className="border-b border-line px-4 py-6 text-center text-sm text-muted">No comments yet.</li>
         )}
       </ol>
       {thread.nextCursor !== null && (
@@ -290,7 +288,7 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
           />
         </label>
         <div className="mt-2 flex items-center justify-between gap-2">
-          <p role="status" className={cx("text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
+          <p role="status" className={cx("font-mono text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
             {commentCharacters(draft)} / 2,000
           </p>
           <button type="submit" disabled={busy || !draft || tooLong} className={buttonClass("primary", "sm")}>
@@ -317,8 +315,8 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       aria-controls={`${kind}-thread-panel`}
       onClick={() => setSelected(kind)}
       className={cx(
-        "rounded-full px-3.5 py-1 text-[13px] font-medium transition",
-        selected === kind ? "bg-paper text-ink shadow-sm" : "text-ink-soft hover:text-ink",
+        "eyebrow px-3.5 py-2 transition-colors",
+        selected === kind ? "bg-ink text-paper" : "text-ink-soft hover:bg-paper hover:text-ink",
       )}
     >
       {label}
@@ -329,7 +327,7 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       <div
         role="tablist"
         aria-label="Comment thread"
-        className="inline-flex items-center self-start rounded-full bg-cream p-0.5 ring-1 ring-line"
+        className="inline-flex max-w-full flex-wrap items-center self-start border border-line bg-cream"
       >
         {tab("private", "Private")}
         {tab("public", "Public")}

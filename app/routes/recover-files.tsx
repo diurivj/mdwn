@@ -62,7 +62,7 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
             browser. Recovery replaces every previous Encryption device and signs out other Sessions.
           </p>
           {!phrase && (
-            <fetcher.Form method="post" className="mt-8 rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
+            <fetcher.Form method="post" className="mt-8 border border-line bg-cream p-6 sm:p-8">
               <label className={labelClass} htmlFor="phrase">
                 Current recovery phrase
               </label>
@@ -102,13 +102,15 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
             </p>
           )}
           {phrase && (
-            <section className="mt-8 rounded-3xl bg-wine p-6 text-paper sm:p-8" role="status">
-              <p className="eyebrow text-petal/80">Write it down now</p>
-              <h2 className="mt-2 font-serif text-3xl leading-tight">Save your new recovery phrase</h2>
-              <p className="mt-2 text-sm text-paper/75">
+            <section className="mt-8 border-y border-ink bg-sand p-6 text-ink sm:p-8" role="status">
+              <p className="eyebrow text-muted">Write it down now</p>
+              <h2 className="mt-2 font-display text-3xl font-light leading-tight tracking-tight">
+                Save your new recovery phrase
+              </h2>
+              <p className="mt-2 text-sm text-ink-soft">
                 Your previous phrase no longer works. Keep these 24 words offline.
               </p>
-              <p className="mt-5 break-words rounded-2xl bg-paper/10 p-4 font-mono text-[15px] leading-loose [word-spacing:0.35em]">
+              <p className="mt-5 break-words border-y border-line bg-cream p-4 font-mono text-[15px] leading-loose [word-spacing:0.35em]">
                 {phrase}
               </p>
               <button

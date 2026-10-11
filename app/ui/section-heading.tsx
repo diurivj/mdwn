@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { cx } from "./cx";
 
-/** An eyebrow, a serif section title and an optional lead, as used across long pages. */
+/** A typewritten section label, a light heading and an optional lead. */
 export function SectionHeading({
   eyebrow,
   title,
@@ -28,8 +28,11 @@ export function SectionHeading({
       )}
     >
       <div className={cx("max-w-2xl", align === "center" && "mx-auto")}>
-        <p className={cx("eyebrow", tone === "dark" ? "text-accent" : "text-petal")}>{eyebrow}</p>
-        <h2 id={id} className="mt-3 font-serif text-4xl leading-[1.05] tracking-tight text-balance sm:text-5xl">
+        <p className={cx("eyebrow", tone === "dark" ? "text-muted" : "text-paper/75")}>{eyebrow}</p>
+        <h2
+          id={id}
+          className="mt-6 font-display text-4xl font-light leading-[0.98] tracking-[-0.035em] text-balance sm:text-5xl"
+        >
           {title}
         </h2>
         {children && (

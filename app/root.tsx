@@ -1,10 +1,11 @@
 import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
-import "@fontsource-variable/geist/wght.css";
-import "@fontsource/instrument-serif/400.css";
-import "@fontsource/instrument-serif/400-italic.css";
-import geistLatin from "@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?url";
-import serifLatin from "@fontsource/instrument-serif/files/instrument-serif-latin-400-normal.woff2?url";
+import "@fontsource-variable/inter-tight/wght.css";
+import "@fontsource-variable/inter-tight/wght-italic.css";
+import "@fontsource/courier-prime/latin-400.css";
+import "@fontsource/courier-prime/latin-700.css";
+import interLatin from "@fontsource-variable/inter-tight/files/inter-tight-latin-wght-normal.woff2?url";
+import courierLatin from "@fontsource/courier-prime/files/courier-prime-latin-400-normal.woff2?url";
 
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -24,8 +25,8 @@ import { buttonClass } from "./ui/styles";
 
 export const links: Route.LinksFunction = () => [
   // The two faces every page shows above the fold, requested before the stylesheet asks.
-  { rel: "preload", href: geistLatin, as: "font", type: "font/woff2", crossOrigin: "anonymous" },
-  { rel: "preload", href: serifLatin, as: "font", type: "font/woff2", crossOrigin: "anonymous" },
+  { rel: "preload", href: interLatin, as: "font", type: "font/woff2", crossOrigin: "anonymous" },
+  { rel: "preload", href: courierLatin, as: "font", type: "font/woff2", crossOrigin: "anonymous" },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -34,7 +35,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#fbf8f4" />
+        <meta name="theme-color" content="#eeece6" />
         <Meta />
         <Links />
       </head>
@@ -55,7 +56,7 @@ function SiteChrome({ children, footer = true }: { children: React.ReactNode; fo
     <>
       <a
         href="#content"
-        className="sr-only z-50 rounded-full bg-ink px-4 py-2 text-sm text-paper focus:not-sr-only focus:fixed focus:left-4 focus:top-3"
+        className="sr-only z-50 bg-ink px-4 py-2 text-sm text-paper focus:not-sr-only focus:fixed focus:left-4 focus:top-3"
       >
         Skip to content
       </a>
@@ -97,7 +98,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     <SiteChrome footer={false}>
       <main className="container-page flex min-h-[calc(100dvh-4rem)] flex-col items-center justify-center py-24 text-center">
         <p className="eyebrow text-accent">{notFound ? "Error 404" : "Unexpected error"}</p>
-        <h1 className="mt-4 max-w-xl font-serif text-5xl leading-tight tracking-tight text-balance sm:text-6xl">
+        <h1 className="mt-4 max-w-xl font-display text-5xl font-light leading-tight tracking-tight text-balance sm:text-6xl">
           {message}
         </h1>
         <p className="mt-4 max-w-md text-ink-soft">
@@ -111,7 +112,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
           Back to mdwn <ArrowRightIcon />
         </a>
         {stack ? (
-          <pre className="mt-10 w-full max-w-3xl overflow-x-auto rounded-2xl bg-cream p-4 text-left text-xs ring-1 ring-line">
+          <pre className="mt-10 w-full max-w-3xl overflow-x-auto border border-line bg-cream p-4 text-left text-xs">
             <code>{stack}</code>
           </pre>
         ) : null}
