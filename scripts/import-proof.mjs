@@ -16,38 +16,52 @@
  * while D1 enforces the Free 50-queries-per-invocation limit. The script
  * creates a throwaway Worker + D1, applies the committed migrations, seeds one
  * device-bound Session (no production test endpoints), runs
- * `vitest.proof.config.ts`, and deletes everything again.
+ * `vitest.proof.config.ts`, and deletes confirmed owned resources again.
+ * Shared provider behavior: docs/operations/d1-scripting.md.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCookie } from "react-router";
+import { deployedVersionId } from "./lib/deployment-readiness.mjs";
+import { flag, parseFlags, writeSensitive } from "./lib/restore-cli-support.mjs";
+import { createScriptLifecycle } from "./lib/script-lifecycle.mjs";
+import { createTemporaryDatabase } from "./lib/temporary-d1.mjs";
+import { protectedWranglerEnv } from "./lib/wrangler-targets.mjs";
+import { PublicOperationalError } from "./lib/script-errors.mjs";
 
-const PROOF_DB = "mdwn-import-proof-db";
-const PROOF_WORKER = "mdwn-import-proof";
-const PROOF_CONFIG = "wrangler.proof.jsonc";
+const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+const PROOF_DB = `mdwn-import-proof-db-${suffix}`;
+const PROOF_WORKER = `mdwn-import-proof-${suffix}`;
+const PROOF_CONFIG = `wrangler.proof-${suffix}.jsonc`;
 const DB_BINDING = "DB";
 
-const keep = process.argv.includes("--keep");
-const dbIdArgument = process.argv[process.argv.indexOf("--db-id") + 1];
-const requestedDbId = process.argv.includes("--db-id") ? dbIdArgument : process.env.PROOF_D1_ID;
+const flags = parseFlags(process.argv.slice(2));
+const keep = flags.get("keep") === true;
+const requestedDbId = flags.has("db-id") ? flag(flags, "db-id") : process.env.PROOF_D1_ID;
 
 /** @param {string} command @param {string[]} args @param {import("node:child_process").SpawnSyncOptions} [options] */
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { stdio: "inherit", ...options });
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    ...options,
+    env: protectedWranglerEnv(options.env ?? process.env),
+  });
   if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.slice(0, 2).join(" ")} failed`);
+    const label = args
+      .filter((arg) => arg !== "--no-install" && arg !== "wrangler")
+      .slice(0, 2)
+      .join(" ");
+    throw new PublicOperationalError(`${label} failed (exit ${result.status ?? 1})`, { cause: result.error });
   }
+  return result;
 }
 
 /** @param {string} command @param {string[]} args @returns {string} */
 function capture(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-  if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.slice(0, 2).join(" ")} failed:\n${result.stderr ?? ""}`);
-  }
-  return `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return String(run(command, args).stdout ?? "");
 }
 
 function id() {
@@ -55,8 +69,8 @@ function id() {
   return `${value.slice(0, 14)}7${value.slice(15)}`;
 }
 
-/** @param {string} databaseId @returns {string} */
-function proofConfig(databaseId) {
+/** @param {string} databaseId @param {string} databaseName @returns {string} */
+function proofConfig(databaseId, databaseName) {
   return `${JSON.stringify(
     {
       $schema: "node_modules/wrangler/config-schema.json",
@@ -70,7 +84,7 @@ function proofConfig(databaseId) {
       d1_databases: [
         {
           binding: DB_BINDING,
-          database_name: PROOF_DB,
+          database_name: databaseName,
           database_id: databaseId,
           migrations_dir: "./drizzle",
         },
@@ -81,43 +95,33 @@ function proofConfig(databaseId) {
   )}\n`;
 }
 
-/** @returns {string | null} */
-function existingDatabaseId() {
+/** Caller-supplied databases are borrowed, never creation/deletion authority.
+ * @param {string} uuid
+ */
+function borrowedDatabase(uuid) {
   const output = capture("npx", ["--no-install", "wrangler", "d1", "list", "--json"]);
-  const databases = /** @type {{ name: string, uuid: string }[]} */ (
-    JSON.parse(output.slice(output.indexOf("["), output.lastIndexOf("]") + 1))
-  );
-  return databases.find((database) => database.name === PROOF_DB)?.uuid ?? null;
-}
-
-function cleanup() {
-  if (keep) {
-    console.log(`\nKeeping the proof deployment (${PROOF_WORKER}, ${PROOF_DB}). Delete it with:`);
-    console.log(`  npx wrangler delete ${PROOF_WORKER}`);
-    console.log(`  npx wrangler d1 delete ${PROOF_DB} -y`);
-    return;
+  const databases = /** @type {{ name: string, uuid: string }[]} */ (JSON.parse(output));
+  const database = databases.find((entry) => entry.uuid === uuid);
+  if (!database || !/^mdwn-import-proof-db(?:-|$)/.test(database.name)) {
+    throw new Error("--db-id must resolve to an existing disposable mdwn-import-proof-db database");
   }
-  spawnSync("npx", ["--no-install", "wrangler", "delete", PROOF_WORKER], {
-    stdio: ["pipe", "ignore", "ignore"],
-    input: "y\n",
-  });
-  spawnSync("npx", ["--no-install", "wrangler", "d1", "delete", PROOF_DB, "-y"], { stdio: "ignore" });
-  console.log(`✓ proof deployment deleted (${PROOF_WORKER}, ${PROOF_DB})`);
+  return database;
 }
 
+const lifecycle = createScriptLifecycle({ label: "Import proof", keep });
 const temporary = mkdtempSync(join(tmpdir(), "mdwn-import-proof-"));
-/** @type {string | undefined} */
-let databaseId = requestedDbId ?? undefined;
+lifecycle.artifact(temporary);
+lifecycle.artifact(PROOF_CONFIG);
+let failure = null;
 try {
   capture("npx", ["--no-install", "wrangler", "whoami"]);
-  if (!databaseId) databaseId = existingDatabaseId() ?? undefined;
-  if (!databaseId) {
-    run("npx", ["--no-install", "wrangler", "d1", "create", PROOF_DB, "--location", "weur"]);
-    databaseId = existingDatabaseId() ?? undefined;
-  }
-  if (!databaseId) throw new Error("could not resolve the proof D1 id");
-  console.log(`✓ disposable D1 ${PROOF_DB} (${databaseId})`);
-  writeFileSync(PROOF_CONFIG, proofConfig(databaseId));
+  const database = requestedDbId
+    ? borrowedDatabase(requestedDbId)
+    : createTemporaryDatabase({ name: PROOF_DB, directory: temporary, lifecycle, createArgs: ["--location", "weur"] });
+  const databaseId = database.uuid;
+  if (requestedDbId) lifecycle.borrowedResource({ kind: "D1", name: database.name, id: databaseId });
+  console.log(`✓ disposable D1 ${database.name} (${databaseId})`);
+  writeSensitive(PROOF_CONFIG, proofConfig(databaseId, database.name));
 
   run("npx", ["--no-install", "react-router", "build"], {
     env: { ...process.env, WRANGLER_CONFIG: PROOF_CONFIG },
@@ -139,14 +143,22 @@ try {
 
   const sessionSecret = Buffer.from(crypto.getRandomValues(new Uint8Array(48))).toString("base64url");
   const abuseSecret = Buffer.from(crypto.getRandomValues(new Uint8Array(48))).toString("base64url");
-  const secretsFile = join(temporary, "secrets.json");
-  writeFileSync(secretsFile, JSON.stringify({ SESSION_COOKIE_SECRET: sessionSecret, ABUSE_HMAC_SECRET: abuseSecret }), {
-    mode: 0o600,
+  const secretsFile = join(temporary, "proof-secrets.json");
+  writeSensitive(secretsFile, JSON.stringify({ SESSION_COOKIE_SECRET: sessionSecret, ABUSE_HMAC_SECRET: abuseSecret }));
+  const pendingWorker = lifecycle.pendingResource({
+    kind: "Worker",
+    name: PROOF_WORKER,
+    remove() {
+      run("npx", ["--no-install", "wrangler", "delete", PROOF_WORKER, "--config", PROOF_CONFIG], { input: "y\n" });
+    },
   });
   const deployOutput = capture("npx", ["--no-install", "wrangler", "deploy", "--secrets-file", secretsFile]);
+  pendingWorker.created(deployedVersionId(deployOutput));
   // biome-ignore lint/suspicious/noControlCharactersInRegex: strips ANSI escape sequences from Wrangler output.
   const url = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(deployOutput.replace(/\u001b\[[0-9;]*m/g, ""))?.[0];
-  if (!url) throw new Error("could not read the deployed workers.dev URL");
+  if (!url || !new URL(url).hostname.startsWith(`${PROOF_WORKER}.`)) {
+    throw new Error("could not confirm the deployed proof workers.dev URL");
+  }
   // A freshly created or re-created workers.dev route can take a few seconds
   // to serve, and can flap briefly after that; require three consecutive
   // healthy responses before running instead of turning proof requests into
@@ -191,8 +203,8 @@ try {
     INSERT INTO sessions (id, account_id, purpose, authenticated_passkey_id, created_at, idle_expires_at, absolute_expires_at, revoked_at, device_id)
       VALUES ('${sessionId}', '${accountId}', 'normal', '${credentialId}', ${now}, ${now + 86_400_000}, ${now + 86_400_000}, NULL, '${deviceId}');
   `;
-  const seedFile = join(temporary, "seed.sql");
-  writeFileSync(seedFile, seedSql);
+  const seedFile = join(temporary, "proof-seed.sql");
+  writeSensitive(seedFile, seedSql);
   run("npx", [
     "--no-install",
     "wrangler",
@@ -223,17 +235,16 @@ try {
     PROOF_SECOND_ACCOUNT_ID: secondAccountId,
     PROOF_DEVICE_JWK: JSON.stringify(privateJwk),
     PROOF_WRANGLER_CONFIG: PROOF_CONFIG,
-    PROOF_D1_NAME: PROOF_DB,
+    PROOF_D1_NAME: database.name,
   };
-  writeFileSync("/tmp/mdwn-proof-env.json", JSON.stringify(proofEnv, null, 2));
+  writeSensitive(join(temporary, "proof-env.json"), JSON.stringify(proofEnv, null, 2));
 
   run("npx", ["--no-install", "vitest", "run", "--config", "vitest.proof.config.ts"], {
     env: { ...process.env, ...proofEnv },
   });
-  console.log("\n✓ Workers Free + D1 release proof passed");
+} catch (error) {
+  failure = error;
 } finally {
-  rmSync(PROOF_CONFIG, { force: true });
-  rmSync(temporary, { recursive: true, force: true });
-  rmSync("/tmp/mdwn-proof-env.json", { force: true });
-  cleanup();
+  if (lifecycle.finish(failure).ok) console.log("\n✓ Workers Free + D1 release proof passed");
+  else process.exitCode = 1;
 }

@@ -15,11 +15,14 @@
  * Applies any pending migrations with the wrangler environment of that
  * target, then asserts the remote schema matches the committed migration set.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { createScriptLifecycle } from "./lib/script-lifecycle.mjs";
 import { verifyForeignKeys } from "./lib/d1-operations.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isEnvironment, spawnWrangler, WRANGLER_TARGETS } from "./lib/wrangler-targets.mjs";
+import { isEnvironment, runWranglerJson, WRANGLER_TARGETS } from "./lib/wrangler-targets.mjs";
+import { runWranglerOrThrow } from "./lib/restore-cli-support.mjs";
+import { PublicOperationalError } from "./lib/script-errors.mjs";
 
 const isRemoteCli = process.argv.includes("--remote");
 const remoteTarget = isRemoteCli ? process.argv[process.argv.indexOf("--remote") + 1] : "";
@@ -552,31 +555,14 @@ const EXPECTED_TRIGGERS = [
 ];
 
 /**
- * Run a wrangler command; on failure print its output and exit non-zero.
- * @param {string[]} args
- * @param {string} label
- */
-function runCmd(args, label) {
-  const r = spawnWrangler(args);
-  if (r.status !== 0) {
-    process.stdout.write(r.stdout);
-    process.stderr.write(r.stderr);
-    console.error(`✘ ${label} failed`);
-    process.exit(1);
-  }
-  return r;
-}
-
-/**
  * Fetch one column (`name`) of query results as strings.
  * @param {string[]} bindArgs
  * @param {string} sql
  * @returns {string[]}
  */
 function queryResults(bindArgs, sql) {
-  const r = runCmd(["d1", "execute", BINDING, ...bindArgs, "--json", "--command", sql], "d1 query");
   /** @type {Array<{ results?: Array<{ name: string }> }>} */
-  const parsed = JSON.parse(r.stdout);
+  const parsed = runWranglerJson(["d1", "execute", BINDING, ...bindArgs, "--command", sql], "d1 query");
   return parsed.flatMap((row) => row.results ?? []).map((row) => row.name);
 }
 
@@ -625,44 +611,46 @@ function verifySchema(bindArgs, label) {
     ...EXPECTED_TRIGGERS.map((name) => `trigger:${name}`),
   ];
   for (const fact of required) {
-    if (!facts.has(fact)) failNow(`${label}: missing schema fact ${fact}`);
+    if (!facts.has(fact)) throw new PublicOperationalError(`${label}: missing schema fact ${fact}`);
   }
   if (facts.has("fk:import_commits:import_id:import_sessions:id:RESTRICT")) {
-    failNow(`${label}: durable Import marker still depends on ephemeral staging`);
+    throw new PublicOperationalError(`${label}: durable Import marker still depends on ephemeral staging`);
   }
   verifyForeignKeys(bindArgs);
   console.log(`✓ ${label}: schema matches the committed migration set`);
 }
 
-/** @param {string} message */
-function failNow(message) {
-  console.error(`✘ smoke test failed: ${message}`);
-  process.exit(1);
-}
-
 function localSmoke() {
+  const lifecycle = createScriptLifecycle({ label: "smoke test" });
   const persistDir = mkdtempSync(join(tmpdir(), "mdwn-dm-smoke-"));
+  lifecycle.artifact(persistDir, { retainOnFailure: false });
+  let failure = null;
   try {
     // A brand-new persist directory means the local D1 starts empty.
     const localArgs = ["--local", "--persist-to", persistDir];
-    runCmd(["d1", "migrations", "apply", BINDING, ...localArgs], "local migration apply");
+    runWranglerOrThrow(["d1", "migrations", "apply", BINDING, ...localArgs], "local migration apply");
     console.log("✓ migrations applied to a fresh empty local D1");
     verifySchema(localArgs, "local");
 
-    runCmd(["d1", "migrations", "apply", BINDING, ...localArgs], "local re-apply");
+    runWranglerOrThrow(["d1", "migrations", "apply", BINDING, ...localArgs], "local re-apply");
     console.log("✓ re-applying migrations is a no-op (idempotent)");
+  } catch (error) {
+    failure = error;
   } finally {
-    rmSync(persistDir, { recursive: true, force: true });
+    if (!lifecycle.finish(failure).ok) process.exitCode = 1;
   }
 }
 
-if (isRemoteCli) {
-  const { envFlag, extra } = WRANGLER_TARGETS[remoteTarget];
-  runCmd(["d1", "migrations", "apply", BINDING, ...envFlag, ...extra], `${remoteTarget} migration apply`);
-  verifySchema([...envFlag, ...extra], remoteTarget);
-} else {
-  localSmoke();
+try {
+  if (isRemoteCli) {
+    const { envFlag, extra } = WRANGLER_TARGETS[remoteTarget];
+    runWranglerOrThrow(["d1", "migrations", "apply", BINDING, ...envFlag, ...extra], `${remoteTarget} migration apply`);
+    verifySchema([...envFlag, ...extra], remoteTarget);
+  } else {
+    localSmoke();
+  }
+  if (!process.exitCode) console.log("✓ D1 smoke test passed");
+} catch (error) {
+  createScriptLifecycle({ label: "smoke test" }).finish(error);
+  process.exitCode = 1;
 }
-
-console.log("✓ D1 smoke test passed");
-process.exit(0);

@@ -9,7 +9,7 @@
     "build:production": "CLOUDFLARE_ENV=production react-router build",
     "typecheck": "wrangler types && react-router typegen && tsc -b",
     "typecheck:node": "tsc -b tsconfig.node.json",
-    "lint": "biome check",
+    "lint": "biome check && node scripts/check-operational-safety.mjs",
     "format": "biome format --write",
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.workers.config.ts",
     "test:watch": "vitest --config vitest.config.ts",

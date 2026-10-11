@@ -19,7 +19,7 @@
  * No real export, credential, key, or payload is used; the dataset is
  * synthetic and the evidence contains identifiers and digests only.
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,59 +39,39 @@ import {
   createRestoreTarget,
   createWranglerRunner,
   parseFlags,
+  optionalFlag,
   runWranglerOrThrow,
   SENSITIVE_FILE_MODE,
   writeSensitive,
+  withSensitiveOutput,
 } from "./lib/restore-cli-support.mjs";
+import { createScriptLifecycle } from "./lib/script-lifecycle.mjs";
+import { PublicOperationalError } from "./lib/script-errors.mjs";
+import { createTemporaryDatabase } from "./lib/temporary-d1.mjs";
 import { chunkOversizedStatements, splitMultiRowStatements } from "./lib/sql-dump.mjs";
-import { runWranglerJson, spawnWrangler } from "./lib/wrangler-targets.mjs";
-
-/** @param {string} output @returns {string} */
-function parseCreatedDatabaseId(output) {
-  const match = /"database_id"\s*:\s*"([0-9a-f-]{36})"/.exec(output);
-  if (!match) throw new Error(`Could not parse database_id from wrangler output:\n${output}`);
-  return match[1];
-}
+import { runWranglerJson } from "./lib/wrangler-targets.mjs";
 
 const flags = parseFlags(process.argv.slice(2));
 const keep = flags.get("keep") === true;
 const local = flags.get("local") === true;
 const ciphertextBytes = Number(flags.get("max-ciphertext-bytes") ?? 512 * 1024);
 const suffix = `${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`;
-const evidencePath = String(
-  flags.get("evidence") ?? join(tmpdir(), `mdwn-restore-${local ? "local-" : ""}rehearsal-${suffix}.md`),
-);
+const requestedEvidence = optionalFlag(flags, "evidence");
+const lifecycle = createScriptLifecycle({ label: "rehearsal", keep });
 const workDirectory = mkdtempSync(join(tmpdir(), "mdwn-restore-rehearsal-"));
-/** @type {string[]} */
-const temporaryDirectories = [workDirectory];
-/** @type {{ name: string, uuid: string }[]} */
-const created = [];
+lifecycle.artifact(workDirectory);
+const evidencePath = requestedEvidence ?? join(workDirectory, "rehearsal-evidence.md");
+if (requestedEvidence) lifecycle.artifact(evidencePath, { retain: true });
 let failure = null;
 
 /** @param {string} name */
 function createDatabase(name) {
-  const output = runWranglerOrThrow(["d1", "create", name], `create ${name}`).stdout;
-  const uuid = parseCreatedDatabaseId(output);
-  created.push({ name, uuid });
-  console.log(`✓ created ${name} (${uuid})`);
-  return uuid;
-}
-
-/** @param {{ name: string, uuid: string }} database */
-function deleteDatabase(database) {
-  const result = spawnWrangler(["d1", "delete", database.name, "-y"]);
-  if (result.status !== 0) {
-    console.error(`✘ could not delete ${database.name}: ${(result.stderr || result.stdout).trim()}`);
-    return false;
-  }
-  console.log(`✓ deleted ${database.name}`);
-  return true;
+  return createTemporaryDatabase({ name, directory: workDirectory, lifecycle }).uuid;
 }
 
 /**
- * The seed reaches the source through the same 100 KB statement limit and
- * atomic-command transport as a restore, so chunk its max-size BLOBs and keep
- * each foreign-key cycle inside one command.
+ * Keep the seed under the same limits as a restore, with each FK cycle whole.
+ * Transport/limits: docs/operations/d1-scripting.md.
  * @param {number} maxCiphertextBytes
  */
 function buildSeedPlan(maxCiphertextBytes) {
@@ -156,11 +136,26 @@ function seedSource(runner, seedPlan, workDirectory) {
   )[0]?.sql;
   if (!immutableTrigger) throw new Error("source schema is missing tree_representation_immutable");
   runner.run("DROP TRIGGER tree_representation_immutable;");
+  let seedFailure = null;
   try {
     for (const command of seedPlan.commands) runner.run(command);
-  } finally {
-    runner.run(`${immutableTrigger};`);
+  } catch (error) {
+    seedFailure = error;
   }
+  try {
+    runner.run(`${immutableTrigger};`);
+  } catch (error) {
+    const cleanupError = new PublicOperationalError("Could not reinstall the source immutability trigger", {
+      cause: error,
+    });
+    if (seedFailure) {
+      throw new AggregateError([seedFailure, cleanupError], "Source seed and trigger restoration failed", {
+        cause: seedFailure,
+      });
+    }
+    throw cleanupError;
+  }
+  if (seedFailure) throw seedFailure;
   console.log(`✓ source seeded through ${seedPlan.commands.length} atomic commands`);
   if (
     Number(queryRows(runner, "PRAGMA foreign_keys;")[0]?.foreign_keys) !== 1 ||
@@ -183,19 +178,21 @@ function seedSource(runner, seedPlan, workDirectory) {
 /** @param {string} mode @param {string} sourceConfig @param {string} sourceName @param {string} sourceUuid */
 function exportAndPrepare(mode, sourceConfig, sourceName, sourceUuid) {
   const exportPath = join(workDirectory, "rehearsal-export.sql");
-  runWranglerOrThrow(
-    [
-      "d1",
-      "export",
-      "DB",
-      mode === "local" ? "--local" : "--remote",
-      "--config",
-      sourceConfig,
-      "--output",
-      exportPath,
-      "-y",
-    ],
-    "source export",
+  withSensitiveOutput(exportPath, () =>
+    runWranglerOrThrow(
+      [
+        "d1",
+        "export",
+        "DB",
+        mode === "local" ? "--local" : "--remote",
+        "--config",
+        sourceConfig,
+        "--output",
+        exportPath,
+        "-y",
+      ],
+      "source export",
+    ),
   );
   const bookmark = (() => {
     if (mode === "local") return null;
@@ -282,13 +279,14 @@ function runLocalRehearsal() {
     mode: "local",
     databaseName: "mdwn-restore-local-source",
     databaseId: "00000000-0000-4000-8000-0000000000a1",
+    onDirectory: (directory) => lifecycle.artifact(directory),
   });
   const target = createRestoreTarget({
     mode: "local",
     databaseName: "mdwn-restore-local-target",
     databaseId: "00000000-0000-4000-8000-0000000000a2",
+    onDirectory: (directory) => lifecycle.artifact(directory),
   });
-  temporaryDirectories.push(source.directory, target.directory);
   console.log(`Local rehearsal ${suffix} (no Cloudflare auth, no remote resources)`);
   runWranglerOrThrow(
     ["d1", "migrations", "apply", "DB", "--local", "--config", source.configPath],
@@ -323,9 +321,18 @@ function runRemoteRehearsal() {
   console.log(`Account ${account}; remote rehearsal suffix ${suffix}`);
   const sourceUuid = createDatabase(sourceName);
   const targetUuid = createDatabase(targetName);
-  const source = createRestoreTarget({ mode: "remote", databaseName: sourceName, databaseId: sourceUuid });
-  const target = createRestoreTarget({ mode: "remote", databaseName: targetName, databaseId: targetUuid });
-  temporaryDirectories.push(source.directory, target.directory);
+  const source = createRestoreTarget({
+    mode: "remote",
+    databaseName: sourceName,
+    databaseId: sourceUuid,
+    onDirectory: (directory) => lifecycle.artifact(directory),
+  });
+  const target = createRestoreTarget({
+    mode: "remote",
+    databaseName: targetName,
+    databaseId: targetUuid,
+    onDirectory: (directory) => lifecycle.artifact(directory),
+  });
   runWranglerOrThrow(
     ["d1", "migrations", "apply", "DB", "--remote", "--config", source.configPath],
     "source migrations",
@@ -351,21 +358,6 @@ try {
   else runRemoteRehearsal();
 } catch (error) {
   failure = error;
-  console.error(`✘ rehearsal failed: ${error instanceof Error ? error.message : String(error)}`);
 } finally {
-  if (!local && !keep) {
-    for (const database of created.reverse()) deleteDatabase(database);
-  } else if (!local) {
-    for (const database of created)
-      console.log(`Kept ${database.name} (${database.uuid}); delete with: npx wrangler d1 delete ${database.name} -y`);
-  }
-  // A failed run keeps its temporary state for inspection; a successful local
-  // run removes it so CI leaves nothing behind.
-  if (local && !keep && !failure) {
-    for (const directory of temporaryDirectories) rmSync(directory, { recursive: true, force: true });
-    console.log(`✓ removed local rehearsal state`);
-  } else {
-    console.log(`Local rehearsal artifacts (sensitive, trash when done): ${temporaryDirectories.join(" ")}`);
-  }
-  if (failure) process.exitCode = 1;
+  if (!lifecycle.finish(failure).ok) process.exitCode = 1;
 }

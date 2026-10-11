@@ -128,6 +128,100 @@ Reviewed results:
   as `SCAN n`) or automatic substitute index is rejected for representative
   queries.
 
+## Operational script lifecycle and sensitive artifacts
+
+`scripts/smoke-db.mjs`, `scripts/rehearse-d1-restore.mjs` and
+`scripts/import-proof.mjs` choose their exit status **after** cleanup. Reusable
+helpers return or throw; they never terminate the process. An operational
+failure is reported separately from cleanup failures. Unexpected cleanup
+failure makes the command fail even if the checks themselves passed, and does
+not prevent the remaining cleanup attempts. Only explicitly classified,
+content-free command errors are printed. Unclassified failures (including SQL
+parser/preparation errors) keep original details in a private `0600`
+`lifecycle-diagnostics.json`; messages report its path and disposal instructions,
+not exported values. A diagnostic-write failure is itself reported separately
+without replacing the original error.
+
+### Remote ownership and survivors
+
+Rehearsal/proof runs use unique resource names and a current-run ledger. Only a
+successful creation with a confirmed identifier grants deletion authority.
+Cleanup is in reverse dependency order: the proof Worker before its D1, and the
+rehearsal target before its source. D1 deletion binds the recorded UUID rather
+than looking up the name again. Shared command/provider behavior lives in the
+[D1 scripting reference](operations/d1-scripting.md#resource-identities-and-command-output).
+
+`import-proof.mjs --db-id <uuid>` (or `PROOF_D1_ID`) explicitly borrows an existing
+`mdwn-import-proof-db`/`mdwn-import-proof-db-*` database. It is migrated/seeded
+for the proof but **never deleted** by the run. Default proof runs create a
+new database and Worker; they no longer implicitly reuse or delete fixed
+resource names. No production database is an eligible proof target.
+
+- `--keep` explicitly retains confirmed remote resources and local artifacts.
+  Each retained resource is reported by name and UUID/Worker version, not data.
+  Intentional retention is not a cleanup failure.
+- A failed deletion reports `Cleanup failed` and `Surviving resource`, with the
+  identifier needed for manual reconciliation. Remaining deletions are still
+  attempted; there is no blanket “deployment deleted” message.
+- A failed/ambiguous creation reports `Unresolved creation` with the attempted
+  name and an unresolved identifier. Inspect the account before manual cleanup;
+  the command does **not** guess ownership from a later list or delete by name.
+- Borrowed resources are reported separately as left untouched, not as
+  successful deletion or accidental leakage of cleanup responsibility.
+
+The fault-injection suite exercises these outcomes with a controlled command
+runner and synthetic data; it needs no Cloudflare credentials or live deletion.
+
+### Local artifacts and disposal
+
+Exports, prepared SQL, manifests, restore status/evidence, temporary configs,
+proof seed SQL, secrets files and proof environments are sensitive. Writers
+create them with mode `0600`, tighten existing files **before** overwriting, and
+refuse symlinks. Wrangler-written exports are protected before the command,
+including partial output on failure and permissive-umask runs. Operational
+runners disable Wrangler's unmanaged disk debug logs, and lifecycle messages
+never embed raw subprocess output. Do not rely on an operator's umask alone.
+
+- On successful rehearsal/proof runs, temporary artifacts/state are removed in
+  both local and remote modes. Default rehearsal evidence is temporary too.
+- On failure, those artifacts are retained for diagnosis and their paths are
+  reported without contents, together with `trash <path>` instructions. A
+  cleanup failure also reports any retained path. Smoke-test synthetic state
+  is removed on both success and operational failure.
+- `--keep` retains rehearsal/proof artifacts explicitly. `--evidence <path>`
+  is a deliberately retained operator output, even on success; it is `0600`.
+- The restoration CLI's explicit `--out`, `--manifest`, `--status` and local
+  restored-state outputs are operator-held artifacts, retained for inspection.
+  Keep them local and trash them when finished; a failed restore is not verified
+  and its partial state/status must not be treated as a usable restoration.
+
+Prefer `/operational-artifacts/` for operator-chosen repository-local output
+(the directory is ignored), or a private directory outside the checkout. When
+using individual filenames, reserved conventions include `*.d1-export.sql`,
+`*.restore.sql`, `*.restore.manifest.json`, the corresponding
+`*.restore.manifest.json.status.json`, and `*.restore-status.json`.
+`rehearsal-{export,prepared,seed}.sql`, `rehearsal-{manifest,status}.json`,
+`rehearsal-evidence.md`, `lifecycle-diagnostics.json`, generated
+`mdwn-restore-rehearsal-*.md` / `mdwn-restore-local-rehearsal-*.md` evidence,
+`wrangler.proof*.jsonc`, `*.cleanup.jsonc`, `proof-{env,secrets}.json`, `proof-seed.sql`, and the
+legacy `mdwn-proof-env.json` are also reserved operational outputs. Credential
+files `.dev.vars*`, `.env` and `.env.local` must remain untracked;
+`.dev.vars.example` and `.env.example` are intentionally synthetic and allowed.
+
+`.gitignore` excludes these paths, and `npm run lint` independently checks the
+Git index, so force-adding an ignored matching artifact still fails. This is a
+check of documented output locations/names, **not** classification of arbitrary
+sensitive content. Use the ignored output directory for custom filenames. Keep
+synthetic fixtures distinctly named (for example `synthetic-export.sql`), never
+real exports/credentials, rather than exempting every SQL/JSON file.
+
+Never print, commit, upload or attach sensitive artifacts to a PR. Report paths
+or remote identifiers only. When diagnosis/inspection is finished, run
+`trash <path>` on every retained file/directory, including external evidence,
+prepared/status outputs and proof environments containing a Session cookie or
+private JWK. Program tests prove program-controlled cleanup, not eventual manual
+disposal or provider backup erasure.
+
 ## Migration rollback rehearsal
 
 Time Travel is the primary rollback mechanism. **Workers Free retains seven
@@ -256,8 +350,9 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
 
    ```sh
    # Full remote round-trip rehearsal on two disposable databases; deletes
-   # only the databases it created and writes sanitized evidence.
-   npm run db:restore:rehearsal -- [--keep] [--evidence /tmp/evidence.md]
+   # only confirmed current-run databases. --evidence retains a protected output;
+   # without it, success removes the temporary evidence with other artifacts.
+   npm run db:restore:rehearsal -- [--keep] [--evidence /tmp/rehearsal-evidence.md]
    ```
 
    The rehearsal consumes the account's D1 Free daily row-write quota (shared

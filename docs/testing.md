@@ -14,7 +14,7 @@ npm run verify      # local preflight: every CI check, then all browser engines
 Biome (`@biomejs/biome`, pinned) is the formatting and lint guardrail:
 
 ```sh
-npm run lint    # biome check: format check + lint rules, read-only
+npm run lint    # Biome plus scoped operational safety checks, read-only
 npm run format  # biome format --write: apply the formatter
 ```
 
@@ -23,7 +23,25 @@ The `CI` workflow runs `Lint and format check` before `Typecheck`, and
 `tsc -b` alone. The checks stay separate: Biome is not a type checker, and its
 inference-based rules do not replace the TypeScript build.
 
-`biome.json` is the only config. The formatter matches the repo's existing
+`scripts/check-operational-safety.mjs` runs after Biome in the same lint command,
+so both `CI` and clean-head `npm run verify` enforce it. The pinned Biome has no
+`noProcessExit` rule; the repository check uses the installed TypeScript compiler
+to reject Node process-exit calls (including imported/local aliases) only in
+`scripts/lib/`. Command entrypoints own exit status. It also reads `git ls-files`
+to reject tracked [reserved operational output paths](operations.md#local-artifacts-and-disposal),
+even when ignored. It does not classify arbitrary SQL/JSON contents.
+
+`tests/operational-safety-check.test.ts` exercises the check in disposable Git
+repositories. `tests/operational-script-lifecycle.test.ts` runs actual command
+entrypoints under a test-only controlled subprocess runner, with synthetic
+SQLite data and filesystem permission/cleanup faults. The preload never runs a
+real subprocess command or fetches a remote resource. `tests/sensitive-artifacts.test.ts`
+exercises the actual sensitive writers, including overwrites, partial raw
+command output, umask restoration and `0600` permissions. These are Node tests
+in the normal `npm test`; the separate `db:restore:local` gate still exercises the
+real installed Wrangler export/restore path with no remote resources.
+
+`biome.json` is the only Biome config. The formatter matches the repo's existing
 style (two-space indent, double quotes, semicolons, trailing commas,
 120-column lines) and parses `app/app.css` with Tailwind directive support. It
 ignores `.scratch`, `drizzle`, `vendor`, and the generated

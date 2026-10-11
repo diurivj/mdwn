@@ -1,5 +1,6 @@
 .DS_Store
 .env
+.env.local
 /node_modules/
 *.tsbuildinfo
 
@@ -16,6 +17,32 @@ worker-configuration.d.ts
 
 !.dev.vars.example
 !.env.example
+
+# Sensitive operational outputs (see docs/operations.md)
+/operational-artifacts/
+wrangler.proof*.jsonc
+proof-env.json
+mdwn-proof-env.json
+proof-secrets.json
+proof-seed.sql
+rehearsal-export.sql
+rehearsal-prepared.sql
+rehearsal-seed.sql
+rehearsal-manifest.json
+rehearsal-status.json
+rehearsal-evidence.md
+lifecycle-diagnostics.json
+*.cleanup.jsonc
+mdwn-restore-rehearsal-*.md
+mdwn-restore-local-rehearsal-*.md
+*.d1-export.sql
+restore.sql
+*.restore.sql
+restore.manifest.json
+*.restore.manifest.json
+restore.manifest.json.status.json
+*.restore.manifest.json.status.json
+*.restore-status.json
 
 # Test state
 coverage/
