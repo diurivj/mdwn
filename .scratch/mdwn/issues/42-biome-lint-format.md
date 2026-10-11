@@ -37,6 +37,16 @@ Checked 350 files with `recommended` rules and a repo-tuned formatter:
 - [x] `docs/testing.md` documents the commands, the config choices, how the lint step relates to `Typecheck`, and how to add an exception.
 - [x] No `--unsafe` fixes land without individual review; the security and a11y findings are decided explicitly.
 
+## Mechanical follow-up from ticket 41
+
+Ticket 41's maintainer grilling assigned the operational safeguards to [ticket 52](52-operational-script-safety-checks.md), without reopening this completed Biome rollout:
+
+- Reusable process-exit calls: a scoped Biome rule if suitable, otherwise a repository AST check; cleanup correctness needs fault-injection tests, not a check for literal `finally`.
+- Temporary remote resources: tests for current-run ownership, reverse-dependency cleanup, partial failures, retention, survivor reporting, and exit status.
+- Sensitive artifacts: permission/overwrite tests, lifecycle tests, ignore rules plus a tracked-artifact check. Disposal instructions live in the operational runbook; CI cannot prove later manual disposal.
+
+Ticket 52 must wire its checks into CI and local verification. These are filed requirements, not checks supplied by ticket 42's existing configuration.
+
 ## Scope and pointers
 
 - `biome.json`, `package.json`, `package-lock.json`.

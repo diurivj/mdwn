@@ -20,7 +20,7 @@ Put resource-only route modules (no default page component) under `app/routes/ap
 
 Use kebab-case for every file we author — route modules, feature modules, components, hooks, tests, and scripts: `import-control.tsx`, `use-file-draft.ts`, `public-comments.test.ts`. Exported identifiers keep their language convention: React components and types stay PascalCase, hooks and functions stay camelCase.
 
-Framework-reserved entry files (`app/root.tsx`, `app/routes.ts`, `app/entry.server.tsx`), generated files (`drizzle/`), vendored data (`vendor/`), skill entry files (`SKILL.md`), and conventional root documents (`AGENTS.md`, `CONTEXT.md`, `README.md`, `NOTES_TO_DISCUSS.md`) keep their required names.
+Framework-reserved entry files (`app/root.tsx`, `app/routes.ts`, `app/entry.server.tsx`), generated files (`drizzle/`), vendored data (`vendor/`), skill entry files (`SKILL.md`), and conventional root documents (`AGENTS.md`, `CODING_STANDARDS.md`, `CONTEXT.md`, `README.md`, `NOTES_TO_DISCUSS.md`) keep their required names.
 
 ### Reference docs
 
@@ -29,6 +29,10 @@ Framework-reserved entry files (`app/root.tsx`, `app/routes.ts`, `app/entry.serv
 - `docs/operations/d1-scripting.md`: verified Wrangler/D1 semantics before writing an operational script.
 - `docs/serving-and-security.md`: serving and security model.
 - `CONTEXT.md`: domain vocabulary.
+
+### Review gate
+
+Before every code review, read [CODING_STANDARDS.md](CODING_STANDARDS.md) for the Standards axis. A blocking Standards finding must cite a documented rule and explain the concrete maintenance or safety consequence. Treat unwritten preferences and heuristic code smells as advisory, not failures; correctness and security findings remain independently reportable.
 
 ### Post-review RR8 gate
 

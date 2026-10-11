@@ -4,17 +4,19 @@
 
 **Type:** maintenance
 
-**Status:** needs-info
+**Status:** ready-for-agent
 
 **Blocked by:** none.
 
-**Related:** [40: retro environment improvements](40-retro-environment-improvements.md); [42: Biome adoption](42-biome-lint-format.md); `AGENTS.md` (Post-review RR8 gate, Merge discipline).
+**Related:** [40: retro environment improvements](40-retro-environment-improvements.md); [42: Biome adoption](42-biome-lint-format.md); [52: operational script safety checks](52-operational-script-safety-checks.md); `AGENTS.md` (Review gate, Post-review RR8 gate, Merge discipline).
 
 ## Why a grilling session
 
 Standards are judgement calls the maintainer owns; the retro evidence can propose candidates but not ratify them. The grilling should be scoped to the few rules no deterministic check can substitute for — mechanical patterns belong in ticket 42's Biome config instead. Run `/grill-with-docs` in a fresh session, with this ticket as the starting material, then write the file and point `AGENTS.md` at it.
 
 ## Candidate rules from the MVP evidence
+
+Original interview material; the ratified dispositions below amend these candidates.
 
 - Split a module by reason once it carries more than one responsibility; ticket 38's 1,000-line restore library was split on review into planning and verification modules.
 - Extract shared helpers across scripts instead of duplicating: the restore CLI and the rehearsal had three copies of flag parsing, the runner, and the target config before review.
@@ -23,12 +25,27 @@ Standards are judgement calls the maintainer owns; the retro evidence can propos
 - Sensitive artifacts (exports, prepared SQL, manifests, status, evidence) are written mode 0600, never committed, and trashed when finished.
 - Operational D1 facts live in `docs/operations/d1-scripting.md`, not in code comments; scripts point at it.
 
+## Ratified decisions
+
+The maintainer accepted both recommendation rounds, including the cleanup-failure refinement:
+
+1. **Module boundaries — amended.** Split along independent reasons to change when separation clarifies ownership or hides complexity. Keep large cohesive modules together; line count and fragmentation alone justify nothing. Recorded in `CODING_STANDARDS.md`, “Boundaries follow reasons to change.”
+2. **Shared helpers — amended.** Extract logic when callers must preserve the same behavior or safety invariant, not merely similar code. No fixed duplication count; avoid generic helpers with switches disguising unrelated behavior. Recorded in “Share behavior, not resemblance.”
+3. **Cleanup and exit control — amended; assigned to checks.** Require cleanup on success and failure, not literal `finally` syntax. Reusable helpers return or throw; commands own cleanup and exit status. Scoped lint/AST enforcement and failure-path tests belong to ticket 52.
+4. **Remote resource lifecycle — amended; assigned to checks.** Delete only temporary resources created by the current run, in reverse dependency order. Continue cleanup after individual failures, report all survivors, and never guess ownership. Retention is explicit. Unintended cleanup failure produces a nonzero exit while preserving any original error; deliberate retention does not. Ticket 52 owns tests and operational documentation.
+5. **Sensitive artifacts — amended; assigned to checks and the runbook.** Require `0600` and exclusion from version control. Permit retention for diagnosis or explicit operator needs; report retained paths without contents and trash artifacts when finished. Ticket 52 owns permissions, repository checks, lifecycle tests, and disposal instructions; manual disposal cannot be fully proved by CI.
+6. **Operational facts — amended.** Shared, verified D1/Wrangler behavior is authoritative in `docs/operations/d1-scripting.md`. Inline comments may explain local reasoning and link there rather than maintain competing facts. Recorded in “Keep operational facts authoritative.”
+
+**Review policy:** A blocking Standards finding must cite a documented rule and explain a concrete maintenance or safety consequence. Unwritten preferences and heuristic smells are advisory; correctness and security findings remain independently reportable. This procedure belongs in `AGENTS.md`'s Review gate.
+
+**Implementation scope:** This ticket changes documentation and review guidance only. Ticket 42 is already complete, so its follow-up section routes the mechanical safeguards to ticket 52 with explicit checks. Those safeguards are not claimed as implemented by ticket 41. No domain vocabulary or hard-to-reverse architecture decision changed; no glossary or ADR is needed.
+
 ## Acceptance criteria
 
-- [ ] A grilling session with the maintainer has ratified, amended, or rejected each candidate rule.
-- [ ] `CODING_STANDARDS.md` exists, is short, and contains only judgement calls no check can enforce.
-- [ ] `AGENTS.md` points at it from the review gate.
-- [ ] Mechanical rules from the list are filed into ticket 42's Biome config or a deterministic check rather than the standards file.
+- [x] A grilling session with the maintainer has ratified, amended, or rejected each candidate rule.
+- [x] `CODING_STANDARDS.md` exists, is short, and contains only judgement calls no check can enforce.
+- [x] `AGENTS.md` points at it from the review gate.
+- [x] Mechanical rules from the list are filed for deterministic enforcement rather than the standards file: ticket 52, linked from the completed ticket 42.
 - [ ] The next code review cites the standards file where relevant.
 
 ## Scope and pointers
@@ -40,3 +57,4 @@ Standards are judgement calls the maintainer owns; the retro evidence can propos
 ## Comments
 
 - 2026-10-06: Raised from the MVP retro. Awaiting the maintainer's grilling session; the candidate list above is the interview material, not the decision.
+- 2026-10-10: Maintainer ratified the recommendations in two rounds. Added the three-rule standards document and review-gate pointer; recorded each candidate's disposition and filed ticket 52 for the remaining automated safeguards. Implementation is docs-only; pinned review and verification evidence will accompany the PR. Status advanced from `needs-info` after ratification; merge completion remains pending.
