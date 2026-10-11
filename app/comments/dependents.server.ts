@@ -10,10 +10,12 @@ import { sql } from "~/shared/db/client.server";
  *
  * Every statement is guarded by the caller's existing transaction marker: a
  * deletion that loses its authorization/namespace guard (or fails a later
- * statement of the same batch) removes nothing. Authorization, the
- * selected-graph CAS, the atomic batch and its scheduling stay with the
- * callers, and broader File, Publication, Share, Grant and Key-rotation
- * lifecycle work remains theirs because it is not Comment-dependent.
+ * statement of the same batch) removes nothing. The caller's batch must defer
+ * foreign keys (as `commitTreeMutation` does): the epoch/thread cycle resolves
+ * only at commit. Authorization, the selected-graph CAS, the atomic batch and
+ * its scheduling stay with the callers, and broader File, Publication, Share,
+ * Grant and Key-rotation lifecycle work remains theirs because it is not
+ * Comment-dependent.
  */
 
 /** The selected Files of one atomic File/Directory Hard deletion: every node ID
