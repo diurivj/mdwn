@@ -4,9 +4,9 @@
 
 **Type:** bug
 
-**Status:** ready-for-agent
+**Status:** done
 
-**Implementation:** complete on `issue/51-imported-comment-envelope-deletion` at `907842e`; PR [#58](https://github.com/diurivj/mdwn/pull/58) open for review and merge.
+**Implementation:** complete — merged on `main` via PR [#58](https://github.com/diurivj/mdwn/pull/58) (merge `49b5743`).
 
 **Blocked by:** None. Ticket 49 delivered the shared module in `app/comments/dependents.server.ts`, merged on `main` by PR #56 (merge `58f8842`); ticket 50 added the Publication scope to the same module, merged on `main` by PR #57 (merge `f1147bc`), and must not gain this removal.
 
@@ -25,7 +25,7 @@ Root cause: `import_comment_envelopes.thread_id` references `comment_threads(id)
 - [x] The removal stays File-scope-only: Publication teardown (ticket 50) must never select a Private thread or its envelopes, exactly like the `import_comment_meta` asymmetry.
 - [x] Unrelated Files, threads, envelopes and Import sessions remain unchanged; an over-cap Directory and an injected late dependent failure still leave everything unchanged.
 - [x] Existing hard-deletion completeness, import-staging Historical Comment, private-tree, Directory-cap and injected-rollback suites are retained and pass.
-- [ ] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
+- [x] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
 
 ## Scope and pointers
 
@@ -43,3 +43,4 @@ Root cause: `import_comment_envelopes.thread_id` references `comment_threads(id)
 - 2026-10-11: Docs. The module doc's dependent list now names imported Historical Comment metadata and capability envelopes and the File-scope-only asymmetry; `docs/comments.md` updates the hard-deletion paragraph and verification seams; `docs/acceptance.md` updates the File/Directory row, with the Private-thread retention evidence moved to the Unpublishing row.
 - 2026-10-11: Pinned two-axis review `76655e2...33fb997` (parallel Standards + Spec sub-agents), with a wording-only follow-up at `907842e` (module doc, acceptance rows, test comments; no logic change — a 3-file, 8-insertion/7-deletion comment/doc delta). **Standards: Pass** — no documented-standard violations. Judgement calls and dispositions: "Import session marker" against CONTEXT.md's `import_commits` term, reworded to "session row"; the Private-thread rationale restated in module doc and inline notes, kept per site; the acceptance row carrying Publication retention evidence, moved to the Unpublishing row; "Historical Comment rows" imprecision, reworded to metadata and capability envelope; fixture parameter shape, kept consistent with sibling fixtures. **Spec: Pass** — no missing/partial, unasked-for or wrong behavior: the statement is marker-guarded, FK-safe and File-scope-only, and Publication scope gains nothing. Notes: the red test is recorded as commit `6f98063` so red-before-green is reproducible; route tests seed no Import session (retention is pinned at module scope); parent-listing advancement stays with the pre-existing suites. **Separate RR8/stack: Pass** on the same pinned diff: the only changed data-flow site is the Worker/D1 mutation boundary; no route, loader, UI, binding, schema or config change; the statement stays inside `commitTreeMutation`'s deferred-FK atomic batch with the fresh `committed` marker, and D1 parameter and statement bounds are unaffected.
 - 2026-10-11: Full clean-tree `npm run verify` **passed at `907842e`** — lint/format, typecheck, namespace drift, 306 Node + 382 Workers tests, production build, fresh-D1 migration smoke, local D1 export/restore round trip, client secret scan, and 431 passing Chromium/Firefox/WebKit browser cases (one existing synthetic WebKit-drop skip, no retries). Log: `/tmp/mdwn-51-final-verify.log`. Branch pushed; PR [#58](https://github.com/diurivj/mdwn/pull/58) open for review, with current-head `CI` still to be confirmed before merge.
+- 2026-10-11: Status reconciled to **done**: PR #58 merged on `main` as `49b5743` (2026-10-11) after every `CI` job passed at the PR's head `5775037` — typecheck/test/build/migration-smoke/secrets plus Chromium, Firefox and WebKit browser E2E. Application and test code are the reviewed and verified state (`6f98063` red evidence, `907842e` fix; the reviewed pinned diff was `76655e2...33fb997`, with a disclosed wording-only follow-up at `907842e`), and the merge-time commit changed only ticket markdown.
