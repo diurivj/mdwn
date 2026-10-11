@@ -15,6 +15,7 @@ export default [
   route("account/key-rotations", "routes/account-key-rotations.tsx"),
   route("account/shared-access", "routes/account-shared-access.tsx"),
   route("account/device-access", "routes/device-access.tsx"),
+  route("files", "routes/files.tsx"),
   route("d/:directoryId", "routes/directory.tsx"),
   route("f/:fileId", "routes/file.tsx"),
   route("p/:linkId", "routes/publication.tsx"),

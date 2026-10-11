@@ -3,7 +3,14 @@ import { PrivateAccessError, privateRequest } from "~/shared/device/private-clie
 import { resumeKeyRotation } from "~/shared/sharing/rotation-client";
 import type { RotationJob } from "~/shared/sharing/rotation-wire";
 import { isV7 } from "~/shared/tree/wire";
+import type { ChromeHandle } from "~/ui/chrome";
+import { cx } from "~/ui/cx";
+import { ArrowRightIcon, CheckIcon, KeyIcon } from "~/ui/icons";
+import { AccountLayout, PageIntro, SkeletonLines } from "~/ui/page-layouts";
+import { buttonClass, linkClass, noticeClass } from "~/ui/styles";
 import type { Route } from "./+types/account-key-rotations";
+
+export const handle: ChromeHandle = { chrome: "account" };
 
 export function meta() {
   return [{ title: "Secure access updates — mdwn" }];
@@ -44,9 +51,13 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
 
 export function HydrateFallback() {
   return (
-    <main className="mx-auto max-w-xl px-4 py-12" role="status">
-      Loading secure access updates…
-    </main>
+    <AccountLayout busy>
+      <PageIntro eyebrow="Sharing" title="Secure access updates" />
+      <p role="status" className="mt-6 text-sm text-muted">
+        Loading secure access updates…
+      </p>
+      <SkeletonLines className="mt-6 max-w-xl" />
+    </AccountLayout>
   );
 }
 
@@ -54,30 +65,31 @@ function Update({ job }: { job: RotationJob }) {
   const fetcher = useFetcher<typeof clientAction>();
   const busy = fetcher.state !== "idle";
   return (
-    <li className="rounded-md border border-stone-200 bg-white p-4">
-      <p>
-        {job.progress} {job.progress === 1 ? "capability updated" : "capabilities updated"}
-      </p>
-      <fetcher.Form method="post" className="mt-3">
+    <li className="rounded-3xl bg-paper p-6 ring-1 ring-line">
+      <div className="flex items-center gap-3">
+        <span className="grid size-10 place-items-center rounded-full bg-cream text-accent ring-1 ring-line">
+          <KeyIcon />
+        </span>
+        <p className="font-medium">
+          {job.progress} {job.progress === 1 ? "capability updated" : "capabilities updated"}
+        </p>
+      </div>
+      <fetcher.Form method="post" className="mt-5">
         <input type="hidden" name="jobId" value={job.jobId} />
-        <button
-          type="submit"
-          disabled={busy || job.runnable === false}
-          className="rounded-md border border-stone-300 px-3 py-2 disabled:opacity-60"
-        >
+        <button type="submit" disabled={busy || job.runnable === false} className={buttonClass("primary", "sm")}>
           {busy ? "Updating secure access…" : "Resume update"}
         </button>
       </fetcher.Form>
       {job.runnable === false && (
-        <p className="mt-3 text-sm">Queued. Finish the earlier affected folder update first.</p>
+        <p className="mt-3 text-sm text-muted">Queued. Finish the earlier affected folder update first.</p>
       )}
       {fetcher.data?.state === "paused" && (
-        <p role="status" className="mt-3 text-sm">
+        <p role="status" className={cx(noticeClass("info"), "mt-4")}>
           Progress saved. Resume to continue the next bounded batch.
         </p>
       )}
       {fetcher.data?.state === "failed" && (
-        <p role="alert" className="mt-3 text-sm">
+        <p role="alert" className={cx(noticeClass("danger"), "mt-4")}>
           The update paused safely. Refresh and resume from an enrolled Owner device. Writes remain blocked until the
           update finishes.
         </p>
@@ -88,50 +100,53 @@ function Update({ job }: { job: RotationJob }) {
 
 export default function KeyRotations({ loaderData }: Route.ComponentProps) {
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <Link to="/" className="text-sm underline">
-        mdwn
-      </Link>
-      <h1 className="mt-8 text-2xl font-semibold">Secure access updates</h1>
-      <p className="mt-3 text-sm">
-        Removed permissions take effect immediately. New writes beneath affected Files and folders wait until their
-        secure access update finishes.
-      </p>
-      <p className="mt-3 text-sm">This cannot recall previously downloaded plaintext, ciphertext, or keys.</p>
-      <p className="mt-3 text-sm">
-        You can leave and resume from another enrolled Owner device. No plaintext keys or content are stored in the job.
-      </p>
-      <p className="mt-3 text-sm">
-        Expired Shares must finish{" "}
-        <Link to="/account/shared-access" className="underline">
-          shared access cleanup
-        </Link>{" "}
-        before queued updates can resume.
-      </p>
+    <AccountLayout>
+      <PageIntro eyebrow="Sharing" title="Secure access updates">
+        <p>
+          Removed permissions take effect immediately. New writes beneath affected Files and folders wait until their
+          secure access update finishes.
+        </p>
+      </PageIntro>
+      <div className="mt-6 max-w-2xl space-y-2 text-sm leading-relaxed text-ink-soft">
+        <p>This cannot recall previously downloaded plaintext, ciphertext, or keys.</p>
+        <p>
+          You can leave and resume from another enrolled Owner device. No plaintext keys or content are stored in the
+          job.
+        </p>
+        <p>
+          Expired Shares must finish{" "}
+          <Link to="/account/shared-access" className={linkClass}>
+            shared access cleanup
+          </Link>{" "}
+          before queued updates can resume.
+        </p>
+      </div>
       {loaderData.state === "ready" ? (
         <>
           {loaderData.jobs.length ? (
-            <ul className="mt-6 space-y-3">
+            <ul className="mt-8 grid gap-4 md:grid-cols-2">
               {loaderData.jobs.map((job) => (
                 <Update key={job.jobId} job={job} />
               ))}
             </ul>
           ) : (
-            <p role="status" className="mt-6">
+            <p role="status" className={cx(noticeClass("success"), "mt-8 flex max-w-xl items-center gap-2")}>
+              <CheckIcon />
               No secure access updates are waiting.
             </p>
           )}
           {loaderData.nextCursor && (
-            <Link to={`?cursor=${loaderData.nextCursor}`} className="mt-5 block underline">
+            <Link to={`?cursor=${loaderData.nextCursor}`} className={cx(buttonClass("secondary", "sm"), "mt-6")}>
               More updates
+              <ArrowRightIcon />
             </Link>
           )}
         </>
       ) : (
-        <p role="alert" className="mt-6">
+        <p role="alert" className={cx(noticeClass("warning"), "mt-8 max-w-xl")}>
           Use an enrolled Owner device to load and resume secure access updates.
         </p>
       )}
-    </main>
+    </AccountLayout>
   );
 }

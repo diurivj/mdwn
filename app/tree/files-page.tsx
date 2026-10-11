@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/shared/comments/comments-client";
 import { ExportControl } from "~/export/export-control";
@@ -9,6 +9,26 @@ import { PublishPanel } from "~/publications/publish-panel";
 import { PublicationLifecycle, type PublicationContext } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
+import { cx } from "~/ui/cx";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  FileIcon,
+  FilePlusIcon,
+  FolderIcon,
+  FolderPlusIcon,
+  GlobeIcon,
+  KeyIcon,
+  LockIcon,
+  MoveIcon,
+  PencilIcon,
+  RefreshIcon,
+  TrashIcon,
+  UserIcon,
+} from "~/ui/icons";
+import { buttonClass, fieldClass, labelClass, noticeClass, textButtonClass } from "~/ui/styles";
 
 import {
   createTreeChild,
@@ -464,79 +484,113 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     } else await submit({ ...current, review: undefined, needsRefresh: true });
   }
 
+  const pendingPath = navigation.state === "loading" ? navigation.location?.pathname : undefined;
+
   function directoryItems(directoryId: string, depth = 0): React.ReactNode {
     if (!snapshot || depth > 100) return null;
     const listing = snapshot.listings[directoryId];
     if (!listing) return null;
-    return listing.entries.map((entry) => (
-      <div key={entry.nodeId}>
-        <div
-          className={`flex items-center gap-1 rounded px-1 py-0.5 ${entry.nodeId === nodeId ? "bg-stone-200" : ""}`}
-          style={{ paddingLeft: `${depth * 12 + 4}px` }}
-        >
-          {entry.kind === "directory" ? (
-            <button
-              type="button"
-              aria-label={`${expanded.includes(entry.nodeId) ? "Collapse" : "Expand"} ${entry.name}`}
-              onClick={() => void toggle(entry)}
-              className="w-5 text-left"
-            >
-              {expanded.includes(entry.nodeId) ? "▾" : "▸"}
-            </button>
-          ) : (
-            <span className="w-5" aria-hidden="true">
-              ·
-            </span>
-          )}
-          <Link
-            to={`/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`}
-            onClick={() => setDrawer(false)}
-            className="min-w-0 truncate hover:underline"
+    return listing.entries.map((entry) => {
+      const open = expanded.includes(entry.nodeId);
+      const to = `/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`;
+      const current = entry.nodeId === nodeId;
+      const pending = pendingPath === to && !current;
+      return (
+        <div key={entry.nodeId}>
+          <div
+            className={cx(
+              "flex items-center rounded-xl pr-2 text-sm transition-colors",
+              current
+                ? "bg-paper text-ink shadow-[inset_2px_0_0_var(--color-accent)] ring-1 ring-line"
+                : "text-ink-soft hover:bg-paper/70 hover:text-ink",
+              pending && "bg-paper/70 text-ink",
+            )}
+            style={{ paddingLeft: `${depth * 14 + 2}px` }}
           >
-            {entry.name}
-          </Link>
+            {entry.kind === "directory" ? (
+              <button
+                type="button"
+                aria-label={`${open ? "Collapse" : "Expand"} ${entry.name}`}
+                aria-expanded={open}
+                onClick={() => void toggle(entry)}
+                className="grid size-7 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-ink/5 hover:text-ink"
+              >
+                <ChevronRightIcon className={cx("size-3.5 transition-transform duration-200", open && "rotate-90")} />
+              </button>
+            ) : (
+              <span className="size-7 shrink-0" aria-hidden="true" />
+            )}
+            <Link
+              to={to}
+              onClick={() => setDrawer(false)}
+              aria-current={current ? "page" : undefined}
+              className="flex min-w-0 flex-1 items-center gap-2 py-1.5"
+            >
+              {entry.kind === "directory" ? (
+                <FolderIcon className="text-accent/80" />
+              ) : (
+                <FileIcon className="text-muted" />
+              )}
+              <span className="truncate">{entry.name}</span>
+              {pending && (
+                <span aria-hidden="true" className="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+              )}
+            </Link>
+          </div>
+          {entry.kind === "directory" && open && directoryItems(entry.nodeId, depth + 1)}
         </div>
-        {entry.kind === "directory" && expanded.includes(entry.nodeId) && directoryItems(entry.nodeId, depth + 1)}
-      </div>
-    ));
+      );
+    });
   }
 
   if (status === "not-found")
     return (
-      <main className="p-8">
-        <h1 className="text-xl font-semibold">Not found</h1>
+      <EmptyState icon={FileIcon} title="Not found">
         <p>This File or folder is unavailable.</p>
-        <Link to="/account/device-access" className="underline">
-          Files access
-        </Link>
-      </main>
+        <div className="mt-8 flex flex-wrap justify-center gap-3">
+          <Link to="/files" className={buttonClass("primary")}>
+            Back to your Files
+          </Link>
+          <Link to="/account/device-access" className={buttonClass("secondary")}>
+            Files access
+          </Link>
+        </div>
+      </EmptyState>
     );
   if (status === "provisioning")
     return (
-      <main className="p-8">
-        <p role="status">Shared content is being securely provisioned</p>
+      <EmptyState icon={KeyIcon}>
+        <p role="status" className="font-serif text-3xl leading-tight text-ink text-balance sm:text-4xl">
+          Shared content is being securely provisioned
+        </p>
+        <p className="mt-3">
+          An authorized device delivers your keys the next time it opens mdwn. Nothing private is shown until then.
+        </p>
         <button
           type="button"
           onClick={() => void revalidator.revalidate()}
           disabled={revalidator.state !== "idle"}
-          className="mt-4 rounded border px-3 py-2"
+          className={cx(buttonClass("primary"), "mt-8")}
         >
+          <RefreshIcon className={cx(revalidator.state !== "idle" && "animate-spin")} />
           Check shared access
         </button>
-      </main>
+      </EmptyState>
     );
   if (status !== "ready" || !snapshot)
     return (
-      <main className="p-8">
-        <h1 className="text-xl font-semibold">Files unavailable</h1>
+      <EmptyState icon={LockIcon} title="Files unavailable">
         <p>Check this device’s access or try again.</p>
-        <Link to="/account/device-access" className="underline">
-          Device access
-        </Link>
-      </main>
+        <div className="mt-8 flex flex-wrap justify-center gap-3">
+          <Link to="/account/device-access" className={buttonClass("primary")}>
+            Device access
+          </Link>
+        </div>
+      </EmptyState>
     );
 
   const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
+  const owner = snapshot.access.actorAccountId === snapshot.access.vaultId;
   const structuralParent = kind === "directory" ? nodeId : snapshot.file?.parentId;
   const canCreate =
     !!structuralParent &&
@@ -544,8 +598,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     !!snapshot.listings[structuralParent];
   const canChangeStructure =
     nodeId !== snapshot.access.rootId && snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.canCreate !== false;
+  const structureBlocked = busy || recoveryPending || (kind === "file" && !fileReady);
+  const siblings = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];
+  const position = siblings.findIndex((entry) => entry.nodeId === nodeId);
+  const folderEntries = kind === "directory" ? (snapshot.listings[nodeId]?.entries ?? []) : [];
   return (
-    <main className="mx-auto min-h-dvh max-w-screen-2xl lg:grid lg:grid-cols-[18rem_minmax(0,1fr)]">
+    <main className="w-full lg:grid lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-[17.5rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)]">
       {(kind === "directory" || editorParent !== snapshot.file?.parentId) && (
         <NavigationIntentObserver onStart={onNavigationStart} />
       )}
@@ -554,43 +612,70 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           type="button"
           aria-label="Close Files tree"
           onClick={() => setDrawer(false)}
-          className="fixed inset-0 z-10 bg-black/30 lg:hidden"
+          className="fixed inset-0 z-40 animate-fade bg-ink/40 lg:hidden"
         />
       )}
       <aside
-        className={`${drawer ? "block" : "hidden"} fixed inset-y-0 left-0 z-20 w-72 overflow-y-auto border-r border-stone-200 bg-stone-50 p-4 shadow-lg lg:static lg:block lg:w-auto lg:shadow-none`}
+        className={cx(
+          drawer ? "flex" : "hidden",
+          "fixed inset-y-0 left-0 z-50 w-[19rem] max-w-[86vw] flex-col overflow-y-auto overscroll-contain border-r border-line bg-cream shadow-2xl transition-[translate] duration-300 ease-out max-lg:starting:-translate-x-full lg:sticky lg:top-16 lg:z-auto lg:flex lg:h-[calc(100dvh-4rem)] lg:w-auto lg:max-w-none lg:bg-cream/60 lg:shadow-none",
+        )}
         aria-label="Files tree"
       >
-        <div className="mb-4 flex items-center justify-between">
-          <Link to="/" className="font-semibold">
-            mdwn
-          </Link>
-          <button type="button" onClick={() => setDrawer(false)} className="lg:hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-line py-3 pr-3 pl-5 lg:hidden">
+          <p className="eyebrow text-muted">Your Files</p>
+          <button type="button" onClick={() => setDrawer(false)} className={buttonClass("ghost", "sm")}>
+            <CloseIcon />
             Close tree
           </button>
         </div>
-        <Link
-          to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`}
-          className="mb-2 block font-medium hover:underline"
-        >
-          {snapshot.access.rootKind === "file" ? "Shared File" : "Files"}
-        </Link>
-        <nav aria-label="Files">{directoryItems(snapshot.access.rootId)}</nav>
-        <SharedProvisioning />
-        {snapshot.access.actorAccountId === snapshot.access.vaultId && (
-          <>
-            <Link to="/account/pseudonym" className="mt-6 block text-sm underline">
-              Public pseudonym
-            </Link>
-            <Link to="/account/key-rotations" className="mt-2 block text-sm underline">
-              Secure access updates
-            </Link>
-          </>
-        )}
+        <div className="flex-1 px-3 py-5 lg:px-4 lg:py-7">
+          <Link
+            to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`}
+            onClick={() => setDrawer(false)}
+            className={cx(
+              "mb-3 block rounded-xl px-2 font-serif text-[1.7rem] leading-tight transition hover:text-accent",
+              nodeId === snapshot.access.rootId ? "text-ink" : "text-ink-soft",
+            )}
+          >
+            {snapshot.access.rootKind === "file" ? "Shared File" : "Files"}
+          </Link>
+          <nav aria-label="Files" className="space-y-0.5">
+            {directoryItems(snapshot.access.rootId)}
+          </nav>
+          {snapshot.access.rootKind !== "file" && snapshot.listings[snapshot.access.rootId]?.entries.length === 0 && (
+            <p className="px-2 text-sm text-muted">Nothing here yet. Create your first File.</p>
+          )}
+        </div>
+        <div className="space-y-3 border-t border-line px-5 py-5 text-sm">
+          <SharedProvisioning />
+          {owner && (
+            <ul className="space-y-1.5">
+              <li>
+                <Link
+                  to="/account/pseudonym"
+                  className="flex items-center gap-2 text-ink-soft transition hover:text-ink"
+                >
+                  <UserIcon className="text-muted" />
+                  Public pseudonym
+                </Link>
+              </li>
+              <li>
+                <Link
+                  to="/account/key-rotations"
+                  className="flex items-center gap-2 text-ink-soft transition hover:text-ink"
+                >
+                  <KeyIcon className="text-muted" />
+                  Secure access updates
+                </Link>
+              </li>
+            </ul>
+          )}
+        </div>
       </aside>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only File drop target; the Import control exposes a labelled file picker for keyboard users. */}
       <section
-        className="min-w-0 p-4 md:p-6"
+        className="min-w-0 animate-fade px-4 pt-5 pb-16 sm:px-6 lg:px-10 lg:pt-8"
         onDragOver={(event) => {
           if (importControl.current?.canAcceptDrop()) {
             event.preventDefault();
@@ -603,156 +688,165 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           importControl.current.acceptDrop(event.dataTransfer);
         }}
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="button" onClick={() => setDrawer(true)} className="rounded border px-2 py-1 lg:hidden">
+        <div className="flex min-h-9 flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setDrawer(true)}
+            className={cx(buttonClass("secondary", "sm"), "lg:hidden")}
+          >
+            <FolderIcon />
             Tree
           </button>
-          <nav aria-label="Breadcrumbs" className="flex min-w-0 flex-wrap gap-2 text-sm">
-            {snapshot.crumbs.map((crumb, index) => (
-              <span key={crumb.id} className="min-w-0">
-                {index > 0 && (
-                  <span aria-hidden="true" className="mr-2 text-stone-400">
-                    /
-                  </span>
-                )}
-                <Link
-                  to={`/${index === snapshot.crumbs.length - 1 && kind === "file" ? "f" : "d"}/${crumb.id}`}
-                  className="hover:underline"
-                >
-                  {crumb.name}
-                </Link>
-              </span>
-            ))}
+          <nav aria-label="Breadcrumbs" className="min-w-0">
+            <ol className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-[13px] text-muted">
+              {snapshot.crumbs.map((crumb, index) => (
+                <li key={crumb.id} className="flex min-w-0 items-center gap-1">
+                  {index > 0 && <ChevronRightIcon className="size-3 text-muted/60" />}
+                  <Link
+                    to={`/${index === snapshot.crumbs.length - 1 && kind === "file" ? "f" : "d"}/${crumb.id}`}
+                    className={cx(
+                      "truncate rounded-md px-1.5 py-0.5 transition hover:bg-ink/5 hover:text-ink",
+                      index === snapshot.crumbs.length - 1 && "text-ink-soft",
+                    )}
+                  >
+                    {crumb.name}
+                  </Link>
+                </li>
+              ))}
+            </ol>
           </nav>
-        </div>
-        <div className="mt-6 flex flex-wrap items-center gap-2">
-          <h1 className="mr-auto text-2xl font-semibold">{selected}</h1>
-          {canCreate && (
-            <>
-              <button
-                type="button"
-                disabled={busy || recoveryPending}
-                onClick={() => startCreate("directory")}
-                className="rounded border px-2 py-1"
-              >
-                New folder
-              </button>
-              <button
-                type="button"
-                disabled={busy || recoveryPending}
-                onClick={() => startCreate("file")}
-                className="rounded border px-2 py-1"
-              >
-                New File
-              </button>
-            </>
+          {busy && (
+            <p role="status" className="ml-auto inline-flex items-center gap-2 text-[13px] text-muted">
+              <span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-accent" />
+              Updating Files…
+            </p>
           )}
-          {canChangeStructure && (
-            <button
-              type="button"
-              disabled={busy || recoveryPending || (kind === "file" && !fileReady)}
-              onClick={startRename}
-              className="rounded border px-2 py-1"
-            >
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
+          <div className="min-w-0 max-w-full">
+            <p className="eyebrow text-muted">{kind === "file" ? "Markdown File" : "Folder"}</p>
+            <h1 className="mt-2 break-words font-serif text-4xl leading-[1.05] tracking-tight sm:text-[2.75rem]">
+              {selected}
+            </h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {canCreate && (
+              <>
+                <button
+                  type="button"
+                  disabled={busy || recoveryPending}
+                  onClick={() => startCreate("file")}
+                  className={buttonClass("primary", "sm")}
+                >
+                  <FilePlusIcon />
+                  New File
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || recoveryPending}
+                  onClick={() => startCreate("directory")}
+                  className={buttonClass("secondary", "sm")}
+                >
+                  <FolderPlusIcon />
+                  New folder
+                </button>
+              </>
+            )}
+            {kind === "file" && snapshot.file && (
+              <button
+                type="button"
+                aria-expanded={publishOpen}
+                onClick={() => setPublishOpen((open) => !open)}
+                className={cx(buttonClass("secondary", "sm"), publishOpen && "border-ink/40 bg-ink/[0.04]")}
+              >
+                <GlobeIcon />
+                {owner ? "Publish" : "Request publication"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {canChangeStructure && (
+          <div className="mt-4 flex flex-wrap items-center gap-1 border-y border-line py-1.5">
+            <button type="button" disabled={structureBlocked} onClick={startRename} className={textButtonClass()}>
+              <PencilIcon />
               Rename
             </button>
-          )}
-          {kind === "file" && snapshot.file && (
             <button
               type="button"
-              aria-expanded={publishOpen}
-              onClick={() => setPublishOpen((open) => !open)}
-              className="rounded border px-2 py-1"
-            >
-              {snapshot.access.actorAccountId === snapshot.access.vaultId ? "Publish" : "Request publication"}
-            </button>
-          )}
-        </div>
-        <div className="mt-3 flex flex-wrap items-start gap-2">
-          <ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} />
-          <ImportControl
-            ref={importControl}
-            snapshot={snapshot}
-            nodeId={nodeId}
-            kind={kind}
-            disabled={busy || recoveryPending}
-            onRefresh={() => void revalidator.revalidate()}
-          />
-        </div>
-        {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (
-          <PublishPanel lifecycle={publicationLifecycle} fileReady={fileReady && !busy} />
-        )}
-        {canChangeStructure && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {(["up", "down"] as const).map((direction) => {
-              const entries = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];
-              const index = entries.findIndex((entry) => entry.nodeId === nodeId);
-              return (
-                <button
-                  key={direction}
-                  type="button"
-                  disabled={
-                    busy ||
-                    recoveryPending ||
-                    (kind === "file" && !fileReady) ||
-                    index < 0 ||
-                    (direction === "up" ? index === 0 : index === entries.length - 1)
-                  }
-                  onClick={() => startStructural({ operation: "reorder", direction })}
-                  className="rounded border px-2 py-1"
-                >
-                  Move {direction}
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              disabled={busy || recoveryPending || (kind === "file" && !fileReady)}
+              disabled={structureBlocked}
               onClick={() => startStructural({ operation: "move" })}
-              className="rounded border px-2 py-1"
+              className={textButtonClass()}
             >
+              <MoveIcon />
               Move
             </button>
+            {(["up", "down"] as const).map((direction) => (
+              <button
+                key={direction}
+                type="button"
+                disabled={
+                  structureBlocked ||
+                  position < 0 ||
+                  (direction === "up" ? position === 0 : position === siblings.length - 1)
+                }
+                onClick={() => startStructural({ operation: "reorder", direction })}
+                className={textButtonClass()}
+              >
+                {direction === "up" ? <ArrowUpIcon /> : <ArrowDownIcon />}
+                Move {direction}
+              </button>
+            ))}
             <button
               type="button"
-              disabled={busy || recoveryPending || (kind === "file" && !fileReady)}
+              disabled={structureBlocked}
               onClick={() => startStructural({ operation: "delete" })}
-              className="rounded border px-2 py-1"
+              className={textButtonClass("danger")}
             >
+              <TrashIcon />
               Delete
             </button>
             {kind === "file" && !fileReady && (
-              <p role="status">Save your draft before changing this File’s name or location, order, or deleting it.</p>
+              <p role="status" className="ml-auto px-2 text-xs text-muted">
+                Save your draft before changing this File’s name or location, order, or deleting it.
+              </p>
             )}
           </div>
         )}
         {recoveryPending && (
-          <p role="status" className="mt-3">
+          <p role="status" className={cx(noticeClass("warning"), "mt-4")}>
             Confirm your saved recovery phrase and codes before creating Files.
           </p>
         )}
-        {busy && (
-          <p role="status" className="mt-3">
-            Updating Files…
-          </p>
-        )}
         {message && (
-          <p role="alert" className="mt-3 text-rose-700">
+          <p role="alert" className={cx(noticeClass("danger"), "mt-4")}>
             {message}
           </p>
         )}
+        {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (
+          <PublishPanel lifecycle={publicationLifecycle} fileReady={fileReady && !busy} />
+        )}
         {kind === "file" ? (
           <>
-            <div className="mt-6 flex gap-2 lg:hidden">
-              <button type="button" onClick={() => setView("edit")} aria-pressed={view === "edit"}>
-                Edit
-              </button>
-              <button type="button" onClick={() => setView("preview")} aria-pressed={view === "preview"}>
-                Preview
-              </button>
-              <button type="button" onClick={() => setView("comments")} aria-pressed={view === "comments"}>
-                Comments
-              </button>
+            <div className="mt-6 inline-flex rounded-full bg-cream p-1 ring-1 ring-line lg:hidden">
+              {(
+                [
+                  ["edit", "Edit", () => setView("edit")],
+                  ["preview", "Preview", () => setView("preview")],
+                  ["comments", "Comments", () => setView("comments")],
+                ] as const
+              ).map(([value, label, show]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={show}
+                  aria-pressed={view === value}
+                  className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink-soft transition aria-pressed:bg-paper aria-pressed:text-ink aria-pressed:shadow-sm"
+                >
+                  {label}
+                </button>
+              ))}
             </div>
             {editorParent === snapshot.file?.parentId ? (
               <FileEditor
@@ -780,34 +874,48 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                 }
               />
             ) : (
-              <p role="status">Opening moved File…</p>
+              <p role="status" className="mt-6 text-sm text-muted">
+                Opening moved File…
+              </p>
             )}
           </>
         ) : (
-          <p className="mt-8 text-stone-500">Choose a File from the tree or create one here.</p>
+          <FolderContents entries={folderEntries} canCreate={canCreate} pendingPath={pendingPath} />
         )}
+        <div className="mt-12 grid gap-4 border-t border-line pt-8 md:grid-cols-2">
+          <ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} />
+          <ImportControl
+            ref={importControl}
+            snapshot={snapshot}
+            nodeId={nodeId}
+            kind={kind}
+            disabled={busy || recoveryPending}
+            onRefresh={() => void revalidator.revalidate()}
+          />
+        </div>
       </section>
       {dialog && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label={dialogLabels[dialog.operation].label}
-          className="fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4"
+          className="modal-backdrop z-[70]"
         >
           <form
             onSubmit={(event) => {
               event.preventDefault();
               void submit(dialog);
             }}
-            className="w-full max-w-md rounded bg-white p-5 shadow-lg"
+            className="modal-panel max-w-md"
           >
-            <h2 className="text-lg font-semibold">
+            <p className="eyebrow text-accent">{dialog.kind === "file" ? "File" : "Folder"}</p>
+            <h2 className="mt-2 font-serif text-3xl leading-tight">
               {dialog.operation === "create"
                 ? `New ${dialog.kind === "file" ? "File" : "folder"}`
                 : dialogLabels[dialog.operation].heading}
             </h2>
             {!["delete", "reorder"].includes(dialog.operation) && (
-              <label className="mt-4 block">
+              <label className={cx(labelClass, "mt-5")}>
                 Name{" "}
                 <input
                   ref={nameInput}
@@ -816,33 +924,44 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                   value={dialog.requestedName}
                   disabled={busy}
                   onChange={(event) => setDialog({ ...dialog, requestedName: event.target.value, review: undefined })}
-                  className="mt-1 w-full rounded border p-2"
+                  className={cx(fieldClass(), "mt-2")}
+                  placeholder={dialog.kind === "file" ? "Untitled.md" : "Untitled folder"}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </label>
             )}
             {dialog.operation === "move" && (
-              <section aria-label="Destination folder" className="mt-4">
-                <p>Destination: {dialog.path.at(-1)?.name}</p>
-                <nav aria-label="Destination breadcrumbs" className="flex flex-wrap gap-2">
+              <section aria-label="Destination folder" className="mt-5">
+                <p className="text-sm text-ink-soft">
+                  Destination: <span className="font-medium text-ink">{dialog.path.at(-1)?.name}</span>
+                </p>
+                <nav
+                  aria-label="Destination breadcrumbs"
+                  className="mt-2 flex flex-wrap items-center gap-1 text-[13px]"
+                >
                   {dialog.path.map((folder, index) => (
-                    <button
-                      key={folder.id}
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        setDialog({
-                          ...dialog,
-                          destinationId: folder.id,
-                          path: dialog.path.slice(0, index + 1),
-                          review: undefined,
-                        })
-                      }
-                    >
-                      {folder.name}
-                    </button>
+                    <span key={folder.id} className="flex items-center gap-1">
+                      {index > 0 && <ChevronRightIcon className="size-3 text-muted/60" />}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          setDialog({
+                            ...dialog,
+                            destinationId: folder.id,
+                            path: dialog.path.slice(0, index + 1),
+                            review: undefined,
+                          })
+                        }
+                        className="rounded-md px-1.5 py-0.5 text-ink-soft transition hover:bg-ink/5 hover:text-ink"
+                      >
+                        {folder.name}
+                      </button>
+                    </span>
                   ))}
                 </nav>
-                <div className="mt-2 flex flex-col items-start">
+                <div className="mt-3 flex max-h-56 flex-col items-stretch gap-1 overflow-y-auto rounded-2xl bg-cream/70 p-2 ring-1 ring-line">
                   {snapshot.listings[dialog.destinationId]?.entries
                     .filter((entry) => entry.kind === "directory" && entry.nodeId !== nodeId)
                     .map((entry) => (
@@ -852,31 +971,40 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                         disabled={busy}
                         onClick={() => void chooseFolder(entry)}
                         aria-label={`Open destination ${entry.name}`}
+                        className="flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-ink-soft transition hover:bg-paper hover:text-ink"
                       >
-                        {entry.name}
+                        <FolderIcon className="text-accent/80" />
+                        <span className="truncate">{entry.name}</span>
+                        <ChevronRightIcon className="ml-auto size-3.5 text-muted" />
                       </button>
                     ))}
+                  {!snapshot.listings[dialog.destinationId]?.entries.some(
+                    (entry) => entry.kind === "directory" && entry.nodeId !== nodeId,
+                  ) && <p className="px-3 py-2 text-sm text-muted">No folders inside.</p>}
                 </div>
-                {dialog.destinationId === dialog.parentId && <p>Select a different folder.</p>}
+                {dialog.destinationId === dialog.parentId && (
+                  <p className="mt-2 text-sm text-muted">Select a different folder.</p>
+                )}
               </section>
             )}
             {dialog.operation === "delete" && (
-              <>
-                <p className="mt-4">
+              <div className="mt-4 space-y-3 text-sm leading-relaxed text-ink-soft">
+                <p>
                   Permanently delete {dialog.requestedName}
                   {kind === "directory" ? " and all its descendants" : ""}? There is no trash or restore. This cannot
                   recall downloads or guarantee when provider-managed backups are erased.
                 </p>
                 <p>Folders can only be deleted whole when they contain at most 500 nodes.</p>
                 {dialog.tooLarge ? (
-                  <p role="alert">
+                  <p role="alert" className={noticeClass("danger")}>
                     This folder contains more than 500 nodes. Reduce the subtree by moving or deleting smaller folders
                     or Files first. Nothing was deleted.
                   </p>
                 ) : (
-                  <label className="mt-3 block">
+                  <label className="flex items-start gap-3 rounded-2xl bg-danger-soft/60 px-4 py-3 text-ink">
                     <input
                       type="checkbox"
+                      className="mt-1 size-4"
                       checked={dialog.consent ?? false}
                       disabled={busy || !!dialog.review}
                       onChange={(event) => setDialog({ ...dialog, consent: event.target.checked })}
@@ -884,25 +1012,20 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                     I understand deletion is irreversible.
                   </label>
                 )}
-              </>
+              </div>
             )}
             {dialog.review === "local" && (
-              <p role="alert" className="mt-3">
+              <p role="alert" className={cx(noticeClass("warning"), "mt-4")}>
                 That name is already in this folder. Choose another name; nothing was overwritten.
               </p>
             )}
             {dialog.review === "changed" && (
-              <p role="alert" className="mt-3">
+              <p role="alert" className={cx(noticeClass("warning"), "mt-4")}>
                 This folder changed on another device. Nothing was added, replaced, or overwritten.
               </p>
             )}
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setDialog(null)}
-                className="rounded border px-3 py-1"
-              >
+            <div className="mt-7 flex flex-wrap justify-end gap-2">
+              <button type="button" disabled={busy} onClick={() => setDialog(null)} className={buttonClass("ghost")}>
                 Cancel
               </button>
               {dialog.review === "changed" && (
@@ -910,7 +1033,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                   type="button"
                   disabled={busy}
                   onClick={() => void refreshAndRetry(dialog)}
-                  className="rounded border px-3 py-1"
+                  className={buttonClass("secondary")}
                 >
                   Refresh and retry
                 </button>
@@ -923,7 +1046,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                     setDialog({ ...dialog, review: undefined, needsRefresh: true });
                     nameInput.current?.focus();
                   }}
-                  className="rounded border px-3 py-1"
+                  className={buttonClass("secondary")}
                 >
                   Rename
                 </button>
@@ -936,7 +1059,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                     (dialog.operation === "delete" && !dialog.consent) ||
                     (dialog.operation === "move" && dialog.destinationId === dialog.parentId)
                   }
-                  className="rounded bg-stone-900 px-3 py-1 text-white"
+                  className={buttonClass(dialog.operation === "delete" ? "danger" : "primary")}
                 >
                   {submitting ? "Working…" : dialogLabels[dialog.operation].submit}
                 </button>
@@ -946,5 +1069,86 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         </div>
       )}
     </main>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <main className="container-page flex min-h-[calc(100dvh-4rem)] animate-fade flex-col items-center justify-center py-20 text-center">
+      <span className="grid size-14 place-items-center rounded-full bg-cream ring-1 ring-line">
+        <Icon className="size-6 text-muted" />
+      </span>
+      {title && <h1 className="mt-6 font-serif text-5xl leading-tight tracking-tight">{title}</h1>}
+      <div className={cx("max-w-md text-ink-soft", title ? "mt-3" : "mt-6")}>{children}</div>
+    </main>
+  );
+}
+
+/** The selected folder's own entries, so its contents are one tap away on every screen size. */
+function FolderContents({
+  entries,
+  canCreate,
+  pendingPath,
+}: {
+  entries: TreeEntry[];
+  canCreate: boolean;
+  pendingPath: string | undefined;
+}) {
+  if (!entries.length)
+    return (
+      <div className="mt-8 flex flex-col items-center rounded-3xl border border-dashed border-line px-6 py-16 text-center">
+        <span className="grid size-12 place-items-center rounded-full bg-cream ring-1 ring-line">
+          <FolderIcon className="size-5 text-muted" />
+        </span>
+        <p className="mt-4 font-serif text-2xl">This folder is empty</p>
+        <p className="mt-2 max-w-sm text-sm text-ink-soft">
+          {canCreate
+            ? "Create a File or a folder, or drop Markdown here to import it."
+            : "Nothing has been added here yet."}
+        </p>
+      </div>
+    );
+  return (
+    <ul aria-label="Folder contents" className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {entries.map((entry) => {
+        const to = `/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`;
+        return (
+          <li key={entry.nodeId}>
+            <Link
+              to={to}
+              aria-label={`${entry.name}, ${entry.kind === "directory" ? "folder" : "File"}`}
+              className={cx(
+                "group flex items-center gap-4 rounded-2xl bg-paper p-4 ring-1 ring-line transition hover:-translate-y-0.5 hover:shadow-[0_14px_30px_-18px_rgb(29_24_21/0.35)] hover:ring-ink/15",
+                pendingPath === to && "ring-accent/40",
+              )}
+            >
+              <span
+                className={cx(
+                  "grid size-11 shrink-0 place-items-center rounded-xl",
+                  entry.kind === "directory" ? "bg-petal/70 text-accent" : "bg-cream text-muted",
+                )}
+              >
+                {entry.kind === "directory" ? <FolderIcon className="size-5" /> : <FileIcon className="size-5" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium text-ink">{entry.name}</span>
+                <span className="mt-0.5 block text-xs text-muted">
+                  {entry.kind === "directory" ? "Folder" : "Markdown File"}
+                </span>
+              </span>
+              <ChevronRightIcon className="size-4 text-muted transition group-hover:translate-x-0.5 group-hover:text-ink" />
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

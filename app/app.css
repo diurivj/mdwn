@@ -1,8 +1,536 @@
 @import "tailwindcss";
 
+/*
+ * mdwn's editorial design system: warm paper, wine accents, and a serif display
+ * face over a quiet sans. The fonts are bundled from npm (imported in app/root.tsx)
+ * and served first-party: no third-party fonts, scripts, or remote assets, see
+ * docs/serving-and-security.md.
+ */
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --color-paper: #fbf8f4;
+  --color-cream: #f5efe7;
+  --color-sand: #efe7dc;
+  --color-line: #e6ddd1;
+  --color-ink: #1d1815;
+  --color-ink-soft: #3d342e;
+  --color-muted: #73675d;
+  --color-accent: #9b4650;
+  --color-petal: #f2dcd5;
+  --color-wine: #2b1519;
+
+  --color-success: #2f6b4f;
+  --color-success-soft: #e2eee6;
+  --color-warning: #8a5a12;
+  --color-warning-soft: #f4e5cd;
+  --color-danger: #a3302b;
+  --color-danger-soft: #f6e0dc;
+
+  /* Soft tints for feature tiles. */
+  --color-fresco: #5d8c90;
+  --color-fresco-soft: #e0e9e8;
+  --color-floral-soft: #f4dfdb;
+  --color-dulce-soft: #f4e5cd;
+  --color-amaderado-soft: #e6ddd1;
+
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --animate-spin-slow: spin 24s linear infinite;
+  --animate-rise: rise 420ms var(--ease-out-soft) both;
+  --animate-fade: fade 220ms ease-out both;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      translate: 0 0.5rem;
+    }
+  }
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
 }
 
-/* No third-party fonts, scripts, or remote assets: see docs/serving-and-security.md */
+@utility container-page {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 80rem;
+  padding-inline: 1rem;
+
+  @media (width >= 40rem) {
+    padding-inline: 1.5rem;
+  }
+  @media (width >= 64rem) {
+    padding-inline: 2rem;
+  }
+}
+
+@utility eyebrow {
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    color-scheme: light;
+    -webkit-tap-highlight-color: transparent;
+    /* Anchored sections stop below the sticky header (h-16). Route changes
+       still jump instantly: only section links scroll smoothly (app/ui/section-link.tsx). */
+    scroll-padding-top: 5rem;
+    /* Keeps the page from shifting sideways when a modal locks scrolling. */
+    scrollbar-gutter: stable;
+  }
+
+  html:has(dialog:modal) {
+    overflow: hidden;
+  }
+
+  ::selection {
+    background-color: var(--color-petal);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 3px;
+  }
+
+  summary {
+    cursor: pointer;
+    list-style: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  button:not(:disabled),
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--color-accent);
+  }
+}
+
+@layer components {
+  /* The site menu on narrow screens: a <dialog> that slides in from the left. */
+  .drawer {
+    position: fixed;
+    inset: 0 auto 0 0;
+    margin: 0;
+    width: min(22rem, 86vw);
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border: 0;
+    padding: 0;
+    background-color: var(--color-paper);
+    color: inherit;
+    translate: -100% 0;
+    transition:
+      translate 320ms var(--ease-out-soft),
+      display 320ms allow-discrete,
+      overlay 320ms allow-discrete;
+  }
+
+  .drawer[open] {
+    translate: 0 0;
+  }
+
+  @starting-style {
+    .drawer[open] {
+      translate: -100% 0;
+    }
+  }
+
+  .drawer::backdrop {
+    background-color: rgb(29 24 21 / 0);
+    transition:
+      background-color 320ms,
+      display 320ms allow-discrete,
+      overlay 320ms allow-discrete;
+  }
+
+  .drawer[open]::backdrop {
+    background-color: rgb(29 24 21 / 0.45);
+  }
+
+  @starting-style {
+    .drawer[open]::backdrop {
+      background-color: rgb(29 24 21 / 0);
+    }
+  }
+
+  /* The account menu: a popover that drops below the sticky header. */
+  .menu-popover {
+    position: fixed;
+    inset: 4.25rem 1rem auto auto;
+    margin: 0;
+    width: 17rem;
+    border: 0;
+    padding: 0.5rem;
+    border-radius: 1.25rem;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    box-shadow:
+      0 24px 60px -24px rgb(29 24 21 / 0.35),
+      0 0 0 1px var(--color-line);
+    opacity: 0;
+    translate: 0 -0.25rem;
+    transition:
+      opacity 160ms ease-out,
+      translate 200ms var(--ease-out-soft),
+      display 200ms allow-discrete,
+      overlay 200ms allow-discrete;
+  }
+
+  .menu-popover:popover-open {
+    opacity: 1;
+    translate: 0 0;
+  }
+
+  @starting-style {
+    .menu-popover:popover-open {
+      opacity: 0;
+      translate: 0 -0.25rem;
+    }
+  }
+
+  /* Modal panels: create/rename/move/delete, import review, confirmations. */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background-color: rgb(29 24 21 / 0.45);
+    animation: var(--animate-fade);
+  }
+
+  .modal-panel {
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    border-radius: 1.75rem;
+    background-color: var(--color-paper);
+    padding: 1.5rem;
+    box-shadow:
+      0 40px 80px -32px rgb(29 24 21 / 0.45),
+      0 0 0 1px var(--color-line);
+    animation: var(--animate-rise);
+
+    @media (width >= 40rem) {
+      padding: 2rem;
+    }
+  }
+
+  /* The thin bar along the top of the window while a navigation loads. Short
+     navigations finish before its delayed fade-in, so they never flash it. */
+  .navigation-progress {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 60;
+    height: 2px;
+    pointer-events: none;
+    transform-origin: left;
+    background: linear-gradient(90deg, var(--color-accent), #c97b84);
+    opacity: 0;
+    scale: 0 1;
+    transition:
+      opacity 280ms ease,
+      scale 280ms var(--ease-out-soft);
+  }
+
+  .navigation-progress[data-state="loading"] {
+    opacity: 1;
+    animation: navigation-progress 10s cubic-bezier(0.08, 0.75, 0.2, 1) forwards;
+    transition: opacity 150ms ease 150ms;
+  }
+
+  .navigation-progress[data-state="done"] {
+    scale: 1 1;
+  }
+
+  @keyframes navigation-progress {
+    from {
+      scale: 0 1;
+    }
+    to {
+      scale: 0.94 1;
+    }
+  }
+
+  /* Placeholder shimmer for route fallbacks. */
+  .skeleton {
+    border-radius: 0.75rem;
+    background: linear-gradient(
+      100deg,
+      var(--color-sand) 30%,
+      color-mix(in oklab, var(--color-sand) 35%, var(--color-paper)) 50%,
+      var(--color-sand) 70%
+    );
+    background-size: 300% 100%;
+    animation: skeleton 1.6s ease-in-out infinite;
+  }
+
+  @keyframes skeleton {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: 0 0;
+    }
+  }
+}
+
+/*
+ * Rendered Markdown in the Files preview and on Public pages. The Markdown is
+ * sanitized before it reaches the DOM (app/tree/markdown-preview.tsx); these
+ * rules are typography only.
+ */
+@layer components {
+  .prose-editorial {
+    color: var(--color-ink-soft);
+    font-size: 1rem;
+    line-height: 1.75;
+    overflow-wrap: break-word;
+  }
+
+  /* Public pages are read, not edited: a larger measure for long-form text. */
+  .prose-reader {
+    font-size: 1.125rem;
+    line-height: 1.8;
+  }
+
+  .prose-editorial > :first-child {
+    margin-top: 0;
+  }
+
+  .prose-editorial > :last-child {
+    margin-bottom: 0;
+  }
+
+  .prose-editorial :where(h1, h2) {
+    margin: 1.6em 0 0.5em;
+    font-family: var(--font-serif);
+    font-weight: 400;
+    color: var(--color-ink);
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+
+  .prose-editorial h1 {
+    font-size: 2.5rem;
+    line-height: 1.05;
+  }
+
+  .prose-editorial h2 {
+    font-size: 1.85rem;
+    line-height: 1.15;
+  }
+
+  .prose-editorial :where(h3, h4, h5, h6) {
+    margin: 1.6em 0 0.4em;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--color-ink);
+  }
+
+  .prose-editorial h3 {
+    font-size: 1.15rem;
+  }
+
+  .prose-editorial :where(h4, h5, h6) {
+    font-size: 1rem;
+  }
+
+  .prose-editorial :where(p, ul, ol, pre, table, blockquote) {
+    margin: 0 0 1.1em;
+  }
+
+  .prose-editorial a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklab, var(--color-accent) 40%, transparent);
+    text-underline-offset: 0.2em;
+    transition: text-decoration-color 150ms;
+  }
+
+  .prose-editorial a:hover {
+    text-decoration-color: var(--color-accent);
+  }
+
+  .prose-editorial strong {
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+
+  .prose-editorial del {
+    color: var(--color-muted);
+  }
+
+  .prose-editorial :where(ul, ol) {
+    padding-left: 1.4em;
+  }
+
+  .prose-editorial ul {
+    list-style: disc;
+  }
+
+  .prose-editorial ol {
+    list-style: decimal;
+  }
+
+  .prose-editorial li {
+    margin: 0.3em 0;
+    padding-left: 0.2em;
+  }
+
+  .prose-editorial li::marker {
+    color: var(--color-accent);
+  }
+
+  .prose-editorial li > :where(ul, ol) {
+    margin: 0.3em 0;
+  }
+
+  /* GFM task lists. */
+  .prose-editorial li:has(> input[type="checkbox"]) {
+    margin-left: -1.4em;
+    list-style: none;
+  }
+
+  .prose-editorial li > input[type="checkbox"] {
+    margin-right: 0.5em;
+  }
+
+  .prose-editorial blockquote {
+    border-left: 2px solid var(--color-accent);
+    padding: 0.1em 0 0.1em 1.25em;
+    font-family: var(--font-serif);
+    font-size: 1.3rem;
+    font-style: italic;
+    line-height: 1.45;
+    color: var(--color-ink);
+  }
+
+  .prose-editorial blockquote p {
+    margin-bottom: 0.5em;
+  }
+
+  .prose-editorial :not(pre) > code {
+    border-radius: 0.375rem;
+    background-color: var(--color-cream);
+    padding: 0.12em 0.4em;
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    color: var(--color-ink);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+  }
+
+  .prose-editorial pre {
+    overflow-x: auto;
+    border-radius: 1rem;
+    background-color: var(--color-wine);
+    padding: 1rem 1.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1.65;
+    color: var(--color-cream);
+  }
+
+  .prose-editorial hr {
+    margin: 2.25em auto;
+    width: 6rem;
+    border: 0;
+    border-top: 1px solid var(--color-line);
+  }
+
+  .prose-editorial table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.925rem;
+  }
+
+  .prose-editorial :where(th, td) {
+    border-bottom: 1px solid var(--color-line);
+    padding: 0.55em 0.9em 0.55em 0;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .prose-editorial th {
+    border-bottom-color: color-mix(in oklab, var(--color-ink) 25%, transparent);
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+
+  .prose-editorial img {
+    max-width: 100%;
+    border-radius: 0.75rem;
+  }
+}
+
+/* FAQ answers slide open where the browser can interpolate to auto. */
+@supports (interpolate-size: allow-keywords) {
+  :root {
+    interpolate-size: allow-keywords;
+  }
+
+  details.disclosure::details-content {
+    block-size: 0;
+    overflow-y: clip;
+    opacity: 0;
+    transition:
+      block-size 300ms var(--ease-out-soft),
+      opacity 300ms ease,
+      content-visibility 300ms allow-discrete;
+  }
+
+  details.disclosure[open]::details-content {
+    block-size: auto;
+    opacity: 1;
+  }
+}
+
+/* Arrows in links and buttons nudge toward where they lead. */
+@media (hover: hover) {
+  :is(a, button) > .icon-arrow {
+    transition: translate 200ms ease-out;
+  }
+
+  :is(a, button):hover > .icon-arrow {
+    translate: 0.1875rem 0;
+  }
+}
+
+/* Motion is decoration: it must lose to every component rule when the person asks for less. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after,
+  ::backdrop {
+    /* biome-ignore lint/complexity/noImportantStyles: must override every component's own durations. */
+    transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: must override every component's own durations. */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: must stop infinite decorative animations. */
+    animation-iteration-count: 1 !important;
+  }
+}

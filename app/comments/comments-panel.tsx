@@ -19,6 +19,8 @@ import { CommentItem } from "./comment-item";
 import { commentCharacters, MAX_COMMENT_CHARS } from "../shared/comments/content";
 import { PublicThreadPanel } from "./public-thread-panel";
 import type { FilesSnapshot } from "~/tree/navigation-client";
+import { cx } from "~/ui/cx";
+import { buttonClass, fieldClass, noticeClass, textButtonClass } from "~/ui/styles";
 
 type PanelState = { status: "loading" } | { status: "failed"; message: string } | CommentsState;
 
@@ -154,17 +156,21 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
 
   if (panel.status === "loading")
     return (
-      <section aria-label="Private comments" className="mt-4 lg:mt-0">
-        <p role="status">Loading comments…</p>
+      <section aria-label="Private comments" className="mt-4">
+        <p role="status" className="text-sm text-muted">
+          Loading comments…
+        </p>
       </section>
     );
   if (panel.status === "failed")
     return (
-      <section aria-label="Private comments" className="mt-4 lg:mt-0">
-        <p role="alert">{panel.message}</p>
+      <section aria-label="Private comments" className="mt-4">
+        <p role="alert" className={noticeClass("danger")}>
+          {panel.message}
+        </p>
         <button
           type="button"
-          className="mt-2 rounded border px-3 py-1"
+          className={cx(buttonClass("secondary", "sm"), "mt-3")}
           onClick={() => {
             const controller = lifetime.current;
             if (controller) {
@@ -179,27 +185,29 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
     );
   if (panel.status === "preparing")
     return (
-      <section aria-label="Private comments" className="mt-4 lg:mt-0">
-        <p role="status">Secure comment access is being prepared on this device.</p>
+      <section aria-label="Private comments" className="mt-4">
+        <p role="status" className="text-sm text-muted">
+          Secure comment access is being prepared on this device.
+        </p>
       </section>
     );
   if (panel.status === "absent")
     return (
-      <section aria-label="Private comments" className="mt-4 lg:mt-0">
-        <p>Comments aren’t set up for this File yet.</p>
+      <section aria-label="Private comments" className="mt-4">
+        <p className="text-sm text-muted">Comments aren’t set up for this File yet.</p>
       </section>
     );
 
   const thread = panel.thread;
   const tooLong = commentCharacters(draft) > MAX_COMMENT_CHARS;
   return (
-    <section aria-label="Private comments" className="mt-4 flex min-h-0 flex-col lg:mt-0">
+    <section aria-label="Private comments" className="mt-4 flex min-h-0 flex-1 flex-col">
       {message && (
-        <p role="alert" className="mt-2 text-rose-700">
+        <p role="alert" className={noticeClass("danger")}>
           {message}
         </p>
       )}
-      <ol aria-label="Private comments" className="mt-3 flex-1 space-y-3 overflow-y-auto pr-1">
+      <ol aria-label="Private comments" className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {thread.comments.map((comment) => (
           <CommentItem
             key={comment.id}
@@ -242,20 +250,24 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
             }
           />
         ))}
-        {!thread.comments.length && <li className="text-stone-500">No comments yet.</li>}
+        {!thread.comments.length && (
+          <li className="rounded-2xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
+            No comments yet.
+          </li>
+        )}
       </ol>
       {thread.nextCursor !== null && (
         <button
           type="button"
           disabled={busy}
           onClick={() => void loadMore()}
-          className="mt-3 self-start rounded border px-3 py-1 text-sm"
+          className={cx(textButtonClass(), "mt-2 self-start")}
         >
           Load more comments
         </button>
       )}
       <form
-        className="mt-4 border-t border-stone-200 pt-3"
+        className="mt-4 border-t border-line pt-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (!draft || tooLong) return;
@@ -265,7 +277,7 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
           });
         }}
       >
-        <label className="block text-sm" htmlFor="private-comment">
+        <label className="block text-sm font-medium text-ink" htmlFor="private-comment">
           Add a private comment
           <textarea
             id="private-comment"
@@ -274,18 +286,14 @@ function PrivateCommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
             rows={3}
             placeholder="Plain text only"
             onChange={(event) => setDraft(event.target.value)}
-            className="mt-1 w-full rounded border border-stone-300 p-2"
+            className={cx(fieldClass("sm"), "mt-2 resize-none font-normal")}
           />
         </label>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <p role="status" className={tooLong ? "text-rose-700" : "text-stone-500"}>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <p role="status" className={cx("text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
             {commentCharacters(draft)} / 2,000
           </p>
-          <button
-            type="submit"
-            disabled={busy || !draft || tooLong}
-            className="rounded bg-stone-900 px-3 py-1 text-white"
-          >
+          <button type="submit" disabled={busy || !draft || tooLong} className={buttonClass("primary", "sm")}>
             {busy ? "Working…" : "Comment"}
           </button>
         </div>
@@ -308,22 +316,30 @@ export function CommentsPanel({ fileId, snapshot }: { fileId: string; snapshot: 
       id={`${kind}-thread-tab`}
       aria-controls={`${kind}-thread-panel`}
       onClick={() => setSelected(kind)}
-      className={
-        selected === kind
-          ? "rounded border border-stone-900 bg-stone-900 px-3 py-0.5 text-sm text-white"
-          : "rounded border border-stone-300 px-3 py-0.5 text-sm"
-      }
+      className={cx(
+        "rounded-full px-3.5 py-1 text-[13px] font-medium transition",
+        selected === kind ? "bg-paper text-ink shadow-sm" : "text-ink-soft hover:text-ink",
+      )}
     >
       {label}
     </button>
   );
   return (
-    <div className="flex min-h-0 flex-col">
-      <div role="tablist" aria-label="Comment thread" className="flex items-center gap-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <div
+        role="tablist"
+        aria-label="Comment thread"
+        className="inline-flex items-center self-start rounded-full bg-cream p-0.5 ring-1 ring-line"
+      >
         {tab("private", "Private")}
         {tab("public", "Public")}
       </div>
-      <div role="tabpanel" id={`${selected}-thread-panel`} aria-labelledby={`${selected}-thread-tab`}>
+      <div
+        role="tabpanel"
+        id={`${selected}-thread-panel`}
+        aria-labelledby={`${selected}-thread-tab`}
+        className="flex min-h-0 flex-1 flex-col"
+      >
         {selected === "public" ? (
           <PublicThreadPanel fileId={fileId} snapshot={snapshot} />
         ) : (

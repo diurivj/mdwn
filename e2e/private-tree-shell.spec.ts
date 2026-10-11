@@ -15,5 +15,8 @@ for (const prefix of ["d", "f"] as const) {
     await page.goto(`/${prefix}/${opaque}`);
     await expect(page.getByRole("heading", { name: "Files unavailable" })).toBeVisible();
     await expect(page).toHaveTitle("Files — mdwn");
+    // Hydration takes over the server-rendered fallback rather than leaving it beside the page.
+    await expect(page.getByRole("main")).toHaveCount(1);
+    await expect(page.getByText("Opening Files", { exact: false })).toHaveCount(0);
   });
 }

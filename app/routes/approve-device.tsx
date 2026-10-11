@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
 
 import { approveFromPairingLink } from "~/enrollment/ceremony-client";
+import type { ChromeHandle } from "~/ui/chrome";
+import { cx } from "~/ui/cx";
+import { CheckIcon, QrIcon } from "~/ui/icons";
+import { AccountLayout, PageIntro } from "~/ui/page-layouts";
+import { buttonClass, fieldClass, labelClass, noticeClass } from "~/ui/styles";
+
+export const handle: ChromeHandle = { chrome: "account" };
 
 export function meta() {
   return [{ title: "Approve a device — mdwn" }];
@@ -13,9 +19,9 @@ export function clientLoader() {
 
 export function HydrateFallback() {
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <h1 className="text-2xl font-semibold">Preparing approval…</h1>
-    </main>
+    <AccountLayout busy>
+      <PageIntro eyebrow="Devices" title="Preparing approval…" />
+    </AccountLayout>
   );
 }
 
@@ -82,65 +88,82 @@ export default function ApproveDevice() {
   };
 
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <Link to="/" className="text-sm underline">
-        mdwn
-      </Link>
-      <h1 className="mt-8 text-2xl font-semibold">Approve a device</h1>
-      <p className="mt-4">Use this active device to scan the QR code shown on your new browser.</p>
-      <button
-        type="button"
-        onClick={() => {
-          setResult("idle");
-          setScanning(true);
-        }}
-        disabled={scanning || busy}
-        className="mt-5 rounded-md border border-stone-300 px-4 py-2 disabled:opacity-60"
-      >
-        Scan QR code
-      </button>
-      {scanning && (
-        <video
-          ref={video}
-          autoPlay
-          muted
-          playsInline
-          aria-label="QR code camera preview"
-          className="mt-4 w-full rounded-md border border-stone-300"
+    <AccountLayout>
+      <PageIntro eyebrow="Devices" title="Approve a device">
+        <p>Use this active device to scan the QR code shown on your new browser.</p>
+      </PageIntro>
+      <div className="mt-8 max-w-xl rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
+        <ol className="space-y-2 text-sm text-ink-soft">
+          <li className="flex gap-3">
+            <span className="font-serif text-lg leading-none text-accent">1</span>
+            On the new browser, sign in and choose Enroll this device.
+          </li>
+          <li className="flex gap-3">
+            <span className="font-serif text-lg leading-none text-accent">2</span>
+            Scan its QR code here, or paste its pairing link.
+          </li>
+          <li className="flex gap-3">
+            <span className="font-serif text-lg leading-none text-accent">3</span>
+            Approve, then finish setup on the new browser.
+          </li>
+        </ol>
+        <button
+          type="button"
+          onClick={() => {
+            setResult("idle");
+            setScanning(true);
+          }}
+          disabled={scanning || busy}
+          className={cx(buttonClass("secondary"), "mt-6")}
+        >
+          <QrIcon />
+          Scan QR code
+        </button>
+        {scanning && (
+          <video
+            ref={video}
+            autoPlay
+            muted
+            playsInline
+            aria-label="QR code camera preview"
+            className="mt-5 w-full rounded-2xl bg-ink ring-1 ring-line"
+          />
+        )}
+        <label htmlFor="approval-link" className={cx(labelClass, "mt-6")}>
+          Pairing link
+        </label>
+        <input
+          id="approval-link"
+          aria-label="Pairing link"
+          value={link}
+          onChange={(event) => setLink(event.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="https://…/enroll-device/approve#…"
+          className={cx(fieldClass("sm"), "mt-2 font-mono text-xs")}
         />
-      )}
-      <label htmlFor="approval-link" className="mt-5 block text-sm font-medium">
-        Pairing link
-      </label>
-      <input
-        id="approval-link"
-        aria-label="Pairing link"
-        value={link}
-        onChange={(event) => setLink(event.target.value)}
-        autoComplete="off"
-        spellCheck={false}
-        className="mt-2 w-full rounded-md border border-stone-300 p-2 font-mono text-xs"
-      />
-      <button
-        type="button"
-        disabled={busy || !link}
-        onClick={() => {
-          void approve();
-        }}
-        className="mt-5 rounded-md bg-stone-900 px-4 py-2 text-white disabled:opacity-60"
-      >
-        Approve device
-      </button>
+        <button
+          type="button"
+          disabled={busy || !link}
+          onClick={() => {
+            void approve();
+          }}
+          className={cx(buttonClass("primary"), "mt-5")}
+        >
+          <CheckIcon />
+          Approve device
+        </button>
+      </div>
       {result === "success" && (
-        <p role="status" className="mt-4">
+        <p role="status" className={cx(noticeClass("success"), "mt-6 max-w-xl")}>
           Approval sent. Finish setup on your new browser.
         </p>
       )}
       {result === "failed" && (
-        <p role="alert" className="mt-4">
+        <p role="alert" className={cx(noticeClass("danger"), "mt-6 max-w-xl")}>
           This pairing attempt is unavailable. Restart on the new browser and try again.
         </p>
       )}
-    </main>
+    </AccountLayout>
   );
 }

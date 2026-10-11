@@ -7,7 +7,7 @@ import {
   openDeviceEnrollmentEnvelope,
   openVaultRecoveryEnvelope,
 } from "~/shared/crypto/vault";
-import { privateRequest } from "~/shared/device/private-client";
+import { privateExchange, privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
 import { canonicalizeSegment, sameComparisonKey } from "~/shared/namespace-v1";
 import { newOpaqueId } from "~/shared/opaque-id";
@@ -232,16 +232,14 @@ export class NamespaceChangedError extends Error {
   }
 }
 
-/** Browser possession + proof-guarded bootstrap; keys never enter loaders or document HTML. */
+/**
+ * Browser possession + proof-guarded bootstrap; keys never enter loaders or document HTML.
+ * The envelopes are opened for exactly the Account and device the request's proof named.
+ */
 export async function openRoot(signal?: AbortSignal): Promise<RootAccess> {
-  const state = await fetch("/api/device/state", { cache: "no-store", signal });
-  if (!state.ok) throw new Error("private tree unavailable");
-  const { accountId, deviceId } = (await state.json()) as { accountId: string; deviceId: string | null };
-  if (!deviceId) throw new Error("private tree unavailable");
-  const device = await getDevice(accountId);
-  if (!device || device.deviceId !== deviceId) throw new Error("private tree unavailable");
-  const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
+  const { response, accountId, device } = await privateExchange("/api/private/bootstrap", { method: "POST", signal });
   if (!response.ok) throw new Error("private tree unavailable");
+  const deviceId = device.deviceId;
   const bootstrap = (await response.json()) as {
     rootDirectoryId: string;
     rootKeyEpoch?: number;
@@ -282,20 +280,37 @@ export async function openRoot(signal?: AbortSignal): Promise<RootAccess> {
   };
 }
 
+/** A Directory listing as the Worker returns it: ciphertext, not yet verified or opened. */
+export type FetchedDirectory = {
+  directoryId: string;
+  keyEpoch?: number;
+  entriesRevision: number;
+  entries: SealedEntry[];
+  canCreate?: boolean;
+  listingHead: (Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string }) | null;
+};
+
+/** The network half of `loadDirectory`, which needs no key: callers may fetch a whole path at once. */
+export function fetchDirectory(directoryId: string, signal?: AbortSignal): Promise<FetchedDirectory> {
+  return jsonResource<FetchedDirectory>(`/api/private/tree/directories/${directoryId}`, "POST", undefined, signal);
+}
+
 export async function loadDirectory(
   access: RootAccess,
   directoryId: string,
   key: Uint8Array,
   signal?: AbortSignal,
 ): Promise<DirectoryListing> {
-  const listing = await jsonResource<{
-    directoryId: string;
-    keyEpoch?: number;
-    entriesRevision: number;
-    entries: SealedEntry[];
-    canCreate?: boolean;
-    listingHead: (Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string }) | null;
-  }>(`/api/private/tree/directories/${directoryId}`, "POST", undefined, signal);
+  return openDirectory(access, directoryId, key, await fetchDirectory(directoryId, signal));
+}
+
+/** The decrypting half of `loadDirectory`: verify a fetched listing against its head and open it. */
+export async function openDirectory(
+  access: RootAccess,
+  directoryId: string,
+  key: Uint8Array,
+  listing: FetchedDirectory,
+): Promise<DirectoryListing> {
   const keyEpoch = listing.keyEpoch ?? 1;
   if (
     listing.directoryId !== directoryId ||
@@ -416,23 +431,35 @@ function filePublication(value: FilePublicationWire | undefined, canEdit: boolea
   };
 }
 
+/** A File as the Worker returns it: ciphertext and envelopes, not yet verified or opened. */
+export type FetchedFile = {
+  fileId: string;
+  ownerId: string;
+  parentId?: string;
+  revision: number;
+  representationId: string;
+  contentKeyId: string;
+  keyEpoch: number;
+  ciphertext: string;
+  keyEnvelope?: string;
+  canEdit: boolean;
+  capability?: FileCapability | null;
+  representationKeyEnvelope?: string;
+  fileHead?: FileHead & { signerDeviceId: string; signerPublicKey: string };
+  publication?: FilePublicationWire;
+};
+
+/** The network half of `loadFile`, which needs no key. */
+export function fetchFile(fileId: string, signal?: AbortSignal): Promise<FetchedFile> {
+  return jsonResource<FetchedFile>(`/api/private/tree/files/${fileId}`, "POST", undefined, signal);
+}
+
 export async function loadFile(access: RootAccess, fileId: string, parentKey: Uint8Array, signal?: AbortSignal) {
-  const file = await jsonResource<{
-    fileId: string;
-    ownerId: string;
-    parentId?: string;
-    revision: number;
-    representationId: string;
-    contentKeyId: string;
-    keyEpoch: number;
-    ciphertext: string;
-    keyEnvelope?: string;
-    canEdit: boolean;
-    capability?: FileCapability | null;
-    representationKeyEnvelope?: string;
-    fileHead?: FileHead & { signerDeviceId: string; signerPublicKey: string };
-    publication?: FilePublicationWire;
-  }>(`/api/private/tree/files/${fileId}`, "POST", undefined, signal);
+  return openFile(access, fileId, parentKey, await fetchFile(fileId, signal));
+}
+
+/** The decrypting half of `loadFile`: verify a fetched File's head and open its content. */
+export async function openFile(access: RootAccess, fileId: string, parentKey: Uint8Array, file: FetchedFile) {
   if (file.fileId !== fileId || file.ownerId !== access.vaultId) throw new Error("invalid File identity");
   const context = {
     vaultId: access.vaultId,

@@ -33,6 +33,9 @@ import {
 } from "../shared/import/review";
 import { analyzeImportSelection, type ImportSource, type RawImportInput } from "../shared/import/source";
 import { eligibleImportTargets, preferredImportTarget } from "../shared/import/targets";
+import { cx } from "~/ui/cx";
+import { UploadIcon } from "~/ui/icons";
+import { buttonClass, fieldClass, noticeClass } from "~/ui/styles";
 
 export type ImportControlHandle = {
   canAcceptDrop: () => boolean;
@@ -241,30 +244,32 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
   const dialogOpen = phase.status !== "idle";
   return (
     <>
-      <div
-        className="flex flex-wrap items-center gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1"
-        data-testid="import-control"
-      >
-        <span className="text-sm font-medium">Import</span>
-        <button
-          type="button"
-          disabled={disabled || recoveryPending}
-          onClick={() => fileInput.current?.click()}
-          className="rounded border px-2 py-1"
-          data-testid="import-files-command"
-        >
-          Import Files
-        </button>
-        <button
-          type="button"
-          disabled={disabled || recoveryPending}
-          onClick={() => folderInput.current?.click()}
-          className="rounded border px-2 py-1"
-          data-testid="import-folder-command"
-        >
-          Import folder
-        </button>
-        <span className="basis-full text-xs text-stone-500">
+      <div className="flex flex-col gap-3 rounded-3xl bg-cream/60 p-5 ring-1 ring-line" data-testid="import-control">
+        <span className="eyebrow inline-flex items-center gap-2 text-muted">
+          <UploadIcon className="size-3.5 text-accent" />
+          Import
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={disabled || recoveryPending}
+            onClick={() => fileInput.current?.click()}
+            className={buttonClass("secondary", "sm")}
+            data-testid="import-files-command"
+          >
+            Import Files
+          </button>
+          <button
+            type="button"
+            disabled={disabled || recoveryPending}
+            onClick={() => folderInput.current?.click()}
+            className={buttonClass("secondary", "sm")}
+            data-testid="import-folder-command"
+          >
+            Import folder
+          </button>
+        </div>
+        <span className="text-xs leading-relaxed text-muted">
           Drop Markdown Files or folders on this page. Nothing is uploaded until you confirm the review.
         </span>
         <input
@@ -295,22 +300,22 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
           aria-modal="true"
           aria-label="Import review"
           data-testid="import-dialog"
-          className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4"
+          className="modal-backdrop z-[70]"
         >
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded bg-white p-5 shadow-lg">
+          <div className="modal-panel max-w-2xl">
             {phase.status === "choosing" && (
               <>
-                <h2 className="text-lg font-semibold">Choose an Import folder</h2>
-                <p className="mt-2" role="alert">
+                <h2 className="font-serif text-3xl leading-tight">Choose an Import folder</h2>
+                <p className={cx(noticeClass("warning"), "mt-3")} role="alert">
                   {phase.message}
                 </p>
                 {targets.length > 0 && (
-                  <ul className="mt-3 space-y-2">
+                  <ul className="mt-4 space-y-2">
                     {targets.map((target) => (
                       <li key={target.directoryId}>
                         <button
                           type="button"
-                          className="rounded border px-3 py-1"
+                          className={buttonClass("secondary", "sm")}
                           data-testid={`import-target-${target.directoryId}`}
                           onClick={() => openReview(phase.inputs, target.directoryId)}
                         >
@@ -320,34 +325,33 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
                     ))}
                   </ul>
                 )}
-                <div className="mt-5 flex justify-end">
-                  <button type="button" className="rounded border px-3 py-1" onClick={reset}>
+                <div className="mt-6 flex justify-end">
+                  <button type="button" className={buttonClass("ghost")} onClick={reset}>
                     Cancel
                   </button>
                 </div>
               </>
             )}
             {phase.status === "preparing" && (
-              <>
-                <p role="status" data-testid="import-preparing">
-                  {phase.label}
-                </p>
-              </>
+              <p role="status" data-testid="import-preparing" className="flex items-center gap-3 text-ink-soft">
+                <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-accent" />
+                {phase.label}
+              </p>
             )}
             {phase.status === "error" && (
               <>
-                <h2 className="text-lg font-semibold">Import review</h2>
-                <p className="mt-2 text-rose-700" role="alert" data-testid="import-error">
+                <h2 className="font-serif text-3xl leading-tight">Import review</h2>
+                <p className={cx(noticeClass("danger"), "mt-3")} role="alert" data-testid="import-error">
                   {phase.message}
                 </p>
-                <div className="mt-5 flex flex-wrap justify-end gap-2">
-                  <button type="button" className="rounded border px-3 py-1" onClick={reset}>
+                <div className="mt-6 flex flex-wrap justify-end gap-2">
+                  <button type="button" className={buttonClass("ghost")} onClick={reset}>
                     Close
                   </button>
                   {phase.inputs && (
                     <button
                       type="button"
-                      className="rounded border px-3 py-1"
+                      className={buttonClass("secondary")}
                       onClick={() => beginSelection(phase.inputs!)}
                     >
                       Try again
@@ -358,7 +362,8 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "review" && review && (
               <>
-                <h2 className="text-lg font-semibold">Import review</h2>
+                <p className="eyebrow text-accent">Nothing uploads until you confirm</p>
+                <h2 className="mt-2 font-serif text-3xl leading-tight">Import review</h2>
                 <ReviewSummary review={review} />
                 <CollisionChoices
                   review={review}
@@ -370,16 +375,16 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
                     )
                   }
                 />
-                <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
-                  <p className="mr-auto text-xs text-stone-500" data-testid="import-no-upload">
+                <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+                  <p className="mr-auto text-xs text-muted" data-testid="import-no-upload">
                     Nothing is uploaded until you confirm this review.
                   </p>
-                  <button type="button" className="rounded border px-3 py-1" onClick={reset}>
+                  <button type="button" className={buttonClass("ghost")} onClick={reset}>
                     Cancel
                   </button>
                   <button
                     type="button"
-                    className="rounded bg-stone-900 px-3 py-1 text-white disabled:opacity-50"
+                    className={buttonClass("primary")}
                     disabled={!review.canConfirm}
                     onClick={() => void confirm(review, phase.source)}
                     data-testid="import-confirm"
@@ -391,18 +396,18 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "uploading" && (
               <>
-                <h2 className="text-lg font-semibold">Importing</h2>
-                <p className="mt-2 text-sm" role="status" data-testid="import-uploading">
+                <h2 className="font-serif text-3xl leading-tight">Importing</h2>
+                <p className="mt-3 text-sm text-ink-soft" role="status" data-testid="import-uploading">
                   Uploading encrypted chunks {phase.progress.chunksSent} of {phase.progress.chunksTotal}… Nothing is
                   visible until the final commit.
                 </p>
               </>
             )}
             {(phase.status === "uploading" || (phase.status === "preparing" && phase.executing)) && (
-              <div className="mt-5 flex justify-end">
+              <div className="mt-6 flex justify-end">
                 <button
                   type="button"
-                  className="rounded border px-3 py-1"
+                  className={buttonClass("secondary")}
                   onClick={cancelAttempt}
                   data-testid="import-cancel-upload"
                 >
@@ -412,12 +417,12 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "unconfirmed" && (
               <>
-                <h2 className="text-lg font-semibold">Import outcome unconfirmed</h2>
-                <p className="mt-2 text-amber-800" role="alert" data-testid="import-unconfirmed">
+                <h2 className="font-serif text-3xl leading-tight">Import outcome unconfirmed</h2>
+                <p className={cx(noticeClass("warning"), "mt-3")} role="alert" data-testid="import-unconfirmed">
                   {IMPORT_UNCONFIRMED_MESSAGE}
                 </p>
-                <div className="mt-5 flex justify-end">
-                  <button type="button" className="rounded border px-3 py-1" onClick={reset}>
+                <div className="mt-6 flex justify-end">
+                  <button type="button" className={buttonClass("secondary")} onClick={reset}>
                     Close
                   </button>
                 </div>
@@ -425,16 +430,16 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
             )}
             {phase.status === "done" && (
               <>
-                <h2 className="text-lg font-semibold">Import complete</h2>
-                <p className="mt-2 text-sm" role="status" data-testid="import-complete">
+                <h2 className="font-serif text-3xl leading-tight">Import complete</h2>
+                <p className={cx(noticeClass("success"), "mt-3")} role="status" data-testid="import-complete">
                   Added {phase.created} {phase.created === 1 ? "item" : "items"}
                   {phase.comments > 0
                     ? ` with ${phase.comments} Historical ${phase.comments === 1 ? "Comment" : "Comments"}`
                     : ""}
                   . The folder now shows the whole import.
                 </p>
-                <div className="mt-5 flex justify-end">
-                  <button type="button" className="rounded border px-3 py-1" onClick={reset} data-testid="import-done">
+                <div className="mt-6 flex justify-end">
+                  <button type="button" className={buttonClass("primary")} onClick={reset} data-testid="import-done">
                     Close
                   </button>
                 </div>
@@ -452,7 +457,10 @@ function ReviewSummary({ review }: { review: ImportReview }) {
   const targetOwner = review.target.ownerAccountId !== review.target.actorAccountId;
   return (
     <>
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm" data-testid="import-summary">
+      <dl
+        className="mt-5 grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 rounded-2xl bg-cream/70 p-4 text-sm ring-1 ring-line [&>dt]:text-muted [&>dd]:font-medium [&>dd]:text-ink"
+        data-testid="import-summary"
+      >
         <dt>Source items</dt>
         <dd data-testid="import-summary-sources">{counts.sources}</dd>
         <dt>Create</dt>
@@ -478,7 +486,7 @@ function ReviewSummary({ review }: { review: ImportReview }) {
           </>
         )}
       </dl>
-      <p className="mt-3 text-sm" data-testid="import-target">
+      <p className="mt-4 text-sm text-ink-soft" data-testid="import-target">
         Target: <strong>{review.target.label}</strong>
         {targetOwner && (
           <>
@@ -490,9 +498,9 @@ function ReviewSummary({ review }: { review: ImportReview }) {
         {!targetOwner && <> — owned by you.</>}
       </p>
       {review.generatedNames.length > 0 && (
-        <section className="mt-3" aria-label="Generated Keep-both names" data-testid="import-generated-names">
+        <section className="mt-4" aria-label="Generated Keep-both names" data-testid="import-generated-names">
           <h3 className="text-sm font-semibold">Keep-both names</h3>
-          <ul className="mt-1 list-inside list-disc text-sm">
+          <ul className="mt-1 list-inside list-disc text-sm text-ink-soft marker:text-accent">
             {review.generatedNames.map((name) => (
               <li key={name}>{name}</li>
             ))}
@@ -500,7 +508,7 @@ function ReviewSummary({ review }: { review: ImportReview }) {
         </section>
       )}
       {review.empty && (
-        <p className="mt-3" role="alert">
+        <p className={cx(noticeClass("warning"), "mt-4")} role="alert">
           Every item is skipped, so nothing would be created.
         </p>
       )}
@@ -520,13 +528,13 @@ function CollisionChoices({
   );
   if (!collisions.length) return null;
   return (
-    <section className="mt-4" aria-label="Name conflicts">
+    <section className="mt-5" aria-label="Name conflicts">
       <h3 className="text-sm font-semibold">Name conflicts</h3>
       <ul className="mt-2 space-y-3">
         {collisions.map((node) => (
           <li
             key={node.sourcePath}
-            className="rounded border border-stone-200 p-2 text-sm"
+            className="rounded-2xl bg-white/60 p-4 text-sm text-ink-soft ring-1 ring-line"
             data-testid={`import-collision-${node.sourcePath}`}
           >
             <p>
@@ -536,10 +544,10 @@ function CollisionChoices({
               {node.collision!.sameSpelling ? "" : " (equivalent spelling)"}. Files treats case and equivalent Unicode
               spelling as the same name.
             </p>
-            <label className="mt-1 flex flex-wrap items-center gap-2">
+            <label className="mt-3 flex flex-wrap items-center gap-2 font-medium text-ink">
               Action
               <select
-                className="rounded border p-1"
+                className={cx(fieldClass("sm"), "w-auto font-normal")}
                 value={node.choice?.action ?? "keep_both"}
                 aria-label={`Action for ${node.displayPath.join("/")}`}
                 onChange={(event) => {
@@ -562,32 +570,32 @@ function CollisionChoices({
             </label>
             {node.choice?.action === "rename" && (
               <input
-                className="mt-1 w-full rounded border p-1"
+                className={cx(fieldClass("sm"), "mt-2")}
                 value={node.choice.name}
                 aria-label={`New name for ${node.displayPath.join("/")}`}
                 onChange={(event) => onChoose(node.sourcePath, { action: "rename", name: event.target.value })}
               />
             )}
             {node.generated && (
-              <p className="mt-1 text-stone-600">
+              <p className="mt-2 text-muted">
                 Keep both creates <strong>{node.displayName}</strong>.
               </p>
             )}
             {node.action === "replace" && (
-              <p className="mt-1 text-stone-600">
+              <p className="mt-2 text-muted">
                 Replaces the current contents, keeping the File’s comments and Publication.
               </p>
             )}
-            {node.action === "skip" && <p className="mt-1 text-stone-600">Skipped: nothing is created or replaced.</p>}
+            {node.action === "skip" && <p className="mt-2 text-muted">Skipped: nothing is created or replaced.</p>}
             {node.blocked && (
-              <p className="mt-1 text-rose-700" role="alert">
+              <p className="mt-2 text-danger" role="alert">
                 {blockedMessage(node)}
               </p>
             )}
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-xs text-stone-500">
+      <p className="mt-3 text-xs text-muted">
         Import accepts at most {IMPORT_LIMITS.maxNodes} items, {IMPORT_LIMITS.maxDepth} folder levels, and{" "}
         {formatBytes(IMPORT_LIMITS.maxExpandedBytes)} expanded.
       </p>

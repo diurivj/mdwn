@@ -3,6 +3,11 @@ import { Link, useFetcher } from "react-router";
 
 import { authGet, authPost } from "~/auth/client";
 import type { AssertionStart, RegistrationStart } from "~/auth/contracts";
+import { cx } from "~/ui/cx";
+import { FolderIcon, KeyIcon } from "~/ui/icons";
+import { FocusLayout, PageIntro, SkeletonLines } from "~/ui/page-layouts";
+import { markSignedIn, markSignedOut } from "~/ui/session-presence";
+import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/recover";
 
@@ -21,10 +26,12 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
 
 export function HydrateFallback() {
   return (
-    <main className="mx-auto max-w-lg px-4 py-12">
-      <h1 className="text-3xl font-semibold">Recover your Account</h1>
-      <p className="mt-4">Loading recovery…</p>
-    </main>
+    <FocusLayout>
+      <PageIntro eyebrow="Authentication recovery" title="Recover your Account">
+        <p>Loading recovery…</p>
+      </PageIntro>
+      <SkeletonLines className="mt-10" />
+    </FocusLayout>
   );
 }
 
@@ -85,7 +92,11 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
       return { state: "failed" } as const;
     }
   }
-  return { state: await enrollAndSignIn(request.signal) } as const;
+  const state = await enrollAndSignIn(request.signal);
+  // A replacement passkey revokes every Session; only a completed sign-in has one.
+  if (state === "recovered") markSignedIn();
+  if (state === "passkey-added") markSignedOut();
+  return { state } as const;
 }
 
 export default function Recover({ loaderData }: Route.ComponentProps) {
@@ -94,35 +105,35 @@ export default function Recover({ loaderData }: Route.ComponentProps) {
   const state = fetcher.data?.state;
   const canContinue = loaderData.restricted;
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 py-12">
-      <Link to="/sign-in" className="text-sm underline">
-        Sign in
-      </Link>
-      <h1 className="mt-8 text-3xl font-semibold">Recover your Account</h1>
-      <p className="mt-3 text-stone-600">
-        If you have lost your passkeys, use your recovery identifier and one unused authentication recovery code to add
-        a replacement passkey.
-      </p>
-      <p className="mt-3 text-stone-600">
-        If you have lost every passkey and every code, your Account cannot be recovered. There is no support or operator
-        override.
-      </p>
-      <p className="mt-3 text-stone-600">
-        A new passkey does not unlock your encrypted Files. This browser will still need separate device enrollment or
-        your recovery phrase to regain private access.
-      </p>
+    <FocusLayout>
+      <PageIntro eyebrow="Authentication recovery" title="Recover your Account">
+        <p>
+          If you have lost your passkeys, use your recovery identifier and one unused authentication recovery code to
+          add a replacement passkey.
+        </p>
+      </PageIntro>
+      <div className="mt-6 space-y-3 border-l-2 border-accent/40 pl-4 text-sm leading-relaxed text-ink-soft">
+        <p>
+          If you have lost every passkey and every code, your Account cannot be recovered. There is no support or
+          operator override.
+        </p>
+        <p>
+          A new passkey does not unlock your encrypted Files. This browser will still need separate device enrollment or
+          your recovery phrase to regain private access.
+        </p>
+      </div>
       {state === "recovered" ? (
-        <p role="status" className="mt-6">
-          Your passkey is ready and you are signed in.{" "}
-          <Link className="underline" to="/account/device-access">
+        <div role="status" className={cx(noticeClass("success"), "mt-8 animate-rise")}>
+          <p>Your passkey is ready and you are signed in.</p>
+          <Link to="/account/device-access" className={cx(buttonClass("primary", "sm"), "mt-4")}>
+            <FolderIcon />
             Check private access
           </Link>
-          .
-        </p>
+        </div>
       ) : state === "passkey-added" ? (
-        <p role="status" className="mt-6">
+        <p role="status" className={cx(noticeClass("success"), "mt-8 animate-rise")}>
           Your replacement passkey was added and all former Sessions were revoked.{" "}
-          <Link className="underline" to="/sign-in">
+          <Link className={linkClass} to="/sign-in">
             Sign in with your new passkey
           </Link>
           .
@@ -130,47 +141,48 @@ export default function Recover({ loaderData }: Route.ComponentProps) {
       ) : (
         <>
           {state === "failed" && (
-            <p role="alert" className="mt-6 text-red-700">
+            <p role="alert" className={cx(noticeClass("danger"), "mt-8")}>
               We could not begin recovery. Check your identifier and code or try again later.
             </p>
           )}
           {state === "started" && (
-            <p role="status" className="mt-6 text-amber-800">
+            <p role="status" className={cx(noticeClass("warning"), "mt-8")}>
               Your code has been used. Finish adding a passkey before this five-minute recovery Session expires. If it
               expires, you need another unused code.
             </p>
           )}
           {canContinue ? (
-            <fetcher.Form method="post" className="mt-6">
+            <fetcher.Form method="post" className="mt-8">
               <button
                 disabled={busy}
                 type="submit"
                 name="intent"
                 value="continue"
-                className="rounded-md bg-stone-900 px-4 py-2 text-white disabled:opacity-60"
+                className={cx(buttonClass("primary", "lg"), "w-full")}
               >
+                <KeyIcon />
                 {busy ? "Adding passkey…" : "Continue adding a passkey"}
               </button>
             </fetcher.Form>
           ) : (
-            <fetcher.Form method="post" className="mt-6 flex flex-col gap-4">
-              <label>
+            <fetcher.Form method="post" className="mt-8 space-y-5 rounded-3xl bg-paper p-6 ring-1 ring-line sm:p-8">
+              <label className={labelClass}>
                 Recovery identifier
                 <input
                   name="identifier"
                   required
                   autoComplete="off"
-                  className="mt-1 block w-full rounded border p-2 font-mono"
+                  className={cx(fieldClass(), "mt-2 font-mono font-normal")}
                 />
               </label>
-              <label>
+              <label className={labelClass}>
                 Unused recovery code
                 <input
                   name="code"
                   required
                   autoComplete="off"
                   spellCheck={false}
-                  className="mt-1 block w-full rounded border p-2 font-mono"
+                  className={cx(fieldClass(), "mt-2 font-mono font-normal")}
                 />
               </label>
               <button
@@ -178,7 +190,7 @@ export default function Recover({ loaderData }: Route.ComponentProps) {
                 type="submit"
                 name="intent"
                 value="start"
-                className="self-start rounded-md bg-stone-900 px-4 py-2 text-white disabled:opacity-60"
+                className={cx(buttonClass("primary", "lg"), "w-full")}
               >
                 {busy ? "Recovering…" : "Use recovery code"}
               </button>
@@ -186,6 +198,12 @@ export default function Recover({ loaderData }: Route.ComponentProps) {
           )}
         </>
       )}
-    </main>
+      <p className="mt-8 text-center text-sm text-ink-soft">
+        Remembered your passkey?{" "}
+        <Link to="/sign-in" className={linkClass}>
+          Sign in
+        </Link>
+      </p>
+    </FocusLayout>
   );
 }
