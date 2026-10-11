@@ -46,7 +46,7 @@ The maintainer accepted both recommendation rounds, including the cleanup-failur
 - [x] `CODING_STANDARDS.md` exists, is short, and contains only judgement calls no check can enforce.
 - [x] `AGENTS.md` points at it from the review gate.
 - [x] Mechanical rules from the list are filed for deterministic enforcement rather than the standards file: ticket 52, linked from the completed ticket 42.
-- [ ] The next code review cites the standards file where relevant.
+- [x] The next code review cites the standards file where relevant.
 
 ## Scope and pointers
 
@@ -58,3 +58,5 @@ The maintainer accepted both recommendation rounds, including the cleanup-failur
 
 - 2026-10-06: Raised from the MVP retro. Awaiting the maintainer's grilling session; the candidate list above is the interview material, not the decision.
 - 2026-10-10: Maintainer ratified the recommendations in two rounds. Added the three-rule standards document and review-gate pointer; recorded each candidate's disposition and filed ticket 52 for the remaining automated safeguards. Implementation is docs-only; pinned review and verification evidence will accompany the PR. Status advanced from `needs-info` after ratification; merge completion remains pending.
+- 2026-10-10: Pinned two-axis review `120cbe1...5634c84` completed with independent Standards and Spec agents. **Standards: Pass, 0 findings** — cites `CODING_STANDARDS.md`, “Keep operational facts authoritative,” for the canonical reference and ticket 52; the module-boundary and shared-behavior rules have no implementation touchpoints in this docs-only diff. **Spec: Pass, 0 findings** — all ratified decisions, review guidance, and mechanical follow-up match the agreed scope. Ticked the final criterion on that evidence. **Separate RR8/stack: Not applicable — no RR8/stack touchpoints** on the same pinned diff; all six changed files are Markdown, with no routes, UI data consumers, resource endpoints, Worker/D1 boundaries, runtime configuration, or test changes.
+- 2026-10-10: Clean-tree `npm run verify` **passed at `5634c842569c937d323a115a1db97e6713f6d9fa`**: lint, typecheck, namespace drift, 306 Node and 382 Workers tests, build, fresh-local-D1 migration smoke, local export/restore round trip, bundle-secret scan, and 431 browser tests across Chromium/Firefox/WebKit (one existing synthetic WebKit drag/drop skip). No retries or remote database operations. Log: `/tmp/mdwn-41-verify.log`. This subsequent ticket-only update records completion evidence; it does not change the verified standards, guidance, or runtime files. The ad-hoc shell Markdown link check was blocked and not rerun. Current-head green `CI` and merge remain pending; ticket 52's safeguards remain unimplemented.
