@@ -996,7 +996,7 @@ async function deleteChild(env: Env, auth: AuthorizedDevice, nodeId: string, val
       (committed) => [
         // The shared Comment-dependent module owns the applicable dependents
         // and their foreign-key-safe order.
-        ...deletedCommentDependents({ ownerId, nodeIds: ids }, committed),
+        ...deletedCommentDependents({ ownerId, selectedNodeIds: rows.map((row) => row.id) }, committed),
         sql`DELETE FROM key_rotation_entries WHERE (child_id IN (${ids}) OR directory_id IN (${ids})
         OR job_id IN (SELECT id FROM crypto_jobs WHERE target_id IN (${ids}))) AND ${committed}`,
         sql`DELETE FROM key_rotation_items WHERE (object_id IN (${ids}) OR file_id IN (${ids})

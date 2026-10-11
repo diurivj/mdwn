@@ -7,7 +7,7 @@ import { newPublicationIdentifier } from "../../app/shared/publications/capabili
 import { applyPublicParticipationSuspension } from "../../app/shared/security/public-participation.server";
 import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import { commentPayload, publish, sealedAttribution, sealedComment, type Publication } from "./publication-fixtures";
-import { count, stageCommentRotation, stageImportCommentMeta } from "./deletion-fixtures";
+import { count, stageCommentRotation, stageImportCommentMeta, stagePseudonymItems } from "./deletion-fixtures";
 import {
   deletePayload,
   grant,
@@ -124,35 +124,6 @@ async function publicComment(owner: SharingAccount, fileId: string, publication:
 
 const report = (account: SharingAccount, commentId: string) =>
   sharingRequest(account, "/api/private/comments/reports", "POST", { commentId, category: "spam" });
-
-/** A pending Pseudonym-update job staging the given attribution contexts. */
-async function stagePseudonymItems(
-  account: SharingAccount,
-  items: { kind: "thread" | "publication"; recordId: string }[],
-) {
-  const now = Date.now(),
-    jobId = opaqueId();
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO crypto_jobs (id, account_id, device_id, kind, state, progress, created_at, updated_at)
-      VALUES (?, ?, ?, 'pseudonym_update', 'pending', 0, ?, ?)`).bind(
-      jobId,
-      account.accountId,
-      account.deviceId,
-      now,
-      now,
-    ),
-    ...items.map((item) =>
-      item.kind === "thread"
-        ? env.DB.prepare(`INSERT INTO pseudonym_update_items
-        (job_id, kind, record_id, revision, ciphertext, content_key_envelope, content_key_epoch, created_at)
-        VALUES (?, 'thread', ?, 1, X'01', X'01', 1, ?)`).bind(jobId, item.recordId, now)
-        : env.DB.prepare(`INSERT INTO pseudonym_update_items
-        (job_id, kind, record_id, revision, ciphertext, content_key_envelope, content_key_epoch, created_at)
-        VALUES (?, 'publication', ?, 1, X'01', NULL, NULL, ?)`).bind(jobId, item.recordId, now),
-    ),
-  ]);
-  return jobId;
-}
 
 type FileDependents = {
   fileId: string;

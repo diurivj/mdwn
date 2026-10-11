@@ -43,3 +43,32 @@ export async function stageImportCommentMeta(owner: SharingAccount, threadId: st
   await env.DB.prepare(`INSERT INTO import_comment_meta (comment_id, thread_id, owner_id, ciphertext)
     VALUES (?, ?, ?, X'01')`).bind(commentId, threadId, owner.accountId);
 }
+
+/** A pending Pseudonym-update job staging the given attribution contexts. */
+export async function stagePseudonymItems(
+  account: SharingAccount,
+  items: { kind: "thread" | "publication"; recordId: string }[],
+) {
+  const now = Date.now(),
+    jobId = opaqueId();
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO crypto_jobs (id, account_id, device_id, kind, state, progress, created_at, updated_at)
+      VALUES (?, ?, ?, 'pseudonym_update', 'pending', 0, ?, ?)`).bind(
+      jobId,
+      account.accountId,
+      account.deviceId,
+      now,
+      now,
+    ),
+    ...items.map((item) =>
+      item.kind === "thread"
+        ? env.DB.prepare(`INSERT INTO pseudonym_update_items
+        (job_id, kind, record_id, revision, ciphertext, content_key_envelope, content_key_epoch, created_at)
+        VALUES (?, 'thread', ?, 1, X'01', X'01', 1, ?)`).bind(jobId, item.recordId, now)
+        : env.DB.prepare(`INSERT INTO pseudonym_update_items
+        (job_id, kind, record_id, revision, ciphertext, content_key_envelope, content_key_epoch, created_at)
+        VALUES (?, 'publication', ?, 1, X'01', NULL, NULL, ?)`).bind(jobId, item.recordId, now),
+    ),
+  ]);
+  return jobId;
+}
