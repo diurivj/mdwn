@@ -96,7 +96,8 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Signed-in but unauthorized Accounts receive no Collaborators-only data | `tests/worker/public-comments.test.ts`, `tests/worker/effective-access.test.ts`. |
 | Owner/author Comment mutation rules enforced server-side | `tests/worker/private-comments.test.ts`, `tests/worker/public-comments.test.ts`. |
 | Rotation preserves the logical thread; unpublish destroys it; a later Publication is fresh | `tests/worker/publication-lifecycle.test.ts`, `e2e/publications.spec.ts`. |
-| Interrupted teardown stays sealed and Owner-resumable | `tests/worker/publication-lifecycle.test.ts`. |
+| Unpublishing removes only the Publication's Public-thread material; the File's Private thread survives | `tests/worker/publication-lifecycle.test.ts`, `tests/worker/comment-dependent-deletion.test.ts`. |
+| Interrupted teardown stays sealed and Owner-resumable | `tests/worker/publication-lifecycle.test.ts`, `tests/worker/comment-dependent-deletion.test.ts`. |
 | Pseudonym update is all-old or all-new, never mixed | `tests/worker/pseudonym-update.test.ts`, `e2e/pseudonym-update.spec.ts`. |
 
 ### 12.5 Import, export, and deletion
