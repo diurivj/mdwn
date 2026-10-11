@@ -171,7 +171,9 @@ async function publishFileWithDependents(
   ]);
   // A pending Key-rotation job targeting the File stages Comment items, and
   // imported Historical Comment metadata is an explicit dependent of its Comment.
-  const rotationJobId = await stageCommentRotation(owner, fileId, thread.threadId, privatePosted.commentId);
+  const rotationJobId = await stageCommentRotation(owner, fileId, {
+    private: { threadId: thread.threadId, commentId: privatePosted.commentId },
+  });
   await stageImportCommentMeta(owner, thread.threadId, privatePosted.commentId);
   return {
     fileId,

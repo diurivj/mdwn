@@ -21,7 +21,7 @@ import {
   publicParticipationSuspendedResponse,
 } from "~/shared/security/public-participation.server";
 import { epochInput, epochStatements, readPublicCommentPage, type EpochInput } from "~/comments/public.server";
-import { deletedCommentReports } from "~/comments/dependents.server";
+import { deletedCommentBatch, deletedCommentDependents } from "~/comments/dependents.server";
 import { isCommentEpochLink } from "~/shared/comments/public-content";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { deletedPseudonymItems } from "~/account/pseudonym-items.server";
@@ -1025,47 +1025,15 @@ async function unpublishPublication(
   return notFound();
 }
 
-type TeardownState = { id: string; comment_total: number; thread_id: string | null; comments_remaining: number };
+type TeardownState = { id: string; comment_total: number; comments_remaining: number };
 
-/** Every non-Comment row teardown removes, including the Publication itself. */
-function teardownStatements(
-  publicationId: string,
-  fileId: string,
-  ownerId: string,
-  threadId: string | null,
-  marker: SQL,
-): SQL[] {
+/** Every non-Comment row teardown removes, including the Publication itself.
+ * The shared Comment-dependent module removes the Publication's Public-thread
+ * graph (see `teardownPublication`); this function owns what is not
+ * Comment-dependent. */
+function teardownStatements(publicationId: string, fileId: string, ownerId: string, marker: SQL): SQL[] {
   return [
-    ...(threadId === null
-      ? []
-      : [
-          // A public_history staging row names its epoch in `thread_id`; a private
-          // staging row names the thread, and both hold comment content-key bytes.
-          sql`DELETE FROM key_rotation_comment_items WHERE (thread_id = ${threadId}
-        OR thread_id IN (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId})) AND ${marker}`,
-          sql`DELETE FROM key_rotation_items WHERE kind = 'public_history' AND object_id IN
-        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
-          sql`DELETE FROM grant_comment_key_envelopes WHERE object_id IN
-        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
-          sql`DELETE FROM share_comment_key_envelopes WHERE object_id IN
-        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
-          sql`DELETE FROM key_envelopes WHERE object_id IN
-        (SELECT id FROM comment_thread_epochs WHERE thread_id = ${threadId}) AND ${marker}`,
-          sql`DELETE FROM sharing_comment_capabilities WHERE thread_id = ${threadId} AND ${marker}`,
-          sql`DELETE FROM public_comment_epoch_links WHERE publication_id = ${publicationId} AND ${marker}`,
-          // Reports and staged pseudonym-update items are explicit dependents; the
-          // Comment FK is RESTRICT, never a database cascade.
-          deletedCommentReports(sql`SELECT id FROM comments WHERE thread_id = ${threadId}`, marker),
-          deletedPseudonymItems(
-            "thread",
-            sql`SELECT id FROM thread_attributions WHERE thread_id = ${threadId}`,
-            marker,
-          ),
-          sql`DELETE FROM comments WHERE thread_id = ${threadId} AND ${marker}`,
-          sql`DELETE FROM thread_attributions WHERE thread_id = ${threadId} AND ${marker}`,
-          sql`DELETE FROM comment_thread_epochs WHERE thread_id = ${threadId} AND ${marker}`,
-          sql`DELETE FROM comment_threads WHERE id = ${threadId} AND ${marker}`,
-        ]),
+    ...deletedCommentDependents({ kind: "publication", ownerId, publicationId }, marker),
     sql`DELETE FROM public_representations WHERE publication_id = ${publicationId} AND ${marker}`,
     deletedPseudonymItems(
       "publication",
@@ -1097,9 +1065,7 @@ async function teardownPublication(
   if (!input || !exact(input, [])) return invalid();
   const db = createDb(env.DB);
   const publication = await db.get<TeardownState>(sql`
-    SELECT p.id, t.comment_total,
-      (SELECT ct.id FROM comment_threads ct WHERE ct.publication_id = p.id AND ct.purpose = 'public') AS thread_id,
-      ${publicCommentCount(sql`p.id`)} AS comments_remaining
+    SELECT p.id, t.comment_total, ${publicCommentCount(sql`p.id`)} AS comments_remaining
     FROM publications p JOIN publication_teardowns t ON t.publication_id = p.id
     WHERE p.file_id = ${fileId} AND p.state = 'deleting' AND p.owner_id = ${auth.accountId}
       AND ${accessPredicate(auth, fileId, "owner")}`);
@@ -1128,19 +1094,12 @@ async function teardownPublication(
         AND owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
       (marker) =>
         publication.comments_remaining > 0
-          ? [
-              // Reports go in the same batch as their Comments; the FK stays RESTRICT.
-              deletedCommentReports(
-                sql`SELECT c.id FROM comments c JOIN comment_threads t ON t.id = c.thread_id
-        WHERE t.publication_id = ${publication.id} AND t.purpose = 'public'
-        ORDER BY c.sequence LIMIT ${TEARDOWN_COMMENT_BATCH}`,
-                marker,
-              ),
-              sql`DELETE FROM comments WHERE id IN (SELECT c.id FROM comments c JOIN comment_threads t ON t.id = c.thread_id
-        WHERE t.publication_id = ${publication.id} AND t.purpose = 'public'
-        ORDER BY c.sequence LIMIT ${TEARDOWN_COMMENT_BATCH}) AND ${marker}`,
-            ]
-          : teardownStatements(publication.id, fileId, auth.accountId, publication.thread_id, marker),
+          ? deletedCommentBatch(
+              { kind: "publication", ownerId: auth.accountId, publicationId: publication.id },
+              TEARDOWN_COMMENT_BATCH,
+              marker,
+            )
+          : teardownStatements(publication.id, fileId, auth.accountId, marker),
       { deferForeignKeys: true },
     );
   } catch {
