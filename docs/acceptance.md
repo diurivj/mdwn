@@ -96,7 +96,7 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Signed-in but unauthorized Accounts receive no Collaborators-only data | `tests/worker/public-comments.test.ts`, `tests/worker/effective-access.test.ts`. |
 | Owner/author Comment mutation rules enforced server-side | `tests/worker/private-comments.test.ts`, `tests/worker/public-comments.test.ts`. |
 | Rotation preserves the logical thread; unpublish destroys it; a later Publication is fresh | `tests/worker/publication-lifecycle.test.ts`, `e2e/publications.spec.ts`. |
-| Unpublishing removes only the Publication's Public-thread material; the File's Private thread survives | `tests/worker/publication-lifecycle.test.ts`, `tests/worker/comment-dependent-deletion.test.ts`. |
+| Unpublishing removes only the Publication's Public-thread material; the File's Private thread survives | `tests/worker/publication-lifecycle.test.ts`, `tests/worker/comment-dependent-deletion.test.ts` (the Private thread keeps its Comments, imported Historical Comment metadata and capability envelope). |
 | Interrupted teardown stays sealed and Owner-resumable | `tests/worker/publication-lifecycle.test.ts`. |
 | Pseudonym update is all-old or all-new, never mixed | `tests/worker/pseudonym-update.test.ts`, `e2e/pseudonym-update.spec.ts`. |
 
@@ -111,7 +111,7 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Retry idempotence; mismatches, missing sequences, malformed descriptors, cancellation, expiry, disconnect, stale authority, failed commit create no marker or visible data; staged Replace stays old until the marker | `tests/proof/import-proof.test.ts`, `tests/worker/import-staging.test.ts`. |
 | Shared-target imports assign every new descendant to the target Owner and create no authority | `tests/worker/import-shared-target.test.ts`, `tests/worker/shared-tree.test.ts`, `tests/import-targets.test.ts`. |
 | Uncommitted Import records excluded from every normal query class | `tests/worker/import-staging.test.ts`, `tests/worker/import-shared-target.test.ts` (tree listing, direct File read, owned-file scope). |
-| File and ≤500-node Directory hard deletion remove every dependent record atomically | `tests/worker/private-tree.test.ts`, `tests/worker/hard-deletion-completeness.test.ts`, `tests/worker/comment-dependent-deletion.test.ts`. |
+| File and ≤500-node Directory hard deletion remove every dependent record atomically | `tests/worker/private-tree.test.ts`, `tests/worker/hard-deletion-completeness.test.ts` (File and Directory graphs include an imported Historical Comment thread and its capability envelope), `tests/worker/comment-dependent-deletion.test.ts` (the envelope is removed in File scope and a committed Import session row survives). |
 | >500-node Directory deletion changes nothing | `tests/worker/private-tree.test.ts`, `e2e/tree-structure.spec.ts`. |
 | Public-participation limits cannot block export, hard deletion, unpublish, or session revocation | `tests/worker/hard-deletion-completeness.test.ts`, `tests/worker/publication-lifecycle.test.ts`, `tests/worker/public-abuse-response.test.ts`; export is browser-side and has no participation gate (`tests/export-collect.test.ts`). |
 

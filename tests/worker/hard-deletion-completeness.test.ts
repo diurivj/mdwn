@@ -7,7 +7,13 @@ import { newPublicationIdentifier } from "../../app/shared/publications/capabili
 import { applyPublicParticipationSuspension } from "../../app/shared/security/public-participation.server";
 import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import { commentPayload, publish, sealedAttribution, sealedComment, type Publication } from "./publication-fixtures";
-import { count, stageCommentRotation, stageImportCommentMeta, stagePseudonymItems } from "./deletion-fixtures";
+import {
+  count,
+  stageCommentRotation,
+  stageImportCommentEnvelope,
+  stageImportCommentMeta,
+  stagePseudonymItems,
+} from "./deletion-fixtures";
 import {
   deletePayload,
   grant,
@@ -175,6 +181,7 @@ async function publishFileWithDependents(
     private: { threadId: thread.threadId, commentId: privatePosted.commentId },
   });
   await stageImportCommentMeta(owner, thread.threadId, privatePosted.commentId);
+  await stageImportCommentEnvelope(fileId, thread.threadId, thread.capabilityId);
   return {
     fileId,
     privateThread: thread,
@@ -231,6 +238,7 @@ describe("hard-deletion completeness", () => {
     const { publication } = scope;
     expect(await count("publications", "file_id = ?", fileId)).toBe(1);
     expect(await count("public_comment_reports", "comment_id = ?", scope.publicCommentId)).toBe(1);
+    expect(await count("import_comment_envelopes", "thread_id = ?", scope.privateThread.threadId)).toBe(1);
     expect(
       await count(
         "pseudonym_update_items",
@@ -283,6 +291,7 @@ describe("hard-deletion completeness", () => {
         [scope.privateAttributionId, scope.publicAttributionId, scope.authorDeclarationId],
       ],
       ["import_comment_meta", `comment_id = ?`, [scope.privateCommentId]],
+      ["import_comment_envelopes", `thread_id = ?`, [scope.privateThread.threadId]],
       ["key_rotation_comment_items", `job_id = ?`, [scope.rotationJobId]],
       ["key_rotation_items", `job_id = ?`, [scope.rotationJobId]],
       ["crypto_jobs", `id = ?`, [scope.rotationJobId]],
@@ -357,6 +366,7 @@ describe("hard-deletion completeness", () => {
       ),
     ).toBe(0);
     expect(await count("import_comment_meta", "comment_id = ?", scope.privateCommentId)).toBe(0);
+    expect(await count("import_comment_envelopes", "thread_id = ?", scope.privateThread.threadId)).toBe(0);
     expect(await count("key_rotation_comment_items", "job_id = ?", scope.rotationJobId)).toBe(0);
     expect(await count("key_rotation_items", "job_id = ?", scope.rotationJobId)).toBe(0);
     expect(await count("crypto_jobs", "id = ?", scope.rotationJobId)).toBe(0);
@@ -420,6 +430,7 @@ describe("hard-deletion completeness", () => {
         scope.publicAttributionId,
         scope.authorDeclarationId,
       ),
+      envelopes: await count("import_comment_envelopes", "thread_id = ?", scope.privateThread.threadId),
       proofs: await count("device_proof_uses", "account_id = ?", owner.accountId),
     };
     const body = await deletePayload(owner, owner.accountId, directoryId, owner.rootId);
@@ -444,6 +455,7 @@ describe("hard-deletion completeness", () => {
         scope.publicAttributionId,
         scope.authorDeclarationId,
       ),
+      envelopes: await count("import_comment_envelopes", "thread_id = ?", scope.privateThread.threadId),
       proofs: await count("device_proof_uses", "account_id = ?", owner.accountId),
     }).toEqual(state);
     expect((await sharingRequest(owner, `/api/private/tree/files/${fileId}`)).status).toBe(200);

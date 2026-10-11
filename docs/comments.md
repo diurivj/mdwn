@@ -117,8 +117,9 @@ or registry membership fails receives no thread material.
 Hard deletion stays available while a rotation seal blocks new writes. A File or
 Directory hard deletion explicitly removes both Comment threads with their
 Comments, attributions and Public Comment reports, plus staged pseudonym
-declarations, epochs, threads, owned Comment recovery envelopes and rotation
-staging before the node, with no database cascade to fall back on.
+declarations, epochs, threads, owned Comment recovery envelopes, imported
+Historical Comment metadata and capability envelopes, and rotation staging
+before the node, with no database cascade to fall back on.
 
 ## Public audience epochs
 
@@ -232,7 +233,8 @@ anonymous page, signed-in visitor posting, audience transitions in both
 directions, retained history for eligible devices, unauthorized signed-in
 denial, Private-thread absence and the revocation rotation of a current
 Collaborators-only epoch. `tests/worker/hard-deletion-completeness.test.ts`
-drives File and Directory deletion of rich Comment graphs through the
+drives File and Directory deletion of rich Comment graphs — an imported
+Historical Comment thread with its capability envelope included — through the
 authorized routes, and `tests/worker/comment-dependent-deletion.test.ts` pins
 the shared Comment-dependent module's File and Publication scope containment,
 transaction-marker guard, rollback and bounded-batch/final-completion behavior

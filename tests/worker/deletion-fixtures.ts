@@ -74,6 +74,16 @@ export async function stageImportCommentMeta(owner: SharingAccount, threadId: st
     .run();
 }
 
+/** The one capability envelope of an imported Historical Comment thread,
+ * exactly as the Import commit writes it. `thread_id` is its only foreign key. */
+export async function stageImportCommentEnvelope(fileId: string, threadId: string, capabilityId: string) {
+  await env.DB.prepare(`INSERT INTO import_comment_envelopes
+    (thread_id, file_id, capability_id, capability_epoch, key_epoch, ciphertext)
+    VALUES (?, ?, ?, 1, 1, X'01')`)
+    .bind(threadId, fileId, capabilityId)
+    .run();
+}
+
 /** A pending Pseudonym-update job staging the given attribution contexts. */
 export async function stagePseudonymItems(
   account: SharingAccount,

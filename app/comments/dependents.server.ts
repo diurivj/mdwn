@@ -91,12 +91,13 @@ function publicationEpochs(publicationId: string, ownerId: string): SQL {
  * Ordered, marker-guarded removals of every Comment-dependent row of the
  * selected Files: Key-rotation Comment staging, Comment sharing capabilities
  * and their Key envelopes, reports, staged pseudonym-update items, imported
- * Historical Comment metadata, Comments, thread attributions, thread and
- * audience-epoch Key envelopes, Public epoch link wrappers, retained epochs
- * and the threads themselves.
+ * Historical Comment metadata and capability envelopes, Comments, thread
+ * attributions, thread and audience-epoch Key envelopes, Public epoch link
+ * wrappers, retained epochs and the threads themselves.
  *
- * `import_comment_meta` is File-scope-only: imported Historical Comments live
- * in a Private thread, which a Publication's Public-thread scope never selects.
+ * The imported Historical Comment metadata and capability envelope are
+ * File-scope-only: both live in a Private thread, which a Publication's
+ * Public-thread scope never selects.
  */
 function deletedFileCommentDependents(scope: CommentDependentFileScope, committed: SQL): readonly SQL[] {
   const { ownerId, selectedNodeIds } = scope;
@@ -127,6 +128,9 @@ function deletedFileCommentDependents(scope: CommentDependentFileScope, committe
     // never applies to a Publication's Public-thread scope.
     sql`DELETE FROM import_comment_meta WHERE comment_id IN
       (SELECT id FROM comments WHERE thread_id IN (${threads})) AND ${committed}`,
+    // An imported thread's one capability envelope keys on the thread itself;
+    // its RESTRICT foreign key would otherwise abort a File deletion at commit.
+    sql`DELETE FROM import_comment_envelopes WHERE thread_id IN (${threads}) AND ${committed}`,
     sql`DELETE FROM comments WHERE thread_id IN (${threads}) AND ${committed}`,
     sql`DELETE FROM thread_attributions WHERE thread_id IN (${threads}) AND ${committed}`,
     // Thread and audience-epoch Key envelopes, then the retained epochs' Public
@@ -145,8 +149,9 @@ function deletedFileCommentDependents(scope: CommentDependentFileScope, committe
  * staging, Comment sharing Key envelopes and capabilities, Public epoch link
  * wrappers, reports, staged pseudonym-update items, Comments, attributions,
  * audience-epoch Key envelopes, epochs and the thread itself. The File's
- * Private thread is never selected, and `import_comment_meta` never applies
- * because imported Historical Comments always live in a Private thread.
+ * Private thread is never selected, and neither imported Historical Comment
+ * row (`import_comment_meta`, `import_comment_envelopes`) ever applies because
+ * imported Historical Comments always live in a Private thread.
  */
 function deletedPublicationCommentDependents(scope: CommentDependentPublicationScope, committed: SQL): readonly SQL[] {
   const { ownerId, publicationId } = scope;
