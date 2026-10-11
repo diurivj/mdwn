@@ -215,7 +215,10 @@ hard-deletes at most 200 Public Comments; once none remain, one transaction
 removes the thread and its epochs, Comments, attributions and reports, staged
 pseudonym-update items, Owner and device envelopes, capabilities, link
 wrappers, Public representations, author
-declarations, requests, teardown progress and finally the Publication row. A
+declarations, requests, teardown progress and finally the Publication row. The
+File's Private thread and its Comments, attributions and envelopes are never
+selected, and the shared Comment-dependent module owns that Public-thread
+selection and removal order for teardown and File deletion alike. A
 lost response or interrupted browser is resumed by any Owner device; no other
 Account can read progress or delete anything. The File's partial unique index
 keeps it unpublished until cleanup completes, and a later Publication starts
@@ -295,8 +298,10 @@ path is byte-identical to unknown, the new fragment opens the same presentation
 and Comments, every public epoch is rewrapped, Collaborators-only epochs and
 device envelopes are untouched, stale/mis-bound material changes nothing) and
 the sealed, Owner-resumable teardown (pinned count, bounded 200-Comment
-batches, idempotent completion, non-Owner denial, no participation-limit
-blocking, every public row and ciphertext removed, and a fresh later
+batches, idempotent completion after zero remaining Comments, non-Owner
+denial, no participation-limit
+blocking, every public row and ciphertext removed, the File's Private thread
+untouched, and a fresh later
 Publication). `e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
 fresh anonymous context and proves the fragment never reaches a request,
 header, cookie, console message or D1 row while saves keep the link live. It

@@ -234,9 +234,12 @@ denial, Private-thread absence and the revocation rotation of a current
 Collaborators-only epoch. `tests/worker/hard-deletion-completeness.test.ts`
 drives File and Directory deletion of rich Comment graphs through the
 authorized routes, and `tests/worker/comment-dependent-deletion.test.ts` pins
-the shared Comment-dependent module's scope containment, transaction-marker
-guard and rollback in real D1. `tests/worker/publication-lifecycle.test.ts` covers
-link rotation and the sealed, Owner-resumable teardown with bounded batches. `tests/comment-content.test.ts` and
+the shared Comment-dependent module's File and Publication scope containment,
+transaction-marker guard, rollback and bounded-batch/final-completion behavior
+in real D1. `tests/worker/publication-lifecycle.test.ts` covers
+link rotation and the sealed, Owner-resumable teardown with bounded batches
+that removes only the Publication's Public thread and leaves the File's Private
+thread readable. `tests/comment-content.test.ts` and
 `tests/public-comment-content.test.ts` cover the browser envelope shapes, link
 wrappers and bounds. `tests/worker/public-abuse-response.test.ts` proves the
 report shape and limit, the suspension enforcement boundary (create, edit,

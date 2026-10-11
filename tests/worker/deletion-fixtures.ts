@@ -14,10 +14,41 @@ export async function count(table: string, where = "1", ...values: unknown[]) {
     .first<{ n: number }>())!.n;
 }
 
-/** A pending Key-rotation job targeting the File, with one staged Comment item. */
-export async function stageCommentRotation(owner: SharingAccount, fileId: string, threadId: string, commentId: string) {
+export type CommentRotationStaging = {
+  private?: { threadId: string; commentId: string };
+  publicHistory?: { epochId: string; commentId: string };
+};
+
+/** A pending Key-rotation job targeting the File, staging one Private-thread
+ * Comment item and/or one Public audience-epoch (`public_history`) item exactly
+ * as the rotation step writes them: the Private item names its thread in
+ * `object_id`, the Public item names its epoch. */
+export async function stageCommentRotation(owner: SharingAccount, fileId: string, staging: CommentRotationStaging) {
   const jobId = opaqueId(),
     now = Date.now();
+  const items: D1PreparedStatement[] = [];
+  if (staging.private)
+    items.push(
+      env.DB.prepare(`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
+      VALUES (?, ?, 'private_comment', ?, 1, 'ready')`).bind(jobId, staging.private.threadId, fileId),
+      env.DB.prepare(`INSERT INTO key_rotation_comment_items (job_id, thread_id, kind, record_id, revision,
+      content_key_envelope) VALUES (?, ?, 'comment', ?, 1, X'01')`).bind(
+        jobId,
+        staging.private.threadId,
+        staging.private.commentId,
+      ),
+    );
+  if (staging.publicHistory)
+    items.push(
+      env.DB.prepare(`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
+      VALUES (?, ?, 'public_history', ?, 1, 'ready')`).bind(jobId, staging.publicHistory.epochId, fileId),
+      env.DB.prepare(`INSERT INTO key_rotation_comment_items (job_id, thread_id, kind, record_id, revision,
+      content_key_envelope) VALUES (?, ?, 'comment', ?, 1, X'01')`).bind(
+        jobId,
+        staging.publicHistory.epochId,
+        staging.publicHistory.commentId,
+      ),
+    );
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO crypto_jobs (id, account_id, device_id, kind, state, initiating_account_id,
       target_id, key_epoch, progress, created_at, updated_at)
@@ -30,10 +61,7 @@ export async function stageCommentRotation(owner: SharingAccount, fileId: string
       now,
       now,
     ),
-    env.DB.prepare(`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
-      VALUES (?, ?, 'private_comment', ?, 1, 'ready')`).bind(jobId, threadId, fileId),
-    env.DB.prepare(`INSERT INTO key_rotation_comment_items (job_id, thread_id, kind, record_id, revision,
-      content_key_envelope) VALUES (?, ?, 'comment', ?, 1, X'01')`).bind(jobId, threadId, commentId),
+    ...items,
   ]);
   return jobId;
 }
@@ -41,7 +69,9 @@ export async function stageCommentRotation(owner: SharingAccount, fileId: string
 /** Imported Historical Comment metadata for one Private-thread Comment. */
 export async function stageImportCommentMeta(owner: SharingAccount, threadId: string, commentId: string) {
   await env.DB.prepare(`INSERT INTO import_comment_meta (comment_id, thread_id, owner_id, ciphertext)
-    VALUES (?, ?, ?, X'01')`).bind(commentId, threadId, owner.accountId);
+    VALUES (?, ?, ?, X'01')`)
+    .bind(commentId, threadId, owner.accountId)
+    .run();
 }
 
 /** A pending Pseudonym-update job staging the given attribution contexts. */

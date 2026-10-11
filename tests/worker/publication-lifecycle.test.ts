@@ -7,6 +7,7 @@ import {
   sealCommentEpochLink,
   sealPublicCommentBody,
 } from "../../app/shared/comments/public-content";
+import { sealAttribution, sealCommentBody } from "../../app/shared/comments/content";
 import { sealVaultRecoveryEnvelope, generateVaultRootKey } from "../../app/shared/crypto/vault";
 import {
   createPublicationKeyPair,
@@ -317,6 +318,72 @@ async function comment(
   });
   if (response.status !== 201) throw new Error(`comment failed: ${response.status} ${await response.text()}`);
   return commentId;
+}
+
+type PrivateThread = { threadId: string; epochId: string; capabilityId: string; capability: Uint8Array<ArrayBuffer> };
+
+/** The Owner's real Private thread through the authorized route, with its
+ * `vault-recovery` envelope. */
+async function privateThread(owner: SharingAccount, fileId: string): Promise<PrivateThread> {
+  const vaultRootKey = generateVaultRootKey();
+  const threadId = opaqueId(),
+    epochId = opaqueId(),
+    capabilityId = opaqueId();
+  const capability = crypto.getRandomValues(new Uint8Array(32));
+  const recoveryEnvelope = await sealVaultRecoveryEnvelope(
+    vaultRootKey,
+    { scope: "owned", objectId: threadId, keyId: capabilityId, key: capability },
+    {
+      purpose: "vault-recovery",
+      vaultId: owner.accountId,
+      objectId: threadId,
+      keyId: capabilityId,
+      keyEpoch: 1,
+      revision: 1,
+    },
+  );
+  const response = await sharingRequest(owner, `/api/private/comments/files/${fileId}`, "PUT", {
+    threadId,
+    epochId,
+    capabilityId,
+    recoveryEnvelope: encodeTreeBytes(recoveryEnvelope),
+  });
+  if (response.status !== 201) throw new Error(`thread create failed: ${response.status} ${await response.text()}`);
+  return { threadId, epochId, capabilityId, capability };
+}
+
+/** One Private Comment with a real attribution, through the authorized route. */
+async function privateComment(owner: SharingAccount, fileId: string, thread: PrivateThread, text: string) {
+  const commentId = opaqueId(),
+    attributionId = opaqueId();
+  const comment = await sealCommentBody(thread.capability, {
+    vaultId: owner.accountId,
+    commentId,
+    capabilityId: thread.capabilityId,
+    keyEpoch: 1,
+    revision: 1,
+    text,
+  });
+  const attribution = await sealAttribution(thread.capability, {
+    vaultId: owner.accountId,
+    attributionId,
+    pseudonym: "Private Author",
+    capabilityId: thread.capabilityId,
+    keyEpoch: 1,
+    revision: 1,
+  });
+  const response = await sharingRequest(owner, `/api/private/comments/files/${fileId}/entries`, "POST", {
+    commentId,
+    threadId: thread.threadId,
+    capabilityId: thread.capabilityId,
+    capabilityEpoch: 1,
+    epochId: thread.epochId,
+    bodyCiphertext: comment.bodyCiphertext,
+    contentKeyEnvelope: comment.contentKeyEnvelope,
+    attribution,
+  });
+  if (response.status !== 201) throw new Error(`comment failed: ${response.status} ${await response.text()}`);
+  return { commentId, attributionId };
 }
 
 type Anonymous = {
@@ -836,6 +903,46 @@ describe("unpublish seal", () => {
 });
 
 describe("unpublish teardown", () => {
+  it("removes only the Publication's Public thread and leaves the File's Private thread", async () => {
+    const owner = await sharingAccount();
+    const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    const thread = await privateThread(owner, fileId);
+    const privatePosted = await privateComment(owner, fileId, thread, "Private stays");
+    const publication = await publish(owner, fileId);
+    await comment(owner, fileId, publication, "Public goes");
+    expect((await sharingRequest(owner, `/api/private/publications/files/${fileId}/unpublish`, "POST")).status).toBe(
+      200,
+    );
+
+    // The bounded batch removes the Public Comment; zero Comments is progress,
+    // not completion: the thread, epoch and capability remain until the final
+    // completion transaction.
+    const first = await sharingRequest(owner, `/api/private/publications/files/${fileId}/teardown`, "POST");
+    expect(await first.json()).toEqual({ done: false, commentTotal: 1, commentsRemaining: 0 });
+    expect(await count("comments", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(0);
+    expect(await count("comment_threads", "publication_id = ?", publication.publicationId)).toBe(1);
+    expect(await count("comment_thread_epochs", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(1);
+    expect(await count("sharing_comment_capabilities", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(1);
+
+    const final = await sharingRequest(owner, `/api/private/publications/files/${fileId}/teardown`, "POST");
+    expect(await final.json()).toEqual({ done: true, commentTotal: 1, commentsRemaining: 0 });
+
+    // Every public row is gone; the retired link never serves again.
+    expect(await count("publications", "file_id = ?", fileId)).toBe(0);
+    expect(await count("comment_threads", "publication_id = ?", publication.publicationId)).toBe(0);
+    expect(await count("comment_thread_epochs", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(0);
+    expect(await count("public_comment_epoch_links", "publication_id = ?", publication.publicationId)).toBe(0);
+    expect((await readAnonymous(publication.linkId)).status).toBe(404);
+    // The Private thread, its envelopes and its Comments survive and stay readable.
+    expect(await count("comment_threads", "file_id = ?", fileId)).toBe(1);
+    expect(await count("comments", "id = ?", privatePosted.commentId)).toBe(1);
+    expect(await count("thread_attributions", "id = ?", privatePosted.attributionId)).toBe(1);
+    expect(await count("sharing_comment_capabilities", "thread_id = ?", thread.threadId)).toBe(1);
+    expect(await count("key_envelopes", "object_id = ?", thread.threadId)).toBe(1);
+    const read = await sharingRequest(owner, `/api/private/comments/files/${fileId}`);
+    expect(await read.json()).toMatchObject({ thread: { threadId: thread.threadId } });
+  });
+
   it("drives idempotent batches that remove the thread, envelopes, attribution and Publication row", async () => {
     const owner = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
@@ -955,12 +1062,25 @@ describe("unpublish teardown", () => {
 
     const first = await sharingRequest(owner, `/api/private/publications/files/${fileId}/teardown`, "POST");
     expect(await first.json()).toEqual({ done: false, commentTotal: 201, commentsRemaining: 1 });
+    // The committed batch stays deleted, the Publication stays sealed, and the
+    // thread, epoch and capability remain until the final completion call.
+    expect(await count("comments", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(1);
+    expect(await count("comment_threads", "publication_id = ?", publication.publicationId)).toBe(1);
+    expect(await count("comment_thread_epochs", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(1);
+    expect(await count("sharing_comment_capabilities", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(1);
+    expect((await readAnonymous(publication.linkId)).status).toBe(404);
     // An interrupted teardown stays sealed and Owner-resumable.
     expect((await panelState(owner, fileId)).teardown).toEqual({ commentTotal: 201, commentsRemaining: 1 });
     const second = await sharingRequest(owner, `/api/private/publications/files/${fileId}/teardown`, "POST");
     expect(await second.json()).toEqual({ done: false, commentTotal: 201, commentsRemaining: 0 });
+    // Zero remaining Comments is progress, not completion: the final call
+    // removes the thread, epochs, capability and the Publication itself.
+    expect(await count("comments", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(0);
+    expect(await count("comment_threads", "publication_id = ?", publication.publicationId)).toBe(1);
     const third = await sharingRequest(owner, `/api/private/publications/files/${fileId}/teardown`, "POST");
     expect(await third.json()).toEqual({ done: true, commentTotal: 201, commentsRemaining: 0 });
+    expect(await count("comment_threads", "publication_id = ?", publication.publicationId)).toBe(0);
+    expect(await count("comment_thread_epochs", "thread_id = ?", publication.epochs[0]!.threadId)).toBe(0);
     expect((await panelState(owner, fileId)).publication).toBeNull();
   });
 
