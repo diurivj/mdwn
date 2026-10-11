@@ -8,7 +8,14 @@ import {
   type CommentDependentPublicationScope,
 } from "../../app/comments/dependents.server";
 import { atomicSqlBatch, sql } from "../../app/shared/db/client.server";
-import { count, stageCommentRotation, stageImportCommentMeta, stagePseudonymItems } from "./deletion-fixtures";
+import { newStagingId } from "../../app/shared/import/staging";
+import {
+  count,
+  stageCommentRotation,
+  stageImportCommentEnvelope,
+  stageImportCommentMeta,
+  stagePseudonymItems,
+} from "./deletion-fixtures";
 import { commentPayload, publish, sealedAttribution, sealedComment } from "./publication-fixtures";
 import {
   grant,
@@ -58,6 +65,7 @@ type CommentGraph = {
   pseudonymJobId: string;
   shareId: string;
   grantId: string;
+  importSessionId: string;
 };
 
 /** A private thread with Comment, attribution and recovery envelopes. */
@@ -66,6 +74,7 @@ async function privateThread(owner: SharingAccount, fileId: string) {
     epochId = opaqueId(),
     commentId = opaqueId(),
     attributionId = opaqueId(),
+    capabilityId = opaqueId(),
     now = Date.now();
   await env.DB.batch([
     env.DB.prepare("PRAGMA defer_foreign_keys = ON"),
@@ -86,7 +95,7 @@ async function privateThread(owner: SharingAccount, fileId: string) {
       owner.accountId,
       fileId,
       threadId,
-      opaqueId(),
+      capabilityId,
     ),
     env.DB.prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision, body_ciphertext,
       body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
@@ -106,7 +115,7 @@ async function privateThread(owner: SharingAccount, fileId: string) {
     env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
       VALUES (?, 'vault-recovery', ?, 'vault-root', X'01', 1)`).bind(owner.accountId, epochId),
   ]);
-  return { threadId, epochId, commentId, attributionId };
+  return { threadId, epochId, commentId, attributionId, capabilityId };
 }
 
 /** One File's complete Comment-dependent graph: both thread purposes, retained
@@ -218,6 +227,27 @@ async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, 
     { kind: "thread", recordId: publicAttribution.attributionId },
   ]);
   await stageImportCommentMeta(owner, privateSide.threadId, privateSide.commentId);
+  await stageImportCommentEnvelope(fileId, privateSide.threadId, privateSide.capabilityId);
+  // A committed Import session row naming this Account's tree is a session
+  // record, not a Comment dependent; deletion must leave it to retention.
+  const importSessionId = newStagingId();
+  await env.DB.prepare(`INSERT INTO import_sessions (id, account_id, session_id, device_id, target_directory_id,
+    target_owner_id, reviewed_entry_revision, manifest_ciphertext, manifest_digest, expected_record_count,
+    expected_chunk_count, expected_payload_bytes, expected_comment_count, aggregate_digest, state, uploaded_chunks,
+    uploaded_records, uploaded_bytes, created_at, expires_at, committed_at)
+    VALUES (?, ?, ?, ?, ?, ?, 1, X'01', zeroblob(32), 1, 1, 1, 0, zeroblob(32), 'committed', 0, 0, 0, ?, ?, ?)`)
+    .bind(
+      importSessionId,
+      owner.accountId,
+      owner.session.id,
+      owner.deviceId,
+      owner.rootId,
+      owner.accountId,
+      now,
+      now + 3_600_000,
+      now,
+    )
+    .run();
   return {
     fileId,
     publicationId: publication.publicationId,
@@ -235,6 +265,7 @@ async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, 
     pseudonymJobId,
     shareId,
     grantId,
+    importSessionId,
   } satisfies CommentGraph;
 }
 
@@ -286,6 +317,11 @@ async function graphCounts(graph: CommentGraph) {
       graph.publicAttributionId,
     ),
     importCommentMeta: await count("import_comment_meta", "comment_id = ?", graph.privateCommentId),
+    importCommentEnvelopes: await count(
+      "import_comment_envelopes",
+      `thread_id IN (${threadPlaceholders})`,
+      ...threadIds,
+    ),
     comments: await count("comments", `thread_id IN (${threadPlaceholders})`, ...threadIds),
     attributions: await count("thread_attributions", `thread_id IN (${threadPlaceholders})`, ...threadIds),
     threadKeyEnvelopes: await count("key_envelopes", `object_id IN (${threadPlaceholders})`, ...threadIds),
@@ -306,6 +342,9 @@ describe("Comment-dependent Hard deletion module", () => {
     const unrelated = await seedCommentGraph(unrelatedOwner, await sharingAccount(), await sharingAccount());
     const unrelatedBefore = await graphCounts(unrelated);
     expect(unrelatedBefore.comments).toBe(2);
+    const before = await graphCounts(graph);
+    expect(before.comments).toBe(2);
+    expect(before.importCommentEnvelopes).toBe(1);
 
     await atomicSqlBatch(env.DB, [
       sql`PRAGMA defer_foreign_keys = ON`,
@@ -324,6 +363,7 @@ describe("Comment-dependent Hard deletion module", () => {
       reports: 0,
       pseudonymItems: 0,
       importCommentMeta: 0,
+      importCommentEnvelopes: 0,
       comments: 0,
       attributions: 0,
       threadKeyEnvelopes: 0,
@@ -333,6 +373,10 @@ describe("Comment-dependent Hard deletion module", () => {
       threads: 0,
     });
     expect(await graphCounts(unrelated)).toEqual(unrelatedBefore);
+    // The committed Import session row survives: it is a session record, not a
+    // Comment dependent of the deleted File.
+    expect(await count("import_sessions", "id = ?", graph.importSessionId)).toBe(1);
+    expect(await count("import_sessions", "id = ?", unrelated.importSessionId)).toBe(1);
     // The module owns only the Comment-dependent graph: the File, its
     // Publication and the caller's Key-rotation item rows remain for their
     // owners, so both staged item rows survive the File scope.
@@ -428,6 +472,7 @@ async function privateCounts(graph: CommentGraph) {
       graph.privateThreadId,
     ),
     importCommentMeta: await count("import_comment_meta", "comment_id = ?", graph.privateCommentId),
+    importCommentEnvelopes: await count("import_comment_envelopes", "thread_id = ?", graph.privateThreadId),
   };
 }
 
@@ -442,6 +487,7 @@ describe("Comment-dependent Publication scope", () => {
     const unrelatedBefore = await graphCounts(unrelated);
     expect(privateBefore.comments).toBe(1);
     expect(privateBefore.importCommentMeta).toBe(1);
+    expect(privateBefore.importCommentEnvelopes).toBe(1);
     expect((await publicationCounts(graph)).comments).toBe(1);
 
     await atomicSqlBatch(env.DB, [
@@ -467,6 +513,7 @@ describe("Comment-dependent Publication scope", () => {
     expect(await count("grant_comment_key_envelopes", "relationship_id = ?", graph.grantId)).toBe(0);
     expect(await count("share_comment_key_envelopes", "relationship_id = ?", graph.shareId)).toBe(1);
     expect(await privateCounts(graph)).toEqual(privateBefore);
+    expect(await count("import_sessions", "id = ?", graph.importSessionId)).toBe(1);
     expect(await graphCounts(unrelated)).toEqual(unrelatedBefore);
     // The module owns only the Comment-dependent graph: the File, the
     // Publication and its link remain for their callers.
