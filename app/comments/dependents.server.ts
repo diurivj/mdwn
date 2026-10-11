@@ -74,6 +74,19 @@ export function deletedCommentBatch(
   ];
 }
 
+/** The selected Public-thread rows of one Publication. The caller's authorized
+ * read pins the Publication owner, so the thread is the same Account's; no
+ * selector here can ever name the File's Private thread. */
+function publicationThreads(publicationId: string, ownerId: string): SQL {
+  return sql`SELECT id FROM comment_threads
+    WHERE publication_id = ${publicationId} AND purpose = 'public' AND owner_id = ${ownerId}`;
+}
+
+function publicationEpochs(publicationId: string, ownerId: string): SQL {
+  return sql`SELECT e.id FROM comment_thread_epochs e JOIN comment_threads t ON t.id = e.thread_id
+    WHERE t.publication_id = ${publicationId} AND t.purpose = 'public' AND t.owner_id = ${ownerId}`;
+}
+
 /**
  * Ordered, marker-guarded removals of every Comment-dependent row of the
  * selected Files: Key-rotation Comment staging, Comment sharing capabilities
@@ -137,10 +150,8 @@ function deletedFileCommentDependents(scope: CommentDependentFileScope, committe
  */
 function deletedPublicationCommentDependents(scope: CommentDependentPublicationScope, committed: SQL): readonly SQL[] {
   const { ownerId, publicationId } = scope;
-  const threads = sql`SELECT id FROM comment_threads
-    WHERE publication_id = ${publicationId} AND purpose = 'public' AND owner_id = ${ownerId}`;
-  const epochs = sql`SELECT e.id FROM comment_thread_epochs e JOIN comment_threads t ON t.id = e.thread_id
-    WHERE t.publication_id = ${publicationId} AND t.purpose = 'public' AND t.owner_id = ${ownerId}`;
+  const threads = publicationThreads(publicationId, ownerId);
+  const epochs = publicationEpochs(publicationId, ownerId);
   return [
     // A public_history staging row names its epoch in `thread_id`; a private
     // staging row names the thread, and both hold comment content-key bytes.
