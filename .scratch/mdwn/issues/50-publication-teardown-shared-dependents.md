@@ -4,7 +4,9 @@
 
 **Type:** refactor
 
-**Status:** ready-for-agent
+**Status:** done
+
+**Implementation:** complete — merged on `main` via PR #57 (merge `f1147bc`).
 
 **Blocked by:** None — 49 is delivered on `main` by PR #56 (merge `58f8842`). This ticket adds the Publication scope to that module and rewires the second caller.
 
@@ -18,7 +20,7 @@
 - [x] Unrelated Files, threads and surviving access paths remain unchanged.
 - [x] Tests prefer the existing authorized Worker routes, supplemented by real-D1 module integration for the final-completion invariant. The existing sealed/interrupted teardown and publication-lifecycle suites are retained and pass.
 - [x] Before/after evidence shows the teardown caller lost Comment-dependent graph knowledge.
-- [ ] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
+- [x] `npm run verify` passes; the change lands on its issue branch with a PR and current-head `CI` green before merge, with Standards/Spec review and a separate RR8/stack result on the same pinned diff.
 
 ## Scope and pointers
 
@@ -36,3 +38,4 @@
 - 2026-10-11: Pinned review `80f3e99...819ef07` (parallel Standards + Spec sub-agents). **Standards: Pass** — no documented-standard violations; judgement calls were the two scope statement lists sharing six child-before-parent statements (kept deliberately: each list is the complete, auditable ordering for its caller), the batch selector re-encoding the Public-thread predicate (fixed by extracting `publicationThreads`/`publicationEpochs` in `84985a1`), test count-helper overlap, and the preserved `key_envelopes` shape of the sealed teardown. The one docs-accuracy finding (an acceptance row citing the module test for sealing) was reverted. **Spec: Pass** — no missing/partial or unasked-for behavior; the module's Publication statements are table-identical to the removed inline ones and the only knowingly stricter shape is the owner predicate now on the thread/epoch selectors (invariant: the teardown caller is the File Owner and every Public-thread insert binds the same Account). Fixture work beyond the ticket is disclosed above as a required ticket-49 gap fix.
 - 2026-10-11: **Separate RR8/stack: Pass** on the reviewed pinned diff (and the `84985a1` selector extraction, which adds no data-flow site), reported separately from both axes: no route module, loader, clientLoader, UI, binding, schema or migration changed; the touchpoint is the existing proof-guarded `POST …/teardown` resource action and the shared server module, both still inside `commitPrivateBatch`'s single deferred-FK `atomicSqlBatch` with the fresh `commit_token` marker on every statement. Child-before-parent order preserved; at most 7 bound parameters per statement (D1 limit 100); no ciphertext or plaintext crosses the boundary. The workerd route suite and the three-engine browser suite cover the boundary.
 - 2026-10-11: Full clean-tree `npm run verify` **passed at `84985a1`** — lint/format, typecheck, namespace drift, 306 Node + 382 Workers tests, production build, fresh-D1 migration smoke, local D1 export/restore round trip, client secret scan, and 431 passing Chromium/Firefox/WebKit browser cases (one existing synthetic WebKit-drop skip, no retries). Log: `/tmp/mdwn-50-verify.log`.
+- 2026-10-11: Status reconciled to **done**: PR #57 merged on `main` as `f1147bc` (2026-10-11) after every `CI` job passed at the PR's head `e7d99fc` — typecheck/test/build/migration-smoke/secrets plus Chromium, Firefox and WebKit browser E2E. Application and test code are the reviewed and verified state; the merge-time commits changed only ticket markdown. [Ticket 51](51-imported-comment-envelope-deletion.md) remains open as the separately filed imported-envelope correctness bug that ticket 50's behavior-preserving scope deliberately does not address.

@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Blocked by:** None. Ticket 49 delivered the shared module in `app/comments/dependents.server.ts`, merged on `main` by PR #56 (merge `58f8842`); ticket 50 (Publication teardown scope) is independent and must not gain this removal.
+**Blocked by:** None. Ticket 49 delivered the shared module in `app/comments/dependents.server.ts`, merged on `main` by PR #56 (merge `58f8842`); ticket 50 added the Publication scope to the same module, merged on `main` by PR #57 (merge `f1147bc`), and must not gain this removal.
 
 **Related:** [49: Shared Comment-dependent module for File and Directory Hard deletion](49-shared-comment-dependent-deletion.md); [27: Hard-deletion completeness](27-hard-deletion-completeness.md); [30: Import staging and commit](30-import-staging-and-commit.md); [43: Architecture deepening specification](43-architecture-deepening-spec.md) and `docs/architecture-deepening.md` (shared constraint 1: an existing correctness gap needs explicit regression evidence). Reference docs: `docs/comments.md` (Historical Comment envelopes), `docs/import.md`, `docs/acceptance.md` (File/Directory hard deletion removes every dependent record atomically).
 
@@ -35,3 +35,4 @@ Root cause: `import_comment_envelopes.thread_id` references `comment_threads(id)
 ## Comments
 
 - 2026-10-11: Filed from ticket 49's reviewed and verified finding. Ticket 49 was a behavior-preserving refactor and intentionally preserved the 400; its module doc and the completeness test's table inventory currently overstate coverage for imported threads. The fix is small and local: one statement in the File scope of `app/comments/dependents.server.ts` plus regression coverage.
+- 2026-10-11: Reconciled after ticket 50 merged (`f1147bc`). The module now dispatches on `kind`; the File-scope ordering lives in `deletedFileCommentDependents` (its `app/tree/` caller passes `kind: "file"` and does not change), while `deletedPublicationCommentDependents` must never gain `import_comment_envelopes` or `import_comment_meta`. The red test can pin the File scope directly in `tests/worker/comment-dependent-deletion.test.ts` (seed `import_comment_envelopes` for a Private thread and run `kind: "file"`) plus the authorized `DELETE` route for File and Directory cases; the envelope removal belongs with the other Comment dependents, before `comment_threads`, in the existing marker-guarded batch. No schema change is needed.
