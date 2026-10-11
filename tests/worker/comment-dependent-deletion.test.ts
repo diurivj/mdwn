@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { deletedCommentDependents, type CommentDependentFileScope } from "../../app/comments/dependents.server";
 import { atomicSqlBatch, sql } from "../../app/shared/db/client.server";
+import { count, stageCommentRotation, stageImportCommentMeta } from "./deletion-fixtures";
 import { commentPayload, publish, sealedAttribution, sealedComment } from "./publication-fixtures";
 import {
   grant,
@@ -33,12 +34,6 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 });
 
-async function count(table: string, where: string, ...values: unknown[]) {
-  return (await env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`)
-    .bind(...values)
-    .first<{ n: number }>())!.n;
-}
-
 type CommentGraph = {
   fileId: string;
   privateThreadId: string;
@@ -46,6 +41,7 @@ type CommentGraph = {
   privateCommentId: string;
   privateAttributionId: string;
   retainedEpochId: string;
+  collaboratorsEpochId: string;
   publicThreadId: string;
   publicEpochId: string;
   publicCommentId: string;
@@ -101,17 +97,15 @@ async function privateThread(owner: SharingAccount, fileId: string) {
       VALUES (?, 'vault-recovery', ?, 'vault-root', X'01', 1)`).bind(owner.accountId, threadId),
     env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
       VALUES (?, 'vault-recovery', ?, 'vault-root', X'01', 1)`).bind(owner.accountId, epochId),
-    // Imported Historical Comment metadata lives only in a Private thread.
-    env.DB.prepare(`INSERT INTO import_comment_meta (comment_id, thread_id, owner_id, ciphertext)
-      VALUES (?, ?, ?, X'01')`).bind(commentId, threadId, owner.accountId),
   ]);
   return { threadId, epochId, commentId, attributionId };
 }
 
-/** One File's complete Comment-dependent graph: both thread purposes, a
- * retained Public audience epoch with its Key envelope and link wrapper, a
- * Public Comment report, staged pseudonym-update material, Comment-related
- * Key-rotation staging and both Comment-sharing Key-envelope families. */
+/** One File's complete Comment-dependent graph: both thread purposes, retained
+ * Public and Collaborators-only audience epochs with their Key envelopes (the
+ * Public one also with its link wrapper), a Public Comment report, staged
+ * pseudonym-update material, Comment-related Key-rotation staging, imported
+ * Historical Comment metadata and both Comment-sharing Key-envelope families. */
 async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, grantee: SharingAccount) {
   const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
   // The Grant exists before any Comment capability, so acceptance never waits
@@ -130,9 +124,9 @@ async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, 
   );
   if (posted.status !== 201) throw new Error(`public comment failed: ${posted.status} ${await posted.text()}`);
   const retainedEpochId = opaqueId(),
+    collaboratorsEpochId = opaqueId(),
     now = Date.now(),
-    pseudonymJobId = opaqueId(),
-    rotationJobId = opaqueId();
+    pseudonymJobId = opaqueId();
   await env.DB.batch([
     env.DB.prepare("PRAGMA defer_foreign_keys = ON"),
     // A retained Public audience epoch keeps a capability, a recovery envelope
@@ -158,6 +152,26 @@ async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, 
     ),
     env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
       VALUES (?, 'vault-recovery', ?, 'vault-root', X'01', 1)`).bind(owner.accountId, retainedEpochId),
+    // A retained Collaborators-only epoch has no link wrapper but still keeps
+    // its capability and recovery envelope.
+    env.DB.prepare(`INSERT INTO comment_thread_epochs (id, thread_id, audience, key_epoch, ordinal, state, created_at)
+      VALUES (?, ?, 'collaborators_only', 1, 3, 'retained', ?)`).bind(
+      collaboratorsEpochId,
+      publication.epoch.threadId,
+      now,
+    ),
+    env.DB.prepare(`INSERT INTO sharing_comment_capabilities
+      (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
+      VALUES (?, ?, ?, ?, 'public-comment-audience-epoch', ?, ?, 1)`).bind(
+      collaboratorsEpochId,
+      owner.accountId,
+      fileId,
+      publication.epoch.threadId,
+      publication.publicationId,
+      opaqueId(),
+    ),
+    env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
+      VALUES (?, 'vault-recovery', ?, 'vault-root', X'01', 1)`).bind(owner.accountId, collaboratorsEpochId),
     env.DB.prepare(`INSERT INTO public_comment_reports (id, reporter_id, comment_id, category, created_at, expires_at)
       VALUES (?, ?, ?, 'spam', ?, ?)`).bind(
       opaqueId(),
@@ -181,23 +195,6 @@ async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, 
     env.DB.prepare(`INSERT INTO pseudonym_update_items
       (job_id, kind, record_id, revision, ciphertext, content_key_envelope, content_key_epoch, created_at)
       VALUES (?, 'thread', ?, 1, X'01', X'01', 1, ?)`).bind(pseudonymJobId, publicAttribution.attributionId, now),
-    // Comment items staged under a Key-rotation job that targets this File.
-    env.DB.prepare(`INSERT INTO crypto_jobs (id, account_id, device_id, kind, state, initiating_account_id,
-      target_id, key_epoch, progress, created_at, updated_at)
-      VALUES (?, ?, ?, 'key_rotation', 'pending', ?, ?, 2, 0, ?, ?)`).bind(
-      rotationJobId,
-      owner.accountId,
-      owner.deviceId,
-      owner.accountId,
-      fileId,
-      now,
-      now,
-    ),
-    env.DB.prepare(`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
-      VALUES (?, ?, 'private_comment', ?, 1, 'ready')`).bind(rotationJobId, privateSide.threadId, fileId),
-    env.DB.prepare(`INSERT INTO key_rotation_comment_items
-      (job_id, thread_id, kind, record_id, revision, content_key_envelope)
-      VALUES (?, ?, 'comment', ?, 1, X'01')`).bind(rotationJobId, privateSide.threadId, privateSide.commentId),
     // Comment-sharing Key envelopes for the pending Share and the accepted Grant.
     env.DB.prepare(`INSERT INTO share_comment_key_envelopes (relationship_id, device_id, capability_id,
       capability_epoch, grant_key_epoch, owner_registry_epoch, recipient_registry_epoch, ciphertext, signature,
@@ -220,6 +217,8 @@ async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, 
       publication.epoch.epochId,
     ),
   ]);
+  const rotationJobId = await stageCommentRotation(owner, fileId, privateSide.threadId, privateSide.commentId);
+  await stageImportCommentMeta(owner, privateSide.threadId, privateSide.commentId);
   return {
     fileId,
     privateThreadId: privateSide.threadId,
@@ -227,6 +226,7 @@ async function seedCommentGraph(owner: SharingAccount, pending: SharingAccount, 
     privateCommentId: privateSide.commentId,
     privateAttributionId: privateSide.attributionId,
     retainedEpochId,
+    collaboratorsEpochId,
     publicThreadId: publication.epoch.threadId,
     publicEpochId: publication.epoch.epochId,
     publicCommentId: publicComment.commentId,
@@ -245,7 +245,7 @@ function scope(owner: SharingAccount, graph: CommentGraph): CommentDependentFile
 /** Every table/selector the module owns for one Comment graph. */
 async function graphCounts(graph: CommentGraph) {
   const threadIds = [graph.privateThreadId, graph.publicThreadId];
-  const epochIds = [graph.privateEpochId, graph.publicEpochId, graph.retainedEpochId];
+  const epochIds = [graph.privateEpochId, graph.publicEpochId, graph.retainedEpochId, graph.collaboratorsEpochId];
   const threadPlaceholders = threadIds.map(() => "?").join(", ");
   const epochPlaceholders = epochIds.map(() => "?").join(", ");
   return {

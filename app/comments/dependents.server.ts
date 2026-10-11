@@ -1,13 +1,13 @@
 import type { SQL } from "drizzle-orm";
 import { deletedPseudonymItems } from "~/account/pseudonym-items.server";
 import { sql } from "~/shared/db/client.server";
-import { deletedCommentReports } from "./public.server";
 
 /**
  * Comment-dependent Hard deletion (ticket 49). One module owns the dependent
  * selection and foreign-key-safe removal ordering of an authorized deletion
- * scope, so its File/Directory and Publication callers name the scope they
- * selected, never the Comment tables or their order.
+ * scope, so its callers name the scope they selected, never the Comment tables
+ * or their order. Ticket 50 adds a Publication's Public-thread scope beside
+ * the File scope below.
  *
  * Every statement is guarded by the caller's existing transaction marker: a
  * deletion that loses its authorization/namespace guard (or fails a later
@@ -18,8 +18,10 @@ import { deletedCommentReports } from "./public.server";
  */
 
 /** The selected Files of one atomic File/Directory Hard deletion. `nodeIds` is
- * the caller's authorized deletion snapshot: Comment dependents are keyed on
- * its Files, while a targeted Key-rotation job may name any selected node. */
+ * the caller's authorized deletion snapshot selector: it can name hundreds of
+ * nodes while D1 bounds each statement to 100 bound parameters, and Comment
+ * dependents are keyed on its Files while a targeted Key-rotation job may name
+ * any selected node. */
 export type CommentDependentFileScope = {
   ownerId: string;
   nodeIds: SQL;
@@ -27,8 +29,8 @@ export type CommentDependentFileScope = {
 
 /**
  * Ordered, marker-guarded removals of every Comment-dependent row of the
- * selected Files: Key-rotation Comment staging, Comment sharing capacities and
- * their Key envelopes, reports, staged pseudonym-update items, imported
+ * selected Files: Key-rotation Comment staging, Comment sharing capabilities
+ * and their Key envelopes, reports, staged pseudonym-update items, imported
  * Historical Comment metadata, Comments, thread attributions, thread and
  * audience-epoch Key envelopes, Public epoch link wrappers, retained epochs
  * and the threads themselves.
@@ -72,4 +74,11 @@ export function deletedCommentDependents(scope: CommentDependentFileScope, commi
     sql`DELETE FROM comment_thread_epochs WHERE thread_id IN (${threads}) AND ${committed}`,
     sql`DELETE FROM comment_threads WHERE file_id IN (${nodeIds}) AND owner_id = ${ownerId} AND ${committed}`,
   ];
+}
+
+/** The category-only reports of any set of Comments. The Comment foreign key
+ * is RESTRICT, so every Comment-removal path deletes reports explicitly in the
+ * same transaction; this helper is the one place that delete shape lives. */
+export function deletedCommentReports(comments: SQL, marker: SQL): SQL {
+  return sql`DELETE FROM public_comment_reports WHERE comment_id IN (${comments}) AND ${marker}`;
 }

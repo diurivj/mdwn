@@ -110,7 +110,7 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Retry idempotence; mismatches, missing sequences, malformed descriptors, cancellation, expiry, disconnect, stale authority, failed commit create no marker or visible data; staged Replace stays old until the marker | `tests/proof/import-proof.test.ts`, `tests/worker/import-staging.test.ts`. |
 | Shared-target imports assign every new descendant to the target Owner and create no authority | `tests/worker/import-shared-target.test.ts`, `tests/worker/shared-tree.test.ts`, `tests/import-targets.test.ts`. |
 | Uncommitted Import records excluded from every normal query class | `tests/worker/import-staging.test.ts`, `tests/worker/import-shared-target.test.ts` (tree listing, direct File read, owned-file scope). |
-| File and ≤500-node Directory hard deletion remove every dependent record atomically | `tests/worker/private-tree.test.ts`, `tests/worker/hard-deletion-completeness.test.ts`. |
+| File and ≤500-node Directory hard deletion remove every dependent record atomically | `tests/worker/private-tree.test.ts`, `tests/worker/hard-deletion-completeness.test.ts`, `tests/worker/comment-dependent-deletion.test.ts`. |
 | >500-node Directory deletion changes nothing | `tests/worker/private-tree.test.ts`, `e2e/tree-structure.spec.ts`. |
 | Public-participation limits cannot block export, hard deletion, unpublish, or session revocation | `tests/worker/hard-deletion-completeness.test.ts`, `tests/worker/publication-lifecycle.test.ts`, `tests/worker/public-abuse-response.test.ts`; export is browser-side and has no participation gate (`tests/export-collect.test.ts`). |
 

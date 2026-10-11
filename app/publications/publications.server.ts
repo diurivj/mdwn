@@ -20,13 +20,8 @@ import {
   activePublicParticipationSuspension,
   publicParticipationSuspendedResponse,
 } from "~/shared/security/public-participation.server";
-import {
-  epochInput,
-  epochStatements,
-  readPublicCommentPage,
-  deletedCommentReports,
-  type EpochInput,
-} from "~/comments/public.server";
+import { epochInput, epochStatements, readPublicCommentPage, type EpochInput } from "~/comments/public.server";
+import { deletedCommentReports } from "~/comments/dependents.server";
 import { isCommentEpochLink } from "~/shared/comments/public-content";
 import { pseudonymUpdatePending } from "~/account/pseudonym-guard.server";
 import { deletedPseudonymItems } from "~/account/pseudonym-items.server";

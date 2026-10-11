@@ -7,6 +7,7 @@ import { newPublicationIdentifier } from "../../app/shared/publications/capabili
 import { applyPublicParticipationSuspension } from "../../app/shared/security/public-participation.server";
 import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import { commentPayload, publish, sealedAttribution, sealedComment, type Publication } from "./publication-fixtures";
+import { count, stageCommentRotation, stageImportCommentMeta } from "./deletion-fixtures";
 import {
   deletePayload,
   grant,
@@ -43,12 +44,6 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM public_participation_suspensions"),
   ]);
 });
-
-async function count(table: string, where = "1", ...values: unknown[]) {
-  return (await env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`)
-    .bind(...values)
-    .first<{ n: number }>())!.n;
-}
 
 type PrivateThread = { threadId: string; epochId: string; capabilityId: string; capability: Uint8Array<ArrayBuffer> };
 
@@ -205,30 +200,8 @@ async function publishFileWithDependents(
   ]);
   // A pending Key-rotation job targeting the File stages Comment items, and
   // imported Historical Comment metadata is an explicit dependent of its Comment.
-  const rotationJobId = opaqueId();
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO crypto_jobs (id, account_id, device_id, kind, state, initiating_account_id,
-      target_id, key_epoch, progress, created_at, updated_at)
-      VALUES (?, ?, ?, 'key_rotation', 'pending', ?, ?, 2, 0, ?, ?)`).bind(
-      rotationJobId,
-      owner.accountId,
-      owner.deviceId,
-      owner.accountId,
-      fileId,
-      now,
-      now,
-    ),
-    env.DB.prepare(`INSERT INTO key_rotation_items (job_id, object_id, kind, file_id, depth, state)
-      VALUES (?, ?, 'private_comment', ?, 1, 'ready')`).bind(rotationJobId, thread.threadId, fileId),
-    env.DB.prepare(`INSERT INTO key_rotation_comment_items (job_id, thread_id, kind, record_id, revision,
-      content_key_envelope) VALUES (?, ?, 'comment', ?, 1, X'01')`).bind(
-      rotationJobId,
-      thread.threadId,
-      privatePosted.commentId,
-    ),
-    env.DB.prepare(`INSERT INTO import_comment_meta (comment_id, thread_id, owner_id, ciphertext)
-      VALUES (?, ?, ?, X'01')`).bind(privatePosted.commentId, thread.threadId, owner.accountId),
-  ]);
+  const rotationJobId = await stageCommentRotation(owner, fileId, thread.threadId, privatePosted.commentId);
+  await stageImportCommentMeta(owner, thread.threadId, privatePosted.commentId);
   return {
     fileId,
     privateThread: thread,
