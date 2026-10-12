@@ -1,4 +1,4 @@
-# 57: Bounded Mac mini CI pool
+# 60: Bounded Mac mini CI pool
 
 Type: infrastructure
 Status: ready-for-agent
@@ -12,8 +12,10 @@ On 2026-10-11 the maintainer requested reuse of the existing `diurivj` account;
 the pool therefore retains access to personal files rather than satisfying
 the plan's dedicated-account recommendation.
 
-The infrastructure ticket was renumbered to 57 before publication because
-parallel repository work allocated ticket 56 to the pre-launch polish PR.
+The infrastructure ticket was initially published as 57 in PR 64 on branch
+`issue-57-bounded-mac-ci-pool`. Incoming main subsequently allocated 57–59
+to other efforts, so this ticket is now 60; the published branch/PR are
+preserved. Historical commit subjects retain their original allocations.
 
 ## Acceptance
 
