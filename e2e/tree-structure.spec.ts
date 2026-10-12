@@ -1,6 +1,7 @@
 import type { Page, Request } from "@playwright/test";
 import { installWorkspaceScript, test, expect } from "./workspace-fixture";
 import { waitForSharedProvisioning } from "./support/navigation";
+import { forgetTabMemory, withoutTabMessages } from "./support/tab-memory";
 
 const changed = "This folder changed on another device. Nothing was added, replaced, or overwritten.";
 async function create(page: Page, name: string, kind: "File" | "folder") {
@@ -78,6 +79,8 @@ for (const sourceKind of ["file", "directory"] as const)
       try {
         await confirmDelete(page);
         await expect.poll(() => Boolean(release)).toBe(true);
+        // Only a destination this tab does not remember has a loader to hold (ticket 57).
+        if (pendingLoader) await forgetTabMemory(page);
         await page.goBack();
         // While its loader runs, the library previews the Back destination in place of the deleted source.
         const opening = page.getByRole("status").filter({ hasText: `Opening ${destinationName}…` });
@@ -212,6 +215,8 @@ for (const affected of ["source", "destination"] as const) {
     await dialog.getByRole("button", { name: "Open destination Destination", exact: true }).click();
     await dialog.getByRole("textbox", { name: "Name", exact: true }).fill("Requested.md");
     const other = await context.newPage();
+    // The concurrent change comes from another device, which this tab hears about only on conflict.
+    await withoutTabMessages(other);
     await installWorkspaceScript(other, workspaceScript, baseURL!);
     try {
       await other.evaluate(

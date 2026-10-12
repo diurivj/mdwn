@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { waitForSharedProvisioning } from "./support/navigation";
+import { withoutTabMessages } from "./support/tab-memory";
 import { test, expect } from "./workspace-fixture";
 
 // Ticket 57: verified listings and keys stay in the tab's memory. A revisit
@@ -111,14 +112,7 @@ test("another tab's rename arrives through an id-only broadcast", async ({ page,
 
 test("a change from another device appears when the tab regains focus", async ({ page, workspace }) => {
   // Without a channel this tab hears nothing, as with another device or Collaborator.
-  await page.addInitScript(() => {
-    class SilentChannel extends EventTarget {
-      onmessage = null;
-      postMessage() {}
-      close() {}
-    }
-    Object.assign(window, { BroadcastChannel: SilentChannel });
-  });
+  await withoutTabMessages(page);
   await page.reload();
   await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
   await openLibrary(page);
