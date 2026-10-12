@@ -1,18 +1,19 @@
-import { discardDeviceState } from "~/shared/device/private-client";
+import { clearPrivateMemoryInAllTabs } from "~/shared/tree/tab-tree-cache";
 import { markSignedIn, markSignedOut } from "./session-presence";
 
 /**
  * A completed authentication change: the header learns it without a request,
- * and private requests stop reusing the previous Session's device state
- * (ticket 57). Kept apart from `session-presence` so the public shell's
- * header does not load the private-request module.
+ * and this tab and every other tab forget the previous Session's private
+ * memory, its reusable device state and verified listings and keys (ticket
+ * 57). Kept apart from `session-presence` so the public shell's header does
+ * not load the private-request or tree-memory modules.
  */
 export function afterSignIn(): void {
-  discardDeviceState();
+  clearPrivateMemoryInAllTabs();
   markSignedIn();
 }
 
 export function afterSignOut(): void {
-  discardDeviceState();
+  clearPrivateMemoryInAllTabs();
   markSignedOut();
 }

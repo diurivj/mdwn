@@ -1,11 +1,14 @@
-import { privateRequest } from "~/shared/device/private-client";
+import { deviceStateGeneration, PrivateAccessError, privateRequest } from "~/shared/device/private-client";
+import { clearPrivateTabMemory } from "~/shared/device/private-tab-memory";
 import { getDevice } from "~/shared/device/store";
 import { openGrantKeyEnvelope, type GrantKeyContext } from "~/shared/sharing/grant-keys";
+import { treeCache } from "~/shared/tree/tab-tree-cache";
+import type { VerifiedListing } from "~/shared/tree/verified-tree-cache";
 import {
   fetchDirectory,
   fetchFile,
   loadAncestors,
-  loadDirectory,
+  type FetchedDirectory,
   type loadFile,
   openChildDirectory,
   openDirectory,
@@ -26,7 +29,8 @@ export type FilesSnapshot = {
   file: Awaited<ReturnType<typeof loadFile>> | null;
 };
 export type FilesPageData =
-  | { status: "ready"; snapshot: FilesSnapshot }
+  /** `fromMemory`: rebuilt from this tab's verified tree memory; the page revalidates it in the background. */
+  | { status: "ready"; snapshot: FilesSnapshot; fromMemory?: boolean }
   | { status: "not-found" | "unavailable" | "provisioning"; snapshot: null };
 
 export class SharedContentProvisioningError extends Error {
@@ -164,7 +168,7 @@ async function selectedPath(
   target: { nodeId: string; kind: TreeKind } | null,
   signal: AbortSignal,
   root: Promise<RootAccess> = prefetch(openRoot(signal)),
-): Promise<FilesSnapshot> {
+): Promise<Walked> {
   let path: string[];
   let access: RootAccess;
   if (target) {
@@ -197,6 +201,7 @@ async function selectedPath(
       .map((id) => [id, prefetch(fetchDirectory(id, signal))]),
   );
   const listings: Record<string, DirectoryListing> = {};
+  const verified: Record<string, VerifiedListing> = {};
   const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
   const crumbs: Crumb[] = [{ id: access.rootId, name: rootName(access) }];
   let file: FilesSnapshot["file"] = null;
@@ -206,7 +211,8 @@ async function selectedPath(
     if (index === path.length - 1 && kind === "file") break;
     const key = keys[parent];
     if (!key) throw new TreeNotFoundError();
-    const listing = await openDirectory(access, parent, key, await directories.get(parent)!);
+    verified[parent] = await verify(access, parent, key, await directories.get(parent)!);
+    const listing = verified[parent].listing;
     listings[parent] = listing;
     const next = path[index + 1];
     if (!next) continue;
@@ -230,9 +236,35 @@ async function selectedPath(
       if (file.parentId !== parent) throw new TreeNotFoundError();
     }
   }
-  // Preferences are browser-only, never encoded in a deep link. Restore only
-  // descendants discoverable through a decrypted Directory in this Account,
-  // one level per pass, with each level's Directories opened together.
+  await restoreExpanded(access, { listings, keys, verified }, remembered, early, signal);
+  return { snapshot: { access, listings, keys, crumbs, file }, verified };
+}
+
+type Walked = { snapshot: FilesSnapshot; verified: Record<string, VerifiedListing> };
+
+/** Verify and open a fetched listing, keeping the head digest it was verified against. */
+async function verify(
+  access: RootAccess,
+  directoryId: string,
+  key: Uint8Array,
+  fetched: FetchedDirectory,
+): Promise<VerifiedListing> {
+  return { listing: await openDirectory(access, directoryId, key, fetched), digest: fetched.listingHead?.digest ?? "" };
+}
+
+/**
+ * Preferences are browser-only, never encoded in a deep link. Restore only
+ * descendants discoverable through a decrypted Directory in this Account,
+ * one level per pass, with each level's Directories opened together.
+ */
+async function restoreExpanded(
+  access: RootAccess,
+  opened: Pick<Walked["snapshot"], "listings" | "keys"> & { verified: Record<string, VerifiedListing> },
+  remembered: readonly string[],
+  early: ReadonlyMap<string, Promise<FetchedDirectory>>,
+  signal: AbortSignal,
+): Promise<void> {
+  const { listings, keys, verified } = opened;
   const pending = new Set(remembered);
   for (let pass = 0; pass < 201 && pending.size; pass++) {
     const level: Promise<boolean>[] = [];
@@ -251,10 +283,8 @@ async function selectedPath(
           try {
             const key = await openChildDirectory(access, parentKey, entry);
             keys[id] = key;
-            const fetched = early.get(id);
-            listings[id] = fetched
-              ? await openDirectory(access, id, key, await fetched)
-              : await loadDirectory(access, id, key, signal);
+            verified[id] = await verify(access, id, key, await (early.get(id) ?? fetchDirectory(id, signal)));
+            listings[id] = verified[id].listing;
             return true;
           } catch {
             return false; // An old local preference must not block opening the selected object.
@@ -264,12 +294,72 @@ async function selectedPath(
     }
     if (!(await Promise.all(level)).some(Boolean)) break;
   }
-  return { access, listings, keys, crumbs, file };
+}
+
+/** A cold walk, kept in this tab's memory when device state has not changed since it started. */
+async function walk(
+  target: { nodeId: string; kind: TreeKind } | null,
+  signal: AbortSignal,
+  root?: Promise<RootAccess>,
+) {
+  const since = deviceStateGeneration();
+  const { snapshot, verified } = await selectedPath(target, signal, root);
+  treeCache.record({ access: snapshot.access, listings: verified, keys: snapshot.keys }, since);
+  return snapshot;
+}
+
+function crumbsOf(access: RootAccess, path: readonly string[], listings: Record<string, DirectoryListing>): Crumb[] {
+  const crumbs: Crumb[] = [{ id: access.rootId, name: rootName(access) }];
+  for (let index = 1; index < path.length; index++) {
+    const entry = listings[path[index - 1]!]?.entries.find((child) => child.nodeId === path[index]);
+    if (!entry) throw new TreeNotFoundError();
+    crumbs.push({ id: entry.nodeId, name: entry.name });
+  }
+  return crumbs;
+}
+
+function isAccessError(error: unknown): boolean {
+  return error instanceof PrivateAccessError && error.state !== "unavailable";
+}
+
+/**
+ * The page from this tab's verified tree memory, or null when the root and
+ * the target's path are not all remembered. A Directory needs no request; a
+ * File's content is still fetched and opened with the remembered parent key.
+ * A File that no longer opens there falls back to the cold walk.
+ */
+async function fromMemory(
+  target: { nodeId: string; kind: TreeKind } | null,
+  signal: AbortSignal,
+): Promise<FilesPageData | null> {
+  const hit = treeCache.pathSnapshot(target, savedExpanded);
+  if (!hit) return null;
+  const { access, path, listings, keys } = hit;
+  let file: FilesSnapshot["file"] = null;
+  if (target?.kind === "file") {
+    const parent = path.at(-2);
+    try {
+      const parentKey = access.rootKind === "file" ? access.rootKey : keys[parent!]!;
+      file = await openFile(access, target.nodeId, parentKey, await fetchFile(target.nodeId, signal));
+      if (access.rootKind !== "file" && file.parentId !== parent) throw new TreeNotFoundError();
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (isAccessError(error)) clearPrivateTabMemory();
+      else if (parent) treeCache.invalidate(access.actorAccountId, [parent], "local");
+      return null;
+    }
+  }
+  return {
+    status: "ready",
+    snapshot: { access, listings, keys, crumbs: crumbsOf(access, path, listings), file },
+    fromMemory: true,
+  };
 }
 
 /** Browser-only clientLoader data; SSR renders a public HydrateFallback instead. */
-export function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesPageData> {
-  return settle(selectedPath({ nodeId, kind }, signal), signal);
+export async function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesPageData> {
+  const target = { nodeId, kind };
+  return (await fromMemory(target, signal)) ?? settle(walk(target, signal), signal);
 }
 
 /**
@@ -280,6 +370,8 @@ export function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSigna
 export async function loadLibraryPage(
   signal: AbortSignal,
 ): Promise<FilesPageData | { status: "access"; snapshot: null }> {
+  const remembered = await fromMemory(null, signal);
+  if (remembered) return remembered;
   const root = prefetch(openRoot(signal));
   try {
     await root;
@@ -287,7 +379,7 @@ export async function loadLibraryPage(
     if (signal.aborted) throw error;
     return { status: "access", snapshot: null };
   }
-  return settle(selectedPath(null, signal, root), signal);
+  return settle(walk(null, signal, root), signal);
 }
 
 async function settle(walk: Promise<FilesSnapshot>, signal: AbortSignal): Promise<FilesPageData> {
@@ -304,5 +396,130 @@ async function settle(walk: Promise<FilesSnapshot>, signal: AbortSignal): Promis
             : "unavailable",
       snapshot: null,
     };
+  }
+}
+
+/** Open a Directory for the page (an expanded folder, a move destination) and remember it. */
+export async function loadVerifiedDirectory(
+  access: RootAccess,
+  directoryId: string,
+  key: Uint8Array,
+  signal: AbortSignal,
+): Promise<DirectoryListing> {
+  const since = deviceStateGeneration();
+  const verified = await verify(access, directoryId, key, await fetchDirectory(directoryId, signal));
+  treeCache.record({ access, listings: { [directoryId]: verified }, keys: { [directoryId]: key } }, since);
+  return verified.listing;
+}
+
+export type Revalidation =
+  /** The shown listings are current: merge these over the page's (names, entries and keys), and drop `removed`. */
+  | {
+      status: "current";
+      listings: Record<string, DirectoryListing>;
+      keys: Record<string, Uint8Array>;
+      crumbs: Crumb[];
+      removed: string[];
+    }
+  /** The selected node left its remembered path, or a listing failed verification: reload through the cold walk. */
+  | { status: "changed" }
+  /** Private access failed: tab memory is cleared; reload to show the access state. */
+  | { status: "access" }
+  /** A transient failure: keep showing what the page has. */
+  | { status: "offline" };
+
+function sameListing(known: VerifiedListing, fetched: FetchedDirectory): boolean {
+  return (
+    known.listing.entriesRevision === fetched.entriesRevision &&
+    (known.listing.keyEpoch ?? 1) === (fetched.keyEpoch ?? 1) &&
+    known.digest === (fetched.listingHead?.digest ?? "")
+  );
+}
+
+/**
+ * Background revalidation of what a Files page shows (ticket 57): fetch the
+ * listings on its path and its shown expanded folders together, keep each
+ * remembered listing whose revision, key epoch and head digest are
+ * unchanged, and verify and open any other exactly as a cold walk would
+ * (same signature, head and rollback checks), with keys re-derived down
+ * the path from the verified parents. File content is never touched.
+ */
+export async function revalidateFilesPage(
+  snapshot: FilesSnapshot,
+  kind: TreeKind,
+  signal: AbortSignal,
+): Promise<Revalidation> {
+  const since = deviceStateGeneration();
+  const { access } = snapshot;
+  const path = snapshot.crumbs.map((crumb) => crumb.id);
+  const directories = kind === "file" ? path.slice(0, -1) : path;
+  if (!directories.length) return { status: "current", listings: {}, keys: {}, crumbs: snapshot.crumbs, removed: [] };
+  const remembered = savedExpanded(access.actorAccountId);
+  const shown = new Set([
+    ...directories,
+    ...remembered.filter((id) => snapshot.listings[id] && !directories.includes(id)).slice(0, EXPANDED_PREFETCH),
+  ]);
+  const changed = (): Revalidation => {
+    // The next load must not rebuild this path from memory again.
+    treeCache.invalidate(access.actorAccountId, directories, "local");
+    treeCache.forgetRoot(access.rootId);
+    return { status: "changed" };
+  };
+  let fetched: Map<string, FetchedDirectory>;
+  try {
+    fetched = new Map(await Promise.all([...shown].map(async (id) => [id, await fetchDirectory(id, signal)] as const)));
+  } catch (error) {
+    if (signal.aborted) throw error;
+    if (isAccessError(error)) {
+      clearPrivateTabMemory();
+      return { status: "access" };
+    }
+    return error instanceof TreeNotFoundError ? changed() : { status: "offline" };
+  }
+  try {
+    const listings: Record<string, DirectoryListing> = {};
+    const verified: Record<string, VerifiedListing> = {};
+    const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
+    // Root first, then each shown folder its verified parent still contains.
+    const order = [directories[0]!];
+    for (let index = 0; index < order.length; index++) {
+      const id = order[index]!;
+      const response = fetched.get(id)!;
+      const known = treeCache.cached(id);
+      verified[id] =
+        known && sameListing(known, response)
+          ? { listing: { ...known.listing, canCreate: response.canCreate ?? true }, digest: known.digest }
+          : await verify(access, id, keys[id]!, response);
+      listings[id] = verified[id].listing;
+      for (const entry of listings[id].entries) {
+        if (entry.kind !== "directory" || !fetched.has(entry.nodeId) || keys[entry.nodeId]) continue;
+        keys[entry.nodeId] = await openChildDirectory(access, keys[id]!, entry);
+        order.push(entry.nodeId);
+      }
+    }
+    for (let index = 0; index < path.length - 1; index++) {
+      const entry = listings[path[index]!]?.entries.find((child) => child.nodeId === path[index + 1]);
+      if (!entry || entry.kind !== (index === path.length - 2 ? kind : "directory")) return changed();
+    }
+    // Remembered folders the page shows open but has no listing for yet.
+    await restoreExpanded(
+      access,
+      { listings, keys, verified },
+      remembered.filter((id) => !snapshot.listings[id]),
+      new Map(),
+      signal,
+    );
+    signal.throwIfAborted();
+    treeCache.record({ access, listings: verified, keys }, since);
+    return {
+      status: "current",
+      listings,
+      keys,
+      crumbs: crumbsOf(access, path, listings),
+      removed: [...shown].filter((id) => !listings[id]),
+    };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return changed();
   }
 }

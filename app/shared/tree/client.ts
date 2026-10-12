@@ -21,6 +21,7 @@ import {
   type StoredListingHead,
 } from "./listing";
 export { rememberListing } from "./listing";
+import { invalidateTreeListings } from "./tab-tree-cache";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
 import { fileCapabilityContext, rememberFile, type FileCapability } from "./file-capability-client";
 import { createFileHead, verifyFileHead, type FileHead } from "./file-head";
@@ -557,6 +558,19 @@ export async function signListingChange(
   });
 }
 
+/**
+ * Send a structural change. Whatever its outcome, the request may have
+ * changed these listings (or found them changed elsewhere), so this tab and
+ * the others drop what they remember of them (ticket 57).
+ */
+async function changingListings<T>(access: RootAccess, directoryIds: string[], send: () => Promise<T>): Promise<T> {
+  try {
+    return await send();
+  } finally {
+    invalidateTreeListings(access.actorAccountId, directoryIds);
+  }
+}
+
 export async function createTreeChild(
   access: RootAccess,
   parentId: string,
@@ -610,18 +624,20 @@ export async function createTreeChild(
     };
   }
   const head = await signListingChange(access, listing, parentKey, [...listing.entries, input]);
-  const result = await jsonResource<{ nodeId: string; entriesRevision: number }>(
-    `/api/private/tree/directories/${parentId}/children`,
-    "PUT",
-    { ...input, listingHead: head },
-    signal,
-  );
-  try {
-    rememberListing(access.vaultId, parentId, result.entriesRevision, head.digest);
-  } catch {
-    throw new TreeCommitUncertainError();
-  }
-  return result;
+  return changingListings(access, [parentId], async () => {
+    const result = await jsonResource<{ nodeId: string; entriesRevision: number }>(
+      `/api/private/tree/directories/${parentId}/children`,
+      "PUT",
+      { ...input, listingHead: head },
+      signal,
+    );
+    try {
+      rememberListing(access.vaultId, parentId, result.entriesRevision, head.digest);
+    } catch {
+      throw new TreeCommitUncertainError();
+    }
+    return result;
+  });
 }
 
 /** Swap only adjacent encrypted order values; names, capabilities and source stay unchanged. */
@@ -661,23 +677,25 @@ export async function reorderTreeChild(
     orderCiphertext: orders.find((order) => order.nodeId === item.nodeId)?.orderCiphertext ?? item.orderCiphertext,
   }));
   const head = await signListingChange(access, listing, parentKey, updated);
-  const result = await jsonResource<{ entriesRevision: number }>(
-    `/api/private/tree/nodes/${nodeId}/order`,
-    "PATCH",
-    {
-      parentId: listing.directoryId,
-      expectedRevision: listing.entriesRevision,
-      orders,
-      listingHead: head,
-    },
-    signal,
-  );
-  try {
-    rememberListing(access.vaultId, listing.directoryId, result.entriesRevision, head.digest);
-  } catch {
-    throw new TreeCommitUncertainError();
-  }
-  return result;
+  return changingListings(access, [listing.directoryId], async () => {
+    const result = await jsonResource<{ entriesRevision: number }>(
+      `/api/private/tree/nodes/${nodeId}/order`,
+      "PATCH",
+      {
+        parentId: listing.directoryId,
+        expectedRevision: listing.entriesRevision,
+        orders,
+        listingHead: head,
+      },
+      signal,
+    );
+    try {
+      rememberListing(access.vaultId, listing.directoryId, result.entriesRevision, head.digest);
+    } catch {
+      throw new TreeCommitUncertainError();
+    }
+    return result;
+  });
 }
 
 /** Only an authenticated parent listing supplies the child-key context here.
@@ -747,30 +765,37 @@ export async function moveTreeChild(
     ),
     signListingChange(access, destination, destinationKey, [...destination.entries, updated]),
   ]);
-  const result = await jsonResource<{ sourceEntriesRevision: number; destinationEntriesRevision: number }>(
-    `/api/private/tree/nodes/${nodeId}/parent`,
-    "PATCH",
-    {
-      sourceId: source.directoryId,
-      destinationId: destination.directoryId,
-      kind: entry.kind,
-      expectedSourceRevision: source.entriesRevision,
-      expectedDestinationRevision: destination.entriesRevision,
-      nameCiphertext: updated.nameCiphertext,
-      orderCiphertext: updated.orderCiphertext,
-      keyEnvelope: updated.keyEnvelope,
-      sourceListingHead: sourceHead,
-      destinationListingHead: destinationHead,
-    },
-    signal,
-  );
-  try {
-    rememberListing(access.vaultId, source.directoryId, result.sourceEntriesRevision, sourceHead.digest);
-    rememberListing(access.vaultId, destination.directoryId, result.destinationEntriesRevision, destinationHead.digest);
-  } catch {
-    throw new TreeCommitUncertainError();
-  }
-  return result;
+  return changingListings(access, [source.directoryId, destination.directoryId], async () => {
+    const result = await jsonResource<{ sourceEntriesRevision: number; destinationEntriesRevision: number }>(
+      `/api/private/tree/nodes/${nodeId}/parent`,
+      "PATCH",
+      {
+        sourceId: source.directoryId,
+        destinationId: destination.directoryId,
+        kind: entry.kind,
+        expectedSourceRevision: source.entriesRevision,
+        expectedDestinationRevision: destination.entriesRevision,
+        nameCiphertext: updated.nameCiphertext,
+        orderCiphertext: updated.orderCiphertext,
+        keyEnvelope: updated.keyEnvelope,
+        sourceListingHead: sourceHead,
+        destinationListingHead: destinationHead,
+      },
+      signal,
+    );
+    try {
+      rememberListing(access.vaultId, source.directoryId, result.sourceEntriesRevision, sourceHead.digest);
+      rememberListing(
+        access.vaultId,
+        destination.directoryId,
+        result.destinationEntriesRevision,
+        destinationHead.digest,
+      );
+    } catch {
+      throw new TreeCommitUncertainError();
+    }
+    return result;
+  });
 }
 
 export async function deleteTreeChild(
@@ -790,24 +815,27 @@ export async function deleteTreeChild(
     parentKey,
     listing.entries.filter((entry) => entry.nodeId !== nodeId),
   );
-  const result = await jsonResource<{ entriesRevision: number }>(
-    `/api/private/tree/nodes/${nodeId}`,
-    "DELETE",
-    {
-      parentId: listing.directoryId,
-      expectedRevision: listing.entriesRevision,
-      kind: entry.kind,
-      listingHead: head,
-      ...(entry.kind === "directory" ? { expectedDirectoryRevision } : {}),
-    },
-    signal,
-  );
-  try {
-    rememberListing(access.vaultId, listing.directoryId, result.entriesRevision, head.digest);
-  } catch {
-    throw new TreeCommitUncertainError();
-  }
-  return result;
+  const changed = entry.kind === "directory" ? [listing.directoryId, nodeId] : [listing.directoryId];
+  return changingListings(access, changed, async () => {
+    const result = await jsonResource<{ entriesRevision: number }>(
+      `/api/private/tree/nodes/${nodeId}`,
+      "DELETE",
+      {
+        parentId: listing.directoryId,
+        expectedRevision: listing.entriesRevision,
+        kind: entry.kind,
+        listingHead: head,
+        ...(entry.kind === "directory" ? { expectedDirectoryRevision } : {}),
+      },
+      signal,
+    );
+    try {
+      rememberListing(access.vaultId, listing.directoryId, result.entriesRevision, head.digest);
+    } catch {
+      throw new TreeCommitUncertainError();
+    }
+    return result;
+  });
 }
 
 export async function renameTreeChild(
@@ -830,16 +858,18 @@ export async function renameTreeChild(
     parentKey,
     listing.entries.map((item) => (item.nodeId === nodeId ? { ...item, ...input } : item)),
   );
-  const result = await jsonResource<{ entriesRevision: number }>(
-    `/api/private/tree/nodes/${nodeId}/name`,
-    "PATCH",
-    { ...input, parentId, listingHead: head },
-    signal,
-  );
-  try {
-    rememberListing(access.vaultId, parentId, result.entriesRevision, head.digest);
-  } catch {
-    throw new TreeCommitUncertainError();
-  }
-  return result;
+  return changingListings(access, [parentId], async () => {
+    const result = await jsonResource<{ entriesRevision: number }>(
+      `/api/private/tree/nodes/${nodeId}/name`,
+      "PATCH",
+      { ...input, parentId, listingHead: head },
+      signal,
+    );
+    try {
+      rememberListing(access.vaultId, parentId, result.entriesRevision, head.digest);
+    } catch {
+      throw new TreeCommitUncertainError();
+    }
+    return result;
+  });
 }

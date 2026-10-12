@@ -1,4 +1,5 @@
-import { redirect } from "react-router";
+import { useEffect } from "react";
+import { redirect, useNavigate } from "react-router";
 
 import { ownedProvisioningUpkeep } from "~/shared/device/owned-provision-client";
 import { FilesFallback } from "~/tree/files-fallback";
@@ -25,7 +26,11 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   // An unreadable job is "unknown": device access then resumes it rather than assume it finished.
   const provisioning = ownedProvisioningUpkeep(request.signal).catch(() => "unknown" as const);
   const page = await loadLibraryPage(request.signal);
-  if (page.status === "access" || (await provisioning) !== null) return redirect("/account/device-access");
+  if (page.status === "access") return redirect("/account/device-access");
+  // A library remembered by this tab renders without waiting for the network;
+  // a job found meanwhile still hands over to device access (ticket 57).
+  if (page.status === "ready" && page.fromMemory) return { ...page, provisioning };
+  if ((await provisioning) !== null) return redirect("/account/device-access");
   return page;
 }
 
@@ -34,6 +39,19 @@ export function HydrateFallback() {
 }
 
 export default function Files({ loaderData }: Route.ComponentProps) {
+  const navigate = useNavigate();
+  const provisioning = "provisioning" in loaderData ? loaderData.provisioning : null;
+  useEffect(() => {
+    let current = true;
+    // Only a job that is known to exist interrupts a page already shown; an
+    // unreadable answer leaves it to the next cold load and its access checks.
+    void provisioning?.then((job) => {
+      if (current && (job === "recovery" || job === "enrollment")) navigate("/account/device-access");
+    });
+    return () => {
+      current = false;
+    };
+  }, [provisioning, navigate]);
   const rootId = loaderData.snapshot?.access.rootId ?? "";
   return <FilesPage key={rootId} nodeId={rootId} kind="directory" initial={loaderData} />;
 }

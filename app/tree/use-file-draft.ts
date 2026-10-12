@@ -5,6 +5,7 @@ import { FILE_SOURCE_LIMIT, fileSourceBytes } from "~/shared/crypto/file-source"
 import { newOpaqueId } from "~/shared/opaque-id";
 import { loadDirectory, loadFile, rememberListing, type DirectoryListing } from "../shared/tree/client";
 import { rememberFile } from "../shared/tree/file-capability-client";
+import { invalidateTreeListings } from "../shared/tree/tab-tree-cache";
 import {
   prepareFileSave,
   withFileListing,
@@ -177,6 +178,8 @@ export function useFileDraft(
             prepared.payload.representation.fileHead.digest,
           );
         } else if (listing.current && result.entriesRevision !== undefined) {
+          // A legacy save re-signs its parent listing; other views of it are outdated (ticket 57).
+          invalidateTreeListings(snapshot.access.actorAccountId, [listing.current.directoryId]);
           rememberListing(
             snapshot.access.vaultId,
             listing.current.directoryId,
