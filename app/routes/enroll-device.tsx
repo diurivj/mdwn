@@ -4,8 +4,15 @@ import { Link } from "react-router";
 
 import { beginCandidate, loadEnrollmentPage, pollCandidate, type PendingCandidate } from "~/enrollment/ceremony-client";
 import { useOwnedProvisioning } from "~/device/owned-provision-hook";
+import type { ChromeHandle } from "~/ui/chrome";
+import { cx } from "~/ui/cx";
+import { ArrowRightIcon, CheckIcon, QrIcon, RefreshIcon } from "~/ui/icons";
+import { FocusLayout, PageIntro } from "~/ui/page-layouts";
+import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/enroll-device";
+
+export const handle: ChromeHandle = { chrome: "account" };
 
 export function meta() {
   return [{ title: "Enroll this device — mdwn" }];
@@ -18,9 +25,9 @@ export function clientLoader({ request }: Route.ClientLoaderArgs) {
 
 export function HydrateFallback() {
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <h1 className="text-2xl font-semibold">Preparing device enrollment…</h1>
-    </main>
+    <FocusLayout>
+      <PageIntro eyebrow="New device" title="Preparing device enrollment…" />
+    </FocusLayout>
   );
 }
 
@@ -90,135 +97,149 @@ export default function EnrollDevice({ loaderData }: Route.ComponentProps) {
   };
 
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <Link to="/" className="text-sm underline">
-        mdwn
-      </Link>
+    <FocusLayout>
       {loaderData.state === "signed-out" ? (
         <>
-          <h1 className="mt-8 text-2xl font-semibold">Sign in to enroll this device</h1>
-          <p className="mt-4">
-            <Link to="/sign-in" className="underline">
-              Sign in with a passkey
-            </Link>{" "}
-            to continue.
-          </p>
+          <PageIntro eyebrow="New device" title="Sign in to enroll this device">
+            <p>Enrollment starts with your passkey on this browser.</p>
+          </PageIntro>
+          <Link to="/sign-in" className={cx(buttonClass("primary", "lg"), "mt-8")}>
+            Sign in with a passkey
+            <ArrowRightIcon />
+          </Link>
         </>
       ) : loaderData.state === "failed" ? (
-        <>
-          <h1 className="mt-8 text-2xl font-semibold">Enrollment unavailable</h1>
-          <p className="mt-4">Please try again.</p>
-        </>
+        <PageIntro eyebrow="New device" title="Enrollment unavailable">
+          <p>Please try again.</p>
+        </PageIntro>
       ) : phase === "active" ? (
         <>
-          <h1 className="mt-8 text-2xl font-semibold">Device access ready</h1>
-          <p className="mt-4">
-            <Link to="/account/device-access" className="underline">
-              Open your Files
-            </Link>
-          </p>
+          <PageIntro eyebrow="New device" title="Device access ready">
+            <p>This browser can open your Files.</p>
+          </PageIntro>
+          <Link to="/account/device-access" className={cx(buttonClass("primary", "lg"), "mt-8")}>
+            Open your Files
+            <ArrowRightIcon />
+          </Link>
         </>
       ) : phase === "sign-in-again" ? (
         <>
-          <h1 className="mt-8 text-2xl font-semibold">Device approved</h1>
-          <p className="mt-4">Sign in again with your passkey to finish binding this browser.</p>
-          <Link to="/sign-in" className="mt-3 inline-block underline">
+          <PageIntro eyebrow="New device" title="Device approved">
+            <p>Sign in again with your passkey to finish binding this browser.</p>
+          </PageIntro>
+          <Link to="/sign-in" className={cx(buttonClass("primary", "lg"), "mt-8")}>
             Sign in
+            <ArrowRightIcon />
           </Link>
         </>
       ) : phase === "restart" ? (
         <>
-          <h1 className="mt-8 text-2xl font-semibold">Restart device enrollment</h1>
-          <p role="alert" className="mt-4">
+          <PageIntro eyebrow="New device" title="Restart device enrollment" />
+          <p role="alert" className={cx(noticeClass("warning"), "mt-6")}>
             This pairing attempt is no longer available. Start again on this browser.
           </p>
           <button
             type="button"
-            className="mt-5 rounded-md bg-stone-900 px-4 py-2 text-white"
+            className={cx(buttonClass("primary"), "mt-6")}
             onClick={() => {
               setPending(null);
               setPhase("start");
             }}
           >
+            <RefreshIcon />
             Start again
           </button>
         </>
       ) : phase === "setup" ? (
         <>
-          <h1 className="mt-8 text-2xl font-semibold">Setting up your Files securely…</h1>
-          <p role="status" className="mt-4">
+          <PageIntro eyebrow="New device" title="Setting up your Files securely…" />
+          <p role="status" className={cx(noticeClass(provisioning ? "info" : "success"), "mt-6")}>
             {provisioning
               ? "Your Account-owned Files are being prepared on this device."
               : "Your Account-owned Files are ready on this device."}
           </p>
-          <Link to="/account/device-access" className="mt-4 inline-block underline">
+          <Link to="/account/device-access" className={cx(buttonClass("primary"), "mt-6")}>
             Continue to Files
+            <ArrowRightIcon />
           </Link>
         </>
       ) : phase === "start" ? (
         <>
-          <h1 className="mt-8 text-2xl font-semibold">Enroll this device</h1>
-          <p className="mt-4">Confirm with your passkey, then scan the QR code using an existing active device.</p>
-          <label htmlFor="enrollment-label" className="mt-5 block text-sm font-medium">
-            Device label (optional)
-          </label>
-          <input
-            id="enrollment-label"
-            maxLength={80}
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            className="mt-2 w-full rounded-md border border-stone-300 p-2"
-          />
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              void start();
-            }}
-            className="mt-5 rounded-md bg-stone-900 px-4 py-2 text-white disabled:opacity-60"
-          >
-            Create pairing QR code
-          </button>
+          <PageIntro eyebrow="New device" title="Enroll this device">
+            <p>Confirm with your passkey, then scan the QR code using an existing active device.</p>
+          </PageIntro>
+          <div className="mt-8 border border-line bg-cream p-6 sm:p-8">
+            <label htmlFor="enrollment-label" className={labelClass}>
+              Device label (optional)
+            </label>
+            <input
+              id="enrollment-label"
+              maxLength={80}
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="e.g. Work laptop"
+              className={cx(fieldClass(), "mt-2")}
+            />
+            <p className="mt-2 text-xs text-muted">Encrypted in this browser before it’s saved.</p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                void start();
+              }}
+              className={cx(buttonClass("primary"), "mt-6")}
+            >
+              <QrIcon />
+              Create pairing QR code
+            </button>
+          </div>
         </>
       ) : (
         <>
-          <h1 className="mt-8 text-2xl font-semibold">
-            {phase === "scan" ? "Scan this QR code" : "Waiting for approval"}
-          </h1>
-          <p className="mt-4">
-            Open{" "}
-            <Link to="/enroll-device/approve" className="underline">
-              Approve a device
-            </Link>{" "}
-            on your existing device and scan this code.
-          </p>
-          <canvas
-            ref={canvas}
-            role="img"
-            aria-label="Device pairing QR code"
-            className="mt-5 max-w-full rounded-md border border-stone-300 bg-white p-2"
-          />
-          <label htmlFor="pairing-link" className="mt-5 block text-sm font-medium">
-            Pairing link
-          </label>
-          <input
-            id="pairing-link"
-            aria-label="Pairing link"
-            readOnly
-            value={pending?.pairingLink ?? ""}
-            className="mt-2 w-full rounded-md border border-stone-300 p-2 font-mono text-xs"
-          />
-          {phase === "scan" && (
-            <button
-              type="button"
-              onClick={() => setPhase("waiting")}
-              className="mt-4 rounded-md border border-stone-300 px-4 py-2"
-            >
-              I've scanned it
-            </button>
-          )}
+          <PageIntro eyebrow="New device" title={phase === "scan" ? "Scan this QR code" : "Waiting for approval"}>
+            <p>
+              Open{" "}
+              <Link to="/enroll-device/approve" className={linkClass}>
+                Approve a device
+              </Link>{" "}
+              on your existing device and scan this code.
+            </p>
+          </PageIntro>
+          <div className="mt-8 border border-line bg-cream p-6 sm:p-8">
+            <canvas
+              ref={canvas}
+              role="img"
+              aria-label="Device pairing QR code"
+              className="mx-auto block aspect-square w-full max-w-xs border border-line bg-white p-2"
+            />
+            <label htmlFor="pairing-link" className={cx(labelClass, "mt-6")}>
+              Pairing link
+            </label>
+            <input
+              id="pairing-link"
+              aria-label="Pairing link"
+              readOnly
+              value={pending?.pairingLink ?? ""}
+              className={cx(fieldClass("sm"), "mt-2 font-mono text-xs")}
+            />
+            {phase === "scan" ? (
+              <button
+                type="button"
+                onClick={() => setPhase("waiting")}
+                className={cx(buttonClass("secondary"), "mt-5")}
+              >
+                <CheckIcon />
+                I've scanned it
+              </button>
+            ) : (
+              <p className="mt-5 flex items-center gap-2 text-sm text-muted">
+                <span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-accent" />
+                Waiting for your other device…
+              </p>
+            )}
+          </div>
         </>
       )}
-    </main>
+    </FocusLayout>
   );
 }

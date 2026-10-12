@@ -18,6 +18,8 @@ import {
   PublicCommentsSuspendedError,
   type PublicLinkComments,
 } from "./public-client";
+import { cx } from "~/ui/cx";
+import { buttonClass, fieldClass, linkClass, noticeClass, textButtonClass } from "~/ui/styles";
 
 type ReadyPage = Extract<PublicPage, { status: "ready" }>;
 
@@ -67,9 +69,9 @@ export function PublicComments({
   if (view.status === "unavailable") {
     if (!view.threadId) return null;
     return (
-      <section aria-label="Public comments" className="mt-12 border-t border-stone-200 pt-6">
-        <h2 className="text-lg font-medium">Comments</h2>
-        <p className="mt-2 text-stone-600">Sign in to see or add comments if you have access to this file.</p>
+      <section aria-label="Public comments" className="mt-16 border-t border-line pt-10">
+        <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Comments</h2>
+        <p className="mt-2 text-ink-soft">Sign in to see or add comments if you have access to this file.</p>
       </section>
     );
   }
@@ -111,14 +113,14 @@ export function PublicComments({
 
   const tooLong = commentCharacters(draft) > MAX_COMMENT_CHARS;
   return (
-    <section aria-label="Public comments" className="mt-12 border-t border-stone-200 pt-6">
-      <h2 className="text-lg font-medium">Comments</h2>
+    <section aria-label="Public comments" className="mt-16 border-t border-line pt-10">
+      <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Comments</h2>
       {message && (
-        <p role="alert" className="mt-2 text-rose-700">
+        <p role="alert" className={cx(noticeClass("danger"), "mt-4")}>
           {message}
         </p>
       )}
-      <ol aria-label="Public comments" className="mt-3 space-y-3">
+      <ol aria-label="Public comments" className="mt-6 border-t border-line">
         {thread.comments.map((comment) => (
           <CommentItem
             key={comment.id}
@@ -166,13 +168,15 @@ export function PublicComments({
             }
           />
         ))}
-        {!thread.comments.length && <li className="text-stone-500">No comments yet.</li>}
+        {!thread.comments.length && (
+          <li className="border-b border-line px-4 py-6 text-center text-sm text-muted">No comments yet.</li>
+        )}
       </ol>
       {thread.nextCursor !== null && (
         <button
           type="button"
           disabled={busy}
-          className="mt-3 rounded border px-3 py-1 text-sm"
+          className={cx(textButtonClass(), "mt-3")}
           onClick={() =>
             void (async () => {
               const controller = lifetime.current;
@@ -203,21 +207,21 @@ export function PublicComments({
         </button>
       )}
       {thread.postingState === "signed-out" && (
-        <p className="mt-4 border-t border-stone-200 pt-3 text-sm">
-          <a href="/sign-in" className="underline">
+        <p className="mt-6 border border-line bg-cream px-4 py-3 text-sm text-ink-soft">
+          <a href="/sign-in" className={linkClass}>
             Sign in
           </a>{" "}
           to add a comment.
         </p>
       )}
       {thread.postingState === "unprovisioned" && (
-        <p className="mt-4 border-t border-stone-200 pt-3 text-sm text-stone-600">
+        <p className="mt-6 border border-line bg-cream px-4 py-3 text-sm text-ink-soft">
           This browser isn’t set up to post comments. Finish device setup in your Account settings.
         </p>
       )}
       {thread.postingState === "ready" && (
         <form
-          className="mt-4 border-t border-stone-200 pt-3"
+          className="mt-6 border-y border-line bg-paper py-5"
           onSubmit={(event) => {
             event.preventDefault();
             if (!draft || tooLong) return;
@@ -227,7 +231,7 @@ export function PublicComments({
             });
           }}
         >
-          <label className="block text-sm" htmlFor="public-comment">
+          <label className="block text-sm font-medium text-ink" htmlFor="public-comment">
             Add a public comment
             <textarea
               id="public-comment"
@@ -236,18 +240,14 @@ export function PublicComments({
               rows={3}
               placeholder="Plain text only"
               onChange={(event) => setDraft(event.target.value)}
-              className="mt-1 w-full rounded border border-stone-300 p-2"
+              className={cx(fieldClass("sm"), "mt-2 resize-none font-normal")}
             />
           </label>
-          <div className="mt-1 flex items-center justify-between gap-2">
-            <p role="status" className={tooLong ? "text-rose-700" : "text-stone-500"}>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p role="status" className={cx("font-mono text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
               {commentCharacters(draft)} / 2,000
             </p>
-            <button
-              type="submit"
-              disabled={busy || !draft || tooLong}
-              className="rounded bg-stone-900 px-3 py-1 text-white"
-            >
+            <button type="submit" disabled={busy || !draft || tooLong} className={buttonClass("primary", "sm")}>
               {busy ? "Working…" : "Comment"}
             </button>
           </div>

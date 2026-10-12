@@ -13,7 +13,15 @@ import {
 import { PrivateAccessError } from "~/shared/device/private-client";
 import { isV7 } from "~/shared/tree/wire";
 
+import type { ChromeHandle } from "~/ui/chrome";
+import { cx } from "~/ui/cx";
+import { RefreshIcon } from "~/ui/icons";
+import { AccountLayout, PageIntro, SettingsSection, SkeletonLines } from "~/ui/page-layouts";
+import { buttonClass, noticeClass } from "~/ui/styles";
+
 import type { Route } from "./+types/account-pseudonym";
+
+export const handle: ChromeHandle = { chrome: "account" };
 
 export function meta() {
   return [{ title: "Public pseudonym — mdwn" }];
@@ -66,9 +74,13 @@ export async function clientAction({
 
 export function HydrateFallback() {
   return (
-    <main className="mx-auto max-w-xl px-4 py-12" role="status">
-      Loading Public pseudonym…
-    </main>
+    <AccountLayout busy>
+      <PageIntro eyebrow="Identity" title="Public pseudonym" />
+      <p role="status" className="mt-6 text-sm text-muted">
+        Loading Public pseudonym…
+      </p>
+      <SkeletonLines className="mt-6 max-w-xl" />
+    </AccountLayout>
   );
 }
 
@@ -81,48 +93,48 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
   const busy = fetcher.state !== "idle";
   if (loaderData.state !== "ready") {
     return (
-      <main className="mx-auto max-w-xl px-4 py-12">
-        <Link to="/account/security" className="text-sm underline">
-          Account security
-        </Link>
-        <h1 className="mt-8 text-2xl font-semibold">Public pseudonym</h1>
-        <p role="alert" className="mt-6">
+      <AccountLayout>
+        <PageIntro eyebrow="Identity" title="Public pseudonym" />
+        <p role="alert" className={cx(noticeClass("warning"), "mt-8 max-w-xl")}>
           Use an enrolled device to view or change your Public pseudonym.
         </p>
-      </main>
+        <Link to="/account/security" className={cx(buttonClass("secondary", "sm"), "mt-6")}>
+          Account security
+        </Link>
+      </AccountLayout>
     );
   }
   const { job, nextChangeAt, publicPseudonym } = loaderData;
   const coolingDown = nextChangeAt !== null && nextChangeAt > Date.now();
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <Link to="/account/security" className="text-sm underline">
-        Account security
-      </Link>
-      <h1 className="mt-8 text-2xl font-semibold">Public pseudonym</h1>
-      <p className="mt-3 text-sm">
-        This generated label appears on every Comment you author and on Publications where an Owner credits you. It is
-        separate from your share identifier and any share handle.
-      </p>
+    <AccountLayout>
+      <PageIntro eyebrow="Identity" title="Public pseudonym">
+        <p>
+          This generated label appears on every Comment you author and on Publications where an Owner credits you. It is
+          separate from your share identifier and any share handle.
+        </p>
+      </PageIntro>
       <section
         aria-label="Current Public pseudonym"
-        className="mt-4 rounded-md border border-stone-200 bg-white p-4 font-medium"
+        className="mt-8 max-w-xl border-y border-ink bg-sand px-7 py-8 font-display text-4xl font-light leading-tight tracking-tight text-ink sm:text-5xl"
       >
         {publicPseudonym}
       </section>
 
       {job ? (
-        <section
-          className="mt-8 rounded-md border border-stone-200 bg-white p-4"
+        <SettingsSection
+          className="mt-6"
           aria-label="Pseudonym update in progress"
+          title="Update in progress"
+          description={
+            <p>
+              {job.progress} {job.progress === 1 ? "attribution" : "attributions"} staged. Until every context is staged
+              and the update commits, every view keeps the old pseudonym and creating new Comments or Publication
+              declarations is paused.
+            </p>
+          }
         >
-          <h2 className="font-medium">Update in progress</h2>
-          <p className="mt-2 text-sm">
-            {job.progress} {job.progress === 1 ? "attribution" : "attributions"} staged. Until every context is staged
-            and the update commits, every view keeps the old pseudonym and creating new Comments or Publication
-            declarations is paused.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-3">
+          <div className="mt-5 flex flex-wrap gap-2">
             <fetcher.Form method="post">
               <input type="hidden" name="jobId" value={job.jobId} />
               <button
@@ -130,7 +142,7 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
                 name="intent"
                 value="resume"
                 type="submit"
-                className="rounded-md border border-stone-300 px-4 py-2 text-sm font-medium disabled:opacity-60"
+                className={buttonClass("primary", "sm")}
               >
                 {busy ? "Updating…" : "Resume update"}
               </button>
@@ -142,94 +154,97 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
                 name="intent"
                 value="cancel"
                 type="submit"
-                className="rounded-md border border-stone-300 px-4 py-2 text-sm font-medium disabled:opacity-60"
+                className={buttonClass("secondary", "sm")}
               >
                 Cancel update
               </button>
             </fetcher.Form>
           </div>
-          <p className="mt-3 text-sm">
+          <p className="mt-4 text-sm text-ink-soft">
             You can leave and resume from another enrolled device. No plaintext pseudonym or key is stored in the
             update.
           </p>
-        </section>
+        </SettingsSection>
       ) : (
-        <section className="mt-8">
-          <h2 className="font-medium">Change your pseudonym</h2>
-          {coolingDown && nextChangeAt !== null ? (
-            <p className="mt-2 text-sm">
-              You can change it again on {cooldownDate(nextChangeAt)} (at most once every 30 days).
-            </p>
-          ) : (
-            <p className="mt-2 text-sm">
-              You can change it at most once every 30 days. The new label is generated for you.
-            </p>
-          )}
-          <fetcher.Form method="post" className="mt-3">
+        <SettingsSection
+          className="mt-6"
+          title="Change your pseudonym"
+          description={
+            coolingDown && nextChangeAt !== null ? (
+              <p>You can change it again on {cooldownDate(nextChangeAt)} (at most once every 30 days).</p>
+            ) : (
+              <p>You can change it at most once every 30 days. The new label is generated for you.</p>
+            )
+          }
+        >
+          <fetcher.Form method="post" className="mt-5">
             <button
               disabled={busy || coolingDown}
               name="intent"
               value="change"
               type="submit"
-              className="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              className={buttonClass("primary", "sm")}
             >
+              <RefreshIcon />
               {busy ? "Changing…" : "Change pseudonym"}
             </button>
           </fetcher.Form>
-          <p className="mt-3 text-sm">
-            The change updates every encrypted attribution this Account can currently rewrite in one exclusive
-            operation: all its Comment attributions across every thread, and its Publication declarations on active
-            links. Existing views keep the old pseudonym until the whole update commits.
-          </p>
-          <p className="mt-3 text-sm">Cached copies and screenshots cannot be changed.</p>
-          <p className="mt-3 text-sm">
-            Threads or Publications you can no longer open keep the label their readers already have, because this
-            Account no longer holds a key for them.
-          </p>
-        </section>
+          <div className="mt-5 space-y-2 text-sm leading-relaxed text-ink-soft">
+            <p>
+              The change updates every encrypted attribution this Account can currently rewrite in one exclusive
+              operation: all its Comment attributions across every thread, and its Publication declarations on active
+              links. Existing views keep the old pseudonym until the whole update commits.
+            </p>
+            <p>Cached copies and screenshots cannot be changed.</p>
+            <p>
+              Threads or Publications you can no longer open keep the label their readers already have, because this
+              Account no longer holds a key for them.
+            </p>
+          </div>
+        </SettingsSection>
       )}
 
       {!busy && fetcher.data?.state === "complete" && (
-        <p role="status" className="mt-6">
+        <p role="status" className={cx(noticeClass("success"), "mt-6 max-w-xl")}>
           Your Public pseudonym was updated everywhere it can be changed.
         </p>
       )}
       {!busy && fetcher.data?.state === "paused" && (
-        <p role="status" className="mt-6">
+        <p role="status" className={cx(noticeClass("info"), "mt-6 max-w-xl")}>
           Progress saved. Resume to continue the next bounded batch.
         </p>
       )}
       {!busy && fetcher.data?.state === "cancelled" && (
-        <p role="status" className="mt-6">
+        <p role="status" className={cx(noticeClass("info"), "mt-6 max-w-xl")}>
           Update cancelled. The old pseudonym is unchanged.
         </p>
       )}
       {!busy && fetcher.data?.state === "cooldown" && (
-        <p role="alert" className="mt-6">
+        <p role="alert" className={cx(noticeClass("warning"), "mt-6 max-w-xl")}>
           You can change your pseudonym again on {cooldownDate(fetcher.data.nextChangeAt ?? 0)}.
         </p>
       )}
       {!busy && fetcher.data?.state === "pending" && (
-        <p role="alert" className="mt-6">
+        <p role="alert" className={cx(noticeClass("warning"), "mt-6 max-w-xl")}>
           An update is already in progress. Refresh to resume it.
         </p>
       )}
       {!busy && fetcher.data?.state === "preparing" && (
-        <p role="alert" className="mt-6">
+        <p role="alert" className={cx(noticeClass("warning"), "mt-6 max-w-xl")}>
           Secure access to one of your Comment threads is still being prepared on this device. Open that File, then
           resume the update.
         </p>
       )}
       {!busy && fetcher.data?.state === "changed" && (
-        <p role="alert" className="mt-6">
+        <p role="alert" className={cx(noticeClass("warning"), "mt-6 max-w-xl")}>
           The update changed while you worked. Refresh and resume it.
         </p>
       )}
       {!busy && fetcher.data?.state === "failed" && (
-        <p role="alert" className="mt-6">
+        <p role="alert" className={cx(noticeClass("danger"), "mt-6 max-w-xl")}>
           The update paused safely. Refresh and try again.
         </p>
       )}
-    </main>
+    </AccountLayout>
   );
 }

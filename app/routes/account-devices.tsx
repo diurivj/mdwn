@@ -9,9 +9,17 @@ import {
   type DeviceInventory,
 } from "~/device/management-client";
 
+import type { ChromeHandle } from "~/ui/chrome";
+import { cx } from "~/ui/cx";
+import { DevicesIcon, QrIcon, ShieldIcon, TrashIcon } from "~/ui/icons";
+import { AccountLayout, PageIntro, SkeletonLines } from "~/ui/page-layouts";
+import { buttonClass, fieldClass, labelClass, noticeClass } from "~/ui/styles";
+
 import type { Route } from "./+types/account-devices";
 
 type Screen = { state: "ready"; inventory: DeviceInventory } | { state: PrivateAccessState | "failed" };
+
+export const handle: ChromeHandle = { chrome: "account" };
 
 export function meta() {
   return [{ title: "Encryption devices — mdwn" }];
@@ -29,9 +37,10 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise
 
 export function HydrateFallback() {
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <h1 className="text-2xl font-semibold">Loading Encryption devices…</h1>
-    </main>
+    <AccountLayout busy>
+      <PageIntro eyebrow="Devices" title="Loading Encryption devices…" />
+      <SkeletonLines className="mt-10 max-w-xl" />
+    </AccountLayout>
   );
 }
 
@@ -63,31 +72,59 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
     }
   };
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <Link className="text-sm underline" to="/">
-        mdwn
-      </Link>
-      <h1 className="mt-8 text-2xl font-semibold">Encryption devices</h1>
-      <p className="mt-3 text-sm text-stone-600">
-        Removing a device stops its future private access. It cannot erase plaintext, keys, or ciphertext already cached
-        on that device.
-      </p>
+    <AccountLayout>
+      <PageIntro eyebrow="Devices" title="Encryption devices">
+        <p>
+          Removing a device stops its future private access. It cannot erase plaintext, keys, or ciphertext already
+          cached on that device.
+        </p>
+      </PageIntro>
       {inventory ? (
         <>
-          <ul className="mt-7 space-y-3">
+          <ul className="mt-10 border-t border-line">
             {inventory.devices.map((device) => (
-              <li className="rounded-md border border-stone-200 bg-white p-4" key={device.id}>
-                <p className="font-medium">{device.label}</p>
-                <p className="mt-1 text-sm text-stone-600">{device.state === "active" ? "Active" : "Removed"}</p>
-                <p className="mt-1 text-sm text-stone-600">Added {new Date(device.createdAt).toLocaleString()}</p>
-                <p className="mt-1 text-sm text-stone-600">
-                  Last recorded use:{" "}
-                  {device.lastUseAt === null ? "Not recorded" : new Date(device.lastUseAt).toLocaleDateString()}
-                </p>
+              <li
+                className={cx(
+                  "flex min-w-0 flex-col border-b border-line p-6",
+                  device.state === "active" ? "bg-paper" : "bg-cream text-ink-soft",
+                )}
+                key={device.id}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="grid size-11 shrink-0 place-items-center border border-line bg-cream text-ink">
+                    <DevicesIcon className="size-5" />
+                  </span>
+                  <span className="flex flex-wrap justify-end gap-1.5">
+                    {device.id === inventory.currentDeviceId && (
+                      <span className="eyebrow bg-ink px-2.5 py-1 text-paper">This browser</span>
+                    )}
+                    <span
+                      className={cx(
+                        "eyebrow px-2.5 py-1",
+                        device.state === "active" ? "bg-success-soft text-success" : "bg-sand text-muted",
+                      )}
+                    >
+                      {device.state === "active" ? "Active" : "Removed"}
+                    </span>
+                  </span>
+                </div>
+                <p className="mt-5 font-display text-2xl font-light leading-tight tracking-tight">{device.label}</p>
+                <dl className="mt-3 space-y-1 text-sm text-ink-soft [&_dt]:font-mono [&_dt]:text-[12px] [&_dt]:uppercase [&_dt]:tracking-[0.12em]">
+                  <div className="flex gap-2">
+                    <dt className="text-muted">Added</dt>
+                    <dd>{new Date(device.createdAt).toLocaleString()}</dd>
+                  </div>
+                  <div className="flex gap-2">
+                    <dt className="text-muted">Last recorded use:</dt>
+                    <dd>
+                      {device.lastUseAt === null ? "Not recorded" : new Date(device.lastUseAt).toLocaleDateString()}
+                    </dd>
+                  </div>
+                </dl>
                 {device.state === "active" && device.id !== inventory.currentDeviceId && activeCount > 1 ? (
                   <button
                     type="button"
-                    className="mt-3 rounded-md border border-red-700 px-3 py-2 text-sm text-red-800 disabled:opacity-60"
+                    className={cx(buttonClass("danger-quiet", "sm"), "mt-5 self-start")}
                     disabled={busy || revalidator.state !== "idle"}
                     onClick={() => {
                       setConfirmingId(device.id);
@@ -95,6 +132,7 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
                       setNotice(null);
                     }}
                   >
+                    <TrashIcon />
                     Remove device
                   </button>
                 ) : null}
@@ -102,12 +140,17 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
             ))}
           </ul>
           {confirming && (
-            <section className="mt-6 rounded-md border border-red-700 p-4" aria-label="Confirm device removal">
-              <h2 className="text-lg font-medium">Remove {confirming.label}?</h2>
-              <p className="mt-2 text-sm">
+            <section
+              className="mt-6 animate-fade border border-danger/25 bg-danger-soft/50 p-6 sm:p-8"
+              aria-label="Confirm device removal"
+            >
+              <h2 className="font-display text-3xl font-light leading-tight tracking-tight">
+                Remove {confirming.label}?
+              </h2>
+              <p className="mt-2 text-sm text-ink-soft">
                 This stops future private access for this device, but cannot recall anything it already cached.
               </p>
-              <label htmlFor="confirm-device-label" className="mt-4 block text-sm">
+              <label htmlFor="confirm-device-label" className={cx(labelClass, "mt-5")}>
                 Type {confirming.label} to confirm
               </label>
               <input
@@ -116,16 +159,16 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
                 value={typedLabel}
                 autoComplete="off"
                 onChange={(event) => setTypedLabel(event.target.value)}
-                className="mt-2 w-full rounded-md border border-stone-300 p-2"
+                className={cx(fieldClass(), "mt-2 max-w-md")}
               />
-              <div className="mt-4 flex gap-3">
+              <div className="mt-5 flex flex-wrap gap-2">
                 <button
                   type="button"
                   disabled={busy || typedLabel !== confirming.label}
                   onClick={() => {
                     void remove();
                   }}
-                  className="rounded-md bg-red-800 px-4 py-2 text-white disabled:opacity-60"
+                  className={buttonClass("danger")}
                 >
                   Confirm removal
                 </button>
@@ -136,7 +179,7 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
                     setConfirmingId(null);
                     setTypedLabel("");
                   }}
-                  className="rounded-md border border-stone-300 px-4 py-2 disabled:opacity-60"
+                  className={buttonClass("ghost")}
                 >
                   Cancel
                 </button>
@@ -144,14 +187,14 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
             </section>
           )}
           {activeCount === 1 && (
-            <p className="mt-5 text-sm">
+            <p className={cx(noticeClass("info"), "mt-6 max-w-2xl")}>
               This is the last active device. You cannot remove it here. Sign out instead, or use Files recovery to
               replace lost devices.
             </p>
           )}
         </>
       ) : (
-        <p role="alert" className="mt-6">
+        <p role="alert" className={cx(noticeClass("warning"), "mt-8 max-w-2xl")}>
           {loaderData.state === "signed-out"
             ? "Sign in to manage your Encryption devices."
             : loaderData.state === "unprovisioned" || loaderData.state === "device-lost"
@@ -160,7 +203,10 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
         </p>
       )}
       {notice && (
-        <p role={notice === "removed" ? "status" : "alert"} className="mt-4 text-sm">
+        <p
+          role={notice === "removed" ? "status" : "alert"}
+          className={cx(noticeClass(notice === "removed" ? "success" : "danger"), "mt-6 max-w-2xl")}
+        >
           {notice === "removed"
             ? "Device removed. Other devices can continue after refreshing their access."
             : notice === "changed"
@@ -168,14 +214,19 @@ export default function AccountDevices({ loaderData }: Route.ComponentProps) {
               : "Device removal failed. Review the device list and try again."}
         </p>
       )}
-      <div className="mt-8 flex flex-wrap gap-4 text-sm">
-        <Link to="/account/security" className="underline">
+      <div className="mt-10 flex flex-wrap gap-2 border-t border-line pt-6">
+        <Link to="/enroll-device/approve" className={buttonClass("secondary", "sm")}>
+          <QrIcon />
+          Approve a new device
+        </Link>
+        <Link to="/account/security" className={buttonClass("ghost", "sm")}>
+          <ShieldIcon />
           Account security and sign out
         </Link>
-        <Link to="/recover-files" className="underline">
+        <Link to="/recover-files" className={buttonClass("ghost", "sm")}>
           Files recovery
         </Link>
       </div>
-    </main>
+    </AccountLayout>
   );
 }

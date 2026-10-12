@@ -1,6 +1,6 @@
 export const CROSS_ENGINE_ROUTE = {
-  title: "mdwn — private markdown vault",
-  heading: "A private markdown vault.",
+  title: "mdwn — private Markdown, end-to-end encrypted",
+  heading: "Write in Markdown.",
 } as const;
 
 export const CROSS_ENGINE_VECTOR = {

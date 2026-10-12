@@ -1,6 +1,6 @@
 import { PUBLIC_PARTICIPATION_SUSPENDED } from "~/shared/security/public-participation";
 import { signDeviceProof, type DeviceProof } from "./proof";
-import { getDevice, updateRegistryEpoch } from "./store";
+import { getDevice, type StoredDevice, updateRegistryEpoch } from "./store";
 
 export type PrivateAccessState = "signed-out" | "unprovisioned" | "device-lost" | "stale" | "denied" | "unavailable";
 
@@ -56,9 +56,34 @@ type RegistryState = {
   sessionBinding: string;
 };
 
+type RegistryRead = { status: number; state: unknown };
+const registryReads = new Map<AbortSignal | undefined, Promise<RegistryRead>>();
+
+/**
+ * Parallel operations in the same request lifetime share an in-flight read;
+ * settled reads are never cached. A new Router navigation has a new signal
+ * and must not inherit a cancelled loader's Session binding. Operations without
+ * a signal share only with other unscoped operations, never with a navigation.
+ */
+function readRegistryState(signal?: AbortSignal): Promise<RegistryRead> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  const pending = registryReads.get(signal);
+  if (pending) return pending;
+  const read = fetch("/api/device/state", { cache: "no-store", signal })
+    .then(async (response) => ({ status: response.status, state: response.ok ? await response.json() : null }))
+    .finally(() => {
+      if (registryReads.get(signal) === read) registryReads.delete(signal);
+    });
+  registryReads.set(signal, read);
+  return read;
+}
+
+/** A private response with the Account and device its proof was bound to. */
+export type PrivateExchange = { response: Response; accountId: string; device: StoredDevice };
+
 /**
  * Fetch an authenticated private resource with a new, request-bound proof.
- * Registry state is read before every operation, so an epoch change refreshes
+ * Registry state is read for every operation, so an epoch change refreshes
  * only cached authority, never the non-extractable device keys. A lost handle
  * prevents the request entirely; the caller renders enrollment/recovery UI.
  */
@@ -66,6 +91,14 @@ export async function privateRequest(
   path: string,
   options: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: string | Uint8Array; signal?: AbortSignal },
 ): Promise<Response> {
+  return (await privateExchange(path, options)).response;
+}
+
+/** `privateRequest`, also returning the device whose proof the request carried. */
+export async function privateExchange(
+  path: string,
+  options: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: string | Uint8Array; signal?: AbortSignal },
+): Promise<PrivateExchange> {
   const url = new URL(path, location.origin);
   if (
     url.origin !== location.origin ||
@@ -78,10 +111,10 @@ export async function privateRequest(
 
   let state: RegistryState;
   try {
-    const response = await fetch("/api/device/state", { cache: "no-store", signal: options.signal });
-    if (response.status === 401) throw new PrivateAccessError("signed-out");
-    if (!response.ok) throw new PrivateAccessError("unavailable");
-    state = (await response.json()) as RegistryState;
+    const read = await readRegistryState(options.signal);
+    if (read.status === 401) throw new PrivateAccessError("signed-out");
+    if (read.status < 200 || read.status > 299) throw new PrivateAccessError("unavailable");
+    state = read.state as RegistryState;
   } catch (error) {
     if (error instanceof PrivateAccessError) throw error;
     throw new PrivateAccessError("unavailable");
@@ -148,7 +181,7 @@ export async function privateRequest(
       if (policy) throw policy;
       throw new PrivateAccessError("denied");
     }
-    return response;
+    return { response, accountId: state.accountId, device };
   } catch (error) {
     if (error instanceof PrivateAccessError) throw error;
     throw new PrivateAccessError("unavailable");

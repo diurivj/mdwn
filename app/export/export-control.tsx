@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import { downloadExport, exportOwnedFiles, type ExportSelection } from "./export-client";
 import { ExportError } from "../shared/export/collect";
+import { cx } from "~/ui/cx";
+import { DownloadIcon } from "~/ui/icons";
+import { buttonClass } from "~/ui/styles";
 
 type ExportState =
   | { status: "idle" }
@@ -76,44 +79,49 @@ export function ExportControl({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1">
-      <span className="text-sm font-medium">Export</span>
-      <button
-        type="button"
-        disabled={running}
-        onClick={() => void start({ kind: "all" })}
-        className="rounded border px-2 py-1"
-      >
-        Export my Files
-      </button>
-      {canExportSelected && (
+    <div className="flex min-w-0 flex-col gap-3 bg-sand p-5">
+      <span className="eyebrow inline-flex items-center gap-2 text-muted">
+        <DownloadIcon className="size-3.5 text-accent" />
+        Export
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           disabled={running}
-          className="rounded border px-2 py-1"
-          onClick={() =>
-            void start(
-              kind === "file"
-                ? { kind: "file", fileId: nodeId, parentKey: parentKey!, name: selectedName }
-                : { kind: "directory", directoryId: nodeId, key: selectedKey!, name: selectedName },
-            )
-          }
+          onClick={() => void start({ kind: "all" })}
+          className={buttonClass("secondary", "sm")}
         >
-          {kind === "file" ? "Export this File" : "Export this folder"}
+          Export my Files
         </button>
-      )}
-      {running && (
-        <button type="button" className="rounded border px-2 py-1" onClick={() => controller.current?.abort()}>
-          Cancel export
-        </button>
-      )}
+        {canExportSelected && (
+          <button
+            type="button"
+            disabled={running}
+            className={buttonClass("secondary", "sm")}
+            onClick={() =>
+              void start(
+                kind === "file"
+                  ? { kind: "file", fileId: nodeId, parentKey: parentKey!, name: selectedName }
+                  : { kind: "directory", directoryId: nodeId, key: selectedKey!, name: selectedName },
+              )
+            }
+          >
+            {kind === "file" ? "Export this File" : "Export this folder"}
+          </button>
+        )}
+        {running && (
+          <button type="button" className={buttonClass("ghost", "sm")} onClick={() => controller.current?.abort()}>
+            Cancel export
+          </button>
+        )}
+      </div>
       {state.status === "running" && (
-        <span role="status" className="text-sm">
+        <span role="status" className="text-sm text-ink-soft">
           {state.files ? `Exporting ${state.files} ${state.files === 1 ? "File" : "Files"}…` : "Preparing export…"}
         </span>
       )}
       {state.status === "done" && (
-        <span role="status" className="text-sm">
+        <span role="status" className="text-sm text-success">
           Exported {state.files} {state.files === 1 ? "File" : "Files"} ({state.directories}{" "}
           {state.directories === 1 ? "folder" : "folders"}
           {state.comments ? `, ${state.comments} ${state.comments === 1 ? "Comment" : "Comments"}` : ""}).{" "}
@@ -122,11 +130,11 @@ export function ExportControl({
         </span>
       )}
       {state.status === "error" && (
-        <span role="alert" className="text-sm text-rose-700">
+        <span role="alert" className="text-sm text-danger">
           {state.message}
         </span>
       )}
-      <span className="basis-full text-xs text-stone-500">
+      <span className={cx("text-xs leading-relaxed text-muted")}>
         Creates a ZIP only in this browser. It cannot remove or recall copies already downloaded elsewhere.
       </span>
     </div>

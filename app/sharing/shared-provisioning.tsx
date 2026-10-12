@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Link, useFetcher } from "react-router";
 import type { clientAction, clientLoader } from "~/routes/account-shared-access";
+import { ShareIcon } from "~/ui/icons";
 
 /** Visiting Files processes bounded passes through the route's browser action.
  * No worker queue, plaintext job state, custom fetch lifecycle, or SSR data. */
@@ -28,13 +29,21 @@ export function SharedProvisioning() {
   // The initial idle render precedes the first load; it is not a completed check.
   return (
     <section
-      className="mt-4 text-sm"
+      className="space-y-2 text-sm"
       aria-label="Shared access provisioning"
       aria-busy={state !== "idle" || data === undefined}
     >
-      {data?.pending && <p role="status">Shared content is being securely provisioned</p>}
-      {data && "state" in data && data.state === "failed" && <p>Shared provisioning paused safely.</p>}
-      <Link to="/account/shared-access" className="underline">
+      {data?.pending && (
+        <p role="status" className="flex items-start gap-2 text-ink-soft">
+          <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+          Shared content is being securely provisioned
+        </p>
+      )}
+      {data && "state" in data && data.state === "failed" && (
+        <p className="text-warning">Shared provisioning paused safely.</p>
+      )}
+      <Link to="/account/shared-access" className="flex items-center gap-2 text-ink-soft transition hover:text-ink">
+        <ShareIcon className="text-muted" />
         Shared access
       </Link>
     </section>

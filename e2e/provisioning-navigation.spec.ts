@@ -11,7 +11,8 @@ for (const source of ["file", "device-access"] as const) {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const modulePattern = "**/assets/account-shared-access-main-*.js";
+    // Match the route module in both whole-route and split-route builds.
+    const modulePattern = "**/assets/account-shared-access-*.js";
     const importErrors: string[] = [];
     page.on("console", (message) => {
       if (message.type() === "error" && message.text().includes("Error loading route module"))
