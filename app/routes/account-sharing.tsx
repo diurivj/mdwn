@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useFetcher } from "react-router";
-import { PrivateAccessError, type PrivateAccessState } from "~/shared/device/private-client";
+import type { PrivateAccessState } from "~/shared/device/private-client";
 import { listRelationships, readShareIdentifier, type Relationships } from "~/shared/sharing/relationships-client";
 import { sharingLoadState } from "~/shared/sharing/sharing-errors";
 import { runSharingIntent, type SharingOutcome } from "~/shared/sharing/sharing-intents";
