@@ -433,3 +433,33 @@ test("structural controls protect pending, failed, saving, and composing File dr
   await expect(page.getByRole("button", { name: "Move", exact: true })).toBeEnabled();
   await expect(source).toHaveValue("# Pending draft stays here");
 });
+
+test("a created or deleted node's own navigation is not reported as an interruption", async ({ page, workspace }) => {
+  await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
+  expect(workspace.fileId).toBeTruthy();
+  // Hold each destination's path read so the departing page stays rendered while it loads.
+  await page.route("**/api/private/tree/nodes/*/ancestors", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await route.continue().catch(() => {
+      /* A later navigation may cancel this loader. */
+    });
+  });
+  await page.evaluate(() => {
+    const seen = { interrupted: false };
+    Object.assign(window, { interruptionProbe: seen });
+    new MutationObserver(() => {
+      if (document.body.textContent?.includes("Navigation interrupted")) seen.interrupted = true;
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  const interrupted = () =>
+    page.evaluate(
+      () => (window as unknown as { interruptionProbe: { interrupted: boolean } }).interruptionProbe.interrupted,
+    );
+  await create(page, "From a File.md", "File");
+  await create(page, "From a File folder", "folder");
+  await create(page, "From a folder.md", "File");
+  await confirmDelete(page);
+  await expect(page.getByRole("heading", { name: "From a File folder", exact: true })).toBeVisible();
+  expect(await interrupted()).toBe(false);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});

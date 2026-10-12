@@ -379,6 +379,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         const created = await createTreeChild(snapshot.access, current.parentId, payload, parent, key, signal);
         if (signal.aborted) return;
         setDialog(null);
+        // Opening the new node completes this operation; it does not interrupt it.
+        submission.current = false;
         navigate(`/${current.kind === "directory" ? "d" : "f"}/${created.nodeId}`);
       } else if (current.operation === "reorder" || current.operation === "move" || current.operation === "delete") {
         if (current.operation === "reorder")
@@ -405,8 +407,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           );
         if (signal.aborted) return;
         setDialog(null);
-        if (current.operation === "delete") navigate(`/d/${current.parentId}`);
-        else revalidator.revalidate();
+        if (current.operation === "delete") {
+          submission.current = false;
+          navigate(`/d/${current.parentId}`);
+        } else revalidator.revalidate();
       } else {
         const entry = parent.entries.find((item) => item.nodeId === current.nodeId);
         if (!entry) throw new TreeNotFoundError();
