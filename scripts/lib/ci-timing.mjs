@@ -28,6 +28,14 @@ export function executionIntervals(jobs) {
   };
 }
 
+/** Workflow completion includes canceled waiting jobs, even without execution.
+ * @param {Array<{completed_at: string | null}>} jobs
+ */
+export function lastJobCompletion(jobs) {
+  const timestamps = jobs.map((job) => Date.parse(job.completed_at ?? "")).filter(Number.isFinite);
+  return timestamps.length ? Math.max(...timestamps) : null;
+}
+
 /** @param {any} report */
 export function summarizePlaywright(report) {
   const counts = { tests: 0, retries: 0, flaky: 0, failed: 0, skipped: 0, timedOutAttempts: 0 };

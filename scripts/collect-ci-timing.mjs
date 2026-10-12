@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { executionIntervals } from "./lib/ci-timing.mjs";
+import { executionIntervals, lastJobCompletion } from "./lib/ci-timing.mjs";
 
 const [repository, runId, attempt, output] = process.argv.slice(2);
 if (
@@ -29,6 +29,7 @@ for (let page = 1; ; page++) {
   if (batch.length < 100) break;
 }
 const intervals = executionIntervals(jobs);
+const completed = lastJobCompletion(jobs);
 const requested = Date.parse(workflow.run_started_at ?? workflow.created_at);
 // updated_at can include subsequent metadata changes. Completion is the last
 // terminal job timestamp, not the workflow's update timestamp.
@@ -40,7 +41,8 @@ const summary = {
   url: workflow.html_url,
   conclusion: workflow.conclusion,
   ...intervals,
-  turnaroundSeconds: intervals.lastFinish === null ? null : (intervals.lastFinish - requested) / 1000,
+  workflowCompleted: completed,
+  turnaroundSeconds: completed === null ? null : (completed - requested) / 1000,
   initialDispatchWaitSeconds: intervals.firstStart === null ? null : (intervals.firstStart - requested) / 1000,
   executionSpanSeconds:
     intervals.lastFinish === null || intervals.firstStart === null
@@ -53,10 +55,14 @@ const summary = {
     runnerName: job.runner_name,
     conclusion: job.conclusion,
     created: job.created_at,
-    started: job.started_at,
+    started: job.runner_id === 0 ? null : job.started_at,
     completed: job.completed_at,
     executionSeconds:
-      job.started_at && job.completed_at ? (Date.parse(job.completed_at) - Date.parse(job.started_at)) / 1000 : null,
+      job.runner_id === 0
+        ? 0
+        : job.started_at && job.completed_at
+          ? (Date.parse(job.completed_at) - Date.parse(job.started_at)) / 1000
+          : null,
     steps: job.steps,
   })),
 };

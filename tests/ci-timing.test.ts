@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { executionIntervals, summarizePlaywright } from "../scripts/lib/ci-timing.mjs";
+import { executionIntervals, lastJobCompletion, summarizePlaywright } from "../scripts/lib/ci-timing.mjs";
 
 test("interval overlap distinguishes serialization, overlap, and an exact handoff", () => {
   const job = (start: number, end: number) => ({
@@ -24,6 +24,10 @@ test("canceled unassigned jobs have no execution interval despite GitHub placeho
     lastFinish: Date.parse(assigned.completed_at),
   });
   expect(executionIntervals([queued])).toEqual({ maximumOverlap: 0, firstStart: null, lastFinish: null });
+  const laterCancellation = { ...queued, completed_at: "2026-10-12T16:19:20Z" };
+  expect(lastJobCompletion([assigned, laterCancellation])).toBe(Date.parse(laterCancellation.completed_at));
+  expect(lastJobCompletion([laterCancellation])).toBe(Date.parse(laterCancellation.completed_at));
+  expect(lastJobCompletion([{ completed_at: null }])).toBeNull();
 });
 
 test("retry-recovered green tests retain their timeout and retry evidence", () => {
