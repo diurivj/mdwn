@@ -4,6 +4,8 @@ import { Link, redirect, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
 import { confirmFreshPasskey } from "~/auth/fresh-client";
+import { RecoveryDownload } from "~/recovery/recovery-download";
+import { recoveryCodesText } from "~/shared/account/recovery-text";
 import { prepareRecoveryCodeSet } from "~/shared/auth/recovery-codes";
 import type { PasskeySummary, RegistrationStart, RevocationResult, SessionSummary } from "~/auth/contracts";
 import type { ChromeHandle } from "~/ui/chrome";
@@ -268,6 +270,13 @@ export default function AccountSecurity({ loaderData, actionData }: Route.Compon
                     </li>
                   ))}
                 </ol>
+                <div className="mt-4">
+                  <RecoveryDownload
+                    filename="mdwn-recovery-codes.txt"
+                    text={recoveryCodesText(result.codes, loaderData.identifier)}
+                    label="Download codes (.txt)"
+                  />
+                </div>
               </div>
             )}
           </SettingsSection>

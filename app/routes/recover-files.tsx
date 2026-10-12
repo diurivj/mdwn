@@ -1,6 +1,8 @@
 import { Link, useFetcher } from "react-router";
 
 import { forgetRecoveryPhrase, loadVaultRecovery, runVaultRecovery } from "~/recovery/ceremony-client";
+import { RecoveryDownload } from "~/recovery/recovery-download";
+import { recoveryPhraseText } from "~/shared/account/recovery-text";
 import { useOwnedProvisioning } from "~/device/owned-provision-hook";
 import type { ChromeHandle } from "~/ui/chrome";
 import { cx } from "~/ui/cx";
@@ -102,24 +104,27 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
             </p>
           )}
           {phrase && (
-            <section className="mt-8 border-y border-ink bg-sand p-6 text-ink sm:p-8" role="status">
+            <section className="mt-8 border border-ink bg-sand p-6 text-ink sm:p-8" role="status">
               <p className="eyebrow text-muted">Write it down now</p>
               <h2 className="mt-2 font-display text-3xl font-light leading-tight tracking-tight">
                 Save your new recovery phrase
               </h2>
               <p className="mt-2 text-sm text-ink-soft">
-                Your previous phrase no longer works. Keep these 24 words offline.
+                Your previous phrase no longer works. Keep these 24 words offline, written down or as a text file.
               </p>
-              <p className="mt-5 break-words border-y border-line bg-cream p-4 font-mono text-[15px] leading-loose [word-spacing:0.35em]">
+              <p className="mt-5 break-words border border-line bg-cream p-4 font-mono text-[15px] leading-loose [word-spacing:0.35em]">
                 {phrase}
               </p>
-              <button
-                type="button"
-                className={cx(buttonClass("secondary", "sm"), "mt-5")}
-                onClick={forgetRecoveryPhrase}
-              >
-                <CheckIcon />I saved this phrase
-              </button>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <RecoveryDownload
+                  filename="mdwn-recovery-phrase.txt"
+                  text={recoveryPhraseText(phrase)}
+                  label="Download phrase (.txt)"
+                />
+                <button type="button" className={buttonClass("secondary", "sm")} onClick={forgetRecoveryPhrase}>
+                  <CheckIcon />I saved this phrase
+                </button>
+              </div>
             </section>
           )}
           {fetcher.data?.state === "success" && restoring && (
@@ -134,7 +139,7 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
           )}
           {phrase && (
             <Link to="/account/device-access" className={cx(buttonClass("primary"), "mt-6")}>
-              Open your Files
+              Open your library
               <ArrowRightIcon />
             </Link>
           )}

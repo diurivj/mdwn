@@ -1,3 +1,9 @@
+import {
+  normalizePseudonym,
+  type PseudonymProblem,
+  pseudonymProblem,
+  suggestPseudonym,
+} from "~/shared/account/pseudonym";
 import { MAX_COMMENT_KEY_ENVELOPE_BYTES, sealAttribution } from "~/shared/comments/content";
 import { sealPublicAttribution } from "~/shared/comments/public-content";
 import { MAX_ACCOUNT_PROFILE_BYTES, openAccountProfile, sealAccountProfile } from "~/shared/crypto/account-profile";
@@ -25,6 +31,8 @@ export type PseudonymBrowser = PrivateBrowser & {
   request(path: string, method?: "POST" | "PUT" | "PATCH", body?: object): Promise<Response>;
 };
 type Options = { maxSteps?: number; signal?: AbortSignal; onProgress?: (job: PseudonymJob) => void };
+/** A change names its new pseudonym; without one it uses a generated suggestion. */
+type ChangeOptions = Options & { pseudonym?: string };
 
 export class PseudonymCooldownError extends Error {
   constructor(readonly nextChangeAt: number) {
@@ -44,6 +52,12 @@ export class PseudonymPreparingError extends Error {
 export class PseudonymChangedError extends Error {
   constructor() {
     super("pseudonym_update_changed");
+  }
+}
+/** A requested pseudonym the browser refuses before starting a job (and its cooldown). */
+export class PseudonymInvalidError extends Error {
+  constructor(readonly problem: PseudonymProblem | "unchanged") {
+    super("pseudonym_invalid");
   }
 }
 
@@ -199,11 +213,6 @@ async function sealContext(
   };
 }
 
-/** A generated, non-identifying pseudonym in the signup format. */
-export function generatePseudonym(): string {
-  return `Member ${encodeTreeBytes(crypto.getRandomValues(new Uint8Array(9)))}`;
-}
-
 /** Stage bounded pages and commit. Returns true when the job is complete. */
 export async function runPseudonymUpdate(
   jobId: string,
@@ -260,12 +269,24 @@ export async function runPseudonymUpdate(
   return false;
 }
 
-/** Start the one exclusive change. Cooldown is enforced server-side as well. */
-export async function changePseudonym(browser: PseudonymBrowser, options: Options = {}): Promise<boolean> {
+/**
+ * Start the one exclusive change. Cooldown is enforced server-side as well; an
+ * invalid or unchanged pseudonym is refused before a job could consume it.
+ */
+export async function changePseudonym(browser: PseudonymBrowser, options: ChangeOptions = {}): Promise<boolean> {
+  const { pseudonym: requested, ...run } = options;
+  const problem = requested === undefined ? null : pseudonymProblem(requested);
+  if (problem) throw new PseudonymInvalidError(problem);
+  const publicPseudonym = requested === undefined ? suggestPseudonym() : normalizePseudonym(requested);
   const profile = await json<ProfileWire>(browser, "/api/private/profile");
   if (profile.nextChangeAt !== null && profile.nextChangeAt > Date.now())
     throw new PseudonymCooldownError(profile.nextChangeAt);
-  const publicPseudonym = generatePseudonym();
+  const current = await openAccountProfile(
+    decodeTreeBytes(profile.ciphertext, MAX_ACCOUNT_PROFILE_BYTES),
+    browser.vaultRootKey,
+    { accountId: browser.accountId, epoch: profile.epoch, revision: profile.revision },
+  );
+  if (current.publicPseudonym === publicPseudonym) throw new PseudonymInvalidError("unchanged");
   const sealed = await sealAccountProfile(
     browser.vaultRootKey,
     { publicPseudonym },
@@ -276,7 +297,7 @@ export async function changePseudonym(browser: PseudonymBrowser, options: Option
     jobId,
     profile: { ciphertext: encodeTreeBytes(sealed.ciphertext), epoch: sealed.epoch, revision: sealed.revision },
   });
-  return runPseudonymUpdate(jobId, browser, options);
+  return runPseudonymUpdate(jobId, browser, run);
 }
 
 /** The current pseudonym, its cooldown and any pending update for the UI. */
@@ -309,7 +330,7 @@ export async function loadAccountPseudonymState(signal?: AbortSignal): Promise<P
   return readPseudonymState(await productionBrowser(signal));
 }
 
-export async function changeAccountPseudonym(options: Options = {}): Promise<boolean> {
+export async function changeAccountPseudonym(options: ChangeOptions = {}): Promise<boolean> {
   return changePseudonym(await productionBrowser(options.signal), options);
 }
 
