@@ -23,6 +23,8 @@ import {
   type FilePublicComments,
   type PublicThreadView,
 } from "./public-client";
+import { cx } from "~/ui/cx";
+import { buttonClass, fieldClass, noticeClass, textButtonClass } from "~/ui/styles";
 
 type PanelState =
   | { status: "loading" }
@@ -149,20 +151,26 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
   if (panel.status === "loading")
     return (
       <section aria-label="Public comments" className="mt-4">
-        <p role="status">Loading public comments…</p>
+        <p role="status" className="text-sm text-muted">
+          Loading public comments…
+        </p>
       </section>
     );
   if (panel.status === "preparing")
     return (
       <section aria-label="Public comments" className="mt-4">
-        <p role="status">Secure public comment access is being prepared on this device.</p>
+        <p role="status" className="text-sm text-muted">
+          Secure public comment access is being prepared on this device.
+        </p>
       </section>
     );
   if (panel.status === "failed")
     return (
       <section aria-label="Public comments" className="mt-4">
-        <p role="alert">{panel.message}</p>
-        <button type="button" className="mt-2 rounded border px-3 py-1" onClick={retry}>
+        <p role="alert" className={noticeClass("danger")}>
+          {panel.message}
+        </p>
+        <button type="button" className={cx(buttonClass("secondary", "sm"), "mt-3")} onClick={retry}>
           Retry public comments
         </button>
       </section>
@@ -170,7 +178,7 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
   if (panel.status === "absent")
     return (
       <section aria-label="Public comments" className="mt-4">
-        <p>
+        <p className="text-sm text-muted">
           {panel.publicationId
             ? "This Publication’s public Comment thread isn’t set up yet."
             : "Publish this File to open a Public comment thread."}
@@ -182,16 +190,16 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
   const tooLong = commentCharacters(draft) > MAX_COMMENT_CHARS;
   const audience = thread.audience === "public" ? "Public" : "Collaborators only";
   return (
-    <section aria-label="Public comments" className="mt-4 flex min-h-0 flex-col">
-      <p role="status" className="text-sm text-stone-600">
-        Audience: <span className="font-medium text-stone-900">{audience}</span>
+    <section aria-label="Public comments" className="mt-4 flex min-h-0 flex-1 flex-col">
+      <p role="status" className="text-[13px] text-muted">
+        Audience: <span className="font-medium text-ink">{audience}</span>
       </p>
       {message && (
-        <p role="alert" className="mt-2 text-rose-700">
+        <p role="alert" className={cx(noticeClass("danger"), "mt-2")}>
           {message}
         </p>
       )}
-      <ol aria-label="Public comments" className="mt-3 flex-1 space-y-3 overflow-y-auto pr-1">
+      <ol aria-label="Public comments" className="mt-3 min-h-0 flex-1 overflow-y-auto border-t border-line pr-1">
         {thread.comments.map((comment) => (
           <CommentItem
             key={comment.id}
@@ -240,20 +248,22 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
             }
           />
         ))}
-        {!thread.comments.length && <li className="text-stone-500">No public comments yet.</li>}
+        {!thread.comments.length && (
+          <li className="border-b border-line px-4 py-6 text-center text-sm text-muted">No public comments yet.</li>
+        )}
       </ol>
       {thread.nextCursor !== null && (
         <button
           type="button"
           disabled={busy}
           onClick={() => void loadMore()}
-          className="mt-3 self-start rounded border px-3 py-1 text-sm"
+          className={cx(textButtonClass(), "mt-2 self-start")}
         >
           Load more comments
         </button>
       )}
       <form
-        className="mt-4 border-t border-stone-200 pt-3"
+        className="mt-4 border-t border-line pt-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (!draft || tooLong) return;
@@ -263,7 +273,7 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
           });
         }}
       >
-        <label className="block text-sm" htmlFor="public-thread-comment">
+        <label className="block text-sm font-medium text-ink" htmlFor="public-thread-comment">
           Add a public comment
           <textarea
             id="public-thread-comment"
@@ -272,18 +282,14 @@ export function PublicThreadPanel({ fileId, snapshot }: { fileId: string; snapsh
             rows={3}
             placeholder="Plain text only"
             onChange={(event) => setDraft(event.target.value)}
-            className="mt-1 w-full rounded border border-stone-300 p-2"
+            className={cx(fieldClass("sm"), "mt-2 resize-none font-normal")}
           />
         </label>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <p role="status" className={tooLong ? "text-rose-700" : "text-stone-500"}>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <p role="status" className={cx("font-mono text-xs tabular-nums", tooLong ? "text-danger" : "text-muted")}>
             {commentCharacters(draft)} / 2,000
           </p>
-          <button
-            type="submit"
-            disabled={busy || !draft || tooLong}
-            className="rounded bg-stone-900 px-3 py-1 text-white"
-          >
+          <button type="submit" disabled={busy || !draft || tooLong} className={buttonClass("primary", "sm")}>
             {busy ? "Working…" : "Comment"}
           </button>
         </div>

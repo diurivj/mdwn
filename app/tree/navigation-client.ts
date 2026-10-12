@@ -2,10 +2,14 @@ import { privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
 import { openGrantKeyEnvelope, type GrantKeyContext } from "~/shared/sharing/grant-keys";
 import {
+  fetchDirectory,
+  fetchFile,
   loadAncestors,
   loadDirectory,
-  loadFile,
+  type loadFile,
   openChildDirectory,
+  openDirectory,
+  openFile,
   openRoot,
   TreeNotFoundError,
   type DirectoryListing,
@@ -124,11 +128,35 @@ export function savedExpanded(accountId: string): string[] {
   }
 }
 
+/** Start a read now and observe its failure only when it is awaited, in the order a sequential walk would. */
+function prefetch<T>(read: Promise<T>): Promise<T> {
+  read.catch(() => {});
+  return read;
+}
+
+/**
+ * Every request is a full network round trip, so the walk sends independent
+ * requests together: the root and the path at once, then every Directory
+ * listing on the path with the File. Keys still open strictly down the path,
+ * each verified listing yielding the next key, and failures surface in the
+ * order the walk reaches them.
+ */
 async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesSnapshot> {
-  let access = await openRoot(signal);
-  const path = await loadAncestors(nodeId, signal);
+  const root = prefetch(openRoot(signal));
+  let path: string[];
+  try {
+    path = await loadAncestors(nodeId, signal);
+  } catch (error) {
+    await root; // An unavailable root explains the failure before an unknown path does.
+    throw error;
+  }
+  let access = await root;
   if (path[0] !== access.rootId) access = await openReceivedGrantRoot(access, path[0]!, signal);
   if (access.rootKind === "file" && (kind !== "file" || path.length !== 1)) throw new TreeNotFoundError();
+  const directories = new Map(
+    (kind === "file" ? path.slice(0, -1) : path).map((id) => [id, prefetch(fetchDirectory(id, signal))]),
+  );
+  const fetchedFile = kind === "file" ? prefetch(fetchFile(nodeId, signal)) : null;
   const listings: Record<string, DirectoryListing> = {};
   const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
   const crumbs: Crumb[] = [{ id: access.rootId, name: access.rootKind === "file" ? "Shared File" : "Files" }];
@@ -139,7 +167,7 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
     if (index === path.length - 1 && kind === "file") break;
     const key = keys[parent];
     if (!key) throw new TreeNotFoundError();
-    const listing = await loadDirectory(access, parent, key, signal);
+    const listing = await openDirectory(access, parent, key, await directories.get(parent)!);
     listings[parent] = listing;
     const next = path[index + 1];
     if (!next) continue;
@@ -153,21 +181,22 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
     crumbs.push({ id: next, name: entry.name });
     if (entry.kind === "directory") keys[next] = await openChildDirectory(access, key, entry);
   }
-  if (kind === "file") {
+  if (fetchedFile) {
     const parent = path.at(-2);
     if (access.rootKind === "file") {
-      file = await loadFile(access, nodeId, access.rootKey, signal);
+      file = await openFile(access, nodeId, access.rootKey, await fetchedFile);
     } else {
       if (!parent || !keys[parent]) throw new TreeNotFoundError();
-      file = await loadFile(access, nodeId, keys[parent], signal);
+      file = await openFile(access, nodeId, keys[parent], await fetchedFile);
       if (file.parentId !== parent) throw new TreeNotFoundError();
     }
   }
   // Preferences are browser-only, never encoded in a deep link. Restore only
-  // descendants discoverable through a decrypted Directory in this Account.
+  // descendants discoverable through a decrypted Directory in this Account,
+  // one level per pass, with each level's Directories loaded together.
   const pending = new Set(savedExpanded(access.actorAccountId));
   for (let pass = 0; pass < 201 && pending.size; pass++) {
-    let progressed = false;
+    const level: Promise<boolean>[] = [];
     for (const id of pending) {
       if (listings[id]) {
         pending.delete(id);
@@ -175,18 +204,23 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
       }
       const parent = Object.values(listings).find((listing) => listing.entries.some((entry) => entry.nodeId === id));
       const entry = parent?.entries.find((item) => item.nodeId === id);
-      if (!parent || !entry || entry.kind !== "directory" || !keys[parent.directoryId]) continue;
+      const parentKey = parent && keys[parent.directoryId];
+      if (!entry || entry.kind !== "directory" || !parentKey) continue;
       pending.delete(id);
-      try {
-        const key = await openChildDirectory(access, keys[parent.directoryId], entry);
-        keys[id] = key;
-        listings[id] = await loadDirectory(access, id, key, signal);
-        progressed = true;
-      } catch {
-        /* An old local preference must not block opening the selected object. */
-      }
+      level.push(
+        (async () => {
+          try {
+            const key = await openChildDirectory(access, parentKey, entry);
+            keys[id] = key;
+            listings[id] = await loadDirectory(access, id, key, signal);
+            return true;
+          } catch {
+            return false; // An old local preference must not block opening the selected object.
+          }
+        })(),
+      );
     }
-    if (!progressed) break;
+    if (!(await Promise.all(level)).some(Boolean)) break;
   }
   return { access, listings, keys, crumbs, file };
 }

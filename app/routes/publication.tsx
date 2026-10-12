@@ -5,10 +5,16 @@ import { getEnv } from "~/context/env";
 import { activePublicLink } from "~/publications/publications.server";
 import { loadPublicPage, type PublicPage } from "~/publications/public-client";
 import { MarkdownPreview } from "~/tree/markdown-preview";
+import type { ChromeHandle } from "~/ui/chrome";
+import { LockIcon } from "~/ui/icons";
+import { Logo } from "~/ui/logo";
 
 import type { Route } from "./+types/publication";
 
 const ROBOTS = "noindex, nofollow, noarchive";
+
+/** A reader page: no site navigation, Account state or Session check. */
+export const handle: ChromeHandle = { chrome: "reader" };
 
 export function meta({ loaderData }: Route.MetaArgs) {
   const page = loaderData as PublicPage | null | undefined;
@@ -42,16 +48,43 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs):
 }
 clientLoader.hydrate = true as const;
 
-// The fallback shares this shell with the page so it stays in the main route
-// chunk: hydrating with `clientLoader.hydrate` alongside a server loader needs
-// HydrateFallback in the hydrated route module, not only in the SSR build.
-const shell = "mx-auto max-w-3xl px-4";
+// The fallback and every reader state share one shell, so the page keeps its
+// frame while the document decrypts in the browser.
+function ReaderShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mx-auto flex min-h-dvh w-full max-w-[46rem] flex-col px-5 sm:px-8">
+      <header className="flex items-center justify-between gap-4 border-b border-line py-6">
+        <Logo className="text-[24px]" />
+        <span className="eyebrow inline-flex items-center gap-1.5 border border-line bg-cream px-3 py-1.5 text-ink-soft">
+          <LockIcon className="size-3.5 text-accent" />
+          Read-only
+        </span>
+      </header>
+      {children}
+      <footer className="mt-auto border-t border-line py-6 text-xs leading-relaxed text-muted">
+        Read-only. This page is decrypted in your browser with the key after # in its link; mdwn never receives that
+        key.
+      </footer>
+    </div>
+  );
+}
 
 export function HydrateFallback() {
   return (
-    <main className={`${shell} py-12`} role="status">
-      Opening published File…
-    </main>
+    <ReaderShell>
+      <main className="flex-1 pb-16 pt-6 sm:pt-10" aria-busy="true">
+        <p role="status" className="text-sm text-muted">
+          Opening published File…
+        </p>
+        <div aria-hidden="true" className="mt-8 space-y-4">
+          <div className="skeleton h-12 w-3/4" />
+          <div className="skeleton h-4 w-1/3" />
+          <div className="skeleton mt-10 h-4" />
+          <div className="skeleton h-4 w-11/12" />
+          <div className="skeleton h-4 w-4/5" />
+        </div>
+      </main>
+    </ReaderShell>
   );
 }
 
@@ -83,28 +116,35 @@ export default function PublicationRoute({ loaderData, params }: Route.Component
   if (changed || incompleteNavigation || state === "loading") return <HydrateFallback />;
   if (page.status !== "ready")
     return (
-      <main className={`${shell} py-12`}>
-        <h1 className="text-2xl font-semibold">Published File</h1>
-        <p role="alert" className="mt-3 text-stone-600">
-          {unavailable[page.status]}
-        </p>
-      </main>
+      <ReaderShell>
+        <main className="flex-1 pb-16 pt-6 sm:pt-10">
+          <p className="eyebrow text-accent">Public page</p>
+          <h1 className="mt-3 font-display text-5xl font-light leading-tight tracking-tight">Published File</h1>
+          <p role="alert" className="mt-4 max-w-xl leading-relaxed text-ink-soft">
+            {unavailable[page.status]}
+          </p>
+        </main>
+      </ReaderShell>
     );
   return (
-    <main className={`${shell} py-10`}>
-      <article aria-label="Published File">
-        {page.title && <h1 className="mb-4 text-3xl font-semibold">{page.title}</h1>}
-        {page.authors.length > 0 && <p className="mb-6 text-sm text-stone-600">By {page.authors.join(", ")}</p>}
-        <div className="space-y-3 break-words">
-          <MarkdownPreview source={page.markdown} />
-        </div>
-      </article>
-      {/* No Private/Public selector: the reader sees only explicitly public epochs. */}
-      <PublicComments page={page} linkId={params.linkId} onRefresh={() => void revalidate()} />
-      <footer className="mt-12 border-t border-stone-200 pt-4 text-xs text-stone-500">
-        Read-only. This page is decrypted in your browser with the key after # in its link; mdwn never receives that
-        key.
-      </footer>
-    </main>
+    <ReaderShell>
+      <main className="flex-1 pb-16 pt-6 sm:pt-10">
+        <article aria-label="Published File" className="animate-fade">
+          {page.title && (
+            <h1 className="font-display text-[2.75rem] font-light leading-[1.05] tracking-tight text-balance [overflow-wrap:anywhere] sm:text-6xl">
+              {page.title}
+            </h1>
+          )}
+          {page.authors.length > 0 && <p className="mt-4 text-sm text-muted">By {page.authors.join(", ")}</p>}
+          <div
+            className={`prose-markdown prose-reader [overflow-wrap:anywhere] ${page.title || page.authors.length ? "mt-10 border-t border-line pt-10" : ""}`}
+          >
+            <MarkdownPreview source={page.markdown} />
+          </div>
+        </article>
+        {/* No Private/Public selector: the reader sees only explicitly public epochs. */}
+        <PublicComments page={page} linkId={params.linkId} onRefresh={() => void revalidate()} />
+      </main>
+    </ReaderShell>
   );
 }

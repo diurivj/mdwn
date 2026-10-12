@@ -2,8 +2,15 @@ import { Link, useFetcher } from "react-router";
 
 import { forgetRecoveryPhrase, loadVaultRecovery, runVaultRecovery } from "~/recovery/ceremony-client";
 import { useOwnedProvisioning } from "~/device/owned-provision-hook";
+import type { ChromeHandle } from "~/ui/chrome";
+import { cx } from "~/ui/cx";
+import { ArrowRightIcon, CheckIcon, KeyIcon } from "~/ui/icons";
+import { FocusLayout, PageIntro, SkeletonLines } from "~/ui/page-layouts";
+import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/recover-files";
+
+export const handle: ChromeHandle = { chrome: "account" };
 
 export function meta() {
   return [{ title: "Recover your Files — mdwn" }];
@@ -15,9 +22,10 @@ export function clientLoader({ request }: Route.ClientLoaderArgs) {
 
 export function HydrateFallback() {
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <h1 className="text-2xl font-semibold">Preparing recovery…</h1>
-    </main>
+    <FocusLayout>
+      <PageIntro eyebrow="Files recovery" title="Preparing recovery…" />
+      <SkeletonLines className="mt-10" />
+    </FocusLayout>
   );
 }
 
@@ -32,31 +40,30 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
   const busy = fetcher.state !== "idle";
   const phrase = fetcher.data?.state === "success" ? fetcher.data.phrase : loaderData.phrase;
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <Link to="/" className="text-sm underline">
-        mdwn
-      </Link>
-      <h1 className="mt-8 text-2xl font-semibold">Recover your Files</h1>
+    <FocusLayout>
+      <PageIntro eyebrow="Files recovery" title="Recover your Files" />
       {loaderData.state === "signed-out" ? (
-        <p className="mt-4">
-          <Link to="/sign-in" className="underline">
+        <p className="mt-6 text-ink-soft">
+          <Link to="/sign-in" className={linkClass}>
             Sign in with a passkey
           </Link>{" "}
           first.
         </p>
       ) : loaderData.state === "restricted" ? (
-        <p className="mt-4">Finish replacing your passkey, then sign in with it before recovering your Files.</p>
+        <p className={cx(noticeClass("warning"), "mt-6")}>
+          Finish replacing your passkey, then sign in with it before recovering your Files.
+        </p>
       ) : loaderData.state === "failed" ? (
-        <p className="mt-4">Recovery is unavailable. Please try again.</p>
+        <p className={cx(noticeClass("danger"), "mt-6")}>Recovery is unavailable. Please try again.</p>
       ) : (
         <>
-          <p className="mt-4 text-stone-600">
+          <p className="mt-4 max-w-2xl leading-relaxed text-ink-soft">
             Confirm with a passkey and enter your current 24-word Files recovery phrase. Your phrase stays in this
             browser. Recovery replaces every previous Encryption device and signs out other Sessions.
           </p>
           {!phrase && (
-            <fetcher.Form method="post" className="mt-6 space-y-4">
-              <label className="block text-sm font-medium" htmlFor="phrase">
+            <fetcher.Form method="post" className="mt-8 border border-line bg-cream p-6 sm:p-8">
+              <label className={labelClass} htmlFor="phrase">
                 Current recovery phrase
               </label>
               <textarea
@@ -65,63 +72,74 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
                 required
                 autoComplete="off"
                 spellCheck={false}
-                className="min-h-28 w-full rounded-md border border-stone-300 p-3 font-mono text-sm"
+                placeholder="word word word …"
+                className={cx(fieldClass(), "mt-2 min-h-32 resize-y font-mono text-sm leading-relaxed")}
               />
-              <button
-                type="submit"
-                disabled={busy}
-                className="rounded-md bg-stone-900 px-4 py-2 text-white disabled:opacity-60"
-              >
+              <button type="submit" disabled={busy} className={cx(buttonClass("primary", "lg"), "mt-5 w-full")}>
+                <KeyIcon />
                 Recover Files
               </button>
             </fetcher.Form>
           )}
           {busy && (
-            <p role="status" className="mt-4">
+            <p role="status" className={cx(noticeClass("info"), "mt-6 flex items-center gap-3")}>
+              <span aria-hidden="true" className="size-2 shrink-0 animate-pulse rounded-full bg-accent" />
               Restoring your Files securely…
             </p>
           )}
           {!busy && fetcher.data?.state === "failed" && (
-            <p role="alert" className="mt-4 text-red-700">
+            <p role="alert" className={cx(noticeClass("danger"), "mt-6")}>
               Recovery could not be completed. Start again with your current phrase.
             </p>
           )}
           {!busy && fetcher.data?.state === "uncertain" && (
-            <p role="alert" className="mt-4 text-amber-800">
+            <p role="alert" className={cx(noticeClass("warning"), "mt-6")}>
               We could not confirm the result.{" "}
-              <Link to="/sign-in" className="underline">
+              <Link to="/sign-in" className={linkClass}>
                 Sign in with a passkey
               </Link>{" "}
               to check whether this device was activated before starting again.
             </p>
           )}
           {phrase && (
-            <section className="mt-6 rounded-md border border-amber-300 bg-amber-50 p-4" role="status">
-              <h2 className="font-semibold">Save your new recovery phrase</h2>
-              <p className="mt-2 text-sm">Your previous phrase no longer works. Keep these 24 words offline.</p>
-              <p className="mt-3 break-words font-mono">{phrase}</p>
-              <button type="button" className="mt-4 underline" onClick={forgetRecoveryPhrase}>
-                I saved this phrase
+            <section className="mt-8 border-y border-ink bg-sand p-6 text-ink sm:p-8" role="status">
+              <p className="eyebrow text-muted">Write it down now</p>
+              <h2 className="mt-2 font-display text-3xl font-light leading-tight tracking-tight">
+                Save your new recovery phrase
+              </h2>
+              <p className="mt-2 text-sm text-ink-soft">
+                Your previous phrase no longer works. Keep these 24 words offline.
+              </p>
+              <p className="mt-5 break-words border-y border-line bg-cream p-4 font-mono text-[15px] leading-loose [word-spacing:0.35em]">
+                {phrase}
+              </p>
+              <button
+                type="button"
+                className={cx(buttonClass("secondary", "sm"), "mt-5")}
+                onClick={forgetRecoveryPhrase}
+              >
+                <CheckIcon />I saved this phrase
               </button>
             </section>
           )}
           {fetcher.data?.state === "success" && restoring && (
-            <p role="status" className="mt-4">
+            <p role="status" className={cx(noticeClass("info"), "mt-6")}>
               Restoring your Files securely…
             </p>
           )}
           {restoring && fetcher.data?.state !== "success" && (
-            <p role="status" className="mt-4">
+            <p role="status" className={cx(noticeClass("info"), "mt-6")}>
               Restoring your Files securely…
             </p>
           )}
           {phrase && (
-            <Link to="/account/device-access" className="mt-4 inline-block underline">
+            <Link to="/account/device-access" className={cx(buttonClass("primary"), "mt-6")}>
               Open your Files
+              <ArrowRightIcon />
             </Link>
           )}
         </>
       )}
-    </main>
+    </FocusLayout>
   );
 }

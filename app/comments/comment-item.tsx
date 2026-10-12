@@ -1,5 +1,7 @@
 import { commentCharacters, MAX_COMMENT_CHARS } from "../shared/comments/content";
 import type { ReactNode } from "react";
+import { cx } from "~/ui/cx";
+import { buttonClass, fieldClass, textButtonClass } from "~/ui/styles";
 
 /**
  * One displayed Comment, shared by the Private inspector and the authenticated
@@ -57,9 +59,9 @@ export function CommentItem({
 }) {
   const edit = editing && editing.id === comment.id ? editing : null;
   return (
-    <li className="rounded border border-stone-200 p-3">
-      <p className="text-sm text-stone-600">
-        <span className="font-medium text-stone-900">
+    <li className="border-b border-line px-4 py-4">
+      <p className="font-mono text-[12px] text-muted">
+        <span className="font-sans text-[14px] font-medium text-ink">
           {pseudonym ?? (comment.authorId === viewerAccountId ? "You" : "Unknown author")}
         </span>
         {" · "}
@@ -76,7 +78,7 @@ export function CommentItem({
             onSubmitEdit();
           }}
         >
-          <label className="block text-sm">
+          <label className="block text-sm font-medium text-ink">
             Edit comment
             <textarea
               // biome-ignore lint/a11y/noAutofocus: focus follows the user's explicit Edit action on this comment.
@@ -85,32 +87,32 @@ export function CommentItem({
               disabled={busy}
               rows={4}
               onChange={(event) => onEditText(event.target.value)}
-              className="mt-1 w-full rounded border p-2"
+              className={cx(fieldClass("sm"), "mt-2 resize-none font-normal")}
             />
           </label>
-          <p className="text-sm">{commentCharacters(edit.text)} / 2,000</p>
-          <div className="mt-1 flex gap-2">
+          <p className="mt-1 font-mono text-xs tabular-nums text-muted">{commentCharacters(edit.text)} / 2,000</p>
+          <div className="mt-2 flex gap-2">
             <button
               type="submit"
               disabled={busy || commentCharacters(edit.text) > MAX_COMMENT_CHARS}
-              className="rounded bg-stone-900 px-3 py-1 text-white"
+              className={buttonClass("primary", "sm")}
             >
               Save comment
             </button>
-            <button type="button" disabled={busy} onClick={onCancelEdit}>
+            <button type="button" disabled={busy} onClick={onCancelEdit} className={buttonClass("ghost", "sm")}>
               Cancel
             </button>
           </div>
         </form>
       ) : (
-        <p className="mt-2 whitespace-pre-wrap break-words">
-          {comment.text ?? <span className="text-rose-700">This comment couldn’t be decrypted on this device.</span>}
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-[14.5px] leading-relaxed text-ink-soft">
+          {comment.text ?? <span className="text-danger">This comment couldn’t be decrypted on this device.</span>}
         </p>
       )}
       {(comment.canEdit || comment.canDelete || reportControl) && !edit && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+        <div className="-ml-2 mt-2 flex flex-wrap items-center gap-1 text-[13px]">
           {comment.canEdit && comment.text !== null && (
-            <button type="button" disabled={busy} onClick={() => onEdit(comment)}>
+            <button type="button" disabled={busy} onClick={() => onEdit(comment)} className={textButtonClass()}>
               Edit
             </button>
           )}
@@ -120,17 +122,22 @@ export function CommentItem({
                 <button
                   type="button"
                   disabled={busy}
-                  className="text-rose-700"
+                  className={textButtonClass("danger")}
                   onClick={() => onConfirmDelete(comment)}
                 >
                   Confirm delete
                 </button>
-                <button type="button" disabled={busy} onClick={onCancelDelete}>
+                <button type="button" disabled={busy} onClick={onCancelDelete} className={textButtonClass()}>
                   Cancel
                 </button>
               </>
             ) : (
-              <button type="button" disabled={busy} className="text-rose-700" onClick={() => onDelete(comment)}>
+              <button
+                type="button"
+                disabled={busy}
+                className={textButtonClass("danger")}
+                onClick={() => onDelete(comment)}
+              >
                 Delete
               </button>
             ))}
