@@ -1,9 +1,10 @@
+import { openImportedThreadCapability } from "~/shared/comments/comments-client";
 import { privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
 import { decodeTreeBytes } from "~/shared/tree/wire";
 import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "./grant-keys";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "./comment-keys";
-import { openOwnedCommentKey, ownedKey } from "./owned-capabilities";
+import { openOwnedCommentKey, ownedFileCapabilityKey, ownedKey } from "./owned-capabilities";
 import { uploadSaved } from "./saved-upload";
 
 type Context = GrantKeyContext | CommentKeyContext;
@@ -11,7 +12,11 @@ type SourceEnvelope = Omit<Parameters<typeof openGrantKeyEnvelope>[0], "recipien
 type Item = {
   context: Context;
   device: { deviceId: string; transportPublicKey: string };
-  source: { kind: "owned" } | { kind: "recovery"; envelope: string } | { kind: "grant"; envelope: SourceEnvelope };
+  source:
+    | { kind: "owned" }
+    | { kind: "recovery"; envelope: string }
+    | { kind: "import"; envelope: string }
+    | { kind: "grant"; envelope: SourceEnvelope };
 };
 type Next = { item: Item | null; pending: boolean; expirationPending?: boolean };
 
@@ -28,6 +33,16 @@ export async function resumeGrantProvisioning(options: { signal?: AbortSignal; m
     maxSteps = options.maxSteps ?? 20;
   if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 100) throw new Error("Invalid provisioning bound");
   let pending = false;
+  // A File carrying several imported threads is walked to once per pass.
+  const fileKeys = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+  const fileKey = (ownerId: string, fileId: string) => {
+    let value = fileKeys.get(fileId);
+    if (!value) {
+      value = ownedFileCapabilityKey(ownerId, fileId, signal);
+      fileKeys.set(fileId, value);
+    }
+    return value;
+  };
   for (let processed = 0; processed < maxSteps; processed++) {
     signal?.throwIfAborted();
     const next = await readNextProvisioning(signal);
@@ -76,6 +91,12 @@ export async function resumeGrantProvisioning(options: { signal?: AbortSignal; m
           : await openGrantKeyEnvelope({ ...envelope, recipient: device.transportKeyPair });
     } else if (source.kind === "recovery" && "purpose" in context && state.accountId === context.ownerId) {
       key = await openOwnedCommentKey(context, source.envelope, device, signal);
+    } else if (source.kind === "import" && "purpose" in context && state.accountId === context.ownerId) {
+      key = await openImportedThreadCapability(
+        source.envelope,
+        await fileKey(context.ownerId, context.fileId),
+        context,
+      );
     } else if (source.kind === "owned" && !("purpose" in context)) key = await ownedKey(context, signal);
     else throw new Error("Invalid provisioning source");
     const publicKey = await crypto.subtle.importKey(
