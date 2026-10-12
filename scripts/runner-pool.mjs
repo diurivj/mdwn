@@ -130,6 +130,8 @@ function prepareState(slot) {
 /** @param {import('./lib/runner-pool.mjs').Slot} slot */
 function prepareService(slot) {
   assertLocallyIdle(slot);
+  if (loadedServices().includes(serviceName(slot)))
+    throw new Error("Stop the idle service before changing its environment");
   const backup = snapshotOriginalService(pool, slot);
   const env = prepareState(slot);
   const plist = join(pool.home, "Library", "LaunchAgents", `${serviceName(slot)}.plist`);
@@ -140,6 +142,9 @@ function prepareService(slot) {
   );
   const templatePath = join(pool.root, "config", `${slot.id}-service.plist.template`);
   writeFileSync(templatePath, template);
+  // Unloading alone does not persist across logins. Disable before publishing
+  // an installed plist; explicit start re-enables only budgeted active slots.
+  run("launchctl", ["disable", `gui/${account.uid}/${serviceName(slot)}`]);
   if (!existsSync(join(slot.directory, ".service"))) {
     run("./svc.sh", ["install"], {
       encoding: "utf8",
@@ -147,8 +152,6 @@ function prepareService(slot) {
       env: { ...process.env, ...env, GITHUB_ACTIONS_RUNNER_SERVICE_TEMPLATE: templatePath },
     });
   } else {
-    if (loadedServices().includes(serviceName(slot)))
-      throw new Error("Stop the idle service before changing its environment");
     // Update only the inventoried service, preserving bundled svc.sh/runsvc.sh.
     const rendered = template
       .replaceAll("{{SvcName}}", serviceName(slot))
@@ -249,13 +252,14 @@ function start(slot) {
     "-f",
     `labels[]=${slot.id}`,
   ]);
+  run("launchctl", ["enable", `gui/${account.uid}/${serviceName(slot)}`]);
   if (loaded.includes(serviceName(slot))) return console.log(`${slot.id} is already loaded; routing labels restored`);
   run("./svc.sh", ["start"], { encoding: "utf8", cwd: slot.directory });
   console.log(`Started ${slot.id}`);
 }
 /** @param {import('./lib/runner-pool.mjs').Slot} slot */
 function stop(slot) {
-  if (!loadedServices().includes(serviceName(slot))) return console.log(`${slot.id} is already stopped`);
+  const loaded = loadedServices().includes(serviceName(slot));
   assertLocallyIdle(slot);
   const runner = remote(slot);
   // Removal is a routing aid, not a drain lock: old default-label jobs can
@@ -269,6 +273,8 @@ function stop(slot) {
     ]);
   }
   assertLocallyIdle(slot);
+  run("launchctl", ["disable", `gui/${account.uid}/${serviceName(slot)}`]);
+  if (!loaded) return console.log(`${slot.id} is already stopped; startup disabled`);
   run("./svc.sh", ["stop"], { encoding: "utf8", cwd: slot.directory });
   console.log(`Stopped ${slot.id}; start restores its pool label`);
 }

@@ -213,6 +213,7 @@ test("the official service entry point is preserved with slot environment and re
   const template =
     "<key>ProgramArguments</key><array><string>{{RunnerRoot}}/runsvc.sh</string></array><key>RunAtLoad</key><true/><key>EnvironmentVariables</key><dict><key>ACTIONS_RUNNER_SVC</key><string>1</string></dict><key>SessionCreate</key><true/>";
   const result = serviceTemplate(template, pool, pool.slots[0]);
+  expect(result).toContain("<key>Disabled</key>\n    <true/>");
   expect(result).toContain("{{RunnerRoot}}/runsvc.sh");
   expect(result).toContain("<key>ThrottleInterval</key>");
   expect(result).toContain("<integer>30</integer>");
@@ -229,4 +230,12 @@ test("an unrecognized security-session setting cannot silently break browser key
   expect(() =>
     serviceTemplate(`${template}<key>SessionCreate</key><true/><key>SessionCreate</key><true/>`, pool, pool.slots[0]),
   ).toThrow("security-session setting");
+});
+
+test("unrecognized official startup defaults fail closed", () => {
+  const pool = fixture();
+  const template = "<key>ACTIONS_RUNNER_SVC</key><string>1</string><key>SessionCreate</key><true/>";
+  for (const startup of ["", "<key>RunAtLoad</key><true/><key>Disabled</key><false/>"]) {
+    expect(() => serviceTemplate(`${template}${startup}`, pool, pool.slots[0])).toThrow("startup policy");
+  }
 });

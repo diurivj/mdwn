@@ -152,6 +152,8 @@ export function serviceTemplate(template, pool, slot) {
   const securitySession = /<key>SessionCreate<\/key>\s*<(?:true|false)\s*\/>/g;
   if ([...template.matchAll(securitySession)].length !== 1)
     throw new Error("Unrecognized official service security-session setting");
+  if ([...template.matchAll(/<key>RunAtLoad<\/key>/g)].length !== 1 || template.includes("<key>Disabled</key>"))
+    throw new Error("Unrecognized official service startup policy");
   return (
     template
       // A separate security session breaks WebKit's IndexedDB CryptoKey storage
@@ -160,7 +162,7 @@ export function serviceTemplate(template, pool, slot) {
       .replace("<key>ACTIONS_RUNNER_SVC</key>", `${entries}\n      <key>ACTIONS_RUNNER_SVC</key>`)
       .replace(
         "<key>RunAtLoad</key>",
-        "<key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>30</integer>\n    <key>RunAtLoad</key>",
+        "<key>Disabled</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>30</integer>\n    <key>RunAtLoad</key>",
       )
   );
 }

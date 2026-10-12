@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
-function controller(command: "start" | "stop", busy: boolean, dualDomains = false) {
+function controller(
+  command: "start" | "stop" | "service",
+  busy: boolean,
+  dualDomains = false,
+  loaded = true,
+  firstInstall = false,
+) {
   const root = mkdtempSync(join(tmpdir(), "mdwn-pool-recovery-"));
   const directory = join(root, "ci/runners/one");
   mkdirSync(directory, { recursive: true });
@@ -24,7 +30,13 @@ function controller(command: "start" | "stop", busy: boolean, dualDomains = fals
     join(directory, ".runner"),
     JSON.stringify({ agentId: 1, agentName: "one", gitHubUrl: "https://github.com/owner/repo", workFolder: "_work" }),
   );
-  writeFileSync(join(directory, ".service"), "installed");
+  if (!firstInstall) writeFileSync(join(directory, ".service"), "installed");
+  mkdirSync(join(directory, "bin"));
+  mkdirSync(join(root, "Library/LaunchAgents"), { recursive: true });
+  writeFileSync(
+    join(directory, "bin/actions.runner.plist.template"),
+    "<key>Label</key><string>{{SvcName}}</string><key>ACTIONS_RUNNER_SVC</key><string>1</string><key>RunAtLoad</key><true/><key>SessionCreate</key><true/>",
+  );
   try {
     const result = spawnSync(
       process.execPath,
@@ -43,6 +55,7 @@ function controller(command: "start" | "stop", busy: boolean, dualDomains = fals
           MDWN_POOL_TEST_ROOT: root,
           MDWN_POOL_TEST_BUSY: String(busy),
           MDWN_POOL_TEST_DUAL_DOMAINS: String(dualDomains),
+          MDWN_POOL_TEST_LOADED: String(loaded),
         },
       },
     );
@@ -67,6 +80,10 @@ test("starting an already-loaded service restores routing without loading it twi
     ),
   ).toBe(true);
   expect(result.commands.some((command) => command.executable === "./svc.sh")).toBe(false);
+  expect(result.commands).toContainEqual({
+    executable: "launchctl",
+    args: ["enable", "gui/501/actions.runner.owner-repo.one"],
+  });
 });
 
 test("a busy stop leaves the pool routing label intact", () => {
@@ -74,6 +91,59 @@ test("a busy stop leaves the pool routing label intact", () => {
   expect(result.status).not.toBe(0);
   expect(result.stderr).toContain("still has an executing job");
   expect(result.commands.some((command) => command.args.includes("DELETE"))).toBe(false);
+  expect(result.commands.some((command) => command.args.includes("disable"))).toBe(false);
+});
+
+test("an idle stop persistently disables the service before unloading it", () => {
+  const result = controller("stop", false);
+  expect(result.status).toBe(0);
+  const disable = result.commands.findIndex(
+    (command) => command.executable === "launchctl" && command.args[0] === "disable",
+  );
+  const unload = result.commands.findIndex(
+    (command) => command.executable === "./svc.sh" && command.args[0] === "stop",
+  );
+  expect(disable).toBeGreaterThanOrEqual(0);
+  expect(unload).toBeGreaterThan(disable);
+});
+
+test("stopping an already-unloaded service repairs persistent startup state", () => {
+  const result = controller("stop", false, false, false);
+  expect(result.status).toBe(0);
+  expect(result.commands).toContainEqual({
+    executable: "launchctl",
+    args: ["disable", "gui/501/actions.runner.owner-repo.one"],
+  });
+  expect(result.commands.some((command) => command.executable === "./svc.sh")).toBe(false);
+});
+
+test("preparing an unloaded service persistently disables it until an explicit start", () => {
+  const result = controller("service", false, false, false);
+  expect(result.status).toBe(0);
+  expect(result.commands).toContainEqual({
+    executable: "launchctl",
+    args: ["disable", "gui/501/actions.runner.owner-repo.one"],
+  });
+});
+
+test("first installation is persistently disabled before its plist becomes discoverable", () => {
+  const result = controller("service", false, false, false, true);
+  expect(result.status).toBe(0);
+  const disable = result.commands.findIndex(
+    (command) => command.executable === "launchctl" && command.args[0] === "disable",
+  );
+  const install = result.commands.findIndex(
+    (command) => command.executable === "./svc.sh" && command.args[0] === "install",
+  );
+  expect(disable).toBeGreaterThanOrEqual(0);
+  expect(install).toBeGreaterThan(disable);
+});
+
+test("service preparation cannot change startup state while the service remains loaded", () => {
+  const result = controller("service", false);
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("Stop the idle service");
+  expect(result.commands.some((command) => command.args.includes("disable"))).toBe(false);
 });
 
 test("equal service labels in user and GUI domains consume separate reservations", () => {

@@ -45,7 +45,10 @@ original registration's service after an idle check. Gracefully stop its
 terminal listener with `stop-terminal ... mdwn-01` before starting that service. All service changes require
 a quiet maintenance window. `start` serializes management commands and counts
 all local listeners plus loaded service reservations, including foreign slots.
-It restores the common label removed by `stop`.
+It restores the common label removed by `stop` and persistently enables only
+the selected, budgeted service. Installed services default to disabled until
+an explicit controller start; use the controller rather than calling `svc.sh`
+directly so a login cannot silently activate an inactive slot.
 The controller also counts loaded runner services in the system domain and
 every local login account's launchd domains, failing closed if it cannot inspect
 one. Foreign reservations are conservative and may consume a second budget
@@ -53,7 +56,10 @@ unit alongside a live foreign listener until their paths are inventoried.
 
 The generated templates in `ci/config/<slot>-service.plist.template` extend
 the installed official template, retain `runsvc.sh`, add explicit nonsecret
-environment paths, and throttle launchd restarts to 30 seconds. `.path` uses
+environment paths, default to `Disabled=true`, and throttle launchd restarts to
+30 seconds. The controller records persistent enable/disable state through
+`launchctl`; the supplied `svc.sh stop` only unloads and is insufficient to keep
+an inactive service stopped across logins. `.path` uses
 an explicit host PATH; HOME remains the account's actual home. They set
 `SessionCreate` to `false`: the bundled template's separate security session
 reproducibly caused WebKit `DataCloneError` when storing nonextractable
@@ -72,7 +78,9 @@ download-only Playwright preload remain essential.
 
 Use a quiet window and prevent new assignments before service changes. `stop`
 removes the common label, checks GitHub busy state and local Runner.Worker
-processes, and stops only that service. Label removal is not a drain lock:
+processes, persistently disables startup, and stops only that service. Even an
+already-unloaded service is disabled by `stop`; `service` disables before
+publishing its plist. Label removal is not a drain lock:
 older workflow revisions using default labels can still match. If a job is
 busy, let it finish and retry. Never stop all workerd/browser processes on the host.
 
@@ -100,6 +108,9 @@ They do not depend on an open terminal, but require this account's GUI login
 after restart. FileVault is enabled and requires a preboot unlock. An actual
 reboot/unlock/login/browser test is a separate outstanding check until recorded
 in the host evidence. Existing login and encryption policy remain unchanged.
+Before that test, inspect `launchctl print-disabled gui/501`: only configured
+active services should be enabled. Persistent state and template checks do not
+substitute for the actual reboot test.
 AC idle sleep was already zero; power settings require no change. The display
 may sleep and the screen may lock.
 
