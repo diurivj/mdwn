@@ -1,4 +1,5 @@
 import { PUBLIC_PARTICIPATION_SUSPENDED } from "~/shared/security/public-participation";
+import { DEVICE_STATE_HEADER, type DeviceState, parseDeviceState } from "./device-state";
 import { clearPrivateTabMemory, registerPrivateTabMemory } from "./private-tab-memory";
 import { signDeviceProof, type DeviceProof } from "./proof";
 import { getDevice, type StoredDevice, updateRegistryEpoch } from "./store";
@@ -34,52 +35,28 @@ export function isPublicParticipationSuspended(error: unknown): error is Private
   return error instanceof PrivatePolicyError && error.policy === PUBLIC_PARTICIPATION_SUSPENDED;
 }
 
-/** Recognize only the fixed policy-denial body; every other 403 stays a
- * device-proof denial. The response body is cloned, never consumed. */
-async function policyDenial(response: Response): Promise<PrivatePolicyError | null> {
+/** A 403's JSON body, read from a clone so the response stays unconsumed. */
+async function denialBody(response: Response): Promise<{ error?: unknown; suspendedUntil?: unknown }> {
   try {
-    const body = (await response.clone().json()) as { error?: unknown; suspendedUntil?: unknown };
-    if (body.error !== PUBLIC_PARTICIPATION_SUSPENDED) return null;
-    const suspendedUntil =
-      typeof body.suspendedUntil === "number" && Number.isSafeInteger(body.suspendedUntil) && body.suspendedUntil > 0
-        ? body.suspendedUntil
-        : null;
-    return new PrivatePolicyError(PUBLIC_PARTICIPATION_SUSPENDED, { suspendedUntil });
+    const body: unknown = await response.clone().json();
+    return body && typeof body === "object" ? (body as { error?: unknown; suspendedUntil?: unknown }) : {};
   } catch {
-    return null;
+    return {};
   }
 }
 
-type RegistryState = {
-  accountId: string;
-  deviceId: string | null;
-  registryEpoch: number;
-  sessionBinding: string;
-};
-
-/** Validate a `/api/device/state` answer or an `X-Mdwn-Device-State` header alike. */
-function registryState(value: unknown): RegistryState | null {
-  const state = value as Partial<RegistryState> | null;
-  if (
-    !state ||
-    typeof state !== "object" ||
-    typeof state.accountId !== "string" ||
-    !state.accountId ||
-    !Number.isSafeInteger(state.registryEpoch) ||
-    state.registryEpoch! < 1 ||
-    typeof state.sessionBinding !== "string" ||
-    !state.sessionBinding ||
-    (state.deviceId !== null && typeof state.deviceId !== "string")
-  ) {
-    return null;
-  }
-  return {
-    accountId: state.accountId,
-    deviceId: state.deviceId,
-    registryEpoch: state.registryEpoch!,
-    sessionBinding: state.sessionBinding,
-  };
+/** Recognize only the fixed policy-denial body; every other 403 stays a
+ * device-proof denial. */
+function policyDenial(body: { error?: unknown; suspendedUntil?: unknown }): PrivatePolicyError | null {
+  if (body.error !== PUBLIC_PARTICIPATION_SUSPENDED) return null;
+  const suspendedUntil =
+    typeof body.suspendedUntil === "number" && Number.isSafeInteger(body.suspendedUntil) && body.suspendedUntil > 0
+      ? body.suspendedUntil
+      : null;
+  return new PrivatePolicyError(PUBLIC_PARTICIPATION_SUSPENDED, { suspendedUntil });
 }
+
+type RegistryState = DeviceState;
 
 function sameState(a: RegistryState, b: RegistryState): boolean {
   return a.sessionBinding === b.sessionBinding && a.registryEpoch === b.registryEpoch && a.deviceId === b.deviceId;
@@ -125,8 +102,8 @@ export function deviceStateScope(): { accountId: string; deviceId: string } | nu
   return settled?.deviceId ? { accountId: settled.accountId, deviceId: settled.deviceId } : null;
 }
 
-function adopt(state: RegistryState, since: number) {
-  if (generation !== since || !state.deviceId) return;
+function adopt(state: RegistryState, generationAtStart: number) {
+  if (generation !== generationAtStart || !state.deviceId) return;
   // A different Account, Session, device or registry epoch makes everything
   // this tab remembers outdated; the new state itself is still the current one.
   if (settled && (settled.accountId !== state.accountId || !sameState(settled, state))) clearPrivateTabMemory();
@@ -164,7 +141,7 @@ function readRegistryState(signal?: AbortSignal): Promise<RegistryRead> {
 
 /** A fresh, validated state read, then kept as reusable state. */
 async function freshState(signal?: AbortSignal): Promise<RegistryState> {
-  const since = generation;
+  const generationAtStart = generation;
   let read: RegistryRead;
   try {
     read = await readRegistryState(signal);
@@ -175,19 +152,19 @@ async function freshState(signal?: AbortSignal): Promise<RegistryState> {
     discardDeviceState();
     throw new PrivateAccessError("signed-out");
   }
-  const state = read.status >= 200 && read.status <= 299 ? registryState(read.state) : null;
+  const state = read.status >= 200 && read.status <= 299 ? parseDeviceState(read.state) : null;
   if (!state) throw new PrivateAccessError("unavailable");
-  if (!signal?.aborted) adopt(state, since);
+  if (!signal?.aborted) adopt(state, generationAtStart);
   return state;
 }
 
 /** The validated `X-Mdwn-Device-State` of a response for the same Account, or null. */
 function responseState(response: Response, accountId: string): RegistryState | null {
-  const header = response.headers.get("X-Mdwn-Device-State");
+  const header = response.headers.get(DEVICE_STATE_HEADER);
   if (header === null) return null;
   let state: RegistryState | null;
   try {
-    state = registryState(JSON.parse(header));
+    state = parseDeviceState(JSON.parse(header));
   } catch {
     return null;
   }
@@ -299,7 +276,7 @@ export async function privateExchange(path: string, options: PrivateOptions): Pr
   }
   if (options.signal?.aborted) throw new PrivateAccessError("unavailable");
 
-  const since = generation;
+  const generationAtStart = generation;
   const reused = reusableState();
   let signing = await signingDevice(reused ?? (await freshState(options.signal)), reused !== null, options.signal);
   let reusedSigning = reused !== null && signing.state === reused;
@@ -310,23 +287,49 @@ export async function privateExchange(path: string, options: PrivateOptions): Pr
       throw new PrivateAccessError("signed-out");
     }
     const current = responseState(response, signing.state.accountId);
-    if (current) adopt(current, since);
+    if (current) adopt(current, generationAtStart);
     if (response.status !== 403) return { response, accountId: signing.state.accountId, device: signing.device };
-    const policy = await policyDenial(response);
+    const body = await denialBody(response);
+    const policy = policyDenial(body);
     if (policy) throw policy;
-    // Retry a proof denial once, and only when the Session's current state
-    // differs from the state this proof was signed with. The Worker verifies
-    // every proof against the current Session binding, device and registry
-    // epoch, and each mutation's commit predicate rechecks them, so a proof
-    // signed with other state was refused before anything committed. A
-    // same-state denial may follow a commit (a spent or expired Publication
-    // proof, for example), so it is final, as is a second denial.
-    const next = retried ? null : (current ?? (reusedSigning ? await freshState(options.signal) : null));
-    if (!next || next.accountId !== signing.state.accountId || sameState(next, signing.state)) {
-      if (!current && !(next && sameState(next, signing.state))) discardDeviceState();
+    const { next, confirmed } = retried
+      ? { next: null, confirmed: current !== null }
+      : await retryState(body, signing.state, current, reusedSigning, options.signal);
+    if (!next) {
+      // Keep reusable state only when a current state confirmed it.
+      if (!confirmed) discardDeviceState();
       throw new PrivateAccessError("denied");
     }
     signing = await signingDevice(next, false, options.signal);
     reusedSigning = false;
   }
+}
+
+/**
+ * The state to retry a proof denial with once, or null when it is final.
+ *
+ * Only a verification-time denial, `device_proof_required`, is retried, and
+ * only when the Session's current state differs from the state the proof was
+ * signed with (Session binding, registry epoch or device). The Worker returns
+ * it when the proof does not verify against that current state, before any
+ * commit, so one retry signed with demonstrably different state cannot apply
+ * a change twice. A denial after a possible commit carries
+ * `device_proof_spent` and is never retried, nor is any other body.
+ *
+ * The current state is the denial's own header or, when the request was
+ * signed with reused state and the denial carries none, a fresh read (whose
+ * `401` means the Session is gone: signed out). `confirmed` says whether a
+ * current state for the same Account was seen, so reused state may be kept.
+ */
+async function retryState(
+  body: { error?: unknown },
+  signing: RegistryState,
+  current: RegistryState | null,
+  reusedSigning: boolean,
+  signal?: AbortSignal,
+): Promise<{ next: RegistryState | null; confirmed: boolean }> {
+  if (body.error !== "device_proof_required") return { next: null, confirmed: current !== null };
+  const state = current ?? (reusedSigning ? await freshState(signal) : null);
+  if (!state || state.accountId !== signing.accountId) return { next: null, confirmed: false };
+  return sameState(state, signing) ? { next: null, confirmed: true } : { next: state, confirmed: true };
 }

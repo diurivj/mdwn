@@ -2,6 +2,7 @@ import { createRequestHandler } from "@react-router/cloudflare";
 import { RouterContextProvider } from "react-router";
 import { envContext } from "~/context/env";
 import { startDeviceStateHeader } from "~/device/device-state.server";
+import { DEVICE_STATE_HEADER } from "~/shared/device/device-state";
 import { purgeExpiredSignupProofs } from "~/device/proof.server";
 import { purgeExpiredAbuseRecords } from "~/shared/security/abuse-control.server";
 import { purgeExpiredPublicCommentReports } from "~/shared/security/public-participation.server";
@@ -79,7 +80,7 @@ export default {
     // let the edge transform (inject analytics into) a document.
     headers.set("Cache-Control", responseCacheControl(headers.get("Content-Type"), headers.get("Cache-Control")));
     const state = deviceState && (await deviceState);
-    if (state) headers.set("X-Mdwn-Device-State", state);
+    if (state) headers.set(DEVICE_STATE_HEADER, state);
     for (const [name, value] of Object.entries(buildSecurityHeaders({ nonce, dev: import.meta.env.DEV }))) {
       if (!headers.has(name)) headers.set(name, value);
     }

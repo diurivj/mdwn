@@ -40,6 +40,9 @@ const notFound = () => Response.json({ error: "not_found" }, { status: 404, head
 const badRequest = () => Response.json({ error: "invalid_tree_request" }, { status: 400, headers });
 const changed = () => Response.json({ error: "namespace_changed" }, { status: 409, headers });
 const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers });
+/** A spent or expired proof after a failed commit: an earlier use of this proof
+ * may have committed, so the browser never retries it (ticket 57). */
+const spent = () => Response.json({ error: "device_proof_spent" }, { status: 403, headers });
 const rotationRequired = () => Response.json({ error: "key_rotation_required" }, { status: 409, headers });
 
 type EntryRow = {
@@ -1274,7 +1277,7 @@ async function saveConvertedFile(
       (await createDb(env.DB).get(sql`SELECT 1 FROM device_proof_uses
       WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`))
     )
-      return denied();
+      return spent();
     const latest = await currentFile(env, auth, fileId);
     if (!latest || !latest.can_edit) return notFound();
     if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
@@ -1405,7 +1408,7 @@ async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value:
       (await createDb(env.DB).get(sql`
       SELECT 1 FROM device_proof_uses WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`))
     )
-      return denied();
+      return spent();
     const latest = await currentFile(env, auth, fileId);
     if (!latest) return structuralFailure(env, auth, expected, denied());
     if (latest.parent_node_id !== expectedParentId) return changed();

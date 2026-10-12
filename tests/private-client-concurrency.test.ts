@@ -275,6 +275,7 @@ describe("privateRequest registry-read concurrency", () => {
     await verifiedProof(init, device, { ...signedInState, method: "GET", url: `${ORIGIN}/api/private/files` });
   });
 
+  // A private-response 401 is defensive (private routes answer a lost Session with a 403); see the reuse tests.
   it.each([
     { status: 401, state: "signed-out" as const },
     { status: 403, state: "denied" as const },
@@ -545,6 +546,9 @@ describe("privateExchange proof-bound identity", () => {
   });
 });
 
+/** The verification-time proof denial, the only 403 body ever retried. */
+const PROOF_REQUIRED = JSON.stringify({ error: "device_proof_required" });
+
 /** A private response carrying the Worker's next device state. */
 function withState(state: unknown, init: ResponseInit & { body?: string } = {}) {
   const { body = "ok", ...rest } = init;
@@ -697,8 +701,8 @@ describe("privateRequest device-state reuse (ticket 57)", () => {
     const again = network.queue(path);
     const second = { ...registryState, registryEpoch: 2 };
     const third = { ...registryState, registryEpoch: 3 };
-    denied.response.resolve(withState(second, { status: 403 }));
-    again.response.resolve(withState(third, { status: 403 }));
+    denied.response.resolve(withState(second, { status: 403, body: PROOF_REQUIRED }));
+    again.response.resolve(withState(third, { status: 403, body: PROOF_REQUIRED }));
     await expect(privateRequest(path, { method: "GET" })).rejects.toMatchObject(new PrivateAccessError("denied"));
     expect(network.fetchImpl).toHaveBeenCalledTimes(4);
   });
@@ -718,7 +722,10 @@ describe("privateRequest device-state reuse (ticket 57)", () => {
     expect(network.fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  it("discards reusable state on a 401", async () => {
+  // Defensive: no private route answers 401 today (a lost Session is a 403
+  // proof denial, then a 401 from the state read, tested below), but a 401
+  // from any private response still signs out and discards reusable state.
+  it("discards reusable state on a private-response 401", async () => {
     await settleWithRead("/api/private/first", registryState);
     const signedOut = network.queue("/api/private/second");
     signedOut.response.resolve(new Response(null, { status: 401 }));
@@ -727,6 +734,48 @@ describe("privateRequest device-state reuse (ticket 57)", () => {
     );
     await settleWithRead("/api/private/third", { ...registryState, sessionBinding: "new-session" });
     expect(network.fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it("signs out after another tab's sign-out: a headerless proof denial, then a 401 state read", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/files";
+    const denied = network.queue(path);
+    const read = network.queue(STATE_PATH);
+    // A private route without a live Session answers a plain proof denial, with no state header.
+    denied.response.resolve(new Response(PROOF_REQUIRED, { status: 403 }));
+    read.response.resolve(Response.json({ error: "authentication_failed" }, { status: 401 }));
+    await expect(privateRequest(path, { method: "GET" })).rejects.toMatchObject(new PrivateAccessError("signed-out"));
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    // Reusable state was discarded: the next operation reads state first.
+    const init = await settleWithRead("/api/private/after", { ...registryState, sessionBinding: "signed-in-again" });
+    expect(network.fetchImpl).toHaveBeenCalledTimes(6);
+    await verifiedProof(init, device, {
+      ...registryState,
+      sessionBinding: "signed-in-again",
+      method: "GET",
+      url: `${ORIGIN}/api/private/after`,
+    });
+  });
+
+  it.each([
+    { error: "device_proof_required", retried: true },
+    { error: "device_proof_spent", retried: false },
+    { error: "access denied", retried: false },
+  ])("retries a 403 with a differing state header only for $error", async ({ error, retried }) => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/publications/files/f/unpublish";
+    const current = { ...registryState, registryEpoch: 2, sessionBinding: "current-session" };
+    const denied = network.queue(path);
+    const retry = network.queue(path);
+    denied.response.resolve(withState(current, { status: 403, body: JSON.stringify({ error }) }));
+    retry.response.resolve(withState(current, { body: "retried" }));
+    const result = privateRequest(path, { method: "POST", body: "{}" });
+    if (retried) expect(await (await result).text()).toBe("retried");
+    else await expect(result).rejects.toMatchObject(new PrivateAccessError("denied"));
+    expect(network.fetchImpl).toHaveBeenCalledTimes(retried ? 4 : 3);
+    // The header is still the Session's current state, adopted either way.
+    const { init } = await settleReused("/api/private/after");
+    await verifiedProof(init, device, { ...current, method: "GET", url: `${ORIGIN}/api/private/after` });
   });
 
   it("discards reusable state on demand, for sign-in, sign-out and recovery", async () => {

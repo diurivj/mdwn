@@ -1,5 +1,6 @@
 import { getActiveSession, sessionCookieId } from "~/auth/session.server";
 import { createDb, sql } from "~/shared/db/client.server";
+import { encodeDeviceState } from "~/shared/device/device-state";
 import { sessionBindingDigest } from "~/shared/device/proof";
 
 type Registry = {
@@ -9,7 +10,7 @@ type Registry = {
 };
 
 /** The `/api/device/state` answer for a live normal Session. */
-export type DeviceState = {
+export type DeviceStateAnswer = {
   accountId: string;
   sessionBinding: string;
   registryEpoch: number | null;
@@ -26,7 +27,7 @@ export async function readDeviceState(
   request: Request,
   env: Env,
   candidateId: string | null = null,
-): Promise<DeviceState | null> {
+): Promise<DeviceStateAnswer | null> {
   const sessionId = await sessionCookieId(request, env);
   const [session, registry] = await Promise.all([
     getActiveSession(request, env),
@@ -66,12 +67,7 @@ export function startDeviceStateHeader(request: Request, env: Env): Promise<stri
   return readDeviceState(request, env).then(
     (state) =>
       state && state.registryEpoch !== null
-        ? JSON.stringify({
-            accountId: state.accountId,
-            deviceId: state.deviceId,
-            registryEpoch: state.registryEpoch,
-            sessionBinding: state.sessionBinding,
-          })
+        ? encodeDeviceState({ ...state, registryEpoch: state.registryEpoch })
         : null,
     () => null,
   );
