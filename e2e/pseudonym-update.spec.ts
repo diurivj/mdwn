@@ -9,7 +9,8 @@ test("changes the Public pseudonym everywhere and states the cooldown", async ({
   await page.getByRole("button", { name: "Comment", exact: true }).click();
   await expect(panel.getByText("Member Test")).toBeVisible();
 
-  await page.goto("/account/pseudonym");
+  await page.getByRole("button", { name: "Account menu", exact: true }).click();
+  await page.locator("#account-menu").getByRole("link", { name: "Public pseudonym", exact: true }).click();
   await expect(page.getByLabel("Current Public pseudonym")).toHaveText("Member Test");
   await expect(page.getByText("Cached copies and screenshots cannot be changed.")).toBeVisible();
   // The new pseudonym is the person's own text; nothing is submitted until there is some.
@@ -35,7 +36,11 @@ test("changes the Public pseudonym everywhere and states the cooldown", async ({
   await expect(page.getByRole("button", { name: "Change pseudonym" })).toBeDisabled();
 
   // The Comment now displays the new pseudonym in the workspace.
-  await page.goto(`/f/${workspace.fileId}`);
+  await page.getByRole("link", { name: "Open library", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Files", exact: true })
+    .getByRole("link", { name: "Draft.md", exact: true })
+    .click();
   await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Comments", exact: true }).click();
   await expect(panel.getByText("Night Owl", { exact: true })).toBeVisible();

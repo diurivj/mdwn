@@ -1,4 +1,5 @@
 import { test, expect, objectId } from "./workspace-fixture";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 test.use({ initialSource: "# Rotation source\n\nDownloaded copies cannot be recalled." });
 
@@ -219,12 +220,17 @@ test("an interrupted root rotation resumes from the progress UI without putting 
     .run();
   await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
   expect(await page.evaluate(() => window.workspaceFixture.resumeOwnedProvisioning())).toBe(true);
-  await page.goto(`/f/${workspace.fileId}`);
+  await page.getByRole("link", { name: "Open library", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Files", exact: true })
+    .getByRole("link", { name: "Draft.md", exact: true })
+    .click();
   await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue(
     "# Rotation source\n\nDownloaded copies cannot be recalled.",
   );
   await page.getByRole("textbox", { name: "Markdown source", exact: true }).fill("# Safe future write");
   await expect(page.getByRole("status", { name: "File save status" })).toHaveText("Saved");
+  await waitForSharedProvisioning(page);
   await page.reload();
   await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue("# Safe future write");
   await page
@@ -248,6 +254,7 @@ test("an interrupted root rotation resumes from the progress UI without putting 
   await move.getByRole("button", { name: "Open destination After rotation", exact: true }).click();
   await move.getByRole("button", { name: "Move", exact: true }).click();
   await expect(page.getByRole("heading", { name: "moved.md", exact: true })).toBeVisible();
+  await waitForSharedProvisioning(page);
   await page.reload();
   await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue("# Safe future write");
 });

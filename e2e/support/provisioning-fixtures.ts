@@ -61,6 +61,7 @@ export async function enroll(
   await expect(candidate.page.getByRole("heading", { name: "Scan this QR code" })).toBeVisible();
   const link = await candidate.page.getByRole("textbox", { name: "Pairing link" }).inputValue();
   await candidate.page.goto(origin);
+  await waitForSharedProvisioning(original.page);
   await original.page.goto(`${origin}/enroll-device/approve`);
   await original.page.getByRole("textbox", { name: "Pairing link" }).fill(link);
   // The synced virtual credential's original counter catches up with the
@@ -252,8 +253,7 @@ export async function recover(
   });
   // Restore the original Session before Vault recovery, so its later denial
   // proves the cryptographic cutover rather than just code-based recovery.
-  await original.page.goto(`${origin}/sign-in`);
-  await original.page.getByRole("button", { name: "Sign in with a passkey" }).click();
+  await signInAccount(original);
   await expect(original.page).toHaveURL(/\/files$/);
   const ownedObjects: string[] = [];
   await replacement.page.route("**/api/private/recovery-provision/next", async (route) => {

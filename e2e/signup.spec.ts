@@ -5,6 +5,7 @@ import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
 import { seedAccount, signInAccount } from "./support/seeded-account";
 import { expectSignupShape } from "./support/signup-shape";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 type Env = { DB: D1Database };
 type VerifyPayload = {
@@ -219,6 +220,7 @@ test("signs up atomically with a bound device and gates recovery material before
     expect((await privateRead(page, { ...proof, deviceId: crypto.randomUUID() })).status).toBe(403);
     expect((await privateRead(page, proof)).status).toBe(200); // read proofs are not consumed
     expect(await count(env, "device_proof_uses", accountId)).toBe(0);
+    await waitForSharedProvisioning(page);
     await page.reload();
     await expect(page.getByRole("heading", { name: "Save your recovery phrase" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();

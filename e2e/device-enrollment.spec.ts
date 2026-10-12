@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { test, expect } from "./fixtures";
 import { seedAccount, signInAccount } from "./support/seeded-account";
 import { primeSyncedPasskey } from "./support/passkey";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 test.setTimeout(240_000);
 
@@ -168,6 +169,7 @@ test("a synced Passkey needs QR approval before the second browser can open File
     await candidate.page.unroute("**/api/private/recovery-provision/next");
     await candidate.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
     await expect(candidate.page.getByRole("heading", { name: "Private access ready" })).toBeVisible();
+    await waitForSharedProvisioning(candidate.page);
     expect(sent.every((request) => !request.includes(rawSecret) && !request.includes("Second device"))).toBe(true);
     const devices = await env.DB.prepare("SELECT state FROM encryption_devices ORDER BY created_at").all<{
       state: string;

@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 test.setTimeout(180_000);
 
@@ -46,6 +47,9 @@ test("creates and opens signed private Directories and Files without leaking nam
         }),
     ]);
 
+    await expect(page).toHaveURL(/\/files$/);
+    await waitForSharedProvisioning(page);
+    // Preserve the root deep-link assertion without cancelling its previous document's lazy import.
     await page.goto(new URL(`/d/${signup.transcript.rootDirectoryId}`, baseURL!).href);
     await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "New folder" }).click();
@@ -69,8 +73,10 @@ test("creates and opens signed private Directories and Files without leaking nam
 
     const document = await page.request.get(`/f/${fileId}`);
     expect(await document.text()).not.toContain("Draft.md");
+    await waitForSharedProvisioning(page);
     await page.reload();
     await expect(page.getByRole("heading", { name: "Draft.md" })).toBeVisible();
+    await waitForSharedProvisioning(page);
 
     // The same-revision head still verifies its old ciphertext; substituting
     // an entry in D1 must fail closed before its name reaches the browser.

@@ -131,6 +131,7 @@ test("mobile menu supports keyboard dismissal, section links and account entry",
 
 test("Laboratorio landing and navigation fit mobile, tablet and desktop widths", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Write in Markdown. Keep the key.");
   await page.evaluate(() => document.fonts.ready);
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });

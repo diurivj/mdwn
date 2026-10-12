@@ -92,6 +92,7 @@ test("the Owner publishes a File that an anonymous reader decrypts locally, live
     await expect(article.getByText("Updated for everyone")).toBeVisible();
     const unknown = await reader.goto(`${url.origin}/p/${"A".repeat(43)}#${fragment}`);
     expect(unknown?.status()).toBe(404);
+    await expect(reader.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
 
     expect(
       readerRequests.some((request) => new URL(request.url()).pathname.startsWith("/api/public/publications/")),
@@ -377,6 +378,7 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
     const reader = await context.newPage();
     const retired = await reader.goto(first);
     expect(retired?.status()).toBe(404);
+    await expect(reader.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
     await reader.goto(rotated);
     const article = reader.getByRole("article", { name: "Published File" });
     await expect(article.getByRole("heading", { name: "Diet plan", level: 1 })).toBeVisible();
@@ -447,7 +449,10 @@ test("unpublishes with a counted confirmation, shows bounded progress, and publi
   ).toEqual({ n: 0 });
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   try {
-    expect(await (await context.newPage().then((reader) => reader.goto(link)))?.status()).toBe(404);
+    const reader = await context.newPage();
+    const removed = await reader.goto(link);
+    expect(removed?.status()).toBe(404);
+    await expect(reader.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
   } finally {
     await context.close();
   }

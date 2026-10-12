@@ -43,6 +43,7 @@ workspaceTest(
     expect(workspace.fileId).toBeTruthy();
     const other = await context.newPage();
     await other.goto("/support");
+    await expect(other.getByRole("heading", { name: "Support mdwn", exact: true })).toBeVisible();
     await page.bringToFront();
     let captured!: () => void;
     let release!: () => void;
