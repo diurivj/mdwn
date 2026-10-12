@@ -1,15 +1,6 @@
-import { PrivateAccessError } from "~/shared/device/private-client";
 import { isV7 } from "~/shared/tree/wire";
-import {
-  acceptShare,
-  cancelShare,
-  changeGrant,
-  declineShare,
-  leaveGrant,
-  revokeGrant,
-  SharingChangedError,
-  SharingNotFoundError,
-} from "./relationships-client";
+import { acceptShare, cancelShare, changeGrant, declineShare, leaveGrant, revokeGrant } from "./relationships-client";
+import { type SharingFailure, sharingFailure } from "./sharing-errors";
 import { sharedWithMe } from "./shared-with-me-cache";
 
 /**
@@ -31,7 +22,7 @@ export type SharingIntent = (typeof SHARING_INTENTS)[number];
 
 export type SharingOutcome = {
   intent: SharingIntent | null;
-  state: "done" | "changed" | "not-found" | "invalid" | "access" | "failed";
+  state: "done" | "invalid" | SharingFailure;
 };
 
 /**
@@ -92,10 +83,7 @@ export async function runSharingIntent(form: FormData, signal: AbortSignal): Pro
     return { intent, state: "done" };
   } catch (error) {
     if (signal.aborted) throw error;
-    if (error instanceof SharingChangedError) return { intent, state: "changed" };
-    if (error instanceof SharingNotFoundError) return { intent, state: "not-found" };
-    if (error instanceof PrivateAccessError) return { intent, state: "access" };
-    return { intent, state: "failed" };
+    return { intent, state: sharingFailure(error) };
   } finally {
     // Whatever happened, the library sidebar's remembered summary may be stale.
     sharedWithMe.invalidate();

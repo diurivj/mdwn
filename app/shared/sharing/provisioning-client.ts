@@ -1,9 +1,10 @@
-import { PrivateAccessError, privateRequest } from "~/shared/device/private-client";
+import { privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
 import { decodeTreeBytes } from "~/shared/tree/wire";
 import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "./grant-keys";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "./comment-keys";
 import { openOwnedCommentKey, ownedKey } from "./owned-capabilities";
+import { uploadSaved } from "./saved-upload";
 
 type Context = GrantKeyContext | CommentKeyContext;
 type SourceEnvelope = Omit<Parameters<typeof openGrantKeyEnvelope>[0], "recipient">;
@@ -101,15 +102,7 @@ export async function resumeGrantProvisioning(options: { signal?: AbortSignal; m
       envelopes: [envelope],
     });
     const path = `/api/private/grants/${context.relationshipId}/${"purpose" in context ? `comment-keys/${context.objectId}` : "keys"}`;
-    let response: Response;
-    try {
-      response = await privateRequest(path, { method: "PUT", body, signal });
-    } catch (error) {
-      if (signal?.aborted || !(error instanceof PrivateAccessError && error.state === "unavailable")) throw error;
-      // An uncertain response retries saved ciphertext bytes with a fresh proof,
-      // never re-seals or restores an HPKE context/nonce counter.
-      response = await privateRequest(path, { method: "PUT", body, signal });
-    }
+    const response = await uploadSaved(path, body, signal);
     if (!response.ok) throw new Error("Shared access changed. Refresh and resume.");
   }
   return { complete: false, pending, processed: maxSteps };

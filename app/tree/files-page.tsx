@@ -57,6 +57,7 @@ import { FileEditor } from "./file-editor";
 import {
   type Crumb,
   expandedPreferenceKey,
+  kindName,
   type FilesPageData,
   type FilesSnapshot,
   nodePath,
@@ -1039,10 +1040,14 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
               shareParentId && snapshot.listings[shareParentId] && snapshot.keys[shareParentId]
                 ? { listing: snapshot.listings[shareParentId], key: snapshot.keys[shareParentId] }
                 : null,
-            lineage: snapshot.crumbs.map((crumb) => crumb.id),
+            ancestors: snapshot.crumbs.slice(0, -1),
           }}
           onClose={() => setShareOpen(false)}
-          onConverted={() => void revalidator.revalidate()}
+          onConverted={() => {
+            // Only while this File is still the page: a stale pre-conversion
+            // snapshot must not outlive the dialog, but another route is not ours.
+            if (route.current === `${kind}/${nodeId}`) void revalidator.revalidate();
+          }}
         />
       )}
       {dialog && (
@@ -1059,11 +1064,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             }}
             className="modal-panel max-w-md"
           >
-            <p className="eyebrow text-accent">{dialog.kind === "file" ? "File" : "Folder"}</p>
+            <p className="eyebrow text-accent">{kindName(dialog.kind, "start")}</p>
             <h2 className="mt-2 font-display text-3xl font-light leading-tight tracking-tight">
-              {dialog.operation === "create"
-                ? `New ${dialog.kind === "file" ? "File" : "folder"}`
-                : dialogLabels[dialog.operation].heading}
+              {dialog.operation === "create" ? `New ${kindName(dialog.kind)}` : dialogLabels[dialog.operation].heading}
             </h2>
             {!["delete", "reorder"].includes(dialog.operation) && (
               <label className={cx(labelClass, "mt-5")}>
@@ -1303,7 +1306,7 @@ function PendingNode({ kind, name }: { kind: TreeKind; name: string | null }) {
   return (
     <div className="animate-fade">
       <p role="status" className="sr-only">
-        Opening {name ?? (kind === "file" ? "File" : "folder")}…
+        Opening {name ?? kindName(kind)}…
       </p>
       <div aria-hidden="true">
         <div className="mt-5">

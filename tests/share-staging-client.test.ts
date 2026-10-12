@@ -3,15 +3,17 @@ import { describe, expect, it } from "vitest";
 import { PrivateAccessError } from "../app/shared/device/private-client";
 import { SharingChangedError } from "../app/shared/sharing/relationships-client";
 import {
+  AUTOMATIC_PREPARATIONS,
   MAX_ENVELOPES_PER_PACKET,
   MAX_PASS_REQUESTS,
   packets,
   restartOnce,
   SharePreparationError,
   sameSnapshot,
-  uploadSaved,
+  selectAutomaticPreparations,
   WorkBudget,
 } from "../app/shared/sharing/share-staging-client";
+import { uploadSaved } from "../app/shared/sharing/saved-upload";
 
 const snapshot = {
   relationshipId: "0190a6c4-2222-7aaa-8bbb-000000000001",
@@ -131,5 +133,16 @@ describe("WorkBudget", () => {
     budget.spend();
     expect(() => budget.spend()).toThrow(SharePreparationError);
     expect(MAX_PASS_REQUESTS).toBeGreaterThan(0);
+  });
+});
+
+describe("selectAutomaticPreparations", () => {
+  it("chooses the newest five pending Shares by their time-ordered identifiers", () => {
+    const id = (n: number) => `0190a6c4-${n.toString(16).padStart(4, "0")}-7aaa-8bbb-000000000001`;
+    const ids = [3, 9, 1, 7, 5, 8, 2].map(id);
+    expect(AUTOMATIC_PREPARATIONS).toBe(5);
+    expect(selectAutomaticPreparations(ids)).toEqual([9, 8, 7, 5, 3].map(id));
+    expect(selectAutomaticPreparations([id(1), id(1)])).toEqual([id(1)]);
+    expect(selectAutomaticPreparations([])).toEqual([]);
   });
 });

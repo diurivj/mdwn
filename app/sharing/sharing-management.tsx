@@ -9,7 +9,7 @@ import type {
   RelationshipTargetKind,
 } from "~/shared/sharing/relationships-client";
 import type { SharingIntent, SharingOutcome } from "~/shared/sharing/sharing-intents";
-import { sharedRootName, sharedTargetPath } from "~/tree/navigation-client";
+import { kindName, sharedRootName, sharedTargetPath } from "~/tree/navigation-client";
 import { cx } from "~/ui/cx";
 import { FileIcon, FolderIcon } from "~/ui/icons";
 import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
@@ -23,14 +23,11 @@ import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/u
 
 export const SHARING_ACTION = "/account/sharing";
 type SharingForm = ReturnType<typeof useFetcher>["Form"];
-type RowProps = { Form: SharingForm; busy: boolean };
+/** `stay` submits without revalidating the current route (a dialog over Files re-reads only its own lists). */
+type RowProps = { Form: SharingForm; busy: boolean; stay?: boolean };
 
 export function permissionLabel(permission: RelationshipPermission): string {
   return permission === "read_write" ? "Read/write" : "Read-only";
-}
-
-function ownedTargetLabel(kind: RelationshipTargetKind): string {
-  return kind === "file" ? "File" : "Folder";
 }
 
 function KindIcon({ kind, className }: { kind: RelationshipTargetKind; className?: string }) {
@@ -64,6 +61,7 @@ function Fields({ intent, id, revision }: { intent?: SharingIntent; id: string; 
 function Confirmed({
   Form,
   busy,
+  stay,
   label,
   confirm,
   tone = "secondary",
@@ -103,7 +101,13 @@ function Confirmed({
     >
       <legend className="sr-only">{label}</legend>
       <div className="space-y-2 leading-relaxed text-ink-soft">{children}</div>
-      <Form method="post" action={SHARING_ACTION} className="mt-4 flex flex-wrap gap-2" onSubmit={() => setOpen(false)}>
+      <Form
+        method="post"
+        action={SHARING_ACTION}
+        defaultShouldRevalidate={stay ? false : undefined}
+        className="mt-4 flex flex-wrap gap-2"
+        onSubmit={() => setOpen(false)}
+      >
         <Fields intent={intent} id={id} revision={revision} />
         {extra}
         <button type="submit" disabled={busy} className={buttonClass(tone === "danger" ? "danger" : "primary", "sm")}>
@@ -162,7 +166,7 @@ const ROTATION_NOTE = (
   </p>
 );
 
-export function InvitationItem({ share, Form, busy }: RowProps & { share: IncomingShare }) {
+export function InvitationItem({ share, Form, busy, stay }: RowProps & { share: IncomingShare }) {
   return (
     <Row
       kind={share.targetKind}
@@ -172,6 +176,7 @@ export function InvitationItem({ share, Form, busy }: RowProps & { share: Incomi
       <Confirmed
         Form={Form}
         busy={busy}
+        stay={stay}
         label="Accept"
         confirm="Confirm accept"
         tone="primary"
@@ -179,18 +184,26 @@ export function InvitationItem({ share, Form, busy }: RowProps & { share: Incomi
         id={share.shareId}
       >
         <p>
-          You will be able to open this {share.targetKind === "file" ? "File" : "folder"} as{" "}
+          You will be able to open this {kindName(share.targetKind)} as{" "}
           {permissionLabel(share.permission).toLowerCase()}. It appears under Shared with me in your library.
         </p>
       </Confirmed>
-      <Confirmed Form={Form} busy={busy} label="Decline" confirm="Confirm decline" intent="decline" id={share.shareId}>
+      <Confirmed
+        Form={Form}
+        busy={busy}
+        stay={stay}
+        label="Decline"
+        confirm="Confirm decline"
+        intent="decline"
+        id={share.shareId}
+      >
         <p>The invitation is removed. The Owner can invite you again.</p>
       </Confirmed>
     </Row>
   );
 }
 
-export function ReceivedGrantItem({ grant, Form, busy }: RowProps & { grant: ReceivedGrant }) {
+export function ReceivedGrantItem({ grant, Form, busy, stay }: RowProps & { grant: ReceivedGrant }) {
   return (
     <Row
       kind={grant.targetKind}
@@ -208,6 +221,7 @@ export function ReceivedGrantItem({ grant, Form, busy }: RowProps & { grant: Rec
       <Confirmed
         Form={Form}
         busy={busy}
+        stay={stay}
         label="Leave"
         confirm="Confirm leave"
         tone="danger"
@@ -215,7 +229,10 @@ export function ReceivedGrantItem({ grant, Form, busy }: RowProps & { grant: Rec
         id={grant.grantId}
         revision={grant.revision}
       >
-        <p>Your access ends now. Only the Owner can share it with you again.</p>
+        <p>
+          You lose access now. The Owner’s browser then replaces this item’s keys through a secure access update, and
+          new edits under it wait until that finishes. Only the Owner can share it with you again.
+        </p>
       </Confirmed>
     </Row>
   );
@@ -229,6 +246,7 @@ export function OutgoingShareItem({
   share,
   Form,
   busy,
+  stay,
   children,
 }: RowProps & { share: OutgoingShare; children?: ReactNode }) {
   return (
@@ -236,7 +254,7 @@ export function OutgoingShareItem({
       kind={share.targetKind}
       title={
         <Link to={sharedTargetPath(share.targetId, share.targetKind)} className={linkClass}>
-          {ownedTargetLabel(share.targetKind)}
+          {kindName(share.targetKind, "start")}
         </Link>
       }
       details={
@@ -251,6 +269,7 @@ export function OutgoingShareItem({
       <Confirmed
         Form={Form}
         busy={busy}
+        stay={stay}
         label="Cancel invitation"
         confirm="Confirm cancel"
         tone="danger"
@@ -263,7 +282,7 @@ export function OutgoingShareItem({
   );
 }
 
-export function OwnedGrantItem({ grant, Form, busy }: RowProps & { grant: OwnedGrant }) {
+export function OwnedGrantItem({ grant, Form, busy, stay }: RowProps & { grant: OwnedGrant }) {
   const next: RelationshipPermission = grant.permission === "read_write" ? "read_only" : "read_write";
   const today = localDate(Date.now());
   return (
@@ -271,7 +290,7 @@ export function OwnedGrantItem({ grant, Form, busy }: RowProps & { grant: OwnedG
       kind={grant.targetKind}
       title={
         <Link to={sharedTargetPath(grant.targetId, grant.targetKind)} className={linkClass}>
-          {ownedTargetLabel(grant.targetKind)}
+          {kindName(grant.targetKind, "start")}
         </Link>
       }
       details={
@@ -285,6 +304,7 @@ export function OwnedGrantItem({ grant, Form, busy }: RowProps & { grant: OwnedG
       <Confirmed
         Form={Form}
         busy={busy}
+        stay={stay}
         label={next === "read_only" ? "Make read-only" : "Allow editing"}
         confirm="Confirm permission change"
         intent="permission"
@@ -301,6 +321,7 @@ export function OwnedGrantItem({ grant, Form, busy }: RowProps & { grant: OwnedG
       <Confirmed
         Form={Form}
         busy={busy}
+        stay={stay}
         label="Revoke"
         confirm="Confirm revoke"
         tone="danger"
@@ -311,7 +332,12 @@ export function OwnedGrantItem({ grant, Form, busy }: RowProps & { grant: OwnedG
         <p>Their access ends now. It cannot erase anything their devices already cached.</p>
         {ROTATION_NOTE}
       </Confirmed>
-      <Form method="post" action={SHARING_ACTION} className="flex basis-full flex-wrap items-end gap-2">
+      <Form
+        method="post"
+        action={SHARING_ACTION}
+        defaultShouldRevalidate={stay ? false : undefined}
+        className="flex basis-full flex-wrap items-end gap-2"
+      >
         {/* The submitter names the intent: Set expiry is the default for Enter. */}
         <Fields id={grant.grantId} revision={grant.revision} />
         <div>
@@ -350,6 +376,10 @@ export function OwnedGrantItem({ grant, Form, busy }: RowProps & { grant: OwnedG
             Clear expiry
           </button>
         )}
+        <p className="basis-full text-sm text-muted">
+          When the expiry passes, their access ends and your browser replaces this item’s keys through a secure access
+          update. New edits under it wait until that finishes.
+        </p>
       </Form>
     </Row>
   );
@@ -359,7 +389,8 @@ const DONE: Record<NonNullable<SharingOutcome["intent"]>, string> = {
   accept: "Invitation accepted. It is listed under Shared with me in your library.",
   decline: "Invitation declined.",
   cancel: "Invitation cancelled.",
-  leave: "You left the shared item. Your access has ended.",
+  leave:
+    "You left the shared item. Your access has ended; the Owner’s browser replaces its keys through a secure access update.",
   revoke: "Access revoked. New edits under that item wait until a secure access update finishes.",
   permission: "Permission changed. New edits under that item wait until a secure access update finishes.",
   "set-expiry": "Expiry set.",
@@ -395,7 +426,9 @@ export function SharingOutcomeNotice({ outcome, className }: { outcome: SharingO
               : "That request was not valid. Refresh and try again."
             : outcome.state === "access"
               ? "Use an enrolled device with a current Session to manage sharing."
-              : "Sharing is unavailable right now. Refresh and try again.";
+              : outcome.state === "too-large"
+                ? "There are more sharing relationships than one page can show. Refresh and try again."
+                : "Sharing is unavailable right now. Refresh and try again.";
   return (
     <p role="alert" className={cx(noticeClass("warning"), className)}>
       {message}

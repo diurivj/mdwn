@@ -1,10 +1,19 @@
-import { PrivateAccessError, privateExchange, privateRequest } from "~/shared/device/private-client";
+import { openImportedThreadCapability } from "~/shared/comments/comments-client";
+import { PrivateAccessError, privateExchange } from "~/shared/device/private-client";
 import type { StoredDevice } from "~/shared/device/store";
 import { decodeTreeBytes, isV7 } from "~/shared/tree/wire";
 import { createCommentKeyEnvelope, type CommentKeyContext } from "./comment-keys";
 import { createGrantKeyEnvelope, type GrantKeyContext } from "./grant-keys";
-import { openOwnedCommentKey, ownedKey } from "./owned-capabilities";
-import { readAllPages, SharingChangedError, sharingFailure, SharingNotFoundError } from "./relationships-client";
+import { openOwnedCommentKey, ownedFileCapabilityKey, ownedKey } from "./owned-capabilities";
+import {
+  KeyRotationRequiredError,
+  readAllPages,
+  SharingChangedError,
+  sharingFailure,
+  SharingNotFoundError,
+  SharingPageLimitError,
+} from "./relationships-client";
+import { uploadSaved } from "./saved-upload";
 
 /**
  * Prepare secure access for a pending Share (see docs/sharing.md): the Owner's
@@ -19,7 +28,21 @@ export const MAX_ENVELOPES_PER_PACKET = 20;
 /** Every read, upload and owned-key bootstrap of one pass counts against this bound. */
 export const MAX_PASS_REQUESTS = 2_000;
 
-export type SharePreparationReason = "changed" | "not-found" | "missing-source" | "too-large" | "unavailable";
+export type SharePreparationReason =
+  | "changed"
+  | "not-found"
+  | "sealed"
+  | "missing-source"
+  | "too-large"
+  | "unavailable";
+
+/** Pending Shares the Sharing page prepares by itself on each visit. */
+export const AUTOMATIC_PREPARATIONS = 5;
+
+/** The newest pending Shares first (opaque v7 identifiers sort by creation time), bounded per visit. */
+export function selectAutomaticPreparations(shareIds: readonly string[], limit = AUTOMATIC_PREPARATIONS): string[] {
+  return [...new Set(shareIds)].sort().reverse().slice(0, limit);
+}
 
 /** A preparation pass that cannot finish, with the reason a person can act on. */
 export class SharePreparationError extends Error {
@@ -38,8 +61,8 @@ type Snapshot = Pick<
 >;
 type DeviceTarget = { deviceId: string; transportPublicKey: string };
 type Targets<C> = C & { devices: DeviceTarget[]; nextCursor: string | null };
-type CommentTargets = Targets<CommentKeyContext> & { source?: { kind: "recovery"; envelope: string } };
-type Request = (path: string, init: { method: "PUT"; body: string; signal?: AbortSignal }) => Promise<Response>;
+type CommentSource = { kind: "recovery" | "import"; envelope: string };
+type CommentTargets = Targets<CommentKeyContext> & { source?: CommentSource };
 
 export function packets<T>(items: readonly T[], size = MAX_ENVELOPES_PER_PACKET): T[][] {
   const result: T[][] = [];
@@ -63,25 +86,6 @@ export class WorkBudget {
   constructor(private readonly limit = MAX_PASS_REQUESTS) {}
   spend() {
     if (++this.used > this.limit) throw new SharePreparationError("too-large");
-  }
-}
-
-/**
- * Send saved packet bytes. An uncertain response is retried once with the
- * same bytes and a fresh Device proof: never re-seal an HPKE envelope or
- * restore its sender context for a retry.
- */
-export async function uploadSaved(
-  path: string,
-  body: string,
-  signal?: AbortSignal,
-  request: Request = privateRequest,
-): Promise<Response> {
-  try {
-    return await request(path, { method: "PUT", body, signal });
-  } catch (error) {
-    if (signal?.aborted || !(error instanceof PrivateAccessError && error.state === "unavailable")) throw error;
-    return request(path, { method: "PUT", body, signal });
   }
 }
 
@@ -228,16 +232,24 @@ async function pass(
   let missing = 0;
   for (const { pages } of comments) {
     const context = pages[0]!;
-    const source = pages.find((page) => page.source?.kind === "recovery")?.source;
-    // Without the Owner's own recovery source this capability cannot be
-    // prepared; never fabricate a key. Keep preparing the others.
-    if (!source || typeof source.envelope !== "string") {
+    const source = context.source;
+    // Without an owned source (the Owner's recovery envelope, or an imported
+    // thread's envelope under its File capability) this capability cannot be
+    // prepared from any device; never fabricate a key. Keep preparing the others.
+    if (!source || typeof source.envelope !== "string" || (source.kind !== "recovery" && source.kind !== "import")) {
       missing++;
       continue;
     }
     budget.spend();
     const { devices: _devices, nextCursor: _cursor, source: _source, ...commentContext } = context;
-    const key = await openOwnedCommentKey(commentContext, source.envelope, signer, signal);
+    const key =
+      source.kind === "recovery"
+        ? await openOwnedCommentKey(commentContext, source.envelope, signer, signal)
+        : await openImportedThreadCapability(
+            source.envelope,
+            await ownedFileCapabilityKey(commentContext.ownerId, commentContext.fileId, signal),
+            commentContext,
+          );
     for (const page of pages) {
       const envelopes = [];
       for (const target of page.devices)
@@ -272,6 +284,8 @@ export async function prepareShare(
     if (options.signal?.aborted || error instanceof SharePreparationError || error instanceof PrivateAccessError)
       throw error;
     if (error instanceof SharingNotFoundError) throw new SharePreparationError("not-found");
+    if (error instanceof KeyRotationRequiredError) throw new SharePreparationError("sealed");
+    if (error instanceof SharingPageLimitError) throw new SharePreparationError("too-large");
     throw new SharePreparationError("unavailable");
   }
 }

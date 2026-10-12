@@ -14,10 +14,15 @@ import type { GrantKeyContext } from "./grant-keys";
  * by a verified walk from this Account's own root, at the exact capability
  * identity and epoch the proof-guarded delivery context names.
  */
-export async function ownedKey(context: GrantKeyContext, signal?: AbortSignal) {
+type OwnedTarget =
+  | { kind: "file"; file: Awaited<ReturnType<typeof loadFile>> }
+  | { kind: "directory"; key: Uint8Array; keyEpoch: number };
+
+/** The verified walk from this Account's own root to an owned target. */
+async function walkOwned(ownerId: string, targetId: string, signal?: AbortSignal): Promise<OwnedTarget> {
   const access = await openRoot(signal);
-  if (access.actorAccountId !== context.ownerId) throw new Error("Owner device required");
-  const path = await loadAncestors(context.targetId, signal);
+  if (access.actorAccountId !== ownerId) throw new Error("Owner device required");
+  const path = await loadAncestors(targetId, signal);
   if (path[0] !== access.rootId) throw new Error("Invalid owned scope");
   let key = access.rootKey,
     keyEpoch = access.capability!.epoch;
@@ -26,26 +31,41 @@ export async function ownedKey(context: GrantKeyContext, signal?: AbortSignal) {
     const entry = listing.entries.find((entry) => entry.nodeId === path[index + 1]);
     if (!entry) throw new Error("Changed owned scope");
     if (entry.kind === "file") {
-      if (index !== path.length - 2 || context.targetKind !== "file") throw new Error("Invalid owned scope");
-      const file = await loadFile(access, context.targetId, key, signal);
-      if (
-        file.capability?.id !== context.capabilityId ||
-        file.capability.epoch !== context.capabilityEpoch ||
-        !file.capabilityKey
-      )
-        throw new Error("Changed File capability");
-      return file.capabilityKey;
+      if (index !== path.length - 2) throw new Error("Invalid owned scope");
+      return { kind: "file", file: await loadFile(access, targetId, key, signal) };
     }
     key = await openChildDirectory(access, key, entry);
     keyEpoch = entry.keyEpoch ?? 1;
   }
+  return { kind: "directory", key, keyEpoch };
+}
+
+export async function ownedKey(context: GrantKeyContext, signal?: AbortSignal) {
+  const target = await walkOwned(context.ownerId, context.targetId, signal);
+  if (target.kind === "file") {
+    if (context.targetKind !== "file") throw new Error("Invalid owned scope");
+    if (
+      target.file.capability?.id !== context.capabilityId ||
+      target.file.capability.epoch !== context.capabilityEpoch ||
+      !target.file.capabilityKey
+    )
+      throw new Error("Changed File capability");
+    return target.file.capabilityKey;
+  }
   if (
     context.targetKind !== "directory" ||
     context.capabilityId !== context.targetId ||
-    keyEpoch !== context.capabilityEpoch
+    target.keyEpoch !== context.capabilityEpoch
   )
     throw new Error("Changed Directory capability");
-  return key;
+  return target.key;
+}
+
+/** The Owner's current File capability key for an owned File, by the same verified walk. */
+export async function ownedFileCapabilityKey(ownerId: string, fileId: string, signal?: AbortSignal) {
+  const target = await walkOwned(ownerId, fileId, signal);
+  if (target.kind !== "file" || !target.file.capabilityKey) throw new Error("Changed File capability");
+  return target.file.capabilityKey;
 }
 
 /**

@@ -258,7 +258,7 @@ test("a recipient leaves a Grant and loses access", async ({
     const received = r.getByRole("region", { name: "Shared with you" });
     await expect(received.getByRole("listitem")).toContainText("Read-only");
     await received.getByRole("button", { name: "Leave", exact: true }).click();
-    await expect(received).toContainText("Your access ends now.");
+    await expect(received).toContainText("You lose access now.");
     await received.getByRole("button", { name: "Confirm leave", exact: true }).click();
     await expect(r.getByRole("status").filter({ hasText: "You left the shared item." })).toBeVisible();
     await expect(received).toContainText("Nothing is shared with you yet.");

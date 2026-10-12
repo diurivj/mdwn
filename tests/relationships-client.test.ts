@@ -6,6 +6,7 @@ import {
   parseShareIdentifier,
   parseSharesPage,
   readAllPages,
+  SharingPageLimitError,
 } from "../app/shared/sharing/relationships-client";
 
 const me = "0190a6c4-1111-7aaa-8bbb-000000000001";
@@ -121,7 +122,7 @@ describe("relationship pagination", () => {
         count += 1;
         return { nextCursor: id(count) };
       }),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(SharingPageLimitError);
     expect(count).toBe(MAX_RELATIONSHIP_PAGES);
   });
 });

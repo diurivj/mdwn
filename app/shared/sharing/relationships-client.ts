@@ -60,6 +60,22 @@ export class KeyRotationRequiredError extends Error {
   }
 }
 
+/** 409 `already_shared`: that Account already has an invitation or access for this item. */
+export class AlreadySharedError extends Error {
+  constructor() {
+    super("already shared");
+    this.name = "AlreadySharedError";
+  }
+}
+
+/** More pages than one bounded pass reads (`MAX_RELATIONSHIP_PAGES`). */
+export class SharingPageLimitError extends Error {
+  constructor() {
+    super("too many sharing pages");
+    this.name = "SharingPageLimitError";
+  }
+}
+
 /** 404: the relationship no longer exists or is not this Account's to change. */
 export class SharingNotFoundError extends Error {
   constructor() {
@@ -193,7 +209,7 @@ export async function readAllPages<P extends { nextCursor: string | null }>(
   const pages: P[] = [];
   let cursor: string | null = null;
   do {
-    if (pages.length >= MAX_RELATIONSHIP_PAGES) throw new Error("too many sharing relationships");
+    if (pages.length >= MAX_RELATIONSHIP_PAGES) throw new SharingPageLimitError();
     const next: P = await read(cursor);
     pages.push(next);
     if (next.nextCursor !== null && cursor !== null && next.nextCursor <= cursor)
@@ -203,12 +219,14 @@ export async function readAllPages<P extends { nextCursor: string | null }>(
   return pages;
 }
 
-/** Map a failed sharing response to `SharingNotFoundError`, `SharingChangedError` or a generic failure. */
+/** Map a failed sharing response to its typed error, or a generic failure. */
 export async function sharingFailure(response: Response): Promise<never> {
   if (response.status === 404) throw new SharingNotFoundError();
   if (response.status === 409) {
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
     if (body?.error === "sharing_changed") throw new SharingChangedError();
+    if (body?.error === "key_rotation_required") throw new KeyRotationRequiredError();
+    if (body?.error === "already_shared") throw new AlreadySharedError();
   }
   throw new Error("sharing unavailable");
 }
@@ -314,7 +332,8 @@ export async function changeGrant(
 /**
  * Invite the Account with exactly this share identifier to an owned File or
  * folder. A 404 means no other Account has that identifier (the server also
- * answers 404 for the caller's own); returns the pending Share's id.
+ * answers 404 for the caller's own); a 409 is `AlreadySharedError`,
+ * `KeyRotationRequiredError` or `SharingChangedError`. Returns the Share's id.
  */
 export async function inviteShare(
   targetId: string,
@@ -328,13 +347,6 @@ export async function inviteShare(
     body: JSON.stringify({ targetId, recipient: { shareId: recipientShareId }, permission }),
     signal,
   });
-  if (response.status === 409) {
-    const body = (await response
-      .clone()
-      .json()
-      .catch(() => null)) as { error?: unknown } | null;
-    if (body?.error === "key_rotation_required") throw new KeyRotationRequiredError();
-  }
   if (response.status !== 201) return sharingFailure(response);
   const body = object(await response.json());
   exactKeys(body, ["shareId"]);

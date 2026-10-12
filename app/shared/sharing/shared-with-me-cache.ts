@@ -1,4 +1,4 @@
-import { listGrants, listShares, type ReceivedGrant } from "./relationships-client";
+import { listRelationships, type ReceivedGrant } from "./relationships-client";
 
 /** What the library sidebar shows: received Grant roots and the pending invitation count. */
 export type SharedWithMe = { accountId: string; received: ReceivedGrant[]; invitations: number };
@@ -58,9 +58,12 @@ export function createSharedWithMeCache({
 }
 
 async function loadSharedWithMe(): Promise<SharedWithMe> {
-  const [shares, grants] = await Promise.all([listShares(), listGrants()]);
-  if (shares.accountId !== grants.accountId) throw new Error("Shared with me changed Account");
-  return { accountId: grants.accountId, received: grants.received, invitations: shares.incoming.length };
+  const relationships = await listRelationships();
+  return {
+    accountId: relationships.accountId,
+    received: relationships.received,
+    invitations: relationships.incoming.length,
+  };
 }
 
 /** The one tab-wide instance; sharing actions call `invalidate` or `prime`. */

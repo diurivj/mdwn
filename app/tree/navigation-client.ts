@@ -137,9 +137,14 @@ export function rootName(access: RootAccess): string {
   return sharedRootName(access.rootKind ?? "directory");
 }
 
+/** "File" or "folder"; "Folder" where it starts a sentence or label. */
+export function kindName(kind: TreeKind, position: "inline" | "start" = "inline"): string {
+  return kind === "file" ? "File" : position === "start" ? "Folder" : "folder";
+}
+
 /** A received Grant root's generic label: its name stays encrypted from the recipient. */
 export function sharedRootName(kind: TreeKind): string {
-  return kind === "file" ? "Shared File" : "Shared folder";
+  return `Shared ${kindName(kind)}`;
 }
 
 /** `/files` is the library's own address; shared roots keep their node routes. */
