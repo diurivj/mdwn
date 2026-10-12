@@ -1,6 +1,5 @@
 import { ownedProvisioningUpkeep } from "~/shared/device/owned-provision-client";
-import { deviceStateGeneration, PrivateAccessError, privateRequest } from "~/shared/device/private-client";
-import { clearPrivateTabMemory } from "~/shared/device/private-tab-memory";
+import { deviceStateGeneration, privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
 import { openGrantKeyEnvelope, type GrantKeyContext } from "~/shared/sharing/grant-keys";
 import {
@@ -311,10 +310,6 @@ async function walk(target: Target, signal: AbortSignal, root?: Promise<RootAcce
   return snapshot;
 }
 
-function isAccessError(error: unknown): boolean {
-  return error instanceof PrivateAccessError && error.state !== "unavailable";
-}
-
 /**
  * The page from this tab's verified tree memory, or null when the root and
  * the target's path are not all remembered. A Directory needs no request; a
@@ -330,14 +325,15 @@ async function fromMemory(target: Target, signal: AbortSignal): Promise<FilesPag
   let file: FilesSnapshot["file"] = null;
   if (target?.kind === "file") {
     const parent = path.at(-2);
+    // A private-access error has already cleared tab memory (`loseAccess`);
+    // any other failure only drops the parent listing that led here.
     try {
       const parentKey = access.rootKind === "file" ? access.rootKey : keys[parent!]!;
       file = await openFile(access, target.nodeId, parentKey, await fetchFile(target.nodeId, signal));
       if (access.rootKind !== "file" && file.parentId !== parent) throw new TreeNotFoundError();
     } catch (error) {
       if (signal.aborted) throw error;
-      if (isAccessError(error)) clearPrivateTabMemory();
-      else if (parent) treeCache.invalidate(access.actorAccountId, [parent], "local");
+      if (parent) treeCache.invalidate(access.actorAccountId, [parent], "local");
       return null;
     }
   }
@@ -478,10 +474,9 @@ export async function revalidateFilesPage(
     fetched = new Map(await Promise.all([...shown].map(async (id) => [id, await fetchDirectory(id, signal)] as const)));
   } catch (error) {
     if (signal.aborted) throw error;
-    if (isAccessError(error)) {
-      clearPrivateTabMemory();
-      return { status: "access" };
-    }
+    // Only the private client clears tab memory, and exactly on a private-access
+    // error (`loseAccess`); a moved generation is how this view learns it did.
+    if (deviceStateGeneration() !== since) return { status: "access" };
     return error instanceof TreeNotFoundError ? changed() : { status: "temporary" };
   }
   try {

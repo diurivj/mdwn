@@ -4,6 +4,7 @@ import {
   deviceStateGeneration,
   deviceStateScope,
   discardDeviceState,
+  loseAccess,
   PrivateAccessError,
   PrivatePolicyError,
   privateExchange,
@@ -11,6 +12,7 @@ import {
   PUBLIC_PARTICIPATION_SUSPENDED,
 } from "../app/shared/device/private-client";
 import { clearPrivateTabMemory, registerPrivateTabMemory } from "../app/shared/device/private-tab-memory";
+import { DEVICE_PROOF_REQUIRED, DEVICE_PROOF_SPENT } from "../app/shared/device/proof-denials";
 import { verifyDeviceProof, type DeviceProof } from "../app/shared/device/proof";
 import * as deviceStore from "../app/shared/device/store";
 import type { StoredDevice } from "../app/shared/device/store";
@@ -616,7 +618,6 @@ describe("privateRequest device-state reuse (ticket 57)", () => {
     { name: "malformed JSON", header: "{not json" },
     { name: "an empty Session binding", header: { ...registryState, sessionBinding: "" } },
     { name: "a missing registry epoch", header: { ...registryState, registryEpoch: null } },
-    { name: "a null device", header: { ...registryState, deviceId: null, sessionBinding: "unbound" } },
   ])("ignores a header with $name", async ({ header }) => {
     await settleWithRead("/api/private/first", registryState, withState(header));
     const { init } = await settleReused("/api/private/second");
@@ -927,5 +928,38 @@ describe("private-access errors clear private tab memory (ticket 57)", () => {
     await lost.started;
     lost.response.reject(new TypeError("network"));
     expect(await request).toBe(false);
+  });
+});
+
+describe("one rule for losing private access (ticket 57, review round 2)", () => {
+  it("clears on a same-Account response header that names no device, as a state read does", async () => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await settleWithRead("/api/private/first", registryState);
+      await settleReused("/api/private/second", withState({ ...registryState, deviceId: null }));
+      expect(holder).toHaveBeenCalledOnce();
+      // Reusable state went with it: the next operation reads state first.
+      await settleWithRead("/api/private/third", registryState);
+      expect(network.fetchImpl).toHaveBeenCalledTimes(5);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("exports the one helper that clears and throws a private-access error", () => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      expect(() => loseAccess("device-lost")).toThrow(PrivateAccessError);
+      expect(holder).toHaveBeenCalledOnce();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("names the proof denials it decides on with the shared codes", () => {
+    expect(DEVICE_PROOF_REQUIRED).toBe("device_proof_required");
+    expect(DEVICE_PROOF_SPENT).toBe("device_proof_spent");
   });
 });

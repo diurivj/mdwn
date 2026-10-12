@@ -9,8 +9,10 @@ import {
   commitPrivateBatch,
   commitTreeMutation,
   privateReadGuard,
+  spentProof,
   type AuthorizedDevice,
 } from "~/device/proof.server";
+import { DEVICE_PROOF_REQUIRED } from "~/shared/device/proof-denials";
 import { decodeTreeBytes, encodeTreeBytes, isV7, MAX_REPRESENTATION_BYTES, treeEnvelope } from "../shared/tree/wire";
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "../shared/tree/listing";
 import { verifyFileHead, type FileHead, type FileHeadIdentity } from "../shared/tree/file-head";
@@ -39,10 +41,7 @@ const headers = { "Cache-Control": "no-store" };
 const notFound = () => Response.json({ error: "not_found" }, { status: 404, headers });
 const badRequest = () => Response.json({ error: "invalid_tree_request" }, { status: 400, headers });
 const changed = () => Response.json({ error: "namespace_changed" }, { status: 409, headers });
-const denied = () => Response.json({ error: "device_proof_required" }, { status: 403, headers });
-/** A spent or expired proof after a failed commit: an earlier use of this proof
- * may have committed, so the browser never retries it (ticket 57). */
-const spent = () => Response.json({ error: "device_proof_spent" }, { status: 403, headers });
+const denied = () => Response.json({ error: DEVICE_PROOF_REQUIRED }, { status: 403, headers });
 const rotationRequired = () => Response.json({ error: "key_rotation_required" }, { status: 409, headers });
 
 type EntryRow = {
@@ -1272,12 +1271,8 @@ async function saveConvertedFile(
         { revision, representationId, capability, ...(paired.save ? { publicRevision: paired.save.revision } : {}) },
         { headers },
       );
-    if (
-      auth.expiresAt <= Date.now() ||
-      (await createDb(env.DB).get(sql`SELECT 1 FROM device_proof_uses
-      WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`))
-    )
-      return spent();
+    const spent = await spentProof(env, auth);
+    if (spent) return spent;
     const latest = await currentFile(env, auth, fileId);
     if (!latest || !latest.can_edit) return notFound();
     if (await createDb(env.DB).get(sql`SELECT 1 WHERE ${blocked}`)) return rotationRequired();
@@ -1403,12 +1398,8 @@ async function saveFile(env: Env, auth: AuthorizedDevice, fileId: string, value:
         { headers },
       );
     // A competing File save can win after the initial read. Never invite a namespace retry for a stale draft.
-    if (
-      auth.expiresAt <= Date.now() ||
-      (await createDb(env.DB).get(sql`
-      SELECT 1 FROM device_proof_uses WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`))
-    )
-      return spent();
+    const spent = await spentProof(env, auth);
+    if (spent) return spent;
     const latest = await currentFile(env, auth, fileId);
     if (!latest) return structuralFailure(env, auth, expected, denied());
     if (latest.parent_node_id !== expectedParentId) return changed();

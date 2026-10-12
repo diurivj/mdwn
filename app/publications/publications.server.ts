@@ -7,8 +7,10 @@ import {
   authorizePrivateRequest,
   commitPrivateBatch,
   commitPrivateMutation,
+  spentProof,
   type AuthorizedDevice,
 } from "~/device/proof.server";
+import { DEVICE_PROOF_REQUIRED } from "~/shared/device/proof-denials";
 import { newOpaqueId } from "~/shared/opaque-id";
 import {
   AbuseControlUnavailableError,
@@ -55,11 +57,7 @@ const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
 const notFound = () => failure("not_found", 404);
 const invalid = () => failure("invalid_publication_request", 400);
-const denied = () => failure("device_proof_required", 403);
-/** A spent or expired proof after a failed or uncertain commit: an earlier use
- * of this proof, or this very request, may have committed. Distinct from a
- * verification-time denial so the browser never retries it (ticket 57). */
-const spent = () => failure("device_proof_spent", 403);
+const denied = () => failure(DEVICE_PROOF_REQUIRED, 403);
 const publicationChanged = () => failure("publication_changed", 409);
 const rotationRequired = () => failure("key_rotation_required", 409);
 
@@ -136,14 +134,6 @@ async function validPublicKey(value: unknown): Promise<Uint8Array<ArrayBuffer>> 
   // Reject a malformed point now rather than accept a key no editor can encrypt to.
   await crypto.subtle.importKey("raw", publicKey, { name: "ECDH", namedCurve: "P-256" }, true, []);
   return publicKey;
-}
-
-async function proofSpent(env: Env, auth: AuthorizedDevice): Promise<boolean> {
-  return (
-    auth.expiresAt <= Date.now() ||
-    !!(await createDb(env.DB).get(sql`SELECT 1 FROM device_proof_uses
-    WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`))
-  );
 }
 
 /** The Publish panel's view. Authors and requests are opaque metadata: the
@@ -416,7 +406,8 @@ async function createPublication(
       },
       { status: 201, headers },
     );
-  if (await proofSpent(env, auth)) return spent();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const latest = await db.get<{ current_revision: number; current_representation_id: string; published: number }>(sql`
     SELECT f.current_revision, f.current_representation_id,
       EXISTS (SELECT 1 FROM publications p WHERE ${filePublication(sql`f.node_id`)}) AS published
@@ -454,7 +445,8 @@ async function createRequest(env: Env, auth: AuthorizedDevice, fileId: string, v
       AND ${guard}`,
   );
   if (committed) return Response.json({ requestId, created: true }, { status: 201, headers });
-  if (await proofSpent(env, auth)) return spent();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const pending = await existing();
   if (pending) return Response.json({ requestId: pending.id, created: false }, { headers });
   if (
@@ -495,7 +487,7 @@ async function deleteRequest(
       AND (r.id IS NULL OR r.requester_id = ${auth.accountId}
         OR (f.owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")}))`);
   if (!row) return notFound();
-  if (row.id) return (await proofSpent(env, auth)) ? spent() : notFound();
+  if (row.id) return (await spentProof(env, auth)) ?? notFound();
   return Response.json({ deleted: true, alreadyDeleted: true }, { headers });
 }
 
@@ -616,7 +608,8 @@ async function addAuthor(env: Env, auth: AuthorizedDevice, fileId: string, value
     return publicationChanged();
   }
   if (committed) return Response.json({ declarationId: input.declarationId }, { status: 201, headers });
-  if (await proofSpent(env, auth)) return spent();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const authors = await db.get<{ total: number; present: number }>(sql`
     SELECT (SELECT count(*) FROM publication_authors WHERE publication_id = p.id) AS total,
       EXISTS (SELECT 1 FROM publication_authors WHERE publication_id = p.id AND author_id = ${candidate}) AS present
@@ -649,7 +642,7 @@ async function removeAuthor(
       AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
   );
   if (committed) return Response.json({ deleted: true }, { headers });
-  return (await proofSpent(env, auth)) ? spent() : Response.json({ deleted: true, alreadyDeleted: true }, { headers });
+  return (await spentProof(env, auth)) ?? Response.json({ deleted: true, alreadyDeleted: true }, { headers });
 }
 
 /** A selected author's own device (re)declares its pseudonym to the current link. */
@@ -716,7 +709,7 @@ async function declareAuthor(
       AND ${accessPredicate(auth, fileId, "read")} AND ${guard}`,
   );
   if (committed) return Response.json({ revision: input.revision }, { headers });
-  return (await proofSpent(env, auth)) ? spent() : publicationChanged();
+  return (await spentProof(env, auth)) ?? publicationChanged();
 }
 
 /**
@@ -835,7 +828,8 @@ type RotationState = {
 
 /** A failed rotation reports precisely whether the File or the Publication moved. */
 async function rotationFailure(env: Env, auth: AuthorizedDevice, fileId: string, input: Rotation): Promise<Response> {
-  if (await proofSpent(env, auth)) return spent();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const current = await createDb(env.DB).get<{
     id: string;
     state: string;
@@ -1026,7 +1020,10 @@ async function unpublishPublication(
     WHERE p.file_id = ${fileId} AND p.state = 'deleting' AND p.owner_id = ${auth.accountId}
       AND ${accessPredicate(auth, fileId, "owner")}`);
   if (existing) return Response.json({ publicationId: existing.id, commentTotal: existing.comment_total }, { headers });
-  if (!committed && (await proofSpent(env, auth))) return spent();
+  if (!committed) {
+    const spent = await spentProof(env, auth);
+    if (spent) return spent;
+  }
   return notFound();
 }
 
@@ -1141,7 +1138,8 @@ async function teardownPublication(
       },
       { headers },
     );
-  if (await proofSpent(env, auth)) return spent();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const stillSealed = await db.get(sql`SELECT 1 FROM publications p WHERE p.file_id = ${fileId}
     AND p.state = 'deleting' AND ${accessPredicate(auth, fileId, "owner")}`);
   return stillSealed

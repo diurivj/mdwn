@@ -3,7 +3,7 @@ import { openSymmetric } from "~/shared/crypto/enc-v1";
 import { openDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
 import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
-import { privateRequest, PrivateAccessError } from "../shared/device/private-client";
+import { loseAccess, privateRequest, PrivateAccessError } from "../shared/device/private-client";
 import { getDevice } from "../shared/device/store";
 
 export type ListedDevice = {
@@ -39,7 +39,7 @@ export async function loadDeviceInventory(signal: AbortSignal): Promise<DeviceIn
   const inventory = (await inventoryResponse.json()) as InventoryResponse;
   const device = await getDevice(inventory.accountId);
   if (!device || device.deviceId !== inventory.currentDeviceId || device.registryEpoch !== inventory.registryEpoch)
-    throw new PrivateAccessError("device-lost");
+    loseAccess("device-lost");
   const bootstrapResponse = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
   if (!bootstrapResponse.ok) throw new PrivateAccessError("unavailable");
   // A membership change between the two reads cannot authorize stale labels.
