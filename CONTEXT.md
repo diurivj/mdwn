@@ -5,7 +5,7 @@ mdwn is a private markdown-vault application for people who write, browse, share
 ## Language
 
 **Account**:
-A person’s authenticated identity in mdwn, distinct from any device or passkey. Every Account has a generated, changeable Public pseudonym for public attribution and comments, an opaque share identifier for direct sharing, and may have an optional unique share handle. None is an authentication identity.
+A person’s authenticated identity in mdwn, distinct from any device or passkey. Every Account has a self-chosen, changeable Public pseudonym for public attribution and comments, an opaque share identifier for direct sharing, and may have an optional unique share handle. None is an authentication identity.
 _Avoid_: User profile, login, email address
 
 **Passkey**:
@@ -85,7 +85,7 @@ A signed-in Account's category-only signal naming an opaque Public Comment ID. I
 _Avoid_: Moderation queue, complaint text, content takedown
 
 **Public pseudonym**:
-A generated, account-level label used for public attribution and in every Comment thread. It is pseudonymous rather than private, is separate from share-addressing identity, and may be changed subject to a cooldown.
+An account-level label its person chooses, or keeps from a suggestion, used for public attribution and in every Comment thread. It is pseudonymous rather than private, is not unique, is separate from share-addressing identity, and may be changed subject to a cooldown.
 _Avoid_: Real name, anonymous commenter, share identifier
 
 **Owner**:
@@ -106,7 +106,7 @@ _Avoid_: Ownership, Public link
 
 **Vault**:
 An Account’s entire private Markdown space: its hierarchy of Files and Directories, including content it can access through a Share. This is a technical/domain term only.
-_User-facing_: Files; never render “Vault” in UI labels, browser titles, routes, or user documentation.
+_User-facing_: Library for the owned root and the workspace that shows it; Files for its contents in prose (“Export my Files”). Never render “Vault” in UI labels, browser titles, routes, or user documentation.
 _Avoid_: Workspace, repository
 
 **Vault root key**:

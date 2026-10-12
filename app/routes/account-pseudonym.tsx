@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useFetcher } from "react-router";
 import {
   cancelAccountPseudonymUpdate,
@@ -5,11 +6,19 @@ import {
   loadAccountPseudonymState,
   PseudonymChangedError,
   PseudonymCooldownError,
+  PseudonymInvalidError,
   PseudonymPendingError,
   PseudonymPreparingError,
   resumeAccountPseudonymUpdate,
   type PseudonymJob,
 } from "~/account/pseudonym-client";
+import {
+  PSEUDONYM_MAX_CHARACTERS,
+  PSEUDONYM_PROBLEMS,
+  type PseudonymProblem,
+  pseudonymProblem,
+  suggestPseudonym,
+} from "~/shared/account/pseudonym";
 import { PrivateAccessError } from "~/shared/device/private-client";
 import { isV7 } from "~/shared/tree/wire";
 
@@ -17,7 +26,7 @@ import type { ChromeHandle } from "~/ui/chrome";
 import { cx } from "~/ui/cx";
 import { RefreshIcon } from "~/ui/icons";
 import { AccountLayout, PageIntro, SettingsSection, SkeletonLines } from "~/ui/page-layouts";
-import { buttonClass, noticeClass } from "~/ui/styles";
+import { buttonClass, fieldClass, labelClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/account-pseudonym";
 
@@ -42,13 +51,24 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise
   }
 }
 
-type ActionState = "complete" | "paused" | "cooldown" | "pending" | "preparing" | "changed" | "cancelled" | "failed";
+type ActionState =
+  | "complete"
+  | "paused"
+  | "cooldown"
+  | "pending"
+  | "preparing"
+  | "changed"
+  | "cancelled"
+  | "invalid"
+  | "failed";
 
 /** A fetcher submission runs one bounded browser pass; native revalidation then
  * reloads stored progress. Leaving the page never discards staging. */
-export async function clientAction({
-  request,
-}: Route.ClientActionArgs): Promise<{ state: ActionState; nextChangeAt?: number }> {
+export async function clientAction({ request }: Route.ClientActionArgs): Promise<{
+  state: ActionState;
+  nextChangeAt?: number;
+  problem?: PseudonymProblem | "unchanged";
+}> {
   const form = await request.formData();
   const intent = form.get("intent");
   try {
@@ -61,9 +81,12 @@ export async function clientAction({
       }
       return { state: (await resumeAccountPseudonymUpdate(jobId, { signal: request.signal })) ? "complete" : "paused" };
     }
-    return { state: (await changeAccountPseudonym({ signal: request.signal })) ? "complete" : "paused" };
+    const pseudonym = form.get("pseudonym");
+    if (typeof pseudonym !== "string") return { state: "invalid", problem: "empty" };
+    return { state: (await changeAccountPseudonym({ pseudonym, signal: request.signal })) ? "complete" : "paused" };
   } catch (error) {
     if (request.signal.aborted) throw error;
+    if (error instanceof PseudonymInvalidError) return { state: "invalid", problem: error.problem };
     if (error instanceof PseudonymCooldownError) return { state: "cooldown", nextChangeAt: error.nextChangeAt };
     if (error instanceof PseudonymPendingError) return { state: "pending" };
     if (error instanceof PseudonymPreparingError) return { state: "preparing" };
@@ -91,6 +114,13 @@ function cooldownDate(nextChangeAt: number): string {
 export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher<typeof clientAction>();
   const busy = fetcher.state !== "idle";
+  const [draft, setDraft] = useState("");
+  const [placeholder] = useState(suggestPseudonym);
+  const problem = draft ? pseudonymProblem(draft) : null;
+  const completed = fetcher.state === "idle" && fetcher.data?.state === "complete";
+  useEffect(() => {
+    if (completed) setDraft("");
+  }, [completed]);
   if (loaderData.state !== "ready") {
     return (
       <AccountLayout>
@@ -110,13 +140,13 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
     <AccountLayout>
       <PageIntro eyebrow="Identity" title="Public pseudonym">
         <p>
-          This generated label appears on every Comment you author and on Publications where an Owner credits you. It is
-          separate from your share identifier and any share handle.
+          The name shown on every Comment you author and on Publications where an Owner credits you. It doesn’t have to
+          be your real name, and it is separate from your share identifier and any share handle.
         </p>
       </PageIntro>
       <section
         aria-label="Current Public pseudonym"
-        className="mt-8 max-w-xl border-y border-ink bg-sand px-7 py-8 font-display text-4xl font-light leading-tight tracking-tight text-ink sm:text-5xl"
+        className="mt-8 max-w-xl border border-ink bg-sand px-7 py-8 font-display text-4xl font-light leading-tight tracking-tight text-ink sm:text-5xl"
       >
         {publicPseudonym}
       </section>
@@ -173,19 +203,53 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
             coolingDown && nextChangeAt !== null ? (
               <p>You can change it again on {cooldownDate(nextChangeAt)} (at most once every 30 days).</p>
             ) : (
-              <p>You can change it at most once every 30 days. The new label is generated for you.</p>
+              <p>Choose any name you like. You can change it at most once every 30 days.</p>
             )
           }
         >
           <fetcher.Form method="post" className="mt-5">
+            <label className={labelClass} htmlFor="new-pseudonym">
+              New pseudonym
+            </label>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <div className="min-w-0 flex-1 basis-56">
+                <input
+                  id="new-pseudonym"
+                  name="pseudonym"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  disabled={busy || coolingDown}
+                  maxLength={PSEUDONYM_MAX_CHARACTERS * 2}
+                  placeholder={placeholder}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={problem ? true : undefined}
+                  aria-describedby={problem ? "new-pseudonym-problem" : undefined}
+                  className={fieldClass()}
+                />
+              </div>
+              <button
+                type="button"
+                disabled={busy || coolingDown}
+                onClick={() => setDraft(suggestPseudonym())}
+                className={buttonClass("secondary")}
+              >
+                <RefreshIcon />
+                Suggest one
+              </button>
+            </div>
+            {problem && (
+              <p id="new-pseudonym-problem" role="alert" className="mt-2 text-sm text-danger">
+                {PSEUDONYM_PROBLEMS[problem]}
+              </p>
+            )}
             <button
-              disabled={busy || coolingDown}
+              disabled={busy || coolingDown || !draft || problem !== null}
               name="intent"
               value="change"
               type="submit"
-              className={buttonClass("primary", "sm")}
+              className={cx(buttonClass("primary", "sm"), "mt-4")}
             >
-              <RefreshIcon />
               {busy ? "Changing…" : "Change pseudonym"}
             </button>
           </fetcher.Form>
@@ -238,6 +302,13 @@ export default function AccountPseudonym({ loaderData }: Route.ComponentProps) {
       {!busy && fetcher.data?.state === "changed" && (
         <p role="alert" className={cx(noticeClass("warning"), "mt-6 max-w-xl")}>
           The update changed while you worked. Refresh and resume it.
+        </p>
+      )}
+      {!busy && fetcher.data?.state === "invalid" && (
+        <p role="alert" className={cx(noticeClass("warning"), "mt-6 max-w-xl")}>
+          {fetcher.data.problem === "unchanged"
+            ? "That is already your Public pseudonym."
+            : PSEUDONYM_PROBLEMS[fetcher.data.problem ?? "empty"]}
         </p>
       )}
       {!busy && fetcher.data?.state === "failed" && (

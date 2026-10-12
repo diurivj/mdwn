@@ -1,6 +1,6 @@
 # Public pseudonym update (ticket 24)
 
-Every Account has one generated, non-identifying **Public pseudonym** inside its
+Every Account has one self-chosen **Public pseudonym** inside its
 encrypted `account_profiles` ciphertext. It is displayed through separately
 encrypted `attribution` contexts: one `thread_attributions` row per Private or
 Public Comment thread the Account has authored in, and one `publication_authors`
@@ -103,6 +103,19 @@ blocks commit; the next pass reports it and the browser restages it. Because
 readers resolve displayed pseudonyms only from these rows, the visible state is
 all-old before the transaction and all-new after it — never a mixed rename.
 
+## Choosing the pseudonym
+
+The person writes the new pseudonym, or keeps a suggestion such as “Quiet Heron
+27”, both at signup and on the Public pseudonym page. Because the service only
+ever stores it encrypted, the browser alone checks it
+(`app/shared/account/pseudonym.ts`): it is normalized to NFC with surrounding
+whitespace trimmed and inner whitespace collapsed to single spaces, and must be
+2–32 characters with no control, format, private-use or unassigned characters
+(the zero-width joiners stay, for emoji sequences and scripts that need them).
+Start refuses an invalid pseudonym, or the one already current, before creating a
+job, so neither consumes the cooldown. Pseudonyms are not unique, and a person
+may choose one that identifies them.
+
 ## Cooldown
 
 A change is allowed at most once every 30 days. Start rejects a change while
@@ -147,8 +160,10 @@ second enrolled device, with its own Grant envelope, finishes the job; malformed
 or stale staging is rejected; cancel consumes no cooldown; idempotent start
 retries do not create a second job; and the pending job blocks only the changing
 Account's new attribution contexts. `e2e/pseudonym-update.spec.ts` authors a
-real Comment in Chromium, changes the pseudonym from `/account/pseudonym`,
-states the cooldown, and reads the new label back in the workspace.
+real Comment in Chromium, changes the pseudonym to one the person typed on
+`/account/pseudonym`, states the cooldown, and reads the new label back in the
+workspace. `tests/public-pseudonym.test.ts` covers normalization, validation and
+suggestions.
 
 See [enc-v1](enc-v1.md), [comments](comments.md), [publications](publications.md)
 and [sharing](sharing.md).

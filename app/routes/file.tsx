@@ -10,7 +10,7 @@ import type { Route } from "./+types/file";
 export const handle: ChromeHandle = { chrome: "workspace" };
 
 export function meta() {
-  return [{ title: "Files — mdwn" }];
+  return [{ title: "Library — mdwn" }];
 }
 
 /** Browser-only private data, never serialized into document HTML/hydration. */

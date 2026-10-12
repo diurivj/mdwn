@@ -201,6 +201,8 @@ export async function installWorkspaceScript(page: Page, script: string, baseURL
     route.fulfill({ contentType: "text/javascript", body: script }),
   );
   await page.goto(baseURL, { waitUntil: "commit" });
+  // Commit precedes HTML parsing; addScriptTag needs the real document's head.
+  await page.locator("head").waitFor({ state: "attached" });
   await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
 }
 

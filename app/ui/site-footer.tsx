@@ -4,6 +4,7 @@ import { LockIcon } from "./icons";
 import { SectionLink } from "./section-link";
 
 const PRODUCT_LINKS = [
+  { to: "/#why", label: "Why we built mdwn" },
   { to: "/#how-it-works", label: "How it works" },
   { to: "/#privacy", label: "What we can’t see" },
   { to: "/#publishing", label: "Publishing" },
@@ -13,7 +14,7 @@ const PRODUCT_LINKS = [
 const ACCESS_LINKS = [
   { to: "/sign-up", label: "Create account" },
   { to: "/sign-in", label: "Sign in" },
-  { to: "/files", label: "Open your Files" },
+  { to: "/files", label: "Open your library" },
   { to: "/recover", label: "Recover your Account" },
 ];
 

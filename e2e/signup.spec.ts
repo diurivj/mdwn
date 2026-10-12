@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import type { Browser, Page } from "@playwright/test";
 import type { TestHarness } from "wrangler";
 
@@ -5,6 +6,7 @@ import { test, expect } from "./fixtures";
 import { completeRecoveryPresentation } from "./signup-recovery";
 import { seedAccount, signInAccount } from "./support/seeded-account";
 import { expectSignupShape } from "./support/signup-shape";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 type Env = { DB: D1Database };
 type VerifyPayload = {
@@ -126,6 +128,27 @@ async function signedProof(page: Page, accountId: string) {
   }, accountId);
 }
 
+/** Clicks a button that saves a file from the browser and returns its name and bytes. */
+async function download(page: Page, button: string): Promise<{ name: string; bytes: Buffer }> {
+  const event = page.waitForEvent("download");
+  await page.getByRole("button", { name: button, exact: true }).click();
+  const file = await event;
+  const parts: Buffer[] = [];
+  for await (const part of (await file.createReadStream())!) parts.push(Buffer.from(part));
+  return { name: file.suggestedFilename(), bytes: Buffer.concat(parts) };
+}
+
+/** Saves both forms of one recovery file: the gzip download and its plain text carry the same text. */
+async function recoveryFile(page: Page, label: string, name: string): Promise<string> {
+  const compressed = await download(page, `${label} (.txt.gz)`);
+  expect(compressed.name).toBe(`${name}.txt.gz`);
+  const text = gunzipSync(compressed.bytes).toString("utf8");
+  const plain = await download(page, `${label} as plain text (.txt)`);
+  expect(plain.name).toBe(`${name}.txt`);
+  expect(plain.bytes.toString("utf8")).toBe(text);
+  return text;
+}
+
 test("signs up atomically with a bound device and gates recovery material before private access", async ({
   browser,
   server,
@@ -143,8 +166,17 @@ test("signs up atomically with a bound device and gates recovery material before
       (request) => new URL(request.url()).pathname === "/api/signup/verify" && request.method() === "POST",
       { timeout: 120_000 },
     );
+    // The Public pseudonym is the person's own; a suggestion fills the field until they write one.
+    const pseudonym = page.getByRole("textbox", { name: "Public pseudonym", exact: true });
+    await expect(pseudonym).toHaveValue(/^[A-Z][a-z]+ [A-Z][a-z]+ \d{2}$/);
+    await pseudonym.fill("  Quiet   Heron ");
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Save your recovery phrase" })).toBeVisible({ timeout: 120_000 });
+    const words = (await page.locator("section ol li").allTextContents()).map((word) =>
+      word.replace(/^\d+\.\s*/, "").trim(),
+    );
+    const phraseFile = await recoveryFile(page, "Download phrase", "mdwn-recovery-phrase");
+    expect(phraseFile.match(/^ ?\d+\. \S+$/gm)?.map((line) => line.replace(/^ ?\d+\. /, ""))).toEqual(words);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toEqual(
       expect.any(String),
     );
@@ -164,11 +196,21 @@ test("signs up atomically with a bound device and gates recovery material before
         expect(await count(env, "registration_challenges")).toBe(0);
         expect(await count(env, "accounts")).toBe(0);
         expect(await count(env, "sessions")).toBe(0);
+        const codes = (await page.locator("section ol li").allTextContents()).map((code) =>
+          code.replace(/^\d+\.\s*/, "").trim(),
+        );
+        const codesFile = await recoveryFile(page, "Download codes", "mdwn-recovery-codes");
+        for (const code of codes) expect(codesFile).toContain(code);
+        for (const word of words) expect(codesFile).not.toContain(` ${word}\n`);
+        // Saving a file is local: it starts no signup request.
+        expect(signupRequests).toEqual([]);
       },
     });
     const payload = (await verify).postDataJSON() as VerifyPayload;
     const { accountId, rootDirectoryId } = payload.transcript;
-    await expect(page.getByText("Your account is ready.", { exact: false })).toBeVisible();
+    // Creating the account signs this browser in: its new library is home.
+    await expect(page).toHaveURL(/\/files$/);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
     expect(await count(env, "accounts")).toBe(1);
     await expectSignupShape(env.DB, payload.transcript);
@@ -188,8 +230,13 @@ test("signs up atomically with a bound device and gates recovery material before
     expect((await privateRead(page, { ...proof, deviceId: crypto.randomUUID() })).status).toBe(403);
     expect((await privateRead(page, proof)).status).toBe(200); // read proofs are not consumed
     expect(await count(env, "device_proof_uses", accountId)).toBe(0);
+    await waitForSharedProvisioning(page);
     await page.reload();
     await expect(page.getByRole("heading", { name: "Save your recovery phrase" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Account menu", exact: true }).click();
+    await page.locator("#account-menu").getByRole("link", { name: "Public pseudonym", exact: true }).click();
+    await expect(page.getByLabel("Current Public pseudonym")).toHaveText("Quiet Heron");
   } finally {
     await context.close();
   }
@@ -213,8 +260,9 @@ test("sign-out preserves the device keys for a later private-capable sign-in", a
     expect(response).toBe(200);
     await page.goto(`${new URL(baseURL!).origin}/sign-in`, { waitUntil: "commit" });
     await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(page.getByText("Signed in.", { exact: false })).toBeVisible();
-    await expect(page.getByText("This browser has no active Encryption device", { exact: false })).toHaveCount(0);
+    // The kept device binds the new Session, so sign-in opens the library rather than device access.
+    await expect(page).toHaveURL(/\/files$/);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     expect((await privateRead(page, await signedProof(page, accountId))).status).toBe(200);
     const sessions = await env.DB.prepare("SELECT device_id FROM sessions WHERE account_id = ?")
       .bind(accountId)
@@ -243,6 +291,9 @@ test("a lost signup commit response signs in with the persisted device without a
       payload = route.request().postDataJSON() as VerifyPayload;
       const response = await route.fetch();
       expect(response.status()).toBe(200);
+      // route.fetch() applies Set-Cookie to the shared jar even if we abort the response.
+      // Lose that header before any reload, otherwise signup redirects this bound Session to /files.
+      await context.clearCookies({ name: "__Host-mdwn_session" });
       committed();
       // Simulate response loss AFTER D1 commit; the UI receives only retry guidance.
       await route.abort("failed");
@@ -259,18 +310,22 @@ test("a lost signup commit response signs in with the persisted device without a
     });
     await committedResponse;
     await expect(page.getByRole("alert")).toContainText("sign in if your passkey was saved");
+    // Lost response headers must not leave a browser Session before the reload.
+    expect((await context.cookies()).some((cookie) => cookie.name === "__Host-mdwn_session")).toBe(false);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
     expect(payload).toBeDefined();
     expect(await count(env, "accounts")).toBe(1);
     const accountId = payload!.transcript.accountId;
     const deviceId = payload!.transcript.deviceId;
     await page.reload();
+    await expect(page).toHaveURL(/\/sign-up$/);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
-    await page.goto(`${new URL(baseURL!).origin}/sign-in`, { waitUntil: "commit" });
+    await page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true }).click();
     await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // The persisted device binds the new Session, so sign-in opens the library rather than device access.
+    await expect(page).toHaveURL(/\/files$/);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
-    await expect(page.getByText("This browser has no active Encryption device", { exact: false })).toHaveCount(0);
     const sessions = await env.DB.prepare("SELECT device_id FROM sessions WHERE account_id = ? ORDER BY created_at")
       .bind(accountId)
       .all<{ device_id: string | null }>();

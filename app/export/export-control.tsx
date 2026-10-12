@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { FilesSnapshot } from "~/tree/navigation-client";
-import { downloadExport, exportOwnedFiles, type ExportSelection } from "./export-client";
+import { saveFile } from "~/ui/save-file";
+
+import { exportOwnedFiles, type ExportSelection } from "./export-client";
 import { ExportError } from "../shared/export/collect";
 import { cx } from "~/ui/cx";
 import { DownloadIcon } from "~/ui/icons";
@@ -62,7 +64,7 @@ export function ExportControl({
         onProgress: ({ files, directories }) => setState({ status: "running", files, directories }),
       });
       if (abort.signal.aborted) return;
-      downloadExport(result);
+      saveFile(result.blob, result.filename);
       setState({
         status: "done",
         files: result.files,

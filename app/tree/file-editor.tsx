@@ -4,6 +4,7 @@ import { FILE_SOURCE_FEEDBACK, FILE_SOURCE_LIMIT, fileSourceBytes } from "~/shar
 import { CommentsPanel } from "~/comments/comments-panel";
 import { cx } from "~/ui/cx";
 import { CommentIcon, CopyIcon, DownloadIcon, EyeIcon, RefreshIcon } from "~/ui/icons";
+import { saveFile } from "~/ui/save-file";
 import { buttonClass, noticeClass } from "~/ui/styles";
 
 import { MarkdownPreview } from "./markdown-preview";
@@ -119,30 +120,12 @@ export function FileEditor({
     }
   }
   function download() {
-    const url = URL.createObjectURL(new Blob([draft], { type: "text/markdown;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "local-draft.md";
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    saveFile(new Blob([draft], { type: "text/markdown;charset=utf-8" }), "local-draft.md");
   }
   return (
     <>
       <div className="mt-6 flex flex-wrap items-center gap-2">
-        <p
-          role="status"
-          aria-label="File save status"
-          className={cx(
-            "eyebrow inline-flex items-center gap-2 border border-current/20 px-3 py-1.5 transition-colors",
-            statusTone[status],
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className={cx("size-1.5 rounded-full bg-current", status === "Saving" && "animate-pulse")}
-          />
-          {status}
-        </p>
+        {canEdit && <p className="hidden text-xs text-muted sm:block">Saves automatically · ⌘S or Ctrl+S</p>}
         {!canEdit && (
           <p role="status" className="eyebrow border border-line bg-cream px-3 py-1.5 text-ink-soft">
             Read-only — you can comment
@@ -172,7 +155,20 @@ export function FileEditor({
             )}
           </div>
         )}
-        {canEdit && <p className="ml-auto hidden text-xs text-muted sm:block">Saves automatically · ⌘S or Ctrl+S</p>}
+        <p
+          role="status"
+          aria-label="File save status"
+          className={cx(
+            "eyebrow ml-auto inline-flex items-center gap-2 border border-current/20 px-3 py-1.5 transition-colors",
+            statusTone[status],
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className={cx("size-1.5 rounded-full bg-current", status === "Saving" && "animate-pulse")}
+          />
+          {status}
+        </p>
       </div>
       {status === "Couldn't save" && (
         <section aria-label="Draft recovery" className={cx(noticeClass("warning"), "mt-4 space-y-3")}>

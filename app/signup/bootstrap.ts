@@ -1,6 +1,7 @@
 import { startRegistration } from "@simplewebauthn/browser";
 
 import { authPost } from "~/auth/client";
+import { normalizePseudonym, pseudonymProblem } from "~/shared/account/pseudonym";
 import { prepareRecoveryCodeSet } from "~/shared/auth/recovery-codes";
 import { sealAccountProfile } from "~/shared/crypto/account-profile";
 import { digestEnvelope, inspectEnvelope } from "~/shared/crypto/enc-v1";
@@ -35,8 +36,13 @@ export type PreparedSignup = {
   };
 };
 
-/** Prepare locally, then let the user save and verify recovery material before any network request. */
-export async function prepareSignup(): Promise<PreparedSignup> {
+/**
+ * Prepare locally, then let the user save and verify recovery material before
+ * any network request. The chosen Public pseudonym is sealed into the Account
+ * profile here, so the service only ever receives it encrypted.
+ */
+export async function prepareSignup(publicPseudonym: string): Promise<PreparedSignup> {
+  if (pseudonymProblem(publicPseudonym)) throw new Error("invalid Public pseudonym");
   const accountId = newOpaqueId();
   const rootDirectoryId = newOpaqueId();
   const deviceId = newOpaqueId();
@@ -62,7 +68,7 @@ export async function prepareSignup(): Promise<PreparedSignup> {
   );
   const encryptedProfile = await sealAccountProfile(
     hierarchy.vaultRootKey,
-    { publicPseudonym: `Member ${encodeBytes(crypto.getRandomValues(new Uint8Array(9)))}` },
+    { publicPseudonym: normalizePseudonym(publicPseudonym) },
     { accountId, epoch: 1, revision: 1 },
   );
   const { codes: recoveryCodes, hashes: recoveryCodeHashes } = await prepareRecoveryCodeSet();
