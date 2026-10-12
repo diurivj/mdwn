@@ -349,3 +349,80 @@ export async function manualPass(page: Page, origin: string) {
   await page.getByRole("button", { name: "Provision shared content", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Shared access pass complete" })).toBeVisible();
 }
+
+/**
+ * Until the workspace Share dialog exists, an Owner invites through the real
+ * API from its own browser. With `prepare`, it also stages the signed Grant
+ * envelope for every current recipient device, so the recipient can accept.
+ * The File carries no registered Comment capability, so none is required.
+ */
+export async function inviteToFile(
+  owner: Page,
+  recipientAccountId: string,
+  workspace: Workspace,
+  options: { permission?: "read_only" | "read_write"; prepare?: boolean } = {},
+) {
+  const address = await workspace.db
+    .prepare("SELECT share_id FROM accounts WHERE id = ?")
+    .bind(recipientAccountId)
+    .first<{ share_id: string }>();
+  await loadFixture(owner);
+  return owner.evaluate(
+    async ({ fileId, recipientShareId, permission, prepare }) => {
+      const api = window.workspaceFixture,
+        access = await api.openRoot();
+      let file = await api.loadFile(access, fileId, access.rootKey);
+      if (!file.capability) {
+        const listing = await api.loadDirectory(access, access.rootId, access.rootKey);
+        await api.convertFileCapability(access, fileId, file, access.rootKey, listing);
+        file = await api.loadFile(access, fileId, access.rootKey);
+      }
+      const invite = await api.privateRequest("/api/private/shares", {
+        method: "PUT",
+        body: JSON.stringify({ targetId: fileId, recipient: { shareId: recipientShareId }, permission }),
+      });
+      if (invite.status !== 201) throw new Error(`Invitation: ${invite.status}`);
+      const { shareId } = (await invite.json()) as { shareId: string };
+      if (!prepare) return { shareId, recipientShareId };
+      const signer = (await api.getDevice(access.actorAccountId))!;
+      const path = `/api/private/shares/${shareId}/keys`;
+      const targets = (await (await api.privateRequest(path, { method: "POST" })).json()) as GrantKeyContext & {
+        devices: { deviceId: string; transportPublicKey: string }[];
+      };
+      const envelopes = await Promise.all(
+        targets.devices.map(async (device) =>
+          api.createGrantKeyEnvelope(
+            file.capabilityKey!,
+            await crypto.subtle.importKey(
+              "raw",
+              api.decodeTreeBytes(device.transportPublicKey),
+              { name: "ECDH", namedCurve: "P-256" },
+              true,
+              [],
+            ),
+            signer.assertionKeyPair.privateKey,
+            { ...targets, deviceId: device.deviceId, signerDeviceId: signer.deviceId },
+          ),
+        ),
+      );
+      const upload = await api.privateRequest(path, {
+        method: "PUT",
+        body: JSON.stringify({
+          capabilityId: targets.capabilityId,
+          capabilityEpoch: targets.capabilityEpoch,
+          ownerRegistryEpoch: targets.ownerRegistryEpoch,
+          recipientRegistryEpoch: targets.recipientRegistryEpoch,
+          envelopes,
+        }),
+      });
+      if (!upload.ok) throw new Error(`Key upload: ${upload.status}`);
+      return { shareId, recipientShareId };
+    },
+    {
+      fileId: workspace.fileId,
+      recipientShareId: address!.share_id,
+      permission: options.permission ?? "read_only",
+      prepare: options.prepare ?? true,
+    },
+  );
+}
