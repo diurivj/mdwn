@@ -106,7 +106,7 @@ function Hero() {
     <section className="border-b border-ink">
       <div className="container-page grid lg:grid-cols-12">
         <div className="min-w-0 py-12 sm:py-16 lg:col-span-5 lg:border-r lg:border-ink lg:py-20 lg:pr-10">
-          <p className="eyebrow text-muted">01 — Private Markdown</p>
+          <p className="eyebrow text-muted">Private Markdown</p>
           <h1 className="mt-8 max-w-xl font-display text-[3.25rem] font-light leading-[0.95] tracking-[-0.035em] text-balance sm:text-7xl lg:text-[4.5rem] xl:text-[5.25rem]">
             Write in Markdown. Keep the key.
           </h1>
@@ -141,11 +141,7 @@ function HowItWorks() {
     <section id="how-it-works" aria-labelledby="how-it-works-title" className="border-b border-ink">
       <div className="container-page grid lg:grid-cols-12">
         <div className="py-12 lg:col-span-5 lg:border-r lg:border-ink lg:py-16 lg:pr-10">
-          <SectionHeading
-            id="how-it-works-title"
-            eyebrow="02 — Getting started"
-            title="Three steps, and not one password"
-          >
+          <SectionHeading id="how-it-works-title" eyebrow="Getting started" title="Three steps, and not one password">
             The only things to keep safe are the ones only you should have.
           </SectionHeading>
         </div>
@@ -171,7 +167,7 @@ function Features() {
       <div className="container-page py-14 sm:py-20">
         <SectionHeading
           id="features-title"
-          eyebrow="03 — Index"
+          eyebrow="Features"
           title="A quiet place for serious writing"
           action={
             <Link to="/sign-up" className={buttonClass("secondary")}>
@@ -182,21 +178,18 @@ function Features() {
           No feeds, no plug-ins, no lock-in. Just your Files, the pages you choose to publish, and a way to take
           everything with you.
         </SectionHeading>
-        <ol className="mt-12 border-t border-ink">
-          {FEATURES.map(({ title, text, detail }, index) => (
+        <ul className="mt-12 border-t border-ink">
+          {FEATURES.map(({ title, text, detail }) => (
             <li
               key={title}
-              className="grid grid-cols-[2rem_1fr] items-baseline gap-x-4 gap-y-2 border-b border-line py-5 md:grid-cols-[3rem_8rem_1fr_10rem] md:gap-x-6"
+              className="grid items-baseline gap-x-4 gap-y-2 border-b border-line py-5 md:grid-cols-[8rem_1fr_10rem] md:gap-x-6"
             >
-              <span className="eyebrow text-muted">0{index + 1}</span>
               <h3 className="text-2xl font-light tracking-tight">{title}</h3>
-              <p className="col-start-2 max-w-2xl text-sm leading-relaxed text-ink-soft md:col-start-auto">{text}</p>
-              <p className="col-start-2 font-mono text-[11px] uppercase tracking-wide text-muted md:col-start-auto md:text-right">
-                {detail}
-              </p>
+              <p className="max-w-2xl text-sm leading-relaxed text-ink-soft">{text}</p>
+              <p className="font-mono text-[11px] uppercase tracking-wide text-muted md:text-right">{detail}</p>
             </li>
           ))}
-        </ol>
+        </ul>
       </div>
     </section>
   );
@@ -206,7 +199,7 @@ function Privacy() {
   return (
     <section id="privacy" aria-labelledby="privacy-title" className="border-b border-ink bg-sand">
       <div className="container-page py-14 sm:py-20">
-        <SectionHeading id="privacy-title" eyebrow="04 — Privacy" title="Your words never reach us readable">
+        <SectionHeading id="privacy-title" eyebrow="Privacy" title="Your words never reach us readable">
           mdwn encrypts your writing on your device first. Our servers store ciphertext, not the keys to read it.
         </SectionHeading>
         <div className="mt-12 border-y border-ink py-7">
@@ -234,12 +227,9 @@ function Privacy() {
               title: "Nothing to sell",
               text: "No ads, no analytics, no trackers, no paid tier. There is no business that depends on reading you.",
             },
-          ].map(({ title, text }, index) => (
+          ].map(({ title, text }) => (
             <div key={title}>
-              <dt>
-                <span className="eyebrow block text-muted">0{index + 1}</span>
-                <span className="mt-3 block text-xl font-light">{title}</span>
-              </dt>
+              <dt className="text-xl font-light">{title}</dt>
               <dd className="mt-3 text-sm leading-relaxed text-ink-soft">{text}</dd>
             </div>
           ))}
@@ -260,7 +250,7 @@ function Publishing() {
         <div className="lg:col-span-6">
           <SectionHeading
             id="publishing-title"
-            eyebrow="05 — Publishing"
+            eyebrow="Publishing"
             title="Publish one page. The key travels in the link."
           >
             When a File is ready for the world, publish it. Readers open a clean, read-only page that decrypts in their
@@ -302,25 +292,22 @@ function Questions() {
     <section id="questions" aria-labelledby="questions-title" className="border-b border-ink">
       <div className="container-page grid gap-10 py-14 sm:py-20 lg:grid-cols-12 lg:gap-16">
         <div className="lg:col-span-4">
-          <SectionHeading id="questions-title" eyebrow="06 — Questions" title="Before you trust us with your words" />
+          <SectionHeading id="questions-title" eyebrow="Questions" title="Before you trust us with your words" />
           <p className="mt-6 max-w-sm text-sm leading-relaxed text-ink-soft">
             Your writing is encrypted in your browser before upload. Here’s what that protects, and what stays in your
             hands.
           </p>
         </div>
         <div className="divide-y divide-line border-y border-line lg:col-span-8">
-          {QUESTIONS.map((faq, index) => (
+          {QUESTIONS.map((faq) => (
             <details key={faq.question} className="group">
               <summary className="flex items-baseline gap-3 py-5 sm:gap-5">
-                <span aria-hidden="true" className="eyebrow shrink-0 text-muted">
-                  Q.0{index + 1}
-                </span>
                 <span className="flex-1 text-xl font-light leading-snug tracking-tight sm:text-2xl">
                   {faq.question}
                 </span>
                 <PlusIcon className="size-4 self-center text-muted transition-transform group-open:rotate-45" />
               </summary>
-              <p className="max-w-3xl pb-6 text-[15px] leading-relaxed text-ink-soft sm:pl-14">{faq.answer}</p>
+              <p className="max-w-3xl pb-6 text-[15px] leading-relaxed text-ink-soft">{faq.answer}</p>
             </details>
           ))}
         </div>

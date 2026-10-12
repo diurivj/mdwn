@@ -36,7 +36,7 @@ export function SiteFooter() {
         </div>
 
         <nav aria-label="Product" className="md:col-span-2 md:col-start-7">
-          <p className="eyebrow text-muted">01 — Product</p>
+          <p className="eyebrow text-muted">Product</p>
           <ul className="mt-4 space-y-2.5 text-sm">
             {PRODUCT_LINKS.map((link) => (
               <li key={link.to}>
@@ -49,7 +49,7 @@ export function SiteFooter() {
         </nav>
 
         <nav aria-label="Access" className="md:col-span-2">
-          <p className="eyebrow text-muted">02 — Access</p>
+          <p className="eyebrow text-muted">Access</p>
           <ul className="mt-4 space-y-2.5 text-sm">
             {ACCESS_LINKS.map((link) => (
               <li key={link.to}>
@@ -62,7 +62,7 @@ export function SiteFooter() {
         </nav>
 
         <div className="md:col-span-2">
-          <p className="eyebrow text-muted">03 — Independent</p>
+          <p className="eyebrow text-muted">Independent</p>
           <p className="mt-4 text-sm leading-relaxed">Never monetized. Optional, anonymous donations only.</p>
           <Link to="/support" className="mt-3 inline-block text-sm text-ink underline underline-offset-4">
             Support mdwn

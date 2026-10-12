@@ -1121,7 +1121,7 @@ function FolderContents({
     );
   return (
     <ul aria-label="Folder contents" className="mt-8 divide-y divide-line border-y border-ink">
-      {entries.map((entry, index) => {
+      {entries.map((entry) => {
         const to = `/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`;
         return (
           <li key={entry.nodeId}>
@@ -1133,9 +1133,6 @@ function FolderContents({
                 pendingPath === to && "bg-cream",
               )}
             >
-              <span aria-hidden="true" className="w-6 shrink-0 font-mono text-[12px] tabular-nums text-muted sm:w-10">
-                {String(index + 1).padStart(2, "0")}
-              </span>
               <span className="grid size-11 shrink-0 place-items-center border border-line bg-cream text-ink-soft">
                 {entry.kind === "directory" ? <FolderIcon className="size-5" /> : <FileIcon className="size-5" />}
               </span>
