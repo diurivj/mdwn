@@ -10,6 +10,7 @@ import {
   restartOnce,
   SharePreparationError,
   sameSnapshot,
+  memoizedByKey,
   selectAutomaticPreparations,
   WorkBudget,
 } from "../app/shared/sharing/share-staging-client";
@@ -144,5 +145,20 @@ describe("selectAutomaticPreparations", () => {
     expect(selectAutomaticPreparations(ids)).toEqual([9, 8, 7, 5, 3].map(id));
     expect(selectAutomaticPreparations([id(1), id(1)])).toEqual([id(1)]);
     expect(selectAutomaticPreparations([])).toEqual([]);
+  });
+});
+
+describe("memoizedByKey", () => {
+  it("opens each File's capability once per pass, however many threads it carries", async () => {
+    const opened: string[] = [];
+    const keys = memoizedByKey(async (fileId: string) => {
+      opened.push(fileId);
+      return new Uint8Array(32).fill(fileId.length);
+    });
+    const [first, again, other] = await Promise.all([keys("file-a"), keys("file-a"), keys("file-bb")]);
+    expect(first).toBe(again);
+    expect(other).not.toBe(first);
+    expect(await keys("file-a")).toBe(first);
+    expect(opened).toEqual(["file-a", "file-bb"]);
   });
 });

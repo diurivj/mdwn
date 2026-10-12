@@ -18,20 +18,33 @@ type OwnedTarget =
   | { kind: "file"; file: Awaited<ReturnType<typeof loadFile>> }
   | { kind: "directory"; key: Uint8Array; keyEpoch: number };
 
+/** Called before each private request, so a caller can bound its total work. */
+type Spend = () => void;
+const unbounded: Spend = () => {};
+
 /** The verified walk from this Account's own root to an owned target. */
-async function walkOwned(ownerId: string, targetId: string, signal?: AbortSignal): Promise<OwnedTarget> {
+async function walkOwned(
+  ownerId: string,
+  targetId: string,
+  signal?: AbortSignal,
+  spend = unbounded,
+): Promise<OwnedTarget> {
+  spend();
   const access = await openRoot(signal);
   if (access.actorAccountId !== ownerId) throw new Error("Owner device required");
+  spend();
   const path = await loadAncestors(targetId, signal);
   if (path[0] !== access.rootId) throw new Error("Invalid owned scope");
   let key = access.rootKey,
     keyEpoch = access.capability!.epoch;
   for (let index = 0; index < path.length - 1; index++) {
+    spend();
     const listing = await loadDirectory(access, path[index]!, key, signal);
     const entry = listing.entries.find((entry) => entry.nodeId === path[index + 1]);
     if (!entry) throw new Error("Changed owned scope");
     if (entry.kind === "file") {
       if (index !== path.length - 2) throw new Error("Invalid owned scope");
+      spend();
       return { kind: "file", file: await loadFile(access, targetId, key, signal) };
     }
     key = await openChildDirectory(access, key, entry);
@@ -40,8 +53,8 @@ async function walkOwned(ownerId: string, targetId: string, signal?: AbortSignal
   return { kind: "directory", key, keyEpoch };
 }
 
-export async function ownedKey(context: GrantKeyContext, signal?: AbortSignal) {
-  const target = await walkOwned(context.ownerId, context.targetId, signal);
+export async function ownedKey(context: GrantKeyContext, signal?: AbortSignal, spend = unbounded) {
+  const target = await walkOwned(context.ownerId, context.targetId, signal, spend);
   if (target.kind === "file") {
     if (context.targetKind !== "file") throw new Error("Invalid owned scope");
     if (
@@ -62,8 +75,8 @@ export async function ownedKey(context: GrantKeyContext, signal?: AbortSignal) {
 }
 
 /** The Owner's current File capability key for an owned File, by the same verified walk. */
-export async function ownedFileCapabilityKey(ownerId: string, fileId: string, signal?: AbortSignal) {
-  const target = await walkOwned(ownerId, fileId, signal);
+export async function ownedFileCapabilityKey(ownerId: string, fileId: string, signal?: AbortSignal, spend = unbounded) {
+  const target = await walkOwned(ownerId, fileId, signal, spend);
   if (target.kind !== "file" || !target.file.capabilityKey) throw new Error("Changed File capability");
   return target.file.capabilityKey;
 }
@@ -78,8 +91,10 @@ export async function openOwnedCommentKey(
   envelope: string,
   device: StoredDevice,
   signal?: AbortSignal,
+  spend = unbounded,
 ) {
   if (device.accountId !== context.ownerId) throw new Error("Owner device required");
+  spend();
   const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
   if (!response.ok) throw new Error("Owned source unavailable");
   const boot = (await response.json()) as { enrollmentEnvelope: string };
