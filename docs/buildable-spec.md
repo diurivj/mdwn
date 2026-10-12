@@ -21,7 +21,7 @@ The MVP must provide:
 7. A persistent split editor/preview workspace with responsive narrow-screen behavior.
 8. Browser-generated Markdown ZIP export and browser-preflighted Markdown import.
 9. Hard deletion of bounded File/Directory trees and irreversible Public-material teardown.
-10. Privacy-preserving abuse controls that need no paid add-on or tracking and keep usage within the budgeted [Workers Paid operating policy](operations.md#workers-paid-operating-policy). (Originally specified as remaining within Workers Free and D1 Free capacity; superseded in part on 2026-10-12, see ADR-0005.)
+10. Privacy-preserving abuse controls that need no paid add-on or tracking. They limit misuse; they are not a spending cap, and the [Workers Paid operating policy](operations.md#workers-paid-operating-policy) governs cost warnings and intervention. (Originally specified as remaining within Workers Free and D1 Free capacity; superseded in part on 2026-10-12, see ADR-0005.)
 
 Signup is open. The product is never monetized: there is no billing, subscription, advertising, or paid feature tier.
 
@@ -54,7 +54,7 @@ mdwn is never monetized: there is no billing, subscription, advertising, paywall
 - The only support surface is an optional, anonymous donation page linked from the site footer. It requires no Account, no session, and no personal data.
 - It shows static cryptocurrency addresses with QR codes generated locally (build-time or vendored); it embeds no third-party script, widget, tracker, or analytics, respecting the no-tracking invariants in section 2.1.
 - Donations grant nothing — no badge, priority, feature, storage, or service guarantee — and create no record in D1 or any operational store.
-- The page states what donations cover (domain and any future paid infrastructure) and that mdwn runs identically without them; capacity exhaustion still fails closed.
+- The page states what donations cover (the domain and hosting costs) and that they grant nothing and change nothing about how mdwn runs. It makes no claim about how capacity exhaustion is billed.
 
 Evaluated private donation options and their trade-offs are recorded in [`support-options.md`](support-options.md).
 

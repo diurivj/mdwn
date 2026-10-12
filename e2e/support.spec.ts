@@ -39,9 +39,10 @@ test("support page serves static addresses and locally generated QR codes privat
   await expect(page.locator("svg[shape-rendering='crispEdges']")).toHaveCount(CONFIGURED_ASSET_COUNT);
 
   // Funding and no-entitlement statements required by the spec.
-  await expect(page.getByText(/domain and any future paid infrastructure/i)).toBeVisible();
-  await expect(page.getByText(/runs identically/i)).toBeVisible();
-  await expect(page.getByText(/fails closed rather than triggering paid spend/i)).toBeVisible();
+  await expect(page.getByText(/help cover the mdwn domain and hosting costs/i)).toBeVisible();
+  await expect(page.getByText(/change nothing about how mdwn runs/i)).toBeVisible();
+  // No claim about how capacity exhaustion is billed.
+  await expect(page.getByText(/paid spend/i)).toHaveCount(0);
   await expect(page.getByText(/No badge, priority, feature, storage, or service guarantee/i)).toBeVisible();
 
   // No Account, session, or non-essential cookie is set or read.
