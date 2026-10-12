@@ -40,6 +40,16 @@ one command. `scripts/lib/d1-export-restore.mjs` does exactly that.
   and per-row limits are unchanged. See
   [operations.md](../operations.md#paid-d1-capacity-and-time-travel).
 
+### Per-invocation queries
+
+D1 allows **50 queries per Worker invocation on Workers Free** and **1,000 on
+Workers Paid** ([D1 limits](https://developers.cloudflare.com/d1/platform/limits/),
+checked 2026-10-11). The documentation does not say whether each statement of a
+`batch()` counts as a query, so treat **every statement as counting** until
+that is verified. Budget a request or scheduled invocation by its statements,
+not its D1 calls, and use the Free figure until the account's plan is
+confirmed.
+
 ## Local persistence
 
 - Local commands resolve persistence relative to the **Wrangler config file's

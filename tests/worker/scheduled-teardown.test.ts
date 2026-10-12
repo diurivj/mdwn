@@ -8,6 +8,7 @@ import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import { commentPayload, publish, sealedAttribution, sealedComment, type Publication } from "./publication-fixtures";
 import {
   deletePayload,
+  grant,
   opaqueId,
   sharingAccount,
   sharingRequest,
@@ -343,13 +344,19 @@ describe("scheduled Unpublishing teardown", () => {
 
 describe("scheduled D1 budget", () => {
   it("stays within the Workers Free per-invocation query limit even if every batched statement counts", async () => {
-    const owner = await sharingAccount();
+    const owner = await sharingAccount(),
+      recipient = await sharingAccount();
     const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
     const publication = await publish(owner, fileId);
     await publicComment(owner, fileId, publication, "Counted");
     expect((await unpublish(owner, fileId)).status).toBe(200);
     await scheduled();
-    // The pending batch is now the largest one: the final transaction.
+    // Worst case: the pending teardown batch is the final transaction, and an
+    // expired Grant with envelope dependents makes the Grant drain run too.
+    const directoryId = await treeChild(owner, owner.rootId, "directory");
+    const { grantId } = await grant(owner, recipient, directoryId);
+    await env.DB.prepare("UPDATE grants SET expires_at = 1 WHERE id = ?").bind(grantId).run();
+    expect(await count("grant_key_envelopes", "relationship_id = ?", grantId)).toBeGreaterThan(0);
     let statements = 0;
     const counted = new Proxy(env.DB, {
       get(target, property) {
@@ -364,10 +371,125 @@ describe("scheduled D1 budget", () => {
     });
     await worker.scheduled(createScheduledController({ scheduledTime: Date.now() }), { ...env, DB: counted });
     expect(await publicRows(publication)).toEqual(gone);
-    // 38 here; an expired Grant's bounded drain adds its 3-statement batch,
-    // the worst case documented in app/retention/scheduled-maintenance.server.ts.
-    expect(statements).toBe(38);
-    expect(statements + 3).toBeLessThanOrEqual(50);
+    expect(await count("grant_key_envelopes", "relationship_id = ?", grantId)).toBe(0);
+    // The table beside the duty list in app/retention/scheduled-maintenance.server.ts.
+    expect(statements).toBe(41);
+    expect(statements).toBeLessThanOrEqual(50);
+  });
+});
+
+describe("scheduled teardown fairness and races", () => {
+  /** Runs one scheduled invocation whose D1 binding runs `gap` right after the
+   * teardown target SELECT resolves and before its batch is sent. */
+  async function scheduledWithGap(gap: () => Promise<void>) {
+    let fired = false;
+    const once = async <T>(result: Promise<T>) => {
+      const value = await result;
+      if (!fired) {
+        fired = true;
+        await gap();
+      }
+      return value;
+    };
+    const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+      new Proxy(statement, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (property === "bind") return (...values: unknown[]) => wrap(target.bind(...values));
+          if (property === "raw" || property === "all" || property === "first" || property === "run")
+            return (...args: unknown[]) => once((value as (...a: unknown[]) => Promise<unknown>).apply(target, args));
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    const gapped = new Proxy(env.DB, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (property === "prepare")
+          return (query: string) => {
+            const statement = target.prepare(query);
+            return query.includes("FROM publication_teardowns t JOIN publications p") ? wrap(statement) : statement;
+          };
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    await worker.scheduled(createScheduledController({ scheduledTime: Date.now() }), { ...env, DB: gapped });
+    expect(fired).toBe(true);
+  }
+
+  it("keeps draining other sealed teardowns while one batch fails every time", async () => {
+    const owner = await sharingAccount();
+    const poisonedFile = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    const healthyFile = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    const poisoned = await publish(owner, poisonedFile);
+    await publicComment(owner, poisonedFile, poisoned, "Stuck");
+    const healthy = await publish(owner, healthyFile);
+    await publicComment(owner, healthyFile, healthy, "Goes");
+    // The poisoned Publication is sealed first, so it is the oldest teardown.
+    expect((await unpublish(owner, poisonedFile)).status).toBe(200);
+    expect((await unpublish(owner, healthyFile)).status).toBe(200);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await env.DB.prepare(`CREATE TRIGGER test_poisoned_teardown BEFORE DELETE ON public_representations
+      WHEN OLD.publication_id = '${poisoned.publicationId}'
+      BEGIN SELECT RAISE(ABORT, 'simulated poisoned teardown'); END`).run();
+    try {
+      for (let run = 0; run < 6; run++) await scheduled().catch(() => {});
+      expect(await publicRows(healthy)).toEqual(gone);
+      // The poisoned one stays sealed, Public access stays ended, and nothing claims completion.
+      expect(await sealedState(poisoned.publicationId)).toEqual({ state: "deleting", comment_total: 1 });
+      expect(await count("public_representations", "publication_id = ?", poisoned.publicationId)).toBe(1);
+      expect((await readPublic(poisoned.linkId)).status).toBe(404);
+    } finally {
+      await env.DB.prepare("DROP TRIGGER test_poisoned_teardown").run();
+    }
+    // Once the fault is gone, a later run finishes it.
+    await scheduled();
+    expect(await publicRows(poisoned)).toEqual(gone);
+  });
+
+  it("deletes nothing extra when the browser completes and the File is republished between selection and batch", async () => {
+    const owner = await sharingAccount();
+    const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    const first = await publish(owner, fileId);
+    expect((await unpublish(owner, fileId)).status).toBe(200);
+    let later: Publication | null = null;
+    let kept: { commentId: string; attributionId: string } | null = null;
+    // The scheduler selects the final transaction; the browser wins first.
+    await scheduledWithGap(async () => {
+      expect(await (await browserTeardown(owner, fileId)).json()).toMatchObject({ done: true });
+      later = await publish(owner, fileId);
+      kept = await publicComment(owner, fileId, later, "Fresh");
+    });
+    expect(await publicRows(first)).toEqual(gone);
+    expect(await count("publications", "id = ? AND state = 'active'", later!.publicationId)).toBe(1);
+    expect(await count("comments", "id = ?", kept!.commentId)).toBe(1);
+    expect(await count("thread_attributions", "id = ?", kept!.attributionId)).toBe(1);
+    expect(await count("public_representations", "publication_id = ?", later!.publicationId)).toBe(1);
+    expect(await count("comment_threads", "publication_id = ?", later!.publicationId)).toBe(1);
+    expect((await readPublic(later!.linkId)).status).toBe(200);
+  });
+
+  it("deletes nothing extra when the File is hard-deleted between selection and batch", async () => {
+    const owner = await sharingAccount();
+    const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    const siblingId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+    const publication = await publish(owner, fileId);
+    await publicComment(owner, fileId, publication, "Gone with the File");
+    const sibling = await publish(owner, siblingId);
+    const siblingComment = await publicComment(owner, siblingId, sibling, "Sibling stays");
+    expect((await unpublish(owner, fileId)).status).toBe(200);
+    await scheduledWithGap(async () => {
+      const deleted = await sharingRequest(
+        owner,
+        `/api/private/tree/nodes/${fileId}`,
+        "DELETE",
+        await deletePayload(owner, owner.accountId, fileId, owner.rootId),
+      );
+      expect(deleted.status).toBe(200);
+    });
+    expect(await publicRows(publication)).toEqual(gone);
+    expect(await count("publications", "id = ? AND state = 'active'", sibling.publicationId)).toBe(1);
+    expect(await count("comments", "id = ?", siblingComment.commentId)).toBe(1);
+    expect((await readPublic(sibling.linkId)).status).toBe(200);
   });
 });
 

@@ -10,24 +10,25 @@ import { purgeExpiredSecurityMaterial } from "./retention.server";
  * Unpublishing teardown an Owner already sealed. Each duty is isolated, so a
  * failure (or a teardown backlog) never skips the others.
  *
- * D1 budget. Workers Free allows 50 D1 queries per invocation and does not say
- * whether each statement of a `batch()` counts, so the worst reading — every
- * statement counts — must fit:
+ * D1 budget. Every duty together must fit the per-invocation D1 query limit
+ * in the worst reading, where each statement of a `batch()` counts
+ * (docs/operations/d1-scripting.md#per-invocation-queries):
  *
- * | duty                   | D1 statements                                  |
- * | ---------------------- | ---------------------------------------------- |
- * | abuse-records          | 3 (one batch)                                  |
- * | public-comment-reports | 1                                              |
- * | signup-proofs          | 3 (one batch)                                  |
- * | security-material      | 8 (one batch)                                  |
- * | grant-dependents       | 1 SELECT + 3 (one batch)                       |
- * | publication-teardown   | 1 SELECT + at most 21 (one batch: PRAGMA,      |
- * |                        | anchor and the 19-statement final transaction; |
- * |                        | a Comment batch is 4)                          |
+ * | duty                   | D1 statements                                   |
+ * | ---------------------- | ----------------------------------------------- |
+ * | abuse-records          | 3 (one batch)                                   |
+ * | public-comment-reports | 1                                               |
+ * | signup-proofs          | 3 (one batch)                                   |
+ * | security-material      | 8 (one batch)                                   |
+ * | grant-dependents       | 1 SELECT + 3 (one batch)                        |
+ * | publication-teardown   | 1 SELECT + 1 attempt marker + at most 20 (one   |
+ * |                        | batch: deferred-FK pragma and the 19-statement  |
+ * |                        | final transaction; a Comment batch is 3)        |
  *
- * Worst case 41 statements in 8 D1 calls. Raising a duty's bound, or adding a
- * duty, must keep this total within 50 until the Workers Paid subscription is
- * confirmed (docs/operations.md).
+ * Worst case 41 statements in 9 D1 calls, under the Workers Free limit.
+ * Raising a duty's bound, or adding a duty, must keep this total within that
+ * limit until the Workers Paid subscription is confirmed; the statement-budget
+ * test in tests/worker/scheduled-teardown.test.ts counts a real worst case.
  */
 const duties: readonly (readonly [name: string, run: (env: Env) => Promise<unknown>])[] = [
   ["abuse-records", (env) => purgeExpiredAbuseRecords(env.DB)],

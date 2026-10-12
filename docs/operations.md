@@ -14,8 +14,8 @@ Workers Paid is mdwn's **intended** operating baseline (maintainer decision,
 2026-10-12). This document does not record an active subscription, configured
 alerts or measured production capacity: none has been confirmed. Until the
 checklist's first step confirms the plan, operate within Workers Free limits —
-including D1's 50 queries per invocation — and keep every current product
-bound. Paying changes neither the Import, rate or source limits nor the
+including D1's [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries)
+— and keep every current product bound. Paying changes neither the Import, rate or source limits nor the
 privacy model.
 
 **Budget.** Target about **$5 per month**: the Workers Paid subscription with
@@ -123,18 +123,20 @@ There is no automatic spending controller; every step is an operator decision.
 
 ### Paid D1 capacity and Time Travel
 
-| Limit | Workers Free | Workers Paid |
-| --- | --- | --- |
-| Database size | 500 MB | 10 GB per database |
-| Account storage | 5 GB | 5 GB included and shared, then billed; 1 TB default limit |
-| D1 queries per Worker invocation | 50 | 1,000 |
-| Row, string or BLOB | 2 MB | 2 MB (unchanged) |
-| Query or batch duration | 30 s | 30 s (unchanged) |
-| Time Travel | 7 days | **30 days** |
+What Workers Paid changes for D1:
+
+- **10 GB per database.**
+- **5 GB of storage included and shared** across the account's databases,
+  then billed; 1 TB default account storage limit.
+- A higher [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries).
+- **30 days of Time Travel.**
+- Monthly row allowances that bill overage, where Free exhausts a daily quota
+  and fails until 00:00 UTC.
 
 Sources: [D1 limits][d1-limits], [D1 pricing][d1-pricing],
-[Time Travel][time-travel]. Free exhausts a daily quota and fails until 00:00
-UTC; Paid bills usage beyond the allowance instead.
+[Time Travel][time-travel]. The Free limits, and the per-statement, per-row and
+query-duration limits that do not change, are recorded in the
+[D1 scripting reference](operations/d1-scripting.md#limits).
 
 Time Travel is always on and has no extra charge. It is **operational
 recovery** for a bad migration or manual repair (see
@@ -142,7 +144,7 @@ recovery** for a bad migration or manual repair (see
 user-visible File history, not a restore feature, and a restore rolls back
 every intervening write. Live deletion — Hard deletion, Unpublishing teardown,
 retention — does not immediately erase provider history: deleted rows stay
-restorable by the operator for up to 30 days on Paid (7 on Free). No new backup
+restorable by the operator for the plan's Time Travel window. No new backup
 system is added, and the plan change alone does not require a new restore
 rehearsal.
 
@@ -189,8 +191,8 @@ The handler removes:
 - Bounded expired-Grant envelope/provisioning dependents, **not** the Grant's
   write seal or a cryptographic job. Browser-authorized rotation still owns that
   lifecycle (`app/sharing/grant-expiry.server.ts`).
-- One batch of an Unpublishing the Owner already sealed: the oldest pending
-  teardown's next bounded batch (at most 200 Public Comments, or the final
+- One batch of an Unpublishing the Owner already sealed: the least recently
+  attempted pending teardown's next bounded batch (at most 200 Public Comments, or the final
   transaction once none remain). Only a `deleting` Publication with its
   teardown row qualifies; no Session, Device proof or key is used. See
   [Publications](publications.md#scheduled-completion).
@@ -217,27 +219,22 @@ Travel/backups are outside application-level deletion.
 
 ### Scheduled bounds and D1 budget
 
-The account's Workers Paid subscription is not yet confirmed. Workers Free
-allows 50 D1 queries per invocation and does not say whether each statement of
-a `batch()` counts, so every duty together must fit even if every statement
-counts. The worst case is 41 statements in 8 D1 calls:
+The account's Workers Paid subscription is not yet confirmed, so every duty
+together must fit the Free
+[per-invocation query limit](operations/d1-scripting.md#per-invocation-queries),
+counting every batched statement. The per-duty statement table and its
+worst-case total live beside the duty list in
+`app/retention/scheduled-maintenance.server.ts`; raising a bound or adding a
+duty must keep that total within the limit. The statement-budget test in
+`tests/worker/scheduled-teardown.test.ts` counts a real worst-case invocation
+(a pending final teardown transaction plus an expired Grant drain).
 
-| Duty | Worst-case D1 statements |
-| --- | --- |
-| Abuse records | 3 (one batch) |
-| Public Comment reports | 1 |
-| Signup proofs and challenges | 3 (one batch) |
-| Security material and Import staging | 8 (one batch) |
-| Expired-Grant dependents | 1 SELECT + 3 (one batch) |
-| Unpublishing teardown | 1 SELECT + 21 (one batch: deferred-FK pragma, sealed-state anchor and the 19-statement final transaction; a Comment batch is 4) |
-
-The table and its arithmetic live beside the duty list; raising a bound or
-adding a duty must keep the total within 50 until the plan is confirmed.
-`tests/worker/scheduled-teardown.test.ts` counts the statements of a real
-invocation. Teardown throughput is one batch per run (at most 200 Public
-Comments, or one final transaction): a backlog eventually drains, but no
-deletion deadline is promised. A teardown failure leaves its Publication sealed
-for the next run.
+Teardown throughput is one batch per run (at most 200 Public Comments, or one
+final transaction): a backlog eventually drains, but no deletion deadline is
+promised. Each run first records an attempt on its target, which commits even
+if the batch then fails, and the next run picks the least recently attempted
+sealed Publication. A Publication whose batch keeps failing stays sealed and
+retryable without holding up the others.
 
 ### Verify maintenance
 

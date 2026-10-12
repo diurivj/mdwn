@@ -232,26 +232,33 @@ entirely fresh with new identifiers and an empty thread.
 Only durable sealed state authorizes scheduled cleanup: a `deleting`
 Publication with its `publication_teardowns` row, which only the Owner's
 proof-guarded seal creates. Scheduled maintenance never simulates a Session,
-consumes a Device proof or opens a key. Each run picks the oldest pending
-teardown (`publication_teardowns.created_at`, then id) and commits one batch for
-it in one atomic D1 batch. Its anchor is a compare-and-set on the sealed row,
-and every dependent statement is gated by that row still being `deleting` —
-true until the batch's own last statement removes it. The browser path keeps
-its Device-proof anchor and per-invocation token. Every statement is keyed by
-the Publication's id, File and Owner, so interleaved browser and scheduled
-batches, a run after File hard deletion (which already removed the rows) and a
-later Publication of the same File are all harmless. A failed batch rolls back,
-the Publication stays sealed and the next run retries; access never reopens and
-nothing claims completion. There is no deletion deadline: a backlog drains one
-batch per run.
+consumes a Device proof or opens a key.
+
+Each run picks the least recently attempted sealed Publication (its
+`updated_at`, which the seal sets and every scheduled or browser attempt
+advances, then id) and first records the attempt in a statement of its own.
+That attempt marker carries no authority and commits even if the batch then
+fails, so a Publication whose batch keeps failing moves behind the others
+instead of blocking them. The run then commits one batch in one atomic D1
+batch. Authority is the sealed predicate itself — the Publication row with that
+id, File and Owner still `deleting` — re-evaluated by every statement; it stays
+true until the batch's own last statement removes the row. The browser path
+keeps its Device-proof anchor and per-invocation token. Because every statement
+is keyed by the Publication's id, File and Owner, interleaved browser and
+scheduled batches, a run after File hard deletion (which already removed the
+rows) and a later Publication of the same File all fail the predicate and
+delete nothing. A failed batch rolls back, the Publication stays sealed and a
+later run retries; access never reopens and nothing claims completion. There
+is no deletion deadline: a backlog drains one batch per run.
 
 The Publish panel distinguishes the three states. While sealed it shows
 **Deleting public material…** with progress and says Public access has ended
 and deletion continues automatically, even after the page closes; **Continue
-deleting** appears when this page's own batch failed. Only after an
-authoritative read finds the sealed Publication gone does it say **Public
-material deleted**; it never claims physical deletion before the final
-transaction.
+deleting** appears when this page's own batch failed. Only a page that saw
+the seal, and then an authoritative read without the sealed Publication, says
+**Public material deleted**; it never claims physical deletion before the final
+transaction. An Owner who leaves and returns after cleanup simply sees the File
+as unpublished: Hard deletion keeps no record that a Publication existed.
 
 ## Public reader
 
@@ -335,18 +342,22 @@ Publication). `tests/worker/scheduled-teardown.test.ts` seals real
 Publications and runs the Worker's `scheduled` entry point: completion across
 several bounded runs with no browser call, survival of the File, its Private
 thread and other Publications and Owners by direct D1 inspection, interleaved
-browser batches, File hard deletion, a later Publication, security retention
-beside a backlog, isolated duty failures and the per-invocation D1 statement
-budget. `e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
+browser batches, File hard deletion, a later Publication, a stale target
+whose Publication is completed and replaced or whose File is deleted between
+selection and batch, a permanently failing teardown that does not block
+others, security retention beside a backlog, isolated duty failures and the
+worst-case per-invocation D1 statement budget. `e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
 fresh anonymous context and proves the fragment never reaches a request,
 header, cookie, console message or D1 row while saves keep the link live. It
 also covers fragment-only navigation, adversarial front-matter presentation,
 collapsed panels/lost responses after the real Worker commits creation, retries
 that lose to an earlier pending commit, paired saves with expanded titles, link
 rotation with a surviving Comment, an unpublish whose counted confirmation,
-bounded progress and fresh later Publication are asserted, and an unpublish
-whose page never drives teardown, which scheduled maintenance completes while
-the panel shows pending and then completed deletion.
+bounded progress and fresh later Publication are asserted, an unpublish whose
+page never drives teardown, which scheduled maintenance completes while the
+panel shows pending and then completed deletion, and an Owner who leaves right
+after confirming and later returns to an unpublished File whose old link is
+`404`.
 
 See [enc-v1](enc-v1.md), [serving and security](serving-and-security.md),
 [sharing](sharing.md), [public pseudonym update](pseudonym-update.md) and [tree structure](tree-structure.md).

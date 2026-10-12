@@ -318,8 +318,8 @@ must cover exact-boundary acceptance and one-unit-over rejection (128 KiB
 manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk,
 every canonical ciphertext cap, 1,000 Historical Comments), retries and
 mismatches, expiry/failure/stale-authority, no-visible-partial-tree, and that
-every worst-case upload and commit fits the 50-statement D1 Free invocation
-limit. Ticket 33 extends the same run to its release-gate criteria: a maximum
+every worst-case upload and commit fits the D1 Free
+[per-invocation query limit](operations/d1-scripting.md#per-invocation-queries). Ticket 33 extends the same run to its release-gate criteria: a maximum
 262,144-byte-source File create and save, one-byte-over rejection of the
 canonical 512 KiB bound, a staged Import Replace that stays invisible until
 the marker, an active-Publication paired update, stale-conflict preservation,
@@ -345,10 +345,11 @@ expiry, stale revision and Owner, no-visible-partial-tree reads, direct
 deployed-`CHECK` one-over rows, and (ticket 33) a maximum-source create/save,
 staged Replace invisibility, paired active-Publication saves, stale-conflict
 preservation, and a missing-sequence rejection. Because D1 Free hard-fails an
-invocation above 50 queries and Workers Free reports `exceededCpu` for
+invocation above its query limit and Workers Free reports `exceededCpu` for
 over-budget invocations, a clean pass on a Free account is the budget evidence.
-On a Workers Paid account (1,000 D1 queries per invocation and a larger CPU
-default) a pass no longer demonstrates that fit, so it remains the recorded
+On a Workers Paid account (a higher
+[query limit](operations/d1-scripting.md#per-invocation-queries) and a larger
+CPU default) a pass no longer demonstrates that fit, so it remains the recorded
 2026-10-05/06 evidence for the current bounds until
 [ticket 65](../.scratch/mdwn/issues/65-larger-import-envelope.md) replaces them.
 
