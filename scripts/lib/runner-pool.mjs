@@ -47,6 +47,7 @@ export function validatePool(pool) {
   if (!/^[\w.-]+$/.test(pool.label)) throw new Error("A common pool label is required");
   const ids = new Set();
   const names = new Set();
+  const services = new Set();
   /** @type {string[]} */
   const writable = [];
   for (const slot of pool.slots) {
@@ -58,6 +59,9 @@ export function validatePool(pool) {
     }
     ids.add(slot.id);
     names.add(`${slot.repository}/${slot.name}`);
+    if (services.has(serviceName(slot)))
+      throw new Error("Derived launchd service names must be unique across repositories");
+    services.add(serviceName(slot));
     for (const path of [slot.directory, slot.state]) {
       if (!isAbsolute(path) || normalize(path) !== path || /[$~\r\n]/.test(path)) {
         throw new Error("Slot paths must be expanded, normalized absolute directories");
@@ -71,6 +75,29 @@ export function validatePool(pool) {
         throw new Error("Slots must have disjoint installation and state directories");
       }
       writable.push(canonical);
+    }
+    const environment = slotEnvironment(pool, slot);
+    const work = canonicalPath(join(slot.directory, "_work"));
+    const installation = canonicalPath(slot.directory);
+    const state = canonicalPath(slot.state);
+    if (work === installation || !containsPath(installation, work))
+      throw new Error("Workspace symlink escapes its installation");
+    const resources = [
+      environment.NPM_CONFIG_CACHE,
+      environment.PLAYWRIGHT_BROWSERS_PATH,
+      environment.TMPDIR,
+      environment.AGENT_TOOLSDIRECTORY,
+    ].map((path) => canonicalPath(path.replace(/\/$/, "")));
+    for (const [index, resource] of resources.entries()) {
+      const parent = index === 3 ? work : state;
+      if (resource === parent || !containsPath(parent, resource))
+        throw new Error("Writable resource symlink escapes its slot");
+      if (
+        resources
+          .slice(0, index)
+          .some((previous) => containsPath(previous, resource) || containsPath(resource, previous))
+      )
+        throw new Error("Writable resources must be disjoint");
     }
   }
   if (new Set(pool.activeSlots).size !== pool.activeSlots.length || pool.activeSlots.some((id) => !ids.has(id))) {
@@ -95,8 +122,8 @@ export function slotEnvironment(pool, slot) {
   };
 }
 
-/** @param {Pool} _pool @param {Slot} slot */
-export function serviceName(_pool, slot) {
+/** @param {Slot} slot */
+export function serviceName(slot) {
   return `actions.runner.${slot.repository.replace("/", "-")}.${slot.name}`;
 }
 
@@ -128,13 +155,20 @@ export function serviceTemplate(template, pool, slot) {
 export function assertStartCapacity(pool, listeners, loadedServices, target) {
   if (!pool.activeSlots.includes(target.id)) throw new Error("Slot is outside the configured active pool");
   const reservations = loadedServices.filter((name) => {
-    const slot = pool.slots.find((candidate) => serviceName(pool, candidate) === name);
+    const slot = pool.slots.find((candidate) => serviceName(candidate) === name);
     return !slot || !listeners.includes(join(slot.directory, "bin", "Runner.Listener"));
   }).length;
   const alreadyPresent =
     listeners.includes(join(target.directory, "bin", "Runner.Listener")) ||
-    loadedServices.includes(serviceName(pool, target));
+    loadedServices.includes(serviceName(target));
   if (listeners.length + reservations + Number(!alreadyPresent) > pool.maxActiveSlots) {
     throw new Error("Starting this slot would exceed the host-wide listener budget");
   }
+}
+
+/** Only loaded service rows, not disabled-services/environment sections.
+ * @param {string} output
+ */
+export function parseLaunchdRunners(output) {
+  return [...output.matchAll(/^\s*(?:\d+|-)\s+\S+\s+(actions\.runner\.[\w.-]+)\s*$/gm)].map((match) => match[1]);
 }

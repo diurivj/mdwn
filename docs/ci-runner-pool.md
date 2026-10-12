@@ -46,6 +46,10 @@ terminal listener with `stop-terminal ... mdwn-01` before starting that service.
 a quiet maintenance window. `start` serializes management commands and counts
 all local listeners plus loaded service reservations, including foreign slots.
 It restores the common label removed by `stop`.
+The controller also counts loaded runner services in the system domain and
+every local login account's launchd domains, failing closed if it cannot inspect
+one. Foreign reservations are conservative and may consume a second budget
+unit alongside a live foreign listener until their paths are inventoried.
 
 The generated templates in `ci/config/<slot>-service.plist.template` extend
 the installed official template, retain `runsvc.sh`, add explicit nonsecret
@@ -62,6 +66,15 @@ removes the common label, checks GitHub busy state and local Runner.Worker
 processes, and stops only that service. Label removal is not a drain lock:
 older workflow revisions using default labels can still match. If a job is
 busy, let it finish and retry. Never stop all workerd/browser processes on the host.
+
+Management commands hold `ci/config/.pool.lock/owner.json`, which records the
+owner PID, command, and start time. A crash or reboot can leave this lock behind.
+Recover only in a quiet management window: read that file, check the recorded
+PID with `ps -p PID -o pid=,comm=`, and confirm no pool controller is running.
+If the owner has exited, remove only the exact `owner.json` file, then the
+empty `/Users/diurivj/ci/config/.pool.lock` directory with `rmdir`; retry the
+command. If a crash preceded the owner-file write, remove only the empty lock
+after the same process check. A live or reused PID requires investigation.
 
 Inspect status for failed/offline services, queued work while matching slots
 are idle, disk pressure, and sustained swap growth. Run `trim-logs` on a

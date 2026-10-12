@@ -1,4 +1,4 @@
-# 53: Bounded Mac mini CI pool
+# 56: Bounded Mac mini CI pool
 
 Type: infrastructure
 Status: ready-for-agent

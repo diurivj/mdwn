@@ -2,7 +2,13 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { assertStartCapacity, serviceTemplate, slotEnvironment, validatePool } from "../scripts/lib/runner-pool.mjs";
+import {
+  assertStartCapacity,
+  parseLaunchdRunners,
+  serviceTemplate,
+  slotEnvironment,
+  validatePool,
+} from "../scripts/lib/runner-pool.mjs";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -92,6 +98,35 @@ test("expanded paths, distinct roots, and a bounded configured pool are required
   expect(() => validatePool(pool)).toThrow("absolute");
   expect(() => validatePool({ ...fixture(), maxActiveSlots: 5 })).toThrow("between one and four");
   expect(() => validatePool({ ...fixture(), maxActiveSlots: 1 })).toThrow("exceeds");
+});
+
+test("child caches and tool workspaces cannot escape through symlinks", () => {
+  const pool = fixture();
+  mkdirSync(join(pool.slots[0].state, "npm-cache"), { recursive: true });
+  mkdirSync(pool.slots[1].state, { recursive: true });
+  symlinkSync(join(pool.slots[0].state, "npm-cache"), join(pool.slots[1].state, "npm-cache"));
+  expect(() => validatePool(pool)).toThrow("resource symlink");
+  const work = fixture();
+  mkdirSync(work.slots[0].directory, { recursive: true });
+  mkdirSync(work.slots[1].directory, { recursive: true });
+  symlinkSync(work.slots[0].directory, join(work.slots[1].directory, "_work"));
+  expect(() => validatePool(work)).toThrow("Workspace symlink");
+});
+
+test("different repository spellings cannot collide on a launchd service name", () => {
+  const pool = fixture();
+  pool.slots[0].repository = "a-b/c";
+  pool.slots[1].repository = "a/b-c";
+  pool.slots[1].name = pool.slots[0].name;
+  expect(() => validatePool(pool)).toThrow("service names must be unique");
+});
+
+test("launchd reservations include loaded zero-PID services and omit disabled entries", () => {
+  expect(
+    parseLaunchdRunners(
+      'services = {\n  100 - actions.runner.one\n  0 (pe) actions.runner.two\n}\ndisabled services = {\n  "actions.runner.off" => disabled\n}',
+    ),
+  ).toEqual(["actions.runner.one", "actions.runner.two"]);
 });
 
 test("the official service entry point is preserved with slot environment and restart throttling", () => {

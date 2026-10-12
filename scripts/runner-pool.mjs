@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import {
   assertStartCapacity,
   containsPath,
+  parseLaunchdRunners,
   serviceName,
   serviceTemplate,
   slotEnvironment,
@@ -59,12 +60,31 @@ function processes() {
     });
 }
 function loadedServices() {
-  return run("launchctl", ["list"])
+  const users = run("/usr/bin/dscl", [".", "-list", "/Users", "UniqueID"])
     .split("\n")
     .flatMap((line) => {
-      const label = line.trim().split(/\s+/)[2];
-      return label?.startsWith("actions.runner.") ? [label] : [];
+      const match = /^\s*(\S+)\s+(\d+)\s*$/.exec(line);
+      return match && Number(match[2]) >= 500 ? [Number(match[2])] : [];
     });
+  const domains = ["system", ...new Set(users.flatMap((uid) => [`gui/${uid}`, `user/${uid}`]))];
+  const labels = new Set();
+  for (const domain of domains) {
+    const result = spawnSync("launchctl", ["print", domain], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    if (result.status !== 0) {
+      if (/Could not find domain/.test(result.stderr ?? "")) continue;
+      throw new Error(`Cannot inspect launchd domain ${domain}; capacity accounting fails closed`);
+    }
+    for (const label of parseLaunchdRunners(result.stdout)) {
+      // Foreign reservations count conservatively in addition to live
+      // listeners, since this pool does not own their installation paths.
+      labels.add(domain.endsWith(`/${account.uid}`) ? label : `${domain}/${label}`);
+    }
+  }
+  return [...labels];
 }
 /** @param {import('./lib/runner-pool.mjs').Slot} slot */
 function registration(slot) {
@@ -91,9 +111,10 @@ function assertLocallyIdle(slot) {
   const workers = processes().filter((entry) => entry.executable === join(slot.directory, "bin", "Runner.Worker"));
   if (workers.length || remote(slot).busy) throw new Error(`${slot.id} still has an executing job; retry when idle`);
 }
-/** @param {import('./lib/runner-pool.mjs').Slot} slot */
-function prepareService(slot) {
-  assertLocallyIdle(slot);
+/** Registration and service setup share the same writable-state invariant.
+ * @param {import('./lib/runner-pool.mjs').Slot} slot
+ */
+function prepareState(slot) {
   const env = slotEnvironment(pool, slot);
   for (const path of [
     slot.state,
@@ -101,16 +122,21 @@ function prepareService(slot) {
     env.PLAYWRIGHT_BROWSERS_PATH,
     env.TMPDIR,
     env.AGENT_TOOLSDIRECTORY,
-  ]) {
+  ])
     mkdirSync(path, { recursive: true });
-  }
+  return env;
+}
+/** @param {import('./lib/runner-pool.mjs').Slot} slot */
+function prepareService(slot) {
+  assertLocallyIdle(slot);
+  const env = prepareState(slot);
   const backup = join(pool.root, "config", `${slot.id}-original`);
   mkdirSync(backup, { recursive: true });
   for (const name of [".path", ".env", ".service"]) {
     if (existsSync(join(slot.directory, name)) && !existsSync(join(backup, name)))
       copyFileSync(join(slot.directory, name), join(backup, name));
   }
-  const plist = join(pool.home, "Library", "LaunchAgents", `${serviceName(pool, slot)}.plist`);
+  const plist = join(pool.home, "Library", "LaunchAgents", `${serviceName(slot)}.plist`);
   if (existsSync(plist) && !existsSync(join(backup, "service.plist")))
     copyFileSync(plist, join(backup, "service.plist"));
   const template = serviceTemplate(
@@ -127,11 +153,11 @@ function prepareService(slot) {
       env: { ...process.env, ...env, GITHUB_ACTIONS_RUNNER_SERVICE_TEMPLATE: templatePath },
     });
   } else {
-    if (loadedServices().includes(serviceName(pool, slot)))
+    if (loadedServices().includes(serviceName(slot)))
       throw new Error("Stop the idle service before changing its environment");
     // Update only the inventoried service, preserving bundled svc.sh/runsvc.sh.
     const rendered = template
-      .replaceAll("{{SvcName}}", serviceName(pool, slot))
+      .replaceAll("{{SvcName}}", serviceName(slot))
       .replaceAll("{{RunnerRoot}}", slot.directory)
       .replaceAll("{{UserHome}}", pool.home)
       .replaceAll("{{User}}", pool.owner);
@@ -179,15 +205,7 @@ function install(slot) {
     );
   }
   if (!registration(slot)) {
-    const environment = slotEnvironment(pool, slot);
-    for (const path of [
-      slot.state,
-      environment.NPM_CONFIG_CACHE,
-      environment.PLAYWRIGHT_BROWSERS_PATH,
-      environment.TMPDIR,
-      environment.AGENT_TOOLSDIRECTORY,
-    ])
-      mkdirSync(path, { recursive: true });
+    const environment = prepareState(slot);
     const token = api(`repos/${slot.repository}/actions/runners/registration-token`, ["--method", "POST"]).token;
     // The official listener consumes/masks ACTIONS_RUNNER_INPUT_TOKEN. Keep it
     // out of argv, service files, and command output; never copy credentials.
@@ -207,7 +225,7 @@ function install(slot) {
       {
         cwd: slot.directory,
         encoding: "utf8",
-        env: { ...process.env, ...slotEnvironment(pool, slot), ACTIONS_RUNNER_INPUT_TOKEN: token },
+        env: { ...process.env, ...environment, ACTIONS_RUNNER_INPUT_TOKEN: token },
       },
     );
     if (result.status !== 0)
@@ -225,10 +243,9 @@ function start(slot) {
     .map((entry) => entry.executable);
   const loaded = loadedServices();
   assertStartCapacity(pool, listeners, loaded, slot);
-  if (listeners.includes(join(slot.directory, "bin", "Runner.Listener")) && !loaded.includes(serviceName(pool, slot))) {
+  if (listeners.includes(join(slot.directory, "bin", "Runner.Listener")) && !loaded.includes(serviceName(slot))) {
     throw new Error("The slot is running outside launchd; gracefully stop its original terminal listener first");
   }
-  if (loaded.includes(serviceName(pool, slot))) return console.log(`${slot.id} is already loaded`);
   const runner = remote(slot);
   api(`repos/${slot.repository}/actions/runners/${runner.id}/labels`, [
     "--method",
@@ -238,12 +255,14 @@ function start(slot) {
     "-f",
     `labels[]=${slot.id}`,
   ]);
+  if (loaded.includes(serviceName(slot))) return console.log(`${slot.id} is already loaded; routing labels restored`);
   run("./svc.sh", ["start"], { encoding: "utf8", cwd: slot.directory });
   console.log(`Started ${slot.id}`);
 }
 /** @param {import('./lib/runner-pool.mjs').Slot} slot */
 function stop(slot) {
-  if (!loadedServices().includes(serviceName(pool, slot))) return console.log(`${slot.id} is already stopped`);
+  if (!loadedServices().includes(serviceName(slot))) return console.log(`${slot.id} is already stopped`);
+  assertLocallyIdle(slot);
   const runner = remote(slot);
   // Removal is a routing aid, not a drain lock: old default-label jobs can
   // still match. The operator must use a quiet maintenance window.
@@ -261,7 +280,7 @@ function stop(slot) {
 }
 /** @param {import('./lib/runner-pool.mjs').Slot} slot */
 function stopTerminal(slot) {
-  if (loadedServices().includes(serviceName(pool, slot))) throw new Error("Use stop for a managed service");
+  if (loadedServices().includes(serviceName(slot))) throw new Error("Use stop for a managed service");
   assertLocallyIdle(slot);
   const listeners = processes().filter(
     (entry) => entry.owner === pool.owner && entry.executable === join(slot.directory, "bin", "Runner.Listener"),
@@ -274,7 +293,7 @@ function stopTerminal(slot) {
 }
 /** @param {import('./lib/runner-pool.mjs').Slot} slot */
 function trimLogs(slot) {
-  if (loadedServices().includes(serviceName(pool, slot))) throw new Error("Stop this idle slot before rotating logs");
+  if (loadedServices().includes(serviceName(slot))) throw new Error("Stop this idle slot before rotating logs");
   assertLocallyIdle(slot);
   if (processes().some((entry) => entry.executable.startsWith(`${slot.directory}/`)))
     throw new Error("Slot still owns processes");
@@ -285,7 +304,7 @@ function trimLogs(slot) {
   logs.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
   const removed = logs.slice(60).filter((path) => Date.now() - statSync(path).mtimeMs > 30 * 86400_000);
   for (const path of removed) unlinkSync(path);
-  const serviceLogs = join(pool.home, "Library", "Logs", serviceName(pool, slot));
+  const serviceLogs = join(pool.home, "Library", "Logs", serviceName(slot));
   for (const name of ["stdout.log", "stderr.log"]) {
     const path = join(serviceLogs, name);
     if (existsSync(path) && statSync(path).size > 10 * 1024 * 1024) {
@@ -310,9 +329,9 @@ function status() {
     slots: pool.slots.map((/** @type {import('./lib/runner-pool.mjs').Slot} */ slot) => ({
       ...slot,
       registration: registration(slot),
-      serviceName: serviceName(pool, slot),
-      servicePath: join(pool.home, "Library", "LaunchAgents", `${serviceName(pool, slot)}.plist`),
-      serviceLoaded: loaded.includes(serviceName(pool, slot)),
+      serviceName: serviceName(slot),
+      servicePath: join(pool.home, "Library", "LaunchAgents", `${serviceName(slot)}.plist`),
+      serviceLoaded: loaded.includes(serviceName(slot)),
       version: existsSync(join(slot.directory, "bin", "Runner.Listener"))
         ? run(join(slot.directory, "bin", "Runner.Listener"), ["--version"]).trim()
         : null,
@@ -352,6 +371,11 @@ if (command === "status" || command === "inventory") {
   mkdirSync(join(pool.root, "config"), { recursive: true });
   const lock = join(pool.root, "config", ".pool.lock");
   mkdirSync(lock); // Atomic across simultaneous management commands.
+  const lockOwner = join(lock, "owner.json");
+  writeFileSync(
+    lockOwner,
+    `${JSON.stringify({ pid: process.pid, owner: pool.owner, command, created: new Date().toISOString() })}\n`,
+  );
   try {
     const selected = slotId
       ? pool.slots.filter((/** @type {import('./lib/runner-pool.mjs').Slot} */ slot) => slot.id === slotId)
@@ -370,6 +394,7 @@ if (command === "status" || command === "inventory") {
       if (command === "trim-logs") trimLogs(slot);
     }
   } finally {
+    unlinkSync(lockOwner);
     rmdirSync(lock);
   }
 }
