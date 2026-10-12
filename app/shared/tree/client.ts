@@ -331,22 +331,24 @@ export async function openDirectory(
       ? { ...listing.listingHead, signerPublicKey: decodeTreeBytes(listing.listingHead.signerPublicKey, 65) }
       : null,
   });
-  const entries = await Promise.all(
-    listing.entries.map(async (entry): Promise<TreeEntry> => {
+  const opened = await Promise.all(
+    listing.entries.map(async (entry): Promise<{ entry: TreeEntry; comparison: string }> => {
       const context = metadataContext(access.vaultId, directoryId, entry.nodeId, keyEpoch);
       const name = decoder.decode(await openSymmetric(decodeTreeBytes(entry.nameCiphertext), key, { context }));
       const order = decoder.decode(await openSymmetric(decodeTreeBytes(entry.orderCiphertext), key, { context }));
-      if (canonicalizeSegment(name).display !== name || order.length > 256 || !order) {
+      const segment = canonicalizeSegment(name);
+      if (segment.display !== name || order.length > 256 || !order) {
         throw new Error("invalid directory listing");
       }
-      return { ...entry, name, order };
+      return { entry: { ...entry, name, order }, comparison: encodeTreeBytes(segment.comparisonKey) };
     }),
   );
-  for (let i = 0; i < entries.length; i++) {
-    if (entries.slice(i + 1).some((sibling) => sameComparisonKey(entries[i]!.name, sibling.name))) {
-      throw new Error("invalid directory listing");
-    }
+  // No two siblings may share a comparison key. Each name is canonicalized once:
+  // comparing every pair canonicalized both names again, quadratic in the listing.
+  if (new Set(opened.map(({ comparison }) => comparison)).size !== opened.length) {
+    throw new Error("invalid directory listing");
   }
+  const entries = opened.map(({ entry }) => entry);
   entries.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : a.nodeId.localeCompare(b.nodeId)));
   return {
     directoryId,
