@@ -39,6 +39,10 @@ test("lands on the Laboratorio page and navigates its sections without document 
   );
   expect(fonts.length).toBeGreaterThan(0);
   expect(fonts.every((font) => new URL(font).origin === new URL(page.url()).origin)).toBe(true);
+  // Assert the deployed-shaped Static Assets response, not merely the source _headers file.
+  const asset = await page.request.get(fonts[0]!);
+  expect(asset.ok()).toBe(true);
+  expect(asset.headers()["cache-control"]).toBe("public, max-age=31536000, immutable");
 
   const originalDocument = await page.evaluateHandle(() => window.document);
   // The landing page says why mdwn exists before it says how it works.
@@ -96,6 +100,7 @@ test("mobile menu supports keyboard dismissal, section links and account entry",
   await hydrated;
   const trigger = page.getByRole("button", { name: "Open menu", exact: true });
   const menu = page.getByRole("dialog", { name: "Menu", exact: true });
+  await expect(page.getByRole("banner").getByRole("link", { name: "Support", exact: true })).toBeVisible();
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
@@ -129,6 +134,7 @@ test("Laboratorio landing and navigation fit mobile, tablet and desktop widths",
   await page.evaluate(() => document.fonts.ready);
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByRole("banner").getByRole("link", { name: "Support", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     for (const element of [page.getByRole("banner"), page.getByRole("heading", { level: 1 })]) {
       const bounds = await element.boundingBox();

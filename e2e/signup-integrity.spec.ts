@@ -61,6 +61,8 @@ for (const scenario of ["bad binding proof", "stale registry", "revoked device",
       });
       await page.getByRole("button", { name: "Sign in with a passkey" }).click();
       if (scenario === "stale registry") {
+        await expect(page).toHaveURL(/\/account\/device-access\?sign-in-again=1$/);
+        await expect(page.getByRole("heading", { name: "Finish signing in", exact: true })).toBeVisible();
         await expect(page.getByText("Device registry changed", { exact: false })).toBeVisible();
       } else {
         // An unbound Session opens the library, which hands this browser over to device access.
@@ -80,10 +82,13 @@ for (const scenario of ["bad binding proof", "stale registry", "revoked device",
       const read = await page.evaluate(async () => (await fetch("/api/private/bootstrap", { method: "POST" })).status);
       expect(read).toBe(403);
       if (scenario === "stale registry") {
-        await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-        // The refreshed device binds this Session, so the second sign-in opens the library.
+        await page.getByRole("link", { name: "Sign in with a passkey", exact: true }).click();
+        await page.getByRole("button", { name: "Sign in with a passkey", exact: true }).click();
+        // Only a second fresh assertion binds the refreshed device, then opens the library.
         await expect(page).toHaveURL(/\/files$/);
-        await page.goto(`${new URL(baseURL!).origin}/account/device-access`, { waitUntil: "commit" });
+        await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+        await page.getByRole("button", { name: "Account menu", exact: true }).click();
+        await page.locator("#account-menu").getByRole("link", { name: "Files access", exact: true }).click();
         await expect(page.getByRole("heading", { name: "Private access ready" })).toBeVisible();
         expect(
           await env.DB.prepare(

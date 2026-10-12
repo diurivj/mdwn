@@ -8,6 +8,7 @@ import {
   DevicesIcon,
   FolderIcon,
   KeyIcon,
+  LockIcon,
   MenuIcon,
   QrIcon,
   ShareIcon,
@@ -42,6 +43,7 @@ const LIBRARY: NavItem = {
 };
 
 const ACCOUNT_LINKS: { to: string; label: string; icon: ComponentType<{ className?: string }> }[] = [
+  { to: "/account/device-access", label: "Files access", icon: LockIcon },
   { to: "/account/security", label: "Account security", icon: ShieldIcon },
   { to: "/account/devices", label: "Encryption devices", icon: DevicesIcon },
   { to: "/enroll-device/approve", label: "Approve a device", icon: QrIcon },
@@ -82,15 +84,24 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
           chrome === "workspace" ? "w-full px-5 lg:px-10" : "container-page",
         )}
       >
-        <button
-          type="button"
-          onClick={() => menu.current?.showModal()}
-          className="-ml-2 grid size-10 place-items-center transition-colors hover:bg-sand lg:hidden"
-          aria-haspopup="dialog"
-          aria-label="Open menu"
-        >
-          <MenuIcon className="size-5" />
-        </button>
+        <div className="flex items-center gap-1 lg:hidden">
+          <button
+            type="button"
+            onClick={() => menu.current?.showModal()}
+            className="-ml-2 grid size-10 place-items-center transition-colors hover:bg-sand"
+            aria-haspopup="dialog"
+            aria-label="Open menu"
+          >
+            <MenuIcon className="size-5" />
+          </button>
+          <Link
+            to={SUPPORT.to}
+            aria-current={pathname === SUPPORT.to ? "page" : undefined}
+            className="py-2 font-mono text-[10px] uppercase tracking-wide text-ink-soft transition-colors hover:text-ink"
+          >
+            Support
+          </Link>
+        </div>
 
         <div className="justify-self-center lg:flex lg:items-center lg:gap-6 xl:gap-10">
           <Logo />
@@ -129,12 +140,10 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
                 <UserIcon />
                 <span className="max-sm:hidden">Account</span>
               </button>
-              {!inLibrary && (
-                <Link to={LIBRARY.to} prefetch="intent" className={cx(buttonClass("primary", "sm"), "max-sm:hidden")}>
-                  <FolderIcon />
-                  Open library
-                </Link>
-              )}
+              <Link to={LIBRARY.to} prefetch="intent" className={cx(buttonClass("primary", "sm"), "max-sm:hidden")}>
+                <FolderIcon />
+                Open library
+              </Link>
             </>
           ) : (
             <>

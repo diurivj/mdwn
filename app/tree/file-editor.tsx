@@ -4,6 +4,7 @@ import { FILE_SOURCE_FEEDBACK, FILE_SOURCE_LIMIT, fileSourceBytes } from "~/shar
 import { CommentsPanel } from "~/comments/comments-panel";
 import { cx } from "~/ui/cx";
 import { CommentIcon, CopyIcon, DownloadIcon, EyeIcon, RefreshIcon } from "~/ui/icons";
+import { saveFile } from "~/ui/save-file";
 import { buttonClass, noticeClass } from "~/ui/styles";
 
 import { MarkdownPreview } from "./markdown-preview";
@@ -119,12 +120,7 @@ export function FileEditor({
     }
   }
   function download() {
-    const url = URL.createObjectURL(new Blob([draft], { type: "text/markdown;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "local-draft.md";
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    saveFile(new Blob([draft], { type: "text/markdown;charset=utf-8" }), "local-draft.md");
   }
   return (
     <>

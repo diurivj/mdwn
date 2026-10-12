@@ -10,9 +10,10 @@ test("opens the library from the header, keeps Account pages in the Account menu
   const accountMenu = page.locator("#account-menu");
   // Signed in, the header keeps only Support in view; the library and Account pages are actions.
   await expect(mainNav.getByRole("link")).toHaveText(["Support"]);
-  // Inside the library its own primary action would only repeat the page.
-  await expect(banner.getByRole("link", { name: "Open library", exact: true })).toHaveCount(0);
+  // The header retains both control shapes, even inside the workspace.
+  await expect(banner.getByRole("link", { name: "Open library", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Account menu", exact: true }).click();
+  await expect(accountMenu.getByRole("link", { name: "Files access", exact: true })).toBeVisible();
   await expect(accountMenu.getByRole("link", { name: "Library", exact: true })).toHaveAttribute("aria-current", "page");
   await accountMenu.getByRole("link", { name: "Library", exact: true }).click();
   await expect(page).toHaveURL(/\/files$/);
@@ -45,6 +46,7 @@ test("opens the library from the header, keeps Account pages in the Account menu
   expect((await instructions.boundingBox())!.x).toBeLessThan((await status.boundingBox())!.x);
   await page.screenshot({ path: testInfo.outputPath("workspace-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 375, height: 812 });
+  await expect(banner.getByRole("link", { name: "Support", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("workspace-mobile.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "Open menu", exact: true }).click();
@@ -52,6 +54,7 @@ test("opens the library from the header, keeps Account pages in the Account menu
   await expect(
     menu.getByRole("navigation", { name: "Main", exact: true }).locator("ul").first().getByRole("link"),
   ).toHaveText(["Library", "Support"]);
+  await expect(menu.getByRole("link", { name: "Files access", exact: true })).toBeVisible();
   await menu.getByRole("link", { name: "Account security", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Account security", exact: true })).toBeVisible();
   await expect(menu).toBeHidden();
@@ -106,6 +109,8 @@ test("shows the destination's own frame while a navigation loads, with no progre
   await page.getByRole("button", { name: "Account menu", exact: true }).click();
   await page.locator("#account-menu").getByRole("link", { name: "Public pseudonym", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Public pseudonym", exact: true })).toBeVisible();
+  // The destination placeholder also has this heading; wait for its decrypted content before leaving it.
+  await expect(page.getByLabel("Current Public pseudonym")).toBeVisible();
   const bootstrap = await hold("**/api/private/bootstrap");
   try {
     await page.getByRole("banner").getByRole("link", { name: "Open library", exact: true }).click();

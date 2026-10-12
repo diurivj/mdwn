@@ -55,16 +55,29 @@ async function boundDevice(env: Env, sessionId: string): Promise<ActiveDevice | 
 }
 
 /**
+ * The request's live Session with its active bound device, both read at once:
+ * every D1 read is a network round trip. The device is keyed by the same signed
+ * identifier and counts only because `getActiveSession` found that Session live.
+ */
+async function liveSessionDevice(
+  request: Request,
+  env: Env,
+): Promise<{ session: ActiveSession; device: ActiveDevice | null } | null> {
+  const sessionId = await sessionCookieId(request, env);
+  if (!sessionId) return null;
+  const [session, device] = await Promise.all([getActiveSession(request, env), boundDevice(env, sessionId)]);
+  return session ? { session, device } : null;
+}
+
+/**
  * Whether this request carries a live normal Session bound to a still-active
  * Encryption device, so signing in or up again would change nothing. Any other
  * Session can still sign in: a fresh Passkey assertion is how a browser's
  * Session becomes bound.
  */
 export async function hasActiveDeviceSession(request: Request, env: Env): Promise<boolean> {
-  const sessionId = await sessionCookieId(request, env);
-  if (!sessionId) return false;
-  const [session, device] = await Promise.all([getActiveSession(request, env), boundDevice(env, sessionId)]);
-  return session?.purpose === "normal" && session.deviceId !== undefined && device !== null;
+  const live = await liveSessionDevice(request, env);
+  return live?.session.purpose === "normal" && live.session.deviceId !== undefined && live.device !== null;
 }
 
 /** Prospective Session ID is the sign-in challenge ID; no Session exists until the assertion completes. */
@@ -90,22 +103,15 @@ export async function verifySignInDevice(
   return valid ? proof.deviceId : null;
 }
 
-/**
- * No persistent read-proof consumption: identical read requests cannot mutate
- * anything. Every D1 read is a network round trip, so the Session's bound
- * device is read beside the Session itself, keyed by the same signed
- * identifier; it counts only once `getActiveSession` finds that Session live.
- */
+/** No persistent read-proof consumption: identical read requests cannot mutate anything. */
 export async function authorizePrivateRequest(
   request: Request,
   env: Env,
   proof: unknown,
   body: string | Uint8Array = "",
 ): Promise<AuthorizedDevice | null> {
-  const sessionId = await sessionCookieId(request, env);
-  if (!sessionId) return null;
-  const [session, device] = await Promise.all([getActiveSession(request, env), boundDevice(env, sessionId)]);
-  return session ? verifySessionDevice(session, device, request, proof, body) : null;
+  const live = await liveSessionDevice(request, env);
+  return live ? verifySessionDevice(live.session, live.device, request, proof, body) : null;
 }
 
 export async function authorizeDeviceForSession(

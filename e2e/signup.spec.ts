@@ -221,7 +221,9 @@ test("signs up atomically with a bound device and gates recovery material before
     expect(await count(env, "device_proof_uses", accountId)).toBe(0);
     await page.reload();
     await expect(page.getByRole("heading", { name: "Save your recovery phrase" })).toHaveCount(0);
-    await page.goto("/account/pseudonym");
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Account menu", exact: true }).click();
+    await page.locator("#account-menu").getByRole("link", { name: "Public pseudonym", exact: true }).click();
     await expect(page.getByLabel("Current Public pseudonym")).toHaveText("Quiet Heron");
   } finally {
     await context.close();

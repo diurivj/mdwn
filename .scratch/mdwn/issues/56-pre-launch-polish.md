@@ -42,21 +42,26 @@
 - Hashed static assets are served `immutable` for a year.
 - `/files` opens the library root without a redirect and a second bootstrap.
 - A workspace navigation fetches the remembered expanded folders together with the selected path, instead of one level per extra round trip.
-- Private authorization reads its Session, Encryption device and registry epoch in one D1 query.
+- Private authorization reads its Session and the bound Encryption device/registry concurrently, removing a sequential D1 round trip while preserving React Router's D1-backed Session-storage authority.
 - Changes that alter the private-request protocol, Worker placement or data freshness are documented for maintainer decision, not implemented.
 
 ## Acceptance criteria
 
-- [ ] Landing explains why mdwn exists; closing buttons are equal width and aligned on desktop and mobile.
-- [ ] Header shape is identical signed out and signed in on site, Account and workspace pages; signed-in navigation shows Support only, and the Account menu carries every Account destination.
-- [ ] A device-bound Session visiting `/sign-in` or `/sign-up` lands in the library; sign-in success navigates there.
-- [ ] Workspace root reads "Library"; no redundant single breadcrumb; sidebar footer spacing is uniform; editor status is on the right.
-- [ ] "Optional support only" and the other filled panels have complete borders.
-- [ ] No navigation progress bar; destination placeholders appear on navigation; reduced motion is respected.
-- [ ] Creating a File or folder never shows "Navigation interrupted" (browser regression).
-- [ ] People choose a Public pseudonym at signup and on the Public pseudonym page, with validation and a suggestion.
-- [ ] Recovery phrase and codes can be downloaded as `.txt` wherever they are shown.
-- [ ] `/assets/*` responses are immutable; `/files` performs one bootstrap; expanded folders do not add sequential round trips; private authorization uses one Session/device query.
+- [x] Landing explains why mdwn exists; closing buttons are equal width and aligned on desktop and mobile.
+- [x] Header shape is identical signed out and signed in on site, Account and workspace pages; signed-in navigation shows Support only, and the Account menu carries every Account destination.
+- [x] A device-bound Session visiting `/sign-in` or `/sign-up` lands in the library; sign-in success navigates there.
+- [x] Workspace root reads "Library"; no redundant single breadcrumb; sidebar footer spacing is uniform; editor status is on the right.
+- [x] "Optional support only" and the other filled panels have complete borders.
+- [x] No navigation progress bar; destination placeholders appear on navigation; reduced motion is respected.
+- [x] Creating a File or folder never shows "Navigation interrupted" (browser regression).
+- [x] People choose a Public pseudonym at signup and on the Public pseudonym page, with validation and a suggestion.
+- [x] Recovery phrase and codes can be downloaded as `.txt` wherever they are shown.
+- [x] `/assets/*` responses are immutable; `/files` performs one bootstrap; remembered expanded folders are prefetched alongside the selected path (up to 24); private authorization reads Session/device state concurrently.
 - [ ] Standards/Spec review and the separate RR8/stack gate cover the final diff; clean-head `npm run verify` evidence is recorded with the PR.
 
 ## Comments
+
+- Continuation: retained the parallel Session/device reads rather than replace React Router's authoritative Session-storage read with a separate joined-query implementation. This removes the sequential round trip, not the number of queries. Remembered folders beyond the bounded 24-folder prefetch still load level by level; neither optimization changes authorization or freshness rules.
+- Review fixes: restored Files access in both Account menus and kept the workspace header's primary Open library control. Support remains directly visible at narrow widths. Stale-device sign-in now navigates to Files access with a sign-in-again prompt; only another fresh Passkey assertion binds a new Session. Browser tests use Account-menu links rather than cancelling live provisioning with document navigation, and wait for decrypted Account content rather than an optimistic placeholder heading.
+- Two-axis review findings resolved in follow-up inspection and regressions: **Standards: Pass; Spec: Pass**. Final code scope is `git diff 414d912ef5f2338153639cdb3377a5d10d48bd64`, including working-tree changes, SHA256 `0f2b5b284f536fcc6e9d67dce64b431141e1194e38c8632f64310197acd4fce2`; this checklist/comment is the only subsequent change. **Separate RR8/stack gate: Pass.** Checked RR 8.4.0, current client-data/fetcher/race-condition docs, route/type contracts, public HydrateFallbacks, browser-only profile/recovery handling, native mutation/revalidation paths, abort-aware navigation, authoritative D1 Session storage and unchanged guarded read/write authority. The immutable asset response, stale-registry sign-in, signup/download ceremony and pending-page tests pass in all three engines (12 checks); public and authenticated mobile/header/width checks pass in all three engines (9 checks). Desktop/mobile screenshots inspected. Clean-head preflight evidence will be recorded in the PR; it remains pending here until that run completes.
+- Product/infrastructure decisions remain in tickets 57 and 58, not silently implemented. In particular, the observed production Cloudflare analytics injection needs maintainer action before the existing no-analytics claim can be relied on; no production settings were changed.

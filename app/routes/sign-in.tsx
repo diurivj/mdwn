@@ -88,7 +88,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
           current.candidateActive
         ) {
           await updateRegistryEpoch(state.accountId, state.registryEpoch);
-          return { state: "registry-refreshed" } as const;
+          return redirect("/account/device-access?sign-in-again=1");
         }
       }
     } catch {
@@ -134,24 +134,6 @@ export default function SignIn() {
           Your browser or password manager asks you to confirm. There is no password to type.
         </p>
       </div>
-      {outcome === "registry-refreshed" ? (
-        <div className={cx(noticeClass("warning"), "mt-6 animate-rise")}>
-          <p>
-            <span className="font-medium">Signed in.</span>
-            <span className="mt-1 block">
-              Device registry changed. Sign in again with your passkey to check this device's current authority.
-            </span>
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link className={buttonClass("primary", "sm")} to="/account/device-access">
-              Check private access
-            </Link>
-            <Link className={buttonClass("ghost", "sm")} to="/account/security">
-              Manage Sessions
-            </Link>
-          </div>
-        </div>
-      ) : null}
       {outcome === "failed" ? (
         <p className={cx(noticeClass("danger"), "mt-6")}>We could not sign you in. Try again.</p>
       ) : null}

@@ -18,8 +18,11 @@ export function meta() {
 }
 
 /** Browser-only: neither private ciphertext nor even the Account status enters SSR. */
-export function clientLoader({ request }: Route.ClientLoaderArgs) {
-  return loadDeviceAccess(request.signal);
+export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  return {
+    ...(await loadDeviceAccess(request.signal)),
+    signInAgain: new URL(request.url).searchParams.get("sign-in-again") === "1",
+  };
 }
 
 export function HydrateFallback() {
@@ -53,9 +56,9 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
           )}
           <div className="mt-8 grid border border-line sm:grid-cols-2">
             {loaderData.rootId && (
-              <Link to={`/d/${loaderData.rootId}`} className={cx(tileClass, "bg-ink text-paper hover:bg-ink-soft")}>
+              <Link to="/files" className={cx(tileClass, "bg-ink text-paper hover:bg-ink-soft")}>
                 <FolderIcon className="size-6 text-paper" />
-                <span className="mt-6 font-display text-3xl font-light leading-tight tracking-tight">Open Files</span>
+                <span className="mt-6 font-display text-3xl font-light leading-tight tracking-tight">Open library</span>
                 <span className="mt-1 text-sm text-paper/70">Write, organize and publish.</span>
                 <ArrowRightIcon className="mt-6 size-5" />
               </Link>
@@ -77,6 +80,16 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
         <>
           <PageIntro eyebrow="Files access" title="Sign in to access your Files">
             <p>Your Files stay encrypted until your passkey and an approved device open them.</p>
+          </PageIntro>
+          <Link to="/sign-in" className={cx(buttonClass("primary", "lg"), "mt-8")}>
+            Sign in with a passkey
+            <ArrowRightIcon />
+          </Link>
+        </>
+      ) : state === "unprovisioned" && loaderData.signInAgain ? (
+        <>
+          <PageIntro eyebrow="Files access" title="Finish signing in">
+            <p>Device registry changed. Sign in again with your passkey to finish binding this browser.</p>
           </PageIntro>
           <Link to="/sign-in" className={cx(buttonClass("primary", "lg"), "mt-8")}>
             Sign in with a passkey
