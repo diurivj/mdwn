@@ -351,9 +351,10 @@ export async function manualPass(page: Page, origin: string) {
 }
 
 /**
- * Until the workspace Share dialog exists, an Owner invites through the real
- * API from its own browser. With `prepare`, it also stages the signed Grant
- * envelope for every current recipient device, so the recipient can accept.
+ * An Owner invites through the real API from its own browser, for specs that
+ * test what follows an invitation (`sharing-invite.spec.ts` uses the Share
+ * dialog). With `prepare`, it also stages the signed Grant envelope for every
+ * current recipient device, so the recipient can accept.
  * The File carries no registered Comment capability, so none is required.
  */
 export async function inviteToFile(

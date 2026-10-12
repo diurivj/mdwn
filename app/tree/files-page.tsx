@@ -9,6 +9,7 @@ import { PublishPanel } from "~/publications/publish-panel";
 import { PublicationLifecycle, type PublicationContext } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
+import { ShareDialog } from "~/sharing/share-dialog";
 import { SharedWithMeSection } from "~/sharing/shared-with-me";
 import { cx } from "~/ui/cx";
 import {
@@ -148,6 +149,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   // Folders shown open while their listing loads after an expand click.
   const [opening, setOpening] = useState<ReadonlySet<string>>(() => new Set());
   // One lifecycle per File page. It retains every prepared candidate for this
@@ -195,6 +197,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     submission.current = false;
     setSubmitting(false);
     setDialog(null);
+    setShareOpen(false);
   }, []);
   const route = useRef(`${kind}/${nodeId}`);
   const ensuredThread = useRef<string | null>(null);
@@ -233,6 +236,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     if (route.current !== `${kind}/${nodeId}`) {
       setDialog(null);
       setPublishOpen(false);
+      setShareOpen(false);
       setStructuralReady(false);
       setView("edit");
       route.current = `${kind}/${nodeId}`;
@@ -697,6 +701,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const siblings = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];
   const position = siblings.findIndex((entry) => entry.nodeId === nodeId);
   const folderEntries = kind === "directory" ? (snapshot.listings[nodeId]?.entries ?? []) : [];
+  // Owners share their own Files and folders; the Library root and content
+  // shared with you (Collaborators cannot reshare) offer no Share action.
+  const canShare = owner && nodeId !== snapshot.access.rootId && (kind === "directory" || !!snapshot.file);
+  const shareParentId = kind === "file" ? snapshot.file?.parentId : null;
   return (
     <main
       aria-busy={showPending || undefined}
@@ -861,6 +869,18 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                   </button>
                 </>
               )}
+              {canShare && (
+                <button
+                  type="button"
+                  aria-haspopup="dialog"
+                  disabled={busy || recoveryPending || (kind === "file" && !fileReady)}
+                  onClick={() => setShareOpen(true)}
+                  className={buttonClass("secondary", "sm")}
+                >
+                  <ShareIcon />
+                  Share
+                </button>
+              )}
               {kind === "file" && snapshot.file && (
                 <button
                   type="button"
@@ -1008,6 +1028,23 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           </div>
         </div>
       </section>
+      {shareOpen && canShare && (
+        <ShareDialog
+          target={{
+            access: snapshot.access,
+            nodeId,
+            kind,
+            file: snapshot.file,
+            parent:
+              shareParentId && snapshot.listings[shareParentId] && snapshot.keys[shareParentId]
+                ? { listing: snapshot.listings[shareParentId], key: snapshot.keys[shareParentId] }
+                : null,
+            lineage: snapshot.crumbs.map((crumb) => crumb.id),
+          }}
+          onClose={() => setShareOpen(false)}
+          onConverted={() => void revalidator.revalidate()}
+        />
+      )}
       {dialog && (
         <div
           role="dialog"

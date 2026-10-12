@@ -8,11 +8,11 @@ import type {
   RelationshipPermission,
   RelationshipTargetKind,
 } from "~/shared/sharing/relationships-client";
-import type { SharingIntent } from "~/shared/sharing/sharing-intents";
+import type { SharingIntent, SharingOutcome } from "~/shared/sharing/sharing-intents";
 import { sharedRootName, sharedTargetPath } from "~/tree/navigation-client";
 import { cx } from "~/ui/cx";
 import { FileIcon, FolderIcon } from "~/ui/icons";
-import { buttonClass, fieldClass, labelClass, linkClass } from "~/ui/styles";
+import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
 
 /**
  * Relationship rows for the Sharing page. Every control submits an explicit
@@ -352,5 +352,53 @@ export function OwnedGrantItem({ grant, Form, busy }: RowProps & { grant: OwnedG
         )}
       </Form>
     </Row>
+  );
+}
+
+const DONE: Record<NonNullable<SharingOutcome["intent"]>, string> = {
+  accept: "Invitation accepted. It is listed under Shared with me in your library.",
+  decline: "Invitation declined.",
+  cancel: "Invitation cancelled.",
+  leave: "You left the shared item. Your access has ended.",
+  revoke: "Access revoked. New edits under that item wait until a secure access update finishes.",
+  permission: "Permission changed. New edits under that item wait until a secure access update finishes.",
+  "set-expiry": "Expiry set.",
+  "clear-expiry": "Expiry cleared.",
+};
+
+/** The result of one submitted Sharing intent, for the Sharing page and the Share dialog. */
+export function SharingOutcomeNotice({ outcome, className }: { outcome: SharingOutcome; className?: string }) {
+  if (outcome.state === "done" && outcome.intent)
+    return (
+      <p role="status" className={cx(noticeClass("success"), className)}>
+        {DONE[outcome.intent]}
+        {(outcome.intent === "revoke" || outcome.intent === "permission") && (
+          <>
+            {" "}
+            <Link to="/account/key-rotations" className={linkClass}>
+              Review secure access updates
+            </Link>
+          </>
+        )}
+      </p>
+    );
+  const message =
+    outcome.state === "changed" && outcome.intent === "accept"
+      ? "The Owner’s browser is still preparing secure access for your devices, or the invitation changed. Try again later, or refresh."
+      : outcome.state === "changed"
+        ? "This sharing changed while you worked. Review the refreshed list and try again."
+        : outcome.state === "not-found"
+          ? "That sharing no longer exists. The list has been refreshed."
+          : outcome.state === "invalid"
+            ? outcome.intent === "set-expiry"
+              ? "Choose a date from today onward for the expiry."
+              : "That request was not valid. Refresh and try again."
+            : outcome.state === "access"
+              ? "Use an enrolled device with a current Session to manage sharing."
+              : "Sharing is unavailable right now. Refresh and try again.";
+  return (
+    <p role="alert" className={cx(noticeClass("warning"), className)}>
+      {message}
+    </p>
   );
 }

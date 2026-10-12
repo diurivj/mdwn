@@ -4,7 +4,14 @@ import { PrivateAccessError, type PrivateAccessState } from "~/shared/device/pri
 import { listRelationships, readShareIdentifier, type Relationships } from "~/shared/sharing/relationships-client";
 import { runSharingIntent, type SharingOutcome } from "~/shared/sharing/sharing-intents";
 import { sharedWithMe } from "~/shared/sharing/shared-with-me-cache";
-import { InvitationItem, OutgoingShareItem, OwnedGrantItem, ReceivedGrantItem } from "~/sharing/sharing-management";
+import {
+  InvitationItem,
+  OutgoingShareItem,
+  OwnedGrantItem,
+  ReceivedGrantItem,
+  SharingOutcomeNotice,
+} from "~/sharing/sharing-management";
+import { PrepareSecureAccess, useAutomaticPreparation } from "~/sharing/prepare-secure-access";
 import type { ChromeHandle } from "~/ui/chrome";
 import { cx } from "~/ui/cx";
 import { CheckIcon, CopyIcon } from "~/ui/icons";
@@ -56,53 +63,6 @@ export function HydrateFallback() {
       </p>
       <SkeletonLines className="mt-6 max-w-xl" />
     </AccountLayout>
-  );
-}
-
-const DONE: Record<NonNullable<SharingOutcome["intent"]>, string> = {
-  accept: "Invitation accepted. It is listed under Shared with me in your library.",
-  decline: "Invitation declined.",
-  cancel: "Invitation cancelled.",
-  leave: "You left the shared item. Your access has ended.",
-  revoke: "Access revoked. New edits under that item wait until a secure access update finishes.",
-  permission: "Permission changed. New edits under that item wait until a secure access update finishes.",
-  "set-expiry": "Expiry set.",
-  "clear-expiry": "Expiry cleared.",
-};
-
-function Outcome({ outcome }: { outcome: SharingOutcome }) {
-  if (outcome.state === "done" && outcome.intent)
-    return (
-      <p role="status" className={cx(noticeClass("success"), "mt-6 max-w-2xl")}>
-        {DONE[outcome.intent]}
-        {(outcome.intent === "revoke" || outcome.intent === "permission") && (
-          <>
-            {" "}
-            <Link to="/account/key-rotations" className={linkClass}>
-              Review secure access updates
-            </Link>
-          </>
-        )}
-      </p>
-    );
-  const message =
-    outcome.state === "changed" && outcome.intent === "accept"
-      ? "The Owner’s browser is still preparing secure access for your devices, or the invitation changed. Try again later, or refresh."
-      : outcome.state === "changed"
-        ? "This sharing changed while you worked. Review the refreshed list and try again."
-        : outcome.state === "not-found"
-          ? "That sharing no longer exists. The list has been refreshed."
-          : outcome.state === "invalid"
-            ? outcome.intent === "set-expiry"
-              ? "Choose a date from today onward for the expiry."
-              : "That request was not valid. Refresh and try again."
-            : outcome.state === "access"
-              ? "Use an enrolled device with a current Session to manage sharing."
-              : "Sharing is unavailable right now. Refresh and try again.";
-  return (
-    <p role="alert" className={cx(noticeClass("warning"), "mt-6 max-w-2xl")}>
-      {message}
-    </p>
   );
 }
 
@@ -162,6 +122,8 @@ export default function AccountSharing({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher<typeof clientAction>();
   // Submitting, then revalidating: controls stay disabled until the lists reload.
   const busy = fetcher.state !== "idle";
+  const ready = loaderData.state === "ready";
+  const preparing = useAutomaticPreparation(ready ? loaderData.relationships.outgoing : [], ready);
   if (loaderData.state !== "ready")
     return (
       <AccountLayout>
@@ -188,7 +150,7 @@ export default function AccountSharing({ loaderData }: Route.ComponentProps) {
           stay encrypted from recipients, so shared items appear as Shared File or Shared folder.
         </p>
       </PageIntro>
-      {!busy && fetcher.data && <Outcome outcome={fetcher.data} />}
+      {!busy && fetcher.data && <SharingOutcomeNotice outcome={fetcher.data} className="mt-6 max-w-2xl" />}
       <ShareIdentifier value={loaderData.shareIdentifier} />
 
       <SettingsSection
@@ -236,10 +198,17 @@ export default function AccountSharing({ loaderData }: Route.ComponentProps) {
         }
       >
         <h3 className="eyebrow mt-6 text-muted">Invitations you sent</h3>
+        {preparing && (
+          <p role="status" className="mt-2 text-sm text-muted">
+            Preparing secure access for your newest pending invitations…
+          </p>
+        )}
         {outgoing.length ? (
           <ul className="mt-1">
             {outgoing.map((share) => (
-              <OutgoingShareItem key={share.shareId} share={share} {...row} />
+              <OutgoingShareItem key={share.shareId} share={share} {...row}>
+                <PrepareSecureAccess shareId={share.shareId} busy={busy} />
+              </OutgoingShareItem>
             ))}
           </ul>
         ) : (

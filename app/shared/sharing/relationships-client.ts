@@ -52,6 +52,14 @@ export class SharingChangedError extends Error {
   }
 }
 
+/** 409 `key_rotation_required`: a secure access update must finish for this item first. */
+export class KeyRotationRequiredError extends Error {
+  constructor() {
+    super("key rotation required");
+    this.name = "KeyRotationRequiredError";
+  }
+}
+
 /** 404: the relationship no longer exists or is not this Account's to change. */
 export class SharingNotFoundError extends Error {
   constructor() {
@@ -301,4 +309,35 @@ export async function changeGrant(
   const result = await mutate(`/api/private/grants/${grantId}`, "PATCH", { expectedRevision, ...change }, signal);
   if (!positive(result.revision)) invalid();
   return result.revision;
+}
+
+/**
+ * Invite the Account with exactly this share identifier to an owned File or
+ * folder. A 404 means no other Account has that identifier (the server also
+ * answers 404 for the caller's own); returns the pending Share's id.
+ */
+export async function inviteShare(
+  targetId: string,
+  recipientShareId: string,
+  permission: RelationshipPermission,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!isV7(targetId) || !accountIdentity(recipientShareId)) throw new SharingNotFoundError();
+  const response = await privateRequest("/api/private/shares", {
+    method: "PUT",
+    body: JSON.stringify({ targetId, recipient: { shareId: recipientShareId }, permission }),
+    signal,
+  });
+  if (response.status === 409) {
+    const body = (await response
+      .clone()
+      .json()
+      .catch(() => null)) as { error?: unknown } | null;
+    if (body?.error === "key_rotation_required") throw new KeyRotationRequiredError();
+  }
+  if (response.status !== 201) return sharingFailure(response);
+  const body = object(await response.json());
+  exactKeys(body, ["shareId"]);
+  if (!isV7(body.shareId)) invalid();
+  return body.shareId;
 }

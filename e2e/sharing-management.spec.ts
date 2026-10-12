@@ -6,7 +6,7 @@ import { inviteToFile, seededAccount, sharedMarkdown } from "./support/provision
 test.setTimeout(180_000);
 test.use({ initialSource: sharedMarkdown });
 
-/** Shares are still created through the API (the Share dialog is ticket 58 part 2); everything else is UI. */
+/** These Shares are created through the API to isolate the Sharing page; `sharing-invite.spec.ts` drives the Share dialog. */
 async function openSharing(page: Page) {
   await page.getByRole("button", { name: "Account menu" }).click();
   await page.locator("#account-menu").getByRole("link", { name: "Sharing", exact: true }).click();
