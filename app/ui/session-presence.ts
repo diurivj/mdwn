@@ -1,7 +1,5 @@
 import { useSyncExternalStore } from "react";
 
-import { discardDeviceState } from "~/shared/device/private-client";
-
 /**
  * Whether this browser currently has a Session, for choosing navigation only.
  * It reads the boolean `/api/auth/session` answer once after hydration, when
@@ -51,17 +49,15 @@ function invalidateRead() {
   pending = null;
 }
 
-/** A completed sign-in or sign-out needs no request to know the answer. Either
- * also ends any device state private requests were reusing. */
+/** A completed sign-in or sign-out needs no request to know the answer.
+ * Routes call these through `auth-changes`, which also discards device state. */
 export function markSignedIn() {
   invalidateRead();
-  discardDeviceState();
   publish("signed-in");
 }
 
 export function markSignedOut() {
   invalidateRead();
-  discardDeviceState();
   publish("signed-out");
 }
 

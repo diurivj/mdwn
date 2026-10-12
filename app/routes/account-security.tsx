@@ -12,7 +12,7 @@ import type { ChromeHandle } from "~/ui/chrome";
 import { cx } from "~/ui/cx";
 import { DevicesIcon, KeyIcon, PlusIcon, RefreshIcon, UserIcon } from "~/ui/icons";
 import { AccountLayout, PageIntro, SettingsSection, SkeletonLines } from "~/ui/page-layouts";
-import { markSignedOut } from "~/ui/session-presence";
+import { afterSignOut } from "~/ui/auth-changes";
 import { buttonClass, linkClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/account-security";
@@ -97,7 +97,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
           "failed",
         );
         if (result.signedOut) {
-          markSignedOut();
+          afterSignOut();
           return redirect("/sign-in");
         }
         return { state: "success", message: "Passkey removed." } as const;
@@ -113,21 +113,21 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         return { state: "success", message: "Session refreshed." } as const;
       case "sign-out":
         await authPost<{ ok: true }>("/api/auth/sign-out", {}, request.signal);
-        markSignedOut();
+        afterSignOut();
         return redirect("/sign-in");
       case "revoke": {
         const sessionId = form.get("sessionId");
         if (typeof sessionId !== "string" || !sessionId) break;
         const result = await authPost<RevocationResult>("/api/auth/sessions/revoke", { sessionId }, request.signal);
         if (result.signedOut) {
-          markSignedOut();
+          afterSignOut();
           return redirect("/sign-in");
         }
         return { state: "success", message: "Session revoked." } as const;
       }
       case "revoke-all":
         await authPost<{ ok: true }>("/api/auth/sessions/revoke-all", {}, request.signal);
-        markSignedOut();
+        afterSignOut();
         return redirect("/sign-in");
     }
   } catch (error) {
