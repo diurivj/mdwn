@@ -7,6 +7,7 @@ import { activeRootCoverage, requiredGrantComments } from "./capability-coverage
 import { currentCommentEnvelope, rootDeliveryAuthority } from "./delivery-authority.server";
 import { deliveryContext, readCommentKey } from "./comment-keys.server";
 import { contextFor, readGrantKeys } from "./grant-keys.server";
+import { currentRecoveryEnvelope, recoverySource } from "./owned-sources.server";
 import { expireGrantBatch, hasExpiredGrants, liveGrant } from "./grant-expiry.server";
 
 const headers = { "Cache-Control": "no-store" };
@@ -43,9 +44,7 @@ async function nextProvisioning(env: Env, auth: AuthorizedDevice) {
     FROM provisioning_needs n JOIN grants s ON s.id = n.grant_id
     JOIN encryption_devices d ON d.id = n.device_id AND d.account_id = s.recipient_id AND d.state = 'active'
     JOIN sharing_comment_capabilities c ON c.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
-    LEFT JOIN key_envelopes k ON k.account_id = c.owner_id AND k.object_id = c.object_id
-      AND k.purpose = 'vault-recovery' AND k.recipient_id = 'vault-root'
-      AND k.key_epoch = c.capability_epoch AND k.superseded_at IS NULL
+    LEFT JOIN key_envelopes k ON ${currentRecoveryEnvelope(sql`c.owner_id`, sql`c.object_id`, sql`c.capability_epoch`)}
     WHERE n.grant_key_epoch = s.key_epoch AND ${liveGrant()}
       AND NOT (${currentCommentEnvelope(sql`d.id`, sql`c.object_id`, sql`c.capability_id`, sql`c.capability_epoch`)})
       AND (s.owner_id = ${auth.accountId} AND k.ciphertext IS NOT NULL OR s.recipient_id = ${auth.accountId}
@@ -58,10 +57,7 @@ async function nextProvisioning(env: Env, auth: AuthorizedDevice) {
     : await contextFor(env, auth, "grants", need.grantId);
   if (!context?.capabilityId || !context.capabilityEpoch || context.grantKeyEpoch !== need.grantKeyEpoch)
     return Response.json({ error: "sharing_changed" }, { status: 409, headers });
-  let source: object =
-    need.objectId && need.recovery
-      ? { kind: "recovery", envelope: encodeTreeBytes(new Uint8Array(need.recovery)) }
-      : { kind: "owned" };
+  let source: object = need.objectId && need.recovery ? recoverySource(need.recovery) : { kind: "owned" };
   if (auth.accountId === context.recipientId) {
     const response = need.objectId
       ? await readCommentKey(env, auth, "grants", need.grantId, need.objectId, null)

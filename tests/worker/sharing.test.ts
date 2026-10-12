@@ -340,3 +340,26 @@ it("an invitation beneath a write seal waits for the secure access update", asyn
   const elsewhere = await treeChild(owner, owner.rootId, "file");
   await invite(owner, second, elsewhere);
 });
+
+it("re-inviting an Account with a pending Share or active Grant on the same target is already_shared", async () => {
+  const owner = await sharingAccount(),
+    pending = await sharingAccount(),
+    active = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file");
+  await invite(owner, pending, fileId);
+  await grant(owner, active, fileId);
+  for (const recipient of [pending, active]) {
+    const refused = await sharingRequest(owner, "/api/private/shares", "PUT", {
+      targetId: fileId,
+      recipient: { shareId: recipient.shareId },
+      permission: "read_write",
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "already_shared" });
+  }
+  expect(await env.DB.prepare("SELECT count(*) AS total FROM shares WHERE target_id = ?").bind(fileId).first()).toEqual(
+    {
+      total: 1,
+    },
+  );
+});

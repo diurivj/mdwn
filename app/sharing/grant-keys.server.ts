@@ -16,6 +16,17 @@ const table = (kind: "shares" | "grants") => (kind === "shares" ? sql`shares` : 
 const envelopes = (kind: "shares" | "grants") =>
   kind === "shares" ? sql`share_key_envelopes` : sql`grant_key_envelopes`;
 
+/**
+ * A pending Share beneath a write seal cannot be prepared until rotation
+ * replaces the capability: say so explicitly instead of a generic conflict.
+ * Each committing statement keeps its own in-CAS seal guard.
+ */
+export async function shareSealed(env: Env, kind: "shares" | "grants", nodeId: string) {
+  if (kind !== "shares" || !(await createDb(env.DB).get(sql`SELECT 1 WHERE ${sharingWriteBlocked(nodeId)}`)))
+    return null;
+  return failure("key_rotation_required", 409);
+}
+
 type ContextRow = GrantKeyContext & { capabilityId: string | null; capabilityEpoch: number | null };
 export async function contextFor(env: Env, auth: AuthorizedDevice, kind: "shares" | "grants", id: string) {
   return createDb(env.DB).get<ContextRow>(sql`SELECT s.id AS relationshipId, s.owner_id AS ownerId,
@@ -43,6 +54,8 @@ export async function readGrantKeys(
 ) {
   const context = await contextFor(env, auth, kind, id);
   if (!context) return failure("not_found", 404);
+  const sealed = await shareSealed(env, kind, context.targetId);
+  if (sealed) return sealed;
   if (!context.capabilityId || !context.capabilityEpoch) return failure("shared_content_provisioning_required", 409);
   if (context.ownerId === auth.accountId) {
     const devices = await createDb(env.DB).all<{ deviceId: string; transport_public_key: ArrayBuffer }>(sql`
@@ -124,6 +137,8 @@ export async function uploadGrantKeys(
       AND ${rootDeliveryAuthority(auth, kind)} AND ${privateReadGuard(auth)}`))
   )
     return failure("not_found", 404);
+  const sealed = await shareSealed(env, kind, context.targetId);
+  if (sealed) return sealed;
   if (!context.capabilityId || !context.capabilityEpoch) return failure("shared_content_provisioning_required", 409);
   if (
     input.capabilityId !== context.capabilityId ||
