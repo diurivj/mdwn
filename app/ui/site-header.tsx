@@ -48,6 +48,7 @@ const ACCOUNT_LINKS: { to: string; label: string; icon: ComponentType<{ classNam
   { to: "/account/devices", label: "Encryption devices", icon: DevicesIcon },
   { to: "/enroll-device/approve", label: "Approve a device", icon: QrIcon },
   { to: "/account/pseudonym", label: "Public pseudonym", icon: UserIcon },
+  { to: "/account/sharing", label: "Sharing", icon: ShareIcon },
   { to: "/account/shared-access", label: "Shared access", icon: ShareIcon },
   { to: "/account/key-rotations", label: "Secure access updates", icon: KeyIcon },
 ];

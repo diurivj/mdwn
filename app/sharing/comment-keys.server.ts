@@ -3,7 +3,7 @@ import { commitPrivateBatch, privateReadGuard, type AuthorizedDevice } from "~/d
 import { encodeTreeBytes } from "~/shared/tree/wire";
 import { sharingWriteBlocked } from "./access.server";
 import { verifyCommentKeySignature, type CommentKeyContext } from "../shared/sharing/comment-keys";
-import { contextFor } from "./grant-keys.server";
+import { contextFor, shareSealed } from "./grant-keys.server";
 import { grantRootMatches, requiredGrantComments } from "./capability-coverage.server";
 import type { GrantKeyContext } from "../shared/sharing/grant-keys";
 import { retireFulfilledNeeds } from "./provisioning-needs.server";
@@ -11,6 +11,7 @@ import { readDeviceEnvelopePacket } from "./envelope-packet.server";
 import { rotationDeliveryPermit } from "./rotation-data.server";
 import { commentDeliveryAuthority } from "./delivery-authority.server";
 import { liveGrant } from "./grant-lifetime.server";
+import { ownedCommentSource } from "./owned-sources.server";
 
 const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
@@ -41,6 +42,8 @@ const commentContext = (context: GrantKeyContext, row: CommentRow) => ({
 export async function listCommentKeys(env: Env, auth: AuthorizedDevice, kind: Kind, id: string, cursor: string | null) {
   const context = await contextFor(env, auth, kind, id);
   if (!context) return failure("not_found", 404);
+  const sealed = await shareSealed(env, kind, context.targetId);
+  if (sealed) return sealed;
   if (!context.capabilityId || !context.capabilityEpoch) return failure("shared_content_provisioning_required", 409);
   const rows = await createDb(env.DB).all<CommentRow>(sql`SELECT c.* FROM ${relationships(kind)} s
     JOIN sharing_comment_capabilities c ON c.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
@@ -69,6 +72,15 @@ export async function deliveryContext(env: Env, auth: AuthorizedDevice, kind: Ki
   return row ? { root, comment: commentContext(root, row) } : null;
 }
 
+/** Seal pre-check for a Share's Comment endpoints: the root target (whose
+ * inflated epoch would otherwise hide the Comment row), then the Comment's File. */
+async function commentShareSealed(env: Env, auth: AuthorizedDevice, kind: Kind, id: string, fileId?: string) {
+  if (kind !== "shares") return null;
+  if (fileId) return shareSealed(env, kind, fileId);
+  const root = await contextFor(env, auth, kind, id);
+  return root ? shareSealed(env, kind, root.targetId) : null;
+}
+
 /** Correlated relationship s; bind current metadata AND the still-covered File. */
 function commentMatches(context: CommentKeyContext) {
   return sql`EXISTS (SELECT 1 FROM (${requiredGrantComments()}) c
@@ -86,8 +98,12 @@ export async function readCommentKey(
   cursor: string | null,
   missingOnly = false,
 ) {
+  const sealed = await commentShareSealed(env, auth, kind, id);
+  if (sealed) return sealed;
   const delivery = await deliveryContext(env, auth, kind, id, objectId);
   if (!delivery) return failure("not_found", 404);
+  const fileSealed = await commentShareSealed(env, auth, kind, id, delivery.comment.fileId);
+  if (fileSealed) return fileSealed;
   const { root, comment } = delivery;
   if (comment.ownerId === auth.accountId) {
     const devices = await createDb(env.DB).all<{ deviceId: string; transport_public_key: ArrayBuffer }>(sql`
@@ -106,9 +122,13 @@ export async function readCommentKey(
             : sql`1`
         }
         AND ${privateReadGuard(auth)} ORDER BY d.id LIMIT 21`);
+    // Share preparation needs the Owner's Comment key (see owned-sources.server.ts);
+    // without a source the browser must report it cannot prepare.
+    const source = kind === "shares" ? await ownedCommentSource(env, auth, comment) : null;
     return Response.json(
       {
         ...comment,
+        ...(source ? { source } : {}),
         devices: devices.slice(0, 20).map((device) => ({
           deviceId: device.deviceId,
           transportPublicKey: encodeTreeBytes(new Uint8Array(device.transport_public_key)),
@@ -160,6 +180,8 @@ export async function uploadCommentKeys(
 ) {
   const input = readDeviceEnvelopePacket(value);
   if (!input) return failure("invalid_sharing_request", 400);
+  const sealed = await commentShareSealed(env, auth, kind, id);
+  if (sealed) return sealed;
   const delivery = await deliveryContext(env, auth, kind, id, objectId);
   if (
     !delivery ||
@@ -168,6 +190,8 @@ export async function uploadCommentKeys(
       AND ${commentDeliveryAuthority(auth, kind, delivery.comment)} AND ${privateReadGuard(auth)}`))
   )
     return failure("not_found", 404);
+  const fileSealed = await commentShareSealed(env, auth, kind, id, delivery.comment.fileId);
+  if (fileSealed) return fileSealed;
   const { root, comment } = delivery;
   if (
     input.capabilityId !== comment.capabilityId ||
