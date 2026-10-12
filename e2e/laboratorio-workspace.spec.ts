@@ -1,19 +1,28 @@
 import { test, expect } from "./workspace-fixture";
 import { waitForSharedProvisioning } from "./support/navigation";
 
-test("opens Files from site navigation, retains account navigation and fits a narrow screen", async ({
+test("opens the library from the header, keeps Account pages in the Account menu and fits a narrow screen", async ({
   page,
   workspace,
 }, testInfo) => {
+  const banner = page.getByRole("banner");
   const mainNav = page.getByRole("navigation", { name: "Main", exact: true });
-  await mainNav.getByRole("link", { name: "Files", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
-  await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
-  await expect(mainNav.getByRole("link")).toHaveText(["Files", "Account", "Devices", "Support"]);
+  const accountMenu = page.locator("#account-menu");
+  // Signed in, the header keeps only Support in view; the library and Account pages are actions.
+  await expect(mainNav.getByRole("link")).toHaveText(["Support"]);
+  // Inside the library its own primary action would only repeat the page.
+  await expect(banner.getByRole("link", { name: "Open library", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Account menu", exact: true }).click();
+  await expect(accountMenu.getByRole("link", { name: "Library", exact: true })).toHaveAttribute("aria-current", "page");
+  await accountMenu.getByRole("link", { name: "Library", exact: true }).click();
+  await expect(page).toHaveURL(/\/files$/);
+  await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+  // A lone root crumb would only repeat the title.
+  await expect(page.getByRole("navigation", { name: "Breadcrumbs", exact: true })).toHaveCount(0);
   const fileLink = page.getByRole("list", { name: "Folder contents" }).getByRole("link", { name: "Draft.md, File" });
-  await expect(fileLink).toHaveText(/^Draft\.md\s*Markdown File$/);
-  await expect(mainNav.getByRole("link", { name: "Files", exact: true })).toHaveAttribute("aria-current", "page");
-  await mainNav.getByRole("link", { name: "Account", exact: true }).click();
+  await expect(fileLink).toHaveText("Draft.md");
+  await page.getByRole("button", { name: "Account menu", exact: true }).click();
+  await accountMenu.getByRole("link", { name: "Account security", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Account security", exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Account", exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
@@ -21,34 +30,95 @@ test("opens Files from site navigation, retains account navigation and fits a na
     "Inter Tight Variable",
   );
   await page.screenshot({ path: testInfo.outputPath("account-desktop.png"), fullPage: true, animations: "disabled" });
-  await mainNav.getByRole("link", { name: "Files", exact: true }).click();
+  // Outside the library, the header's primary action opens it.
+  await banner.getByRole("link", { name: "Open library", exact: true }).click();
   await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md" }).click();
+  await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await expect(source).toBeEditable();
   await page.evaluate(() => document.fonts.ready);
   expect(await source.evaluate((node) => getComputedStyle(node).fontFamily)).toContain("Courier Prime");
   await expect(source).toHaveCSS("border-radius", "0px");
+  // Instructions lead the editor's status row; the save status closes it.
+  const status = page.getByRole("status", { name: "File save status", exact: true });
+  const instructions = page.getByText("Saves automatically", { exact: false });
+  expect((await instructions.boundingBox())!.x).toBeLessThan((await status.boundingBox())!.x);
   await page.screenshot({ path: testInfo.outputPath("workspace-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 375, height: 812 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("workspace-mobile.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "Open menu", exact: true }).click();
+  const menu = page.getByRole("dialog", { name: "Menu", exact: true });
   await expect(
-    page
-      .getByRole("dialog", { name: "Menu", exact: true })
-      .getByRole("navigation", { name: "Main", exact: true })
-      .locator("ul")
-      .first()
-      .getByRole("link"),
-  ).toHaveText(["Files", "Account", "Devices", "Support"]);
-  await page
-    .getByRole("dialog", { name: "Menu", exact: true })
-    .getByRole("link", { name: "Account", exact: true })
-    .click();
+    menu.getByRole("navigation", { name: "Main", exact: true }).locator("ul").first().getByRole("link"),
+  ).toHaveText(["Library", "Support"]);
+  await menu.getByRole("link", { name: "Account security", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Account security", exact: true })).toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Menu", exact: true })).toBeHidden();
+  await expect(menu).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("account-mobile.png"), fullPage: true, animations: "disabled" });
+});
+
+test("shows the destination's own frame while a navigation loads, with no progress bar", async ({
+  page,
+  workspace,
+}) => {
+  const hold = async (pattern: string) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached = false;
+    await page.route(pattern, async (route) => {
+      reached = true;
+      await held;
+      await route.continue().catch(() => {
+        /* A newer navigation may cancel this request. */
+      });
+    });
+    return { release, reached: () => reached };
+  };
+  const main = page.getByRole("main");
+  await page
+    .getByRole("complementary", { name: "Files tree", exact: true })
+    .getByRole("link", { name: "Library" })
+    .click();
+  await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+
+  // Inside the library, the clicked File's name and an editor skeleton replace the folder at once.
+  const ancestors = `**/api/private/tree/nodes/${workspace.fileId}/ancestors`;
+  const file = await hold(ancestors);
+  try {
+    await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md" }).click();
+    await expect.poll(file.reached).toBe(true);
+    await expect(page.getByRole("status").filter({ hasText: "Opening Draft.md…" })).toBeAttached();
+    await expect(main).toHaveAttribute("aria-busy", "true");
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeHidden();
+    await expect(page.getByRole("progressbar")).toHaveCount(0);
+  } finally {
+    file.release();
+    await page.unroute(ancestors);
+  }
+  await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
+  await expect(main).not.toHaveAttribute("aria-busy", "true");
+
+  // Entering the library from an Account page shows the library's frame, not the page being left.
+  await page.getByRole("button", { name: "Account menu", exact: true }).click();
+  await page.locator("#account-menu").getByRole("link", { name: "Public pseudonym", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Public pseudonym", exact: true })).toBeVisible();
+  const bootstrap = await hold("**/api/private/bootstrap");
+  try {
+    await page.getByRole("banner").getByRole("link", { name: "Open library", exact: true }).click();
+    await expect.poll(bootstrap.reached).toBe(true);
+    await expect(page.getByRole("status").filter({ hasText: "Opening your library…" })).toBeVisible();
+    await expect(page.getByRole("banner")).toHaveAttribute("data-chrome", "workspace");
+    await expect(page.getByRole("heading", { name: "Public pseudonym", exact: true })).toBeHidden();
+  } finally {
+    bootstrap.release();
+    await page.unroute("**/api/private/bootstrap");
+  }
+  await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+  await expect(page.getByRole("main")).toHaveCount(1);
 });
 
 test("fetches the File while the verified parent listing is still in flight", async ({ page, workspace }) => {

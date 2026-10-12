@@ -50,7 +50,8 @@ test("a synced Passkey needs QR approval before the second browser can open File
     candidate = await withPasskey(browser, origin, passkey);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // Without an Encryption device here, signing in opens device access.
+    await expect(candidate.page).toHaveURL(/\/account\/device-access$/);
     await candidate.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
     await expect(candidate.page.getByRole("heading", { name: "Restore private access" })).toBeVisible();
     await candidate.page.getByRole("link", { name: "Enroll this device" }).click();
@@ -262,7 +263,8 @@ test("lost candidate keys, expiry, and stale registry state restart without acti
     candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // Without an Encryption device here, signing in opens device access.
+    await expect(candidate.page).toHaveURL(/\/account\/device-access$/);
     await candidate.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
 
     const start = async () => {
@@ -345,7 +347,8 @@ test("approval tampering, stale freshness, and a removed approver never activate
     candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // Without an Encryption device here, signing in opens device access.
+    await expect(candidate.page).toHaveURL(/\/account\/device-access$/);
     await candidate.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Create pairing QR code" }).click();
     await expect(candidate.page.getByRole("heading", { name: "Scan this QR code" })).toBeVisible();

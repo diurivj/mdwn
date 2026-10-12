@@ -14,14 +14,14 @@ appTest("reconciles navigation after another tab signs in or signs out", async (
     // Navigate without replacing the first tab's document or its in-memory store.
     await original
       .getByRole("navigation", { name: "Access", exact: true })
-      .getByRole("link", { name: "Open your Files" })
+      .getByRole("link", { name: "Open your library" })
       .click();
-    await expect(original).toHaveURL(new RegExp(`/d/${account.rootDirectoryId}$`));
-    await expect(original.getByRole("banner").getByRole("link", { name: "Account", exact: true })).toBeVisible();
+    await expect(original).toHaveURL(/\/files$/);
+    await expect(original.getByRole("button", { name: "Account menu", exact: true })).toBeVisible();
     await other.getByRole("button", { name: "Account menu", exact: true }).click();
     await other.locator("#account-menu").getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(other).toHaveURL(/\/sign-in$/);
-    // The other tab was already on /sign-in: its URL alone cannot acknowledge sign-out.
+    // The sign-out lands on /sign-in, but the header must also stop showing the Account menu.
     await expect(other.getByRole("button", { name: "Account menu", exact: true })).toHaveCount(0);
     await original.bringToFront();
     // Headless engines differ in native tab focus delivery; exercise the actual
@@ -95,7 +95,8 @@ workspaceTest(
 
 workspaceTest("shows a failed header sign-out even after an earlier Account action", async ({ page, workspace }) => {
   expect(workspace.fileId).toBeTruthy();
-  await page.getByRole("banner").getByRole("link", { name: "Account", exact: true }).click();
+  await page.getByRole("button", { name: "Account menu", exact: true }).click();
+  await page.locator("#account-menu").getByRole("link", { name: "Account security", exact: true }).click();
   await page.getByRole("button", { name: "Refresh session", exact: true }).click();
   await expect(page.getByText("Session refreshed.", { exact: true })).toBeVisible();
   await page.route("**/api/auth/sign-out", (route) => route.abort("failed"));

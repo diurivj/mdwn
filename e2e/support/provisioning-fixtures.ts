@@ -55,7 +55,7 @@ export async function enroll(
   await installWorkspaceScript(candidate.page, script, origin);
   await candidate.page.goto(`${origin}/sign-in`);
   await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+  await expect(candidate.page).toHaveURL(/\/account\/device-access$/);
   await candidate.page.goto(`${origin}/enroll-device`);
   await candidate.page.getByRole("button", { name: "Create pairing QR code" }).click();
   await expect(candidate.page.getByRole("heading", { name: "Scan this QR code" })).toBeVisible();
@@ -254,7 +254,7 @@ export async function recover(
   // proves the cryptographic cutover rather than just code-based recovery.
   await original.page.goto(`${origin}/sign-in`);
   await original.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(original.page.getByText("Signed in.", { exact: false })).toBeVisible();
+  await expect(original.page).toHaveURL(/\/files$/);
   const ownedObjects: string[] = [];
   await replacement.page.route("**/api/private/recovery-provision/next", async (route) => {
     const response = await route.fetch();
@@ -342,7 +342,7 @@ export async function expectPending(page: Page, origin: string, fileId: string, 
 }
 export async function manualPass(page: Page, origin: string) {
   await page
-    .getByRole("region", { name: "Shared access provisioning", exact: true })
+    .getByRole("complementary", { name: "Files tree", exact: true })
     .getByRole("link", { name: "Shared access", exact: true })
     .click();
   await expect(page).toHaveURL(`${origin}/account/shared-access`);

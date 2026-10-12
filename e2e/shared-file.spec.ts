@@ -456,12 +456,12 @@ for (const targetKind of ["file", "directory"] as const)
         );
         await page
           .getByRole("complementary", { name: "Files tree", exact: true })
-          .getByRole("link", { name: "Files", exact: true })
+          .getByRole("link", { name: "Library", exact: true })
           .click();
-        await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+        await expect(page).toHaveURL(/\/files$/);
         expect((await automaticDelivery).status()).toBe(200);
         await page
-          .getByRole("region", { name: "Shared access provisioning", exact: true })
+          .getByRole("complementary", { name: "Files tree", exact: true })
           .getByRole("link", { name: "Shared access", exact: true })
           .click();
         await expect(page).toHaveURL(new URL("/account/shared-access", baseURL!).href);

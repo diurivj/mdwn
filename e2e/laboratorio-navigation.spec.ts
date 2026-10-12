@@ -12,6 +12,7 @@ test("lands on the Laboratorio page and navigates its sections without document 
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Write in Markdown. Keep the key.");
   await expect(page.getByRole("main")).toHaveCount(1);
   await expect(page.getByRole("navigation", { name: "Main", exact: true }).getByRole("link")).toHaveText([
+    "Why mdwn",
     "How it works",
     "Privacy",
     "Publishing",
@@ -40,6 +41,14 @@ test("lands on the Laboratorio page and navigates its sections without document 
   expect(fonts.every((font) => new URL(font).origin === new URL(page.url()).origin)).toBe(true);
 
   const originalDocument = await page.evaluateHandle(() => window.document);
+  // The landing page says why mdwn exists before it says how it works.
+  await page.getByRole("navigation", { name: "Main", exact: true }).getByRole("link", { name: "Why mdwn" }).click();
+  await expect(
+    page.getByRole("region", {
+      name: "In this agentic era, the only human thing we can defend is our privacy.",
+      exact: true,
+    }),
+  ).toBeInViewport();
   await page.getByRole("navigation", { name: "Main", exact: true }).getByRole("link", { name: "Privacy" }).click();
   await expect(page.locator("#privacy")).toBeInViewport();
   expect(await originalDocument.evaluate((original) => original === window.document)).toBe(true);
@@ -81,13 +90,17 @@ test("uses plain labels for unordered content and keeps meaningful numbers", asy
 test("mobile menu supports keyboard dismissal, section links and account entry", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.emulateMedia({ reducedMotion: "reduce" });
+  // The header asks for Session presence once hydrated; a key press before then reaches an inert button.
+  const hydrated = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/auth/session");
   await page.goto("/");
+  await hydrated;
   const trigger = page.getByRole("button", { name: "Open menu", exact: true });
   const menu = page.getByRole("dialog", { name: "Menu", exact: true });
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("navigation", { name: "Main", exact: true }).getByRole("link")).toHaveText([
+    "Why mdwn",
     "How it works",
     "Privacy",
     "Publishing",
@@ -125,6 +138,13 @@ test("Laboratorio landing and navigation fit mobile, tablet and desktop widths",
     }
     const call = page.getByRole("main").getByRole("link", { name: "Create your account" }).first();
     expect(await call.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    // The closing pair of actions shares one width and one baseline at every size.
+    const create = await page.getByRole("main").getByRole("link", { name: "Create your account" }).last().boundingBox();
+    const existing = await page.getByRole("main").getByRole("link", { name: "I already have one" }).boundingBox();
+    expect(Math.abs(create!.width - existing!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(create!.height - existing!.height)).toBeLessThanOrEqual(1);
+    if (create!.y === existing!.y) expect(create!.x).toBeLessThan(existing!.x);
+    else expect(Math.abs(create!.x - existing!.x)).toBeLessThanOrEqual(1);
   }
 });
 
@@ -133,6 +153,6 @@ test("Files entry explains device access instead of leaving a signed-out visitor
   await expect(page).toHaveURL(/\/account\/device-access$/);
   await expect(page.getByRole("main")).toHaveCount(1);
   await expect(page.getByRole("heading", { name: "Sign in to access your Files", exact: true })).toBeVisible();
-  await expect(page.getByText("Opening Files", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("Opening your library", { exact: false })).toHaveCount(0);
   await expect(page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
 });

@@ -37,7 +37,7 @@ test("creates and opens signed private Directories and Files without leaking nam
     await completeRecoveryPresentation(page);
     const signup = (await verify).postDataJSON() as { transcript: { rootDirectoryId: string } };
     await Promise.race([
-      page.getByText("Your account is ready.", { exact: false }).waitFor({ timeout: 120_000 }),
+      page.getByRole("heading", { name: "Library", exact: true }).waitFor({ timeout: 120_000 }),
       page
         .getByRole("alert")
         .waitFor({ timeout: 120_000 })
@@ -47,7 +47,7 @@ test("creates and opens signed private Directories and Files without leaking nam
     ]);
 
     await page.goto(new URL(`/d/${signup.transcript.rootDirectoryId}`, baseURL!).href);
-    await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "New folder" }).click();
     const folderDialog = page.getByRole("dialog", { name: "Create a name" });
     await folderDialog.getByRole("textbox", { name: "Name" }).fill("Private folder");

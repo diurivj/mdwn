@@ -126,6 +126,16 @@ async function signedProof(page: Page, accountId: string) {
   }, accountId);
 }
 
+/** Clicks a button that saves a file from the browser and returns its name and text. */
+async function download(page: Page, button: string): Promise<{ name: string; text: string }> {
+  const event = page.waitForEvent("download");
+  await page.getByRole("button", { name: button, exact: true }).click();
+  const file = await event;
+  const parts: Buffer[] = [];
+  for await (const part of (await file.createReadStream())!) parts.push(Buffer.from(part));
+  return { name: file.suggestedFilename(), text: Buffer.concat(parts).toString("utf8") };
+}
+
 test("signs up atomically with a bound device and gates recovery material before private access", async ({
   browser,
   server,
@@ -143,8 +153,18 @@ test("signs up atomically with a bound device and gates recovery material before
       (request) => new URL(request.url()).pathname === "/api/signup/verify" && request.method() === "POST",
       { timeout: 120_000 },
     );
+    // The Public pseudonym is the person's own; a suggestion fills the field until they write one.
+    const pseudonym = page.getByRole("textbox", { name: "Public pseudonym", exact: true });
+    await expect(pseudonym).toHaveValue(/^[A-Z][a-z]+ [A-Z][a-z]+ \d{2}$/);
+    await pseudonym.fill("  Quiet   Heron ");
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Save your recovery phrase" })).toBeVisible({ timeout: 120_000 });
+    const words = (await page.locator("section ol li").allTextContents()).map((word) =>
+      word.replace(/^\d+\.\s*/, "").trim(),
+    );
+    const phraseFile = await download(page, "Download phrase (.txt)");
+    expect(phraseFile.name).toBe("mdwn-recovery-phrase.txt");
+    expect(phraseFile.text.match(/^ ?\d+\. \S+$/gm)?.map((line) => line.replace(/^ ?\d+\. /, ""))).toEqual(words);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toEqual(
       expect.any(String),
     );
@@ -164,11 +184,22 @@ test("signs up atomically with a bound device and gates recovery material before
         expect(await count(env, "registration_challenges")).toBe(0);
         expect(await count(env, "accounts")).toBe(0);
         expect(await count(env, "sessions")).toBe(0);
+        const codes = (await page.locator("section ol li").allTextContents()).map((code) =>
+          code.replace(/^\d+\.\s*/, "").trim(),
+        );
+        const codesFile = await download(page, "Download codes (.txt)");
+        expect(codesFile.name).toBe("mdwn-recovery-codes.txt");
+        for (const code of codes) expect(codesFile.text).toContain(code);
+        for (const word of words) expect(codesFile.text).not.toContain(` ${word}\n`);
+        // Saving a file is local: it starts no signup request.
+        expect(signupRequests).toEqual([]);
       },
     });
     const payload = (await verify).postDataJSON() as VerifyPayload;
     const { accountId, rootDirectoryId } = payload.transcript;
-    await expect(page.getByText("Your account is ready.", { exact: false })).toBeVisible();
+    // Creating the account signs this browser in: its new library is home.
+    await expect(page).toHaveURL(/\/files$/);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
     expect(await count(env, "accounts")).toBe(1);
     await expectSignupShape(env.DB, payload.transcript);
@@ -190,6 +221,8 @@ test("signs up atomically with a bound device and gates recovery material before
     expect(await count(env, "device_proof_uses", accountId)).toBe(0);
     await page.reload();
     await expect(page.getByRole("heading", { name: "Save your recovery phrase" })).toHaveCount(0);
+    await page.goto("/account/pseudonym");
+    await expect(page.getByLabel("Current Public pseudonym")).toHaveText("Quiet Heron");
   } finally {
     await context.close();
   }
@@ -213,8 +246,9 @@ test("sign-out preserves the device keys for a later private-capable sign-in", a
     expect(response).toBe(200);
     await page.goto(`${new URL(baseURL!).origin}/sign-in`, { waitUntil: "commit" });
     await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(page.getByText("Signed in.", { exact: false })).toBeVisible();
-    await expect(page.getByText("This browser has no active Encryption device", { exact: false })).toHaveCount(0);
+    // The kept device binds the new Session, so sign-in opens the library rather than device access.
+    await expect(page).toHaveURL(/\/files$/);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     expect((await privateRead(page, await signedProof(page, accountId))).status).toBe(200);
     const sessions = await env.DB.prepare("SELECT device_id FROM sessions WHERE account_id = ?")
       .bind(accountId)
@@ -266,11 +300,15 @@ test("a lost signup commit response signs in with the persisted device without a
     const deviceId = payload!.transcript.deviceId;
     await page.reload();
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
+    // route.fetch() stored the commit's Session cookie in this context; a response
+    // lost on the network never reaches the browser, so its cookie is dropped too.
+    await context.clearCookies();
     await page.goto(`${new URL(baseURL!).origin}/sign-in`, { waitUntil: "commit" });
     await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // The persisted device binds the new Session, so sign-in opens the library rather than device access.
+    await expect(page).toHaveURL(/\/files$/);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
-    await expect(page.getByText("This browser has no active Encryption device", { exact: false })).toHaveCount(0);
     const sessions = await env.DB.prepare("SELECT device_id FROM sessions WHERE account_id = ? ORDER BY created_at")
       .bind(accountId)
       .all<{ device_id: string | null }>();

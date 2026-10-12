@@ -143,6 +143,7 @@ test("paste commits its caret before the next frame, including an unchanged draf
 });
 
 test("paste leaves no caret work after the editor is unmounted", async ({ page, workspace }) => {
+  expect(workspace.fileId).toBeTruthy();
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await source.fill("abc");
   // Hold only animation frames: navigation's readiness timers must keep running.
@@ -176,9 +177,9 @@ test("paste leaves no caret work after the editor is unmounted", async ({ page, 
     await expect(page.getByText("Saved", { exact: true })).toBeVisible();
     await page
       .getByRole("navigation", { name: "Breadcrumbs" })
-      .getByRole("link", { name: "Files", exact: true })
+      .getByRole("link", { name: "Library", exact: true })
       .click();
-    await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+    await expect(page).toHaveURL(/\/files$/);
     await detached!.evaluate((element) => (element as HTMLTextAreaElement).setSelectionRange(0, 0));
     await frames.evaluate((release) => release());
     expect(
@@ -284,8 +285,11 @@ test("flushes before navigation and warns only while pending or failed, with exp
   expect(await warns()).toBe(false);
   await source.fill("# Saved before leaving");
   expect(await warns()).toBe(true);
-  await page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Files", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+  await page
+    .getByRole("navigation", { name: "Breadcrumbs" })
+    .getByRole("link", { name: "Library", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/files$/);
   await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md" }).click();
   await expect(source).toHaveValue("# Saved before leaving");
   expect(await warns()).toBe(false);
@@ -296,14 +300,20 @@ test("flushes before navigation and warns only while pending or failed, with exp
   await source.press("ControlOrMeta+s");
   await expect(page.getByText("Couldn't save", { exact: true })).toBeVisible();
   expect(await warns()).toBe(true);
-  await page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Files", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Breadcrumbs" })
+    .getByRole("link", { name: "Library", exact: true })
+    .click();
   const warning = page.getByRole("dialog", { name: "Unsaved File" });
   await expect(warning).toBeVisible();
   await warning.getByRole("button", { name: "Keep editing", exact: true }).click();
   await expect(source).toHaveValue("# Failed but retained");
-  await page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Files", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Breadcrumbs" })
+    .getByRole("link", { name: "Library", exact: true })
+    .click();
   await warning.getByRole("button", { name: "Discard draft and leave", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+  await expect(page).toHaveURL(/\/files$/);
   expect(await warns()).toBe(false);
 });
 

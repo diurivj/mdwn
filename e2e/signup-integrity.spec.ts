@@ -63,7 +63,8 @@ for (const scenario of ["bad binding proof", "stale registry", "revoked device",
       if (scenario === "stale registry") {
         await expect(page.getByText("Device registry changed", { exact: false })).toBeVisible();
       } else {
-        await expect(page.getByText("This browser has no active Encryption device", { exact: false })).toBeVisible();
+        // An unbound Session opens the library, which hands this browser over to device access.
+        await expect(page).toHaveURL(/\/account\/device-access$/);
       }
       expect(presented).toBe(true);
       expect(
@@ -80,8 +81,9 @@ for (const scenario of ["bad binding proof", "stale registry", "revoked device",
       expect(read).toBe(403);
       if (scenario === "stale registry") {
         await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-        await expect(page.getByText("Check private access")).toBeVisible();
-        await page.getByText("Check private access").click();
+        // The refreshed device binds this Session, so the second sign-in opens the library.
+        await expect(page).toHaveURL(/\/files$/);
+        await page.goto(`${new URL(baseURL!).origin}/account/device-access`, { waitUntil: "commit" });
         await expect(page.getByRole("heading", { name: "Private access ready" })).toBeVisible();
         expect(
           await env.DB.prepare(

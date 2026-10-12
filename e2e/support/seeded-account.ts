@@ -142,9 +142,12 @@ export async function seedAccount(browser: Browser, server: TestHarness, baseURL
   }
 }
 
-/** Real WebAuthn sign-in only; deliberately does not visit a provisioning page. */
+/**
+ * Real WebAuthn sign-in. Signing in opens the library, which hands a browser
+ * without an active Encryption device over to device access.
+ */
 export async function signInAccount({ page }: Pick<SeededAccount, "page">): Promise<void> {
   await page.goto(new URL("/sign-in", page.url()).href);
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(page.getByText("Signed in.", { exact: false })).toBeVisible();
+  await expect(page).toHaveURL(/\/(files|account\/device-access)$/);
 }

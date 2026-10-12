@@ -229,9 +229,9 @@ test("an interrupted root rotation resumes from the progress UI without putting 
   await expect(page.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue("# Safe future write");
   await page
     .getByRole("complementary", { name: "Files tree", exact: true })
-    .getByRole("link", { name: "Files", exact: true })
+    .getByRole("link", { name: "Library", exact: true })
     .click();
-  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+  await expect(page).toHaveURL(/\/files$/);
   await page.getByRole("button", { name: "New folder", exact: true }).click();
   const create = page.getByRole("dialog", { name: "Create a name" });
   await create.getByRole("textbox", { name: "Name", exact: true }).fill("After rotation");
