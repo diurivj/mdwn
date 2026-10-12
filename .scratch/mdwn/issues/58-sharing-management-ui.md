@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 **Blocked by:** none.
 
@@ -16,20 +16,28 @@
 - Owner devices stage per-device HPKE Grant envelopes before acceptance; new and replacement recipient devices are provisioned automatically (`grant-provisioning/next`) or from **Shared access**.
 - The workspace opens a received Grant root, enforces read-only versus read/write, shows Collaborators' Comments with their Public pseudonyms, and lets Collaborators request a Publication from the Owner.
 
-## Decisions needed before building
+## Decisions (2026-10-12)
 
-- **Addressing:** where an Account sees and copies its own opaque share identifier, and whether share handles (exact, case-insensitive, 3–32 characters) get an editor now.
-- **Invitation flow:** a Share dialog on a File or folder (target, recipient identifier/handle, read-only or read/write, optional expiry), and how the Owner's browser stages Grant envelopes for every current recipient device before acceptance can succeed (acceptance requires complete current coverage).
-- **Inbox:** where pending incoming Shares appear (Account menu badge, library sidebar, Shared access page) and the accept/decline confirmation.
-- **Shared with me:** how received Grant roots appear in the library sidebar, instead of requiring a direct link.
-- **Management:** outgoing Shares (cancel) and active Grants (permission, expiry, revoke, leave), including copy that explains write seals and key rotation after revocation.
+The maintainer chose the full flow, addressed by share identifier only.
 
-## Acceptance criteria (draft)
+- **Addressing:** an Account sees and copies its own opaque share identifier on a new **Sharing** page (Account menu). Editing share handles is deferred, because no endpoint assigns handles; inviting by handle stays API-only.
+- **Invitation flow:** a **Share** dialog on an owned File or folder takes the recipient's share identifier and read-only or read/write. It is not offered for the Library root or for content shared with you, because Collaborators cannot reshare. The Owner's browser first converts a legacy File capability when needed, then invites, then prepares (stages) the Grant envelope and every required Comment-capability envelope for each current recipient device. Preparation is resumable and safe to repeat (**Prepare secure access**). Expiry is set on an active Grant, because pending Shares have no expiry on the server.
+- **Inbox:** pending incoming Shares appear on the Sharing page and as a count in the library sidebar's **Shared with me** section. Accepting or declining asks for confirmation. Accepting before preparation finishes explains that the Owner's browser is still preparing secure access.
+- **Shared with me:** received Grant roots are listed in the library sidebar as **Shared File** or **Shared folder** with their permission. Names stay encrypted from recipients, as the protocol requires.
+- **Management:** outgoing Shares (cancel, prepare secure access) and owned Grants (permission, expiry, revoke) appear on the Sharing page and in that target's Share dialog. Received Grants can be left. The copy explains that revoking or changing permission ends access immediately and that new edits wait for a secure access update (key rotation).
+- **Protocol addition:** on rows the caller owns (outgoing Shares and owned Grants), relationship lists add the recipient's opaque share identifier, so an Owner can tell Collaborators apart. The Owner already supplied that identifier when inviting. Incoming and received rows gain nothing about the Owner.
+- **Staging sources:** if share preparation needs the Owner's Comment-capability keys and the share comment-key endpoint does not provide a source, the endpoint returns the Owner's own `vault-recovery` envelope to the Owner, as `grant-provisioning/next` already does.
 
-- [ ] An Owner can invite an existing Account by share identifier or handle from the workspace, and see and cancel the pending Share.
-- [ ] A recipient sees pending Shares, can accept or decline, and then finds the shared root in the library without a direct link.
+## Acceptance criteria
+
+- [ ] An Owner can invite an existing Account by share identifier from the workspace, sees the pending Share, and can cancel it or prepare secure access again.
+- [ ] Preparation covers every current recipient device and every required Comment capability, is resumable, and survives a lost response without re-sealing envelopes or weakening signatures.
+- [ ] A recipient sees pending Shares, can accept or decline, and then finds the shared root in the library sidebar without a direct link.
 - [ ] Owners can change permission or expiry and revoke; Collaborators can leave; the UI explains the resulting secure access update.
+- [ ] Owner rows show the recipient's share identifier; no Owner identity is added to recipient rows.
 - [ ] No share identifier, handle lookup or Grant list ever enters server-rendered HTML; every action stays proof-guarded.
-- [ ] Browser coverage drives the whole flow through the UI in Chromium, Firefox and WebKit.
+- [ ] Browser coverage drives the whole flow through the UI in Chromium, Firefox and WebKit, and Workers tests cover the list addition and any staging-source change.
 
 ## Comments
+
+- 2026-10-12: Maintainer decisions recorded (full flow, share identifier only). This ticket is delivered together with 53's first slices and 57 in one pull request.

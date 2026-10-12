@@ -23,8 +23,20 @@ The linked document is the canonical specification. The [pricing and opportunity
 
 ## Next step
 
-Use `/to-tickets` to propose small, dependency-ordered vertical slices for maintainer approval. This is a parent specification, not a request to implement the entire effort in one session. Publish children under the existing local issue tracker; do not silently include the deferred opportunities.
+On 2026-10-12 the maintainer approved this decomposition and asked for the first two children now. Number 60 is skipped: the open CI runner-pool pull request (#64) already claims it.
+
+| Ticket | Slice | Status |
+| --- | --- | --- |
+| [61](61-autonomous-public-cleanup.md) | Scheduled maintenance finishes an already-authorized Unpublishing teardown | ready-for-agent |
+| [62](62-workers-paid-operating-contract.md) | Paid operating policy, intervention runbook, D1 Paid capacity and Time Travel, ADR supersession | ready-for-agent |
+| [63](63-worker-cpu-ceiling.md) | Explicit Worker CPU ceiling | ready-for-human (subscription and CPU evidence first) |
+| [64](64-import-admission-guard.md) | Scoped Import storage/admission guard | needs-triage |
+| [65](65-larger-import-envelope.md) | Larger practical Import envelope | needs-triage (blocked by 63, 64 and authorized evidence) |
+
+The deferred opportunities in the research stay deferred. No child changes the account, a subscription, alerts or any remote resource.
 
 ## Comments
+
+- 2026-10-12: The maintainer chose "cleanup + docs now". Children 61–65 are published; 61 and 62 are delivered together with tickets 57 and 58 in one pull request.
 
 - 2026-10-11: Synthesized from the Workers Paid research and maintainer agreement. The maintainer confirmed the Worker/D1, browser, and operational test boundaries while explicitly objecting to unnecessary test time, rehearsals, and Cloudflare resource requests. The spec therefore reuses current suites and Cron, keeps remote measurement narrow and opt-in, and does not create a new verification or billing platform. No application code, account configuration, deployment, or remote resource changed during publication.

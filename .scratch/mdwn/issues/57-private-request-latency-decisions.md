@@ -1,10 +1,10 @@
 # 57: Private request latency: decisions before the next speed-ups
 
-**What to build:** Nothing yet. Record what makes private pages slow after [56](56-pre-launch-polish.md) and the options that need the maintainer's decision, because each one changes a protocol rule, data freshness, the privacy story or Cloudflare configuration.
+**What to build:** The speed-ups and the privacy fix the maintainer approved on 2026-10-12 (see **Decisions** below): reuse settled device state for a short window, return the next device state with every proof-guarded response, keep verified listings and keys in the tab's memory with background revalidation, enable Smart Placement, start background upkeep less often, and stop Cloudflare injecting its Web Analytics beacon into HTML. This ticket first recorded what makes private pages slow after [56](56-pre-launch-polish.md) and the options that needed the maintainer's decision.
 
-**Type:** decision
+**Type:** feature (was decision)
 
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 **Blocked by:** none.
 
@@ -31,4 +31,27 @@ Done in 56: immutable caching for `/assets/*`; `/files` renders the root without
 5. **Background request frequency.** Check Session presence on focus and visibility rather than every location change, and run shared provisioning at most once per interval per tab. Trades cross-tab sign-out detection and provisioning promptness for fewer requests.
 6. **Cloudflare Web Analytics is injected into production pages.** The HTML served for `https://mdwn.me/` carries `static.cloudflareinsights.com/beacon.min.js` (with the page's CSP nonce), which posts to `/cdn-cgi/rum`. The footer promises "No passwords, ads, trackers, or analytics." Either turn off Web Analytics' automatic setup for the zone in the Cloudflare dashboard, or send `Cache-Control: no-transform` on HTML so Cloudflare cannot inject it (Cloudflare documents that no-transform prevents injection), or change the claim.
 
+## Decisions (2026-10-12)
+
+The maintainer approved items 1, 2, 3, 5 and 6 and the Smart Placement part of item 4.
+
+1. **Reuse device state — approved.** A settled `/api/device/state` answer, or one refreshed by item 2, signs operations that start within 10 seconds of it. A proof denial (`403` that is not a named policy denial) on a request signed with reused state retries once with fresh state: the denial's own state header when present, otherwise a fresh read. A second denial is final. In-flight reads are still never shared across navigation abort signals (ticket 54). A local device record with a newer registry epoch than the reused state forces a fresh read instead of a `stale` error. A `401`, an Account or device mismatch, signing in or out, and recovery all discard reused state.
+2. **Return device state with private responses — approved.** Every response to a request that carries a Device proof includes an `X-Mdwn-Device-State` header with the `/api/device/state` fields (`accountId`, `deviceId`, `registryEpoch`, `sessionBinding`). The Worker reads it for the request's Session at its boundary, in parallel with the handler, and omits it when there is no normal Session. Route bodies do not change. The browser validates the header exactly like a state read and adopts it as fresh reused state. The Worker still verifies every proof, so stale state still fails closed.
+3. **Keep verified listings and keys for the tab — approved.** Verified Directory listings, opened Directory keys and root or Grant-root access stay in the tab's memory only. They are never persisted, and their size is bounded. Revisiting part of the library renders from memory at once and then revalidates in the background by listing revision. Invalidation: this tab's own mutations update or drop the affected entries. Other tabs hear id-only `BroadcastChannel` messages, never names or keys. Changes from other devices and Collaborators arrive through background revalidation on navigation and on focus. Everything is cleared on sign-out (in any tab), on Session or device change, on private-access errors, and once the tab has been hidden for 10 minutes. File content is still fetched each time a File opens.
+4. **Placement — Smart Placement approved** for the preview and production Workers. It affects only fetch handlers, and the scheduled handler is unchanged. **D1 read replication is deferred**: it needs replication enabled on the production database (a remote configuration change), and a design for consistent authorization, because a lagging replica could still serve reads after a revocation or device removal. Moving the D1 primary would need a new database and is out of scope.
+5. **Background request frequency — approved.** Session presence is read after hydration, when the tab regains focus or becomes visible, and after authentication changes, not on every navigation. Background shared and owned provisioning upkeep starts at most once a minute per tab. The explicit **Provision shared content** action stays immediate, and a pass that reports more work continues as it does today.
+6. **Web Analytics injection — approved.** HTML responses carry `Cache-Control: no-store, no-transform`, so Cloudflare cannot inject its Web Analytics beacon. This also means Cloudflare no longer compresses HTML, a cost the maintainer accepted. Non-HTML responses keep `no-store`. Operator step: turn off Web Analytics automatic setup for `mdwn.me` in the Cloudflare dashboard.
+
+## Acceptance criteria
+
+- [ ] Sequential private operations within the reuse window send no extra `/api/device/state` request. A stale epoch or binding retries once and then succeeds or fails closed. Cancelled-navigation isolation from ticket 54 still holds.
+- [ ] Proof-guarded responses carry a validated `X-Mdwn-Device-State`. Requests without a normal Session get none, and no route body changes.
+- [ ] Revisiting a cached part of the library renders before any network response and then reflects changes made in another tab or on another device. Sign-out in another tab clears cached names and keys. No decrypted name or key is ever persisted or broadcast.
+- [ ] Smart Placement is configured for preview and production, with verification and rollback steps documented.
+- [ ] Navigation no longer re-reads Session presence on every location change. Background provisioning upkeep starts at most once a minute per tab.
+- [ ] HTML responses carry `no-store, no-transform` and other responses keep `no-store`. The operator step is documented.
+- [ ] Focused Node, Workers and browser tests cover the changed behavior. `npm run verify` passes.
+
 ## Comments
+
+- 2026-10-12: The maintainer chose items 1, 2, 3, 5 and 6 and the Smart Placement part of item 4, and asked for this ticket to be delivered together with 53 (its first slices) and 58 in one pull request. D1 read replication is deferred for the reasons recorded under Decisions. Ticket 59 stays out of that pull request.
