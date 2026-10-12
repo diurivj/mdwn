@@ -30,7 +30,7 @@ channel?.addEventListener("message", (event: MessageEvent<unknown>) => {
  * This tab changed (or may have changed) these Directories' listings: drop
  * them here and tell other tabs. `accountId` is the acting Account.
  */
-export function invalidateTreeListings(accountId: string, directoryIds: readonly string[]): void {
+function invalidateTreeListings(accountId: string, directoryIds: readonly string[]): void {
   treeCache.invalidate(accountId, directoryIds, "local");
   const message = invalidateMessage(accountId, directoryIds);
   if (!message) return;

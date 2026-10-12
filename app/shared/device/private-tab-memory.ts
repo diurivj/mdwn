@@ -1,3 +1,5 @@
+import { isPlainRecord } from "~/shared/plain-record";
+
 /**
  * Private data this tab keeps in memory between operations (ticket 57):
  * reusable device state, verified Directory listings and keys, and any later
@@ -21,7 +23,7 @@ let channel: BroadcastChannel | null = null;
 
 /** Why memory was cleared, for an open page that should show what is current again. */
 export type ClearReason = "remote" | "expired";
-export const MEMORY_CHANNEL = "mdwn-private-memory";
+const MEMORY_CHANNEL = "mdwn-private-memory";
 
 /** Register a holder's clear function; the returned function unregisters it. */
 export function registerPrivateTabMemory(clear: () => void): () => void {
@@ -94,11 +96,7 @@ function notify(reason: ClearReason): void {
 
 /** Strictly validate a received memory message: exactly `{ type: "clear" }`. */
 export function parseMemoryMessage(value: unknown): { type: "clear" } | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return null;
-  const record = value as Record<string, unknown>;
-  return Object.keys(record).length === 1 && record.type === "clear" ? { type: "clear" } : null;
+  return isPlainRecord(value) && Object.keys(value).length === 1 && value.type === "clear" ? { type: "clear" } : null;
 }
 
 /** A tab hidden this long forgets its private memory. */

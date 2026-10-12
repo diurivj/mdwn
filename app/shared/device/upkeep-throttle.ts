@@ -1,7 +1,7 @@
 import { deviceStateGeneration } from "./private-client";
 
 /** Background upkeep starts at most this often per tab (ticket 57). */
-export const UPKEEP_INTERVAL_MS = 60_000;
+const UPKEEP_INTERVAL_MS = 60_000;
 
 /**
  * "At most once a minute per tab" for one kind of background upkeep, with the

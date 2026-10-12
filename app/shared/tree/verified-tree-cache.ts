@@ -1,6 +1,7 @@
 import type { DirectoryListing, RootAccess, TreeKind } from "./client";
 import { headBehind, type ListingMark } from "./listing";
 import { EXPANDED_CHECKED, keyProven, pathStep, restorableFolders, rootAccepts } from "./path-rules";
+import { isPlainRecord } from "~/shared/plain-record";
 import { isV7 } from "./wire";
 
 /**
@@ -312,10 +313,8 @@ const MAX_MESSAGE_IDS = 256;
 
 /** Strictly validate a received message: exact fields, opaque ids only. */
 export function parseTreeMessage(value: unknown): TreeMessage | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return null;
-  const record = value as Record<string, unknown>;
+  if (!isPlainRecord(value)) return null;
+  const record = value;
   if (record.type !== "invalidate" || Object.keys(record).sort().join(",") !== "accountId,directoryIds,type")
     return null;
   const { accountId, directoryIds } = record;
