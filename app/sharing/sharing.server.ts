@@ -42,8 +42,11 @@ async function listRelationships(env: Env, auth: AuthorizedDevice, kind: "shares
     revision?: number;
     key_epoch?: number;
     expires_at?: number | null;
+    recipient_share_id: string | null;
   }>(sql`
-    SELECT * FROM ${table} WHERE (owner_id = ${auth.accountId} OR recipient_id = ${auth.accountId})
+    SELECT r.*, CASE WHEN r.owner_id = ${auth.accountId}
+        THEN (SELECT share_id FROM accounts WHERE id = r.recipient_id) END AS recipient_share_id
+    FROM ${table} r WHERE (owner_id = ${auth.accountId} OR recipient_id = ${auth.accountId})
       AND ${kind === "shares" ? sql`1` : liveGrant(sql`expires_at`)}
       AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} ORDER BY id LIMIT 101`);
   const relationships = rows.slice(0, 100).map((row) => ({
@@ -52,6 +55,10 @@ async function listRelationships(env: Env, auth: AuthorizedDevice, kind: "shares
       : { grantId: row.id, revision: row.revision, keyEpoch: row.key_epoch, expiresAt: row.expires_at }),
     ownerId: row.owner_id,
     recipientId: row.recipient_id,
+    // The Owner already addressed this Account; recipient rows gain nothing about the Owner.
+    ...(row.owner_id === auth.accountId && row.recipient_share_id !== null
+      ? { recipientShareId: row.recipient_share_id }
+      : {}),
     targetId: row.target_id,
     targetKind: row.target_kind,
     permission: row.permission,

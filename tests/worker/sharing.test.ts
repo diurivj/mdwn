@@ -261,3 +261,52 @@ it("returns only the caller's opaque share address through a replayable, read-on
       .first(),
   ).toEqual(before);
 });
+
+it("lists the recipient's share identifier only on rows the caller owns, never the Owner's on recipient rows", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    stranger = await sharingAccount();
+  const pendingTarget = await treeChild(owner, owner.rootId, "directory");
+  const grantedTarget = await treeChild(owner, owner.rootId, "file");
+  const pending = await invite(owner, recipient, pendingTarget);
+  const active = await grant(owner, recipient, grantedTarget, "read_write");
+  const ownerShares = (await (await sharingRequest(owner, "/api/private/shares")).json()) as Record<string, unknown>;
+  expect(ownerShares).toEqual({
+    incoming: [],
+    outgoing: [
+      {
+        shareId: pending.shareId,
+        ownerId: owner.accountId,
+        recipientId: recipient.accountId,
+        recipientShareId: recipient.shareId,
+        targetId: pendingTarget,
+        targetKind: "directory",
+        permission: "read_only",
+      },
+    ],
+    nextCursor: null,
+  });
+  const ownerGrants = (await (await sharingRequest(owner, "/api/private/grants")).json()) as Record<string, unknown>;
+  expect(ownerGrants).toMatchObject({
+    received: [],
+    owned: [{ grantId: active.grantId, recipientShareId: recipient.shareId, targetId: grantedTarget }],
+  });
+  const recipientShares = await (await sharingRequest(recipient, "/api/private/shares")).text();
+  const recipientGrants = await (await sharingRequest(recipient, "/api/private/grants")).text();
+  for (const body of [recipientShares, recipientGrants]) {
+    expect(body).not.toContain(owner.shareId);
+    expect(body).not.toContain(recipient.shareId);
+    expect(body).not.toContain("recipientShareId");
+  }
+  expect(JSON.parse(recipientShares)).toMatchObject({ incoming: [{ shareId: pending.shareId }], outgoing: [] });
+  expect(JSON.parse(recipientGrants)).toMatchObject({ received: [{ grantId: active.grantId }], owned: [] });
+  for (const path of ["/api/private/shares", "/api/private/grants"]) {
+    const unrelated = await sharingRequest(stranger, path);
+    expect(unrelated.status).toBe(200);
+    expect(await unrelated.json()).toEqual(
+      path.endsWith("shares")
+        ? { incoming: [], outgoing: [], nextCursor: null }
+        : { received: [], owned: [], nextCursor: null },
+    );
+  }
+});

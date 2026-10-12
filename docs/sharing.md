@@ -8,13 +8,13 @@ Resource routes are thin React Router actions under `app/routes/api/`. All reque
 
 | Request | Operation |
 | --- | --- |
-| `POST /api/private/shares[?cursor=<opaque-id>]` | Incoming/outgoing pending Shares |
+| `POST /api/private/shares[?cursor=<opaque-id>]` | Incoming/outgoing pending Shares; outgoing rows add `recipientShareId` |
 | `POST /api/private/shares/address` | Only the caller's opaque share identifier |
 | `PUT /api/private/shares` | Owner invites an exact existing Account |
 | `POST /api/private/shares/:id/accept` | Recipient accepts; atomically creates a Grant and removes the Share |
 | `POST /api/private/shares/:id/decline` | Recipient hard-deletes the pending Share |
 | `DELETE /api/private/shares/:id` | Owner cancels the pending Share |
-| `POST /api/private/grants[?cursor=<opaque-id>]` | Received/owned active Grants |
+| `POST /api/private/grants[?cursor=<opaque-id>]` | Received/owned active Grants; owned rows add `recipientShareId` |
 | `PATCH /api/private/grants/:id` | Owner changes permission and/or a future `expiresAt` deadline (`null` clears it), with `expectedRevision` |
 | `DELETE /api/private/grants/:id` | Owner revokes with `expectedRevision` |
 | `POST /api/private/grants/:id/leave` | Recipient leaves with `expectedRevision` |
@@ -31,7 +31,7 @@ Resource routes are thin React Router actions under `app/routes/api/`. All reque
 
 An invitation has `{ targetId, recipient: { shareId } | { handle }, permission }`. Handles are optional, 3–32 ASCII letters/digits/underscores/hyphens, with exact case-insensitive equality. No trimming, prefixes, wildcards, fuzzy matching, Account directory, or standalone lookup endpoint exists. Only a domain-separated SHA-256 lookup token is stored; this is share addressing, not authentication. Handle assignment/profile editing is not introduced here.
 
-Lists have a combined 100-relationship page and an explicit `nextCursor`. They return opaque identities and target kind/permission only, never tree edges or encrypted Directory names. Every retained Share is pending. Grant authority excludes expired deadlines at statement time; an expired Grant temporarily remains only as a write seal until bounded cleanup hands off to rotation. Unique relationship indexes and same-Owner/type target foreign keys enforce their storage contracts. No sharing audit log or inactive relationship rows are kept.
+Lists have a combined 100-relationship page and an explicit `nextCursor`. They return opaque identities and target kind/permission only, never tree edges or encrypted Directory names. On rows the caller owns (outgoing Shares and owned Grants) they also return `recipientShareId`, the recipient Account's opaque share identifier, so an Owner can tell Collaborators apart; the Owner already supplied it when inviting. Incoming and received rows gain nothing about the Owner beyond the existing opaque `ownerId`. Every retained Share is pending. Grant authority excludes expired deadlines at statement time; an expired Grant temporarily remains only as a write seal until bounded cleanup hands off to rotation. Unique relationship indexes and same-Owner/type target foreign keys enforce their storage contracts. No sharing audit log or inactive relationship rows are kept.
 
 ## Effective authority and the permission matrix
 
