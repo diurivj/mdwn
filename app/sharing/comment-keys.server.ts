@@ -106,9 +106,22 @@ export async function readCommentKey(
             : sql`1`
         }
         AND ${privateReadGuard(auth)} ORDER BY d.id LIMIT 21`);
+    // Share preparation needs the Owner's Comment key. The same owned,
+    // current-epoch vault-recovery row grant-provisioning/next uses is the
+    // source; without one the browser must report it cannot prepare.
+    const recovery =
+      kind === "shares"
+        ? await createDb(env.DB).get<{ ciphertext: ArrayBuffer }>(sql`SELECT k.ciphertext FROM key_envelopes k
+          WHERE k.account_id = ${auth.accountId} AND k.account_id = ${comment.ownerId}
+            AND k.purpose = 'vault-recovery' AND k.object_id = ${objectId} AND k.recipient_id = 'vault-root'
+            AND k.key_epoch = ${comment.capabilityEpoch} AND k.superseded_at IS NULL AND ${privateReadGuard(auth)}`)
+        : null;
     return Response.json(
       {
         ...comment,
+        ...(recovery
+          ? { source: { kind: "recovery", envelope: encodeTreeBytes(new Uint8Array(recovery.ciphertext)) } }
+          : {}),
         devices: devices.slice(0, 20).map((device) => ({
           deviceId: device.deviceId,
           transportPublicKey: encodeTreeBytes(new Uint8Array(device.transport_public_key)),

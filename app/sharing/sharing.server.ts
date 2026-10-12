@@ -114,6 +114,9 @@ async function createShare(env: Env, auth: AuthorizedDevice, value: unknown) {
   if (!target) return notFound();
   if (target.kind === "file" && (!target.capability_id || !target.capability_epoch))
     return failure("shared_content_provisioning_required", 409);
+  // Staging under a seal cannot complete until rotation replaces the capability.
+  if (await db.get(sql`SELECT 1 WHERE ${sharingWriteBlocked(input.targetId)}`))
+    return failure("key_rotation_required", 409);
   const account = await db.get<{ id: string }>(sql`SELECT id FROM accounts
     WHERE ${address} AND id != ${auth.accountId} AND ${privateReadGuard(auth)}`);
   if (!account) return notFound();
@@ -127,6 +130,7 @@ async function createShare(env: Env, auth: AuthorizedDevice, value: unknown) {
     FROM vault_nodes n WHERE n.id = ${input.targetId} AND n.owner_id = ${auth.accountId}
       AND (n.kind = 'directory' OR EXISTS (SELECT 1 FROM files f WHERE f.node_id = n.id
         AND f.owner_id = n.owner_id AND f.capability_id IS NOT NULL AND f.capability_epoch IS NOT NULL))
+      AND NOT ${sharingWriteBlocked(sql`n.id`)}
       AND NOT EXISTS (SELECT 1 FROM grants WHERE owner_id = ${auth.accountId}
         AND recipient_id = ${account.id} AND target_id = n.id) AND ${guard}
     ON CONFLICT (owner_id, recipient_id, target_id) DO NOTHING`,

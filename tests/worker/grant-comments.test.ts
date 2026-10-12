@@ -6,6 +6,7 @@ import {
   type CommentKeyContext,
 } from "../../app/shared/sharing/comment-keys";
 import { newPublicationIdentifier } from "../../app/shared/publications/capability";
+import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   addSharingDevice,
   deletePayload,
@@ -327,5 +328,44 @@ it("atomically accepts only complete Private and retained Public-history device 
     expect(
       (await sharingRequest(owner, `/api/private/shares/${shareId}/comment-keys/${comment.objectId}`)).status,
     ).toBe(404);
+  }
+});
+
+it("share Comment targets give only the Owner its own current vault-recovery source", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    stranger = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const current = await privateThread(owner, await treeChild(owner, directoryId, "file"));
+  const stale = await privateThread(owner, await treeChild(owner, directoryId, "file"));
+  const missing = await privateThread(owner, await treeChild(owner, directoryId, "file"));
+  await env.DB.prepare("UPDATE sharing_comment_capabilities SET capability_epoch = 2 WHERE object_id = ?")
+    .bind(stale.objectId)
+    .run();
+  const recovery = (account: SharingAccount, objectId: string, keyEpoch: number, bytes: number) =>
+    env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
+      VALUES (?, 'vault-recovery', ?, 'vault-root', ?, ?)`)
+      .bind(account.accountId, objectId, new Uint8Array(48).fill(bytes), keyEpoch)
+      .run();
+  await recovery(owner, current.objectId, 1, 1);
+  // A superseded epoch, and another Account's row for the same object, are never a source.
+  await recovery(owner, stale.objectId, 1, 2);
+  await recovery(stranger, missing.objectId, 1, 3);
+  const { shareId } = await invite(owner, recipient, directoryId);
+  const target = (objectId: string) => `/api/private/shares/${shareId}/comment-keys/${objectId}`;
+
+  const response = await sharingRequest(owner, target(current.objectId));
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { source?: { kind: string; envelope: string } };
+  expect(body.source).toEqual({ kind: "recovery", envelope: encodeTreeBytes(new Uint8Array(48).fill(1)) });
+  for (const objectId of [stale.objectId, missing.objectId]) {
+    const other = await sharingRequest(owner, target(objectId));
+    expect(other.status).toBe(200);
+    expect(await other.json()).not.toHaveProperty("source");
+  }
+  for (const account of [recipient, stranger]) {
+    const denied = await sharingRequest(account, target(current.objectId));
+    expect(denied.status).toBe(404);
+    expect(await denied.text()).not.toContain(encodeTreeBytes(new Uint8Array(48).fill(1)));
   }
 });

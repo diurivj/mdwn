@@ -310,3 +310,33 @@ it("lists the recipient's share identifier only on rows the caller owns, never t
     );
   }
 });
+
+it("an invitation beneath a write seal waits for the secure access update", async () => {
+  const owner = await sharingAccount(),
+    first = await sharingAccount(),
+    second = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const fileId = await treeChild(owner, directoryId, "file");
+  await convertFixtureFile(owner, fileId);
+  const active = await grant(owner, first, directoryId);
+  expect(
+    (await sharingRequest(owner, `/api/private/grants/${active.grantId}`, "DELETE", { expectedRevision: 1 })).status,
+  ).toBe(200);
+  for (const targetId of [directoryId, fileId]) {
+    const refused = await sharingRequest(owner, "/api/private/shares", "PUT", {
+      targetId,
+      recipient: { shareId: second.shareId },
+      permission: "read_only",
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "key_rotation_required" });
+  }
+  expect(
+    await env.DB.prepare("SELECT count(*) AS total FROM shares WHERE owner_id = ?").bind(owner.accountId).first(),
+  ).toEqual({
+    total: 0,
+  });
+  // Unsealed content elsewhere in the Owner's library is unaffected.
+  const elsewhere = await treeChild(owner, owner.rootId, "file");
+  await invite(owner, second, elsewhere);
+});
