@@ -5,6 +5,7 @@ import {
   addSharingDevice,
   deletePayload,
   grant,
+  importedThread,
   invite,
   opaqueId,
   prepareGrantKeys,
@@ -14,6 +15,7 @@ import {
   treeChild,
 } from "./sharing-fixtures";
 import { createSymmetricWriter, openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { commentKeyContext } from "../../app/shared/comments/content";
 import {
   createRecoveryMaterial,
   sealDeviceEnrollmentEnvelope,
@@ -635,6 +637,109 @@ it("repeated same-target revocation supersedes interrupted ciphertext and fences
   expect(await (await sharingRequest(owner, `/api/private/tree/files/${fileId}`)).json()).toMatchObject({
     capability: { epoch: 3 },
   });
+});
+
+it("revocation rotates an imported Historical thread and re-wraps it under the replacement File key", async () => {
+  const owner = await sharingAccount(),
+    removed = await sharingAccount(),
+    remaining = await sharingAccount();
+  const browser = await rotationBrowser(owner),
+    fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+  const revoked = await grant(owner, removed, fileId);
+  const kept = await grant(owner, remaining, fileId);
+  const thread = await importedThread(owner, fileId);
+  // A real thread key under the File capability key, and one Comment whose
+  // content key is wrapped under the thread key.
+  const threadKey = new Uint8Array(32).fill(31),
+    contentKey = new Uint8Array(32).fill(32),
+    commentId = opaqueId();
+  const threadEnvelope = await (await createSymmetricWriter(owner.keys.get(fileId)!)).seal(threadKey, {
+    purpose: "private-comment-thread",
+    vaultId: owner.accountId,
+    objectId: thread.objectId,
+    keyId: thread.capabilityId,
+    keyEpoch: 1,
+    revision: 1,
+  });
+  const epoch = await env.DB.prepare("SELECT current_epoch_id AS id FROM comment_threads WHERE id = ?")
+    .bind(thread.objectId)
+    .first<{ id: string }>();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE import_comment_envelopes SET ciphertext = ? WHERE thread_id = ?").bind(
+      threadEnvelope,
+      thread.objectId,
+    ),
+    env.DB.prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision, body_ciphertext,
+      body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, 1, X'01', 1, ?, 1, 1, 1)`).bind(
+      commentId,
+      thread.objectId,
+      epoch!.id,
+      owner.accountId,
+      await (await createSymmetricWriter(threadKey)).seal(
+        contentKey,
+        commentKeyContext(owner.accountId, commentId, thread.capabilityId, 1, 1),
+      ),
+    ),
+  ]);
+  const revokedResponse = await sharingRequest(owner, `/api/private/grants/${revoked.grantId}`, "DELETE", {
+    expectedRevision: 1,
+  });
+  const { rotation } = (await revokedResponse.json()) as { rotation: { jobId: string } };
+  expect(await resumeRotation(rotation.jobId, browser, { maxSteps: 100 })).toBe(true);
+  // The thread advanced to epoch 2; its envelope opens under the replacement File key.
+  const row = await env.DB.prepare(
+    "SELECT capability_epoch, key_epoch, ciphertext FROM import_comment_envelopes WHERE thread_id = ?",
+  )
+    .bind(thread.objectId)
+    .first<{ capability_epoch: number; key_epoch: number; ciphertext: ArrayBuffer }>();
+  expect(row).toMatchObject({ capability_epoch: 2, key_epoch: 2 });
+  const file = (await (await sharingRequest(owner, `/api/private/tree/files/${fileId}`)).json()) as {
+    keyEnvelope: string;
+    capability: { id: string; epoch: number };
+  };
+  const fileKey = await openSymmetric(decodeTreeBytes(file.keyEnvelope), owner.keys.get(owner.rootId)!, {
+    context: {
+      purpose: "file-capability",
+      vaultId: owner.accountId,
+      objectId: fileId,
+      keyId: file.capability.id,
+      keyEpoch: file.capability.epoch,
+      revision: 1,
+    },
+  });
+  const rotated = await openSymmetric(new Uint8Array(row!.ciphertext), fileKey, {
+    context: {
+      purpose: "private-comment-thread",
+      vaultId: owner.accountId,
+      objectId: thread.objectId,
+      keyId: thread.capabilityId,
+      keyEpoch: 2,
+      revision: 1,
+    },
+  });
+  expect(rotated).not.toEqual(threadKey);
+  // The staged Comment wrapper opens under the replacement thread key.
+  const comment = await env.DB.prepare("SELECT content_key_envelope, content_key_epoch FROM comments WHERE id = ?")
+    .bind(commentId)
+    .first<{ content_key_envelope: ArrayBuffer; content_key_epoch: number }>();
+  expect(comment!.content_key_epoch).toBe(2);
+  expect(
+    Array.from(
+      await openSymmetric(new Uint8Array(comment!.content_key_envelope), rotated, {
+        context: commentKeyContext(owner.accountId, commentId, thread.capabilityId, 2, 1),
+      }),
+    ),
+  ).toEqual(Array.from(contentKey));
+  // Rotation delivery opened the import source and gave the remaining Grant the replacement key.
+  const delivered = (await (
+    await sharingRequest(remaining, `/api/private/grants/${kept.grantId}/comment-keys/${thread.objectId}`)
+  ).json()) as Parameters<typeof openCommentKeyEnvelope>[0];
+  expect(delivered.capabilityEpoch).toBe(2);
+  expect(await openCommentKeyEnvelope({ ...delivered, recipient: remaining.transport })).toEqual(rotated);
+  expect(
+    (await sharingRequest(removed, `/api/private/grants/${revoked.grantId}/comment-keys/${thread.objectId}`)).status,
+  ).toBe(404);
 });
 
 it("missing current Private Comment key material leaves rotation sealed rather than silently abandoning current history", async () => {

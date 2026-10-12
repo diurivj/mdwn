@@ -14,6 +14,39 @@ const exact = (input: Record<string, unknown>, fields: string[]) =>
   Object.keys(input).length === fields.length && fields.every((field) => Object.hasOwn(input, field));
 type HeadBytes = { ciphertext: Uint8Array; digest: Uint8Array; signature: Uint8Array };
 
+/** A File replacement re-wraps every imported Historical thread envelope it read
+ * under the replacement File capability key. The browser sends one entry per
+ * thread it saw; the promotion CAS rejects a changed set rather than leaving a
+ * thread wrapped under the replaced key. */
+function rewrappedImportedThreads(value: unknown, auth: AuthorizedDevice) {
+  if (!Array.isArray(value) || value.length > 20) throw new Error("invalid imported threads");
+  return value.map((entry) => {
+    const thread = record(entry);
+    if (
+      !thread ||
+      !exact(thread, ["threadId", "capabilityId", "capabilityEpoch", "envelope"]) ||
+      !isV7(thread.threadId) ||
+      !isV7(thread.capabilityId) ||
+      !Number.isSafeInteger(thread.capabilityEpoch) ||
+      (thread.capabilityEpoch as number) < 1
+    )
+      throw new Error("invalid imported thread");
+    return {
+      threadId: thread.threadId as string,
+      capabilityId: thread.capabilityId as string,
+      capabilityEpoch: thread.capabilityEpoch as number,
+      ciphertext: treeEnvelope(thread.envelope, 16_384, {
+        purpose: "private-comment-thread",
+        vaultId: auth.accountId,
+        objectId: thread.threadId as string,
+        keyId: thread.capabilityId as string,
+        keyEpoch: thread.capabilityEpoch as number,
+        revision: 1,
+      }),
+    };
+  });
+}
+
 export async function rotationHead(
   value: unknown,
   auth: AuthorizedDevice,
@@ -59,28 +92,51 @@ export async function preparePromotion(
 ): Promise<{ eligible: SQL; statements(marker: SQL): SQL[] }> {
   const common = ["operation", "operationId", "objectId"];
   if (source.kind === "private_comment" || source.kind === "public_history") {
-    if (!exact(input, [...common, "recoveryEnvelope"])) throw new Error("invalid comment promotion");
-    const recovery = treeEnvelope(input.recoveryEnvelope, 16_384, {
-      purpose: "vault-recovery",
-      vaultId: auth.accountId,
-      objectId: item.objectId,
-      keyId: item.capabilityId!,
-      keyEpoch: item.targetEpoch!,
-      revision: 1,
-    });
+    const imported = source.kind === "private_comment" && source.importEnvelope !== null;
+    if (!exact(input, [...common, imported ? "importEnvelope" : "recoveryEnvelope"]))
+      throw new Error("invalid comment promotion");
+    // An imported Historical thread has no vault-recovery row: its key is
+    // wrapped under the File capability key, so its replacement is a fresh
+    // import envelope and the File's current capability epoch is its wrapper.
+    const replacement = imported
+      ? treeEnvelope(input.importEnvelope, 16_384, {
+          purpose: "private-comment-thread",
+          vaultId: auth.accountId,
+          objectId: item.objectId,
+          keyId: item.capabilityId!,
+          keyEpoch: item.targetEpoch!,
+          revision: 1,
+        })
+      : treeEnvelope(input.recoveryEnvelope, 16_384, {
+          purpose: "vault-recovery",
+          vaultId: auth.accountId,
+          objectId: item.objectId,
+          keyId: item.capabilityId!,
+          keyEpoch: item.targetEpoch!,
+          revision: 1,
+        });
     const capabilityStatements = (marker: SQL): SQL[] => [
       sql`UPDATE sharing_comment_capabilities SET capability_epoch = ${item.targetEpoch}
         WHERE object_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
+      ...(imported
+        ? [
+            sql`UPDATE import_comment_envelopes SET ciphertext = ${replacement}, capability_epoch = ${item.targetEpoch},
+              key_epoch = (SELECT capability_epoch FROM files WHERE node_id = ${item.fileId})
+              WHERE thread_id = ${item.objectId} AND file_id = ${item.fileId} AND capability_id = ${item.capabilityId}
+                AND capability_epoch = ${item.sourceEpoch} AND ${marker}`,
+          ]
+        : [
+            sql`UPDATE key_envelopes SET superseded_at = ${Date.now()} WHERE account_id = ${auth.accountId}
+              AND object_id = ${item.objectId} AND purpose = 'owned-device' AND key_epoch != ${item.targetEpoch} AND superseded_at IS NULL AND ${marker}`,
+            sql`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
+              SELECT ${auth.accountId}, 'vault-recovery', ${item.objectId}, 'vault-root', ${replacement}, ${item.targetEpoch} WHERE ${marker}
+              ON CONFLICT (account_id, purpose, object_id, recipient_id) DO UPDATE SET ciphertext = excluded.ciphertext,
+                key_epoch = excluded.key_epoch, superseded_at = NULL`,
+          ]),
       sql`DELETE FROM share_comment_key_envelopes WHERE object_id = ${item.objectId}
         AND capability_epoch != ${item.targetEpoch} AND ${marker}`,
       sql`DELETE FROM grant_comment_key_envelopes WHERE object_id = ${item.objectId}
         AND capability_epoch != ${item.targetEpoch} AND ${marker}`,
-      sql`UPDATE key_envelopes SET superseded_at = ${Date.now()} WHERE account_id = ${auth.accountId}
-        AND object_id = ${item.objectId} AND purpose = 'owned-device' AND key_epoch != ${item.targetEpoch} AND superseded_at IS NULL AND ${marker}`,
-      sql`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
-        SELECT ${auth.accountId}, 'vault-recovery', ${item.objectId}, 'vault-root', ${recovery}, ${item.targetEpoch} WHERE ${marker}
-        ON CONFLICT (account_id, purpose, object_id, recipient_id) DO UPDATE SET ciphertext = excluded.ciphertext,
-          key_epoch = excluded.key_epoch, superseded_at = NULL`,
     ];
     // A retained Public Comment audience epoch keeps its key: only the current
     // Collaborators-only epoch advances in place, because a revoked device may
@@ -131,10 +187,11 @@ export async function preparePromotion(
       "recoveryEnvelope",
       ...(source.kind === "directory"
         ? ["listingHead"]
-        : ["representationId", "representationKeyEnvelope", "fileHead"]),
+        : ["representationId", "representationKeyEnvelope", "fileHead", "importedThreads"]),
     ])
   )
     throw new Error("invalid promotion");
+  const imported = source.kind === "file" ? rewrappedImportedThreads(input.importedThreads, auth) : [];
   const parentId = source.parentId;
   let parent: RotationDirectory | null = null,
     parentHead: HeadBytes | null = null;
@@ -273,8 +330,21 @@ export async function preparePromotion(
   )
     throw new Error("invalid File head");
   const content = decodeTreeBytes(source.ciphertext, 524_288);
+  // Every imported Historical thread on the File must be re-wrapped in this
+  // promotion: an omitted thread would stay sealed under the replaced key.
+  const importedCoverage = imported.length
+    ? sql` AND (SELECT count(*) FROM import_comment_envelopes i WHERE i.file_id = ${item.objectId}) = ${imported.length}
+      AND ${sql.join(
+        imported.map(
+          (thread) => sql`EXISTS (SELECT 1 FROM import_comment_envelopes i WHERE i.file_id = ${item.objectId}
+            AND i.thread_id = ${thread.threadId} AND i.capability_id = ${thread.capabilityId}
+            AND i.capability_epoch = ${thread.capabilityEpoch})`,
+        ),
+        sql` AND `,
+      )}`
+    : sql``;
   return {
-    eligible,
+    eligible: sql`${eligible}${importedCoverage}`,
     statements: (marker) => [
       sql`UPDATE files SET current_representation_id = ${input.representationId}, capability_id = ${item.capabilityId}, capability_epoch = ${item.targetEpoch}
       WHERE node_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
@@ -283,6 +353,13 @@ export async function preparePromotion(
       ciphertext, ciphertext_size, created_at, key_envelope, head_digest, head_signature, head_device_id)
       SELECT ${input.representationId}, ${item.objectId}, ${auth.accountId}, ${source.revision}, ${source.contentKeyId}, ${source.keyEpoch},
         ${content}, ${content.length}, ${Date.now()}, ${wrapper}, ${decodeTreeBytes(head.digest, 32)}, ${decodeTreeBytes(head.signature, 64)}, ${auth.deviceId} WHERE ${marker}`,
+      ...imported.map(
+        (
+          thread,
+        ) => sql`UPDATE import_comment_envelopes SET ciphertext = ${thread.ciphertext}, key_epoch = ${item.targetEpoch}
+          WHERE thread_id = ${thread.threadId} AND file_id = ${item.objectId} AND capability_id = ${thread.capabilityId}
+            AND capability_epoch = ${thread.capabilityEpoch} AND ${marker}`,
+      ),
       ...parentStatements(marker),
       ...recoveryStatements(marker),
       ...grantStatements(marker),
