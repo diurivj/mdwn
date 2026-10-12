@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -104,6 +113,22 @@ test("a preexisting service remains the original snapshot after later template c
   snapshotOriginalService(pool, slot);
   expect(JSON.parse(readFileSync(join(backup, "snapshot.json"), "utf8")).files["service.plist"]).toBe(true);
   expect(readFileSync(join(backup, "service.plist"), "utf8")).toBe("original-plist");
+});
+
+test("an incomplete or changed original snapshot fails closed rather than recapturing current files", () => {
+  const pool = fixture();
+  const slot = pool.slots[0];
+  mkdirSync(slot.directory, { recursive: true });
+  writeFileSync(join(slot.directory, ".path"), "original-path");
+  const backup = snapshotOriginalService(pool, slot);
+  unlinkSync(join(backup, ".path"));
+  expect(() => snapshotOriginalService(pool, slot)).toThrow("file-presence record");
+  expect(existsSync(join(backup, ".path"))).toBe(false);
+  writeFileSync(
+    join(backup, "snapshot.json"),
+    JSON.stringify({ version: 1, slot: slot.id, directory: slot.directory }),
+  );
+  expect(() => snapshotOriginalService(pool, slot)).toThrow("file-presence record");
 });
 
 test("a listener from another repository or account consumes the same host budget", () => {

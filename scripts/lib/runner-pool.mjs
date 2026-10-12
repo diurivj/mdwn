@@ -172,19 +172,26 @@ export function serviceTemplate(template, pool, slot) {
 export function snapshotOriginalService(pool, slot) {
   const backup = join(pool.root, "config", `${slot.id}-original`);
   const marker = join(backup, "snapshot.json");
+  const sources = [
+    ...[".path", ".env", ".service"].map((name) => [name, join(slot.directory, name)]),
+    ["service.plist", join(pool.home, "Library", "LaunchAgents", `${serviceName(slot)}.plist`)],
+  ];
   if (existsSync(marker)) {
     const snapshot = JSON.parse(readFileSync(marker, "utf8"));
     if (snapshot.version !== 1 || snapshot.slot !== slot.id || snapshot.directory !== slot.directory)
       throw new Error("Original snapshot identity does not match this slot");
+    if (
+      !sources.every(
+        ([name]) =>
+          typeof snapshot.files?.[name] === "boolean" && existsSync(join(backup, name)) === snapshot.files[name],
+      )
+    )
+      throw new Error("Original snapshot file-presence record is incomplete or changed");
     return backup;
   }
   if (existsSync(backup) && readdirSync(backup).length)
     throw new Error("Legacy original backup needs an inventoried snapshot.json before service changes");
   mkdirSync(backup, { recursive: true });
-  const sources = [
-    ...[".path", ".env", ".service"].map((name) => [name, join(slot.directory, name)]),
-    ["service.plist", join(pool.home, "Library", "LaunchAgents", `${serviceName(slot)}.plist`)],
-  ];
   const files = Object.fromEntries(
     sources.map(([name, source]) => {
       const present = existsSync(source);
