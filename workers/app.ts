@@ -1,11 +1,12 @@
 import { createRequestHandler } from "@react-router/cloudflare";
 import { RouterContextProvider } from "react-router";
 import { envContext } from "~/context/env";
+import { startDeviceStateHeader } from "~/device/device-state.server";
 import { purgeExpiredSignupProofs } from "~/device/proof.server";
 import { purgeExpiredAbuseRecords } from "~/shared/security/abuse-control.server";
 import { purgeExpiredPublicCommentReports } from "~/shared/security/public-participation.server";
 import { purgeExpiredSecurityMaterial } from "~/retention/retention.server";
-import { buildSecurityHeaders, DYNAMIC_CACHE_CONTROL, generateCspNonce } from "~/shared/security/headers";
+import { buildSecurityHeaders, generateCspNonce, responseCacheControl } from "~/shared/security/headers";
 import { cspNonceContext } from "~/shared/security/nonce";
 import { purgeExpiredGrantDependents } from "~/sharing/grant-expiry.server";
 
@@ -68,13 +69,17 @@ export default {
       cspNonce: nonce,
     } as AdapterEvent;
 
+    // A proof-guarded request learns the next device state from its own
+    // response; the read runs beside the handler, not after it.
+    const deviceState = startDeviceStateHeader(request, env);
     const response = await requestHandler(event);
 
     const headers = new Headers(response.headers);
-    if (!headers.has("Cache-Control")) {
-      // Private-first app: never share dynamic responses across users.
-      headers.set("Cache-Control", DYNAMIC_CACHE_CONTROL);
-    }
+    // Private-first app: never share dynamic responses across users, and never
+    // let the edge transform (inject analytics into) a document.
+    headers.set("Cache-Control", responseCacheControl(headers.get("Content-Type"), headers.get("Cache-Control")));
+    const state = deviceState && (await deviceState);
+    if (state) headers.set("X-Mdwn-Device-State", state);
     for (const [name, value] of Object.entries(buildSecurityHeaders({ nonce, dev: import.meta.env.DEV }))) {
       if (!headers.has(name)) headers.set(name, value);
     }

@@ -66,6 +66,6 @@ describe("anonymous support page", () => {
     // runtime runs with the local dev relaxation.
     expect(csp).toContain("script-src 'self'");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-transform");
   });
 });
