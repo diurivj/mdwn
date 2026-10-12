@@ -21,6 +21,7 @@ import {
   parseLaunchdRunners,
   serviceName,
   serviceTemplate,
+  snapshotOriginalService,
   slotEnvironment,
   validatePool,
 } from "./lib/runner-pool.mjs";
@@ -129,16 +130,9 @@ function prepareState(slot) {
 /** @param {import('./lib/runner-pool.mjs').Slot} slot */
 function prepareService(slot) {
   assertLocallyIdle(slot);
+  const backup = snapshotOriginalService(pool, slot);
   const env = prepareState(slot);
-  const backup = join(pool.root, "config", `${slot.id}-original`);
-  mkdirSync(backup, { recursive: true });
-  for (const name of [".path", ".env", ".service"]) {
-    if (existsSync(join(slot.directory, name)) && !existsSync(join(backup, name)))
-      copyFileSync(join(slot.directory, name), join(backup, name));
-  }
   const plist = join(pool.home, "Library", "LaunchAgents", `${serviceName(slot)}.plist`);
-  if (existsSync(plist) && !existsSync(join(backup, "service.plist")))
-    copyFileSync(plist, join(backup, "service.plist"));
   const template = serviceTemplate(
     readFileSync(join(slot.directory, "bin", "actions.runner.plist.template"), "utf8"),
     pool,

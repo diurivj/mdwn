@@ -142,7 +142,12 @@ original registration, installation, and common label so workflow routing
 still has a target. Keep stopped installations/evidence until recovery is
 verified. `ci/config/<slot>-original/` contains the original nonsecret `.path`,
 `.env`, `.service`, and service plist when present. Stop the targeted service
-before restoring those files. The original terminal entry point remains
+before restoring those files. `snapshot.json` records original presence and
+absence before the first environment change; later reconfiguration never
+backs up newly generated service files as originals. A legacy backup without
+this marker requires an explicit migration using its initial inventory; do
+not infer original presence from a currently installed service. Preserve
+post-setup files separately when correcting such a backup. The original terminal entry point remains
 `/Users/diurivj/actions-runner/run.sh` if launchd must be rolled back.
 Revert workflow/worker-limit changes independently if they caused a regression.
 There is no power-setting rollback because the existing settings were retained.

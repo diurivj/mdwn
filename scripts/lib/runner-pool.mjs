@@ -1,4 +1,13 @@
-import { realpathSync } from "node:fs";
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 /** @typedef {{id: string, repository: string, name: string, directory: string, state: string, legacy?: boolean}} Slot */
@@ -154,6 +163,41 @@ export function serviceTemplate(template, pool, slot) {
         "<key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>30</integer>\n    <key>RunAtLoad</key>",
       )
   );
+}
+
+/** Capture one pre-change snapshot, including absent files. Later service
+ * creation must not turn a generated plist into an "original" backup.
+ * @param {Pool} pool @param {Slot} slot
+ */
+export function snapshotOriginalService(pool, slot) {
+  const backup = join(pool.root, "config", `${slot.id}-original`);
+  const marker = join(backup, "snapshot.json");
+  if (existsSync(marker)) {
+    const snapshot = JSON.parse(readFileSync(marker, "utf8"));
+    if (snapshot.version !== 1 || snapshot.slot !== slot.id || snapshot.directory !== slot.directory)
+      throw new Error("Original snapshot identity does not match this slot");
+    return backup;
+  }
+  if (existsSync(backup) && readdirSync(backup).length)
+    throw new Error("Legacy original backup needs an inventoried snapshot.json before service changes");
+  mkdirSync(backup, { recursive: true });
+  const sources = [
+    ...[".path", ".env", ".service"].map((name) => [name, join(slot.directory, name)]),
+    ["service.plist", join(pool.home, "Library", "LaunchAgents", `${serviceName(slot)}.plist`)],
+  ];
+  const files = Object.fromEntries(
+    sources.map(([name, source]) => {
+      const present = existsSync(source);
+      if (present) copyFileSync(source, join(backup, name), constants.COPYFILE_EXCL);
+      return [name, present];
+    }),
+  );
+  writeFileSync(
+    marker,
+    `${JSON.stringify({ version: 1, slot: slot.id, directory: slot.directory, files }, null, 2)}\n`,
+    { flag: "wx" },
+  );
+  return backup;
 }
 
 /** Count every listener, including other repositories/accounts. Loaded services

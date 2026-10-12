@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -6,6 +6,8 @@ import {
   assertStartCapacity,
   parseLaunchdRunners,
   serviceTemplate,
+  serviceName,
+  snapshotOriginalService,
   slotEnvironment,
   validatePool,
 } from "../scripts/lib/runner-pool.mjs";
@@ -50,6 +52,58 @@ test("separate registrations keep every writable resource in its own slot", () =
     expect(first[key]).toMatch(/^\//);
   }
   expect(first).not.toHaveProperty("HOME");
+});
+
+test("service snapshots preserve both original contents and original absence across reconfiguration", () => {
+  const pool = fixture();
+  const slot = pool.slots[0];
+  mkdirSync(slot.directory, { recursive: true });
+  writeFileSync(join(slot.directory, ".path"), "original-path");
+  const backup = snapshotOriginalService(pool, slot);
+  const snapshot = readFileSync(join(backup, "snapshot.json"), "utf8");
+  expect(JSON.parse(snapshot).files).toEqual({
+    ".path": true,
+    ".env": false,
+    ".service": false,
+    "service.plist": false,
+  });
+  writeFileSync(join(slot.directory, ".path"), "updated-path");
+  writeFileSync(join(slot.directory, ".service"), "new-service");
+  const agents = join(pool.home, "Library", "LaunchAgents");
+  mkdirSync(agents, { recursive: true });
+  writeFileSync(join(agents, `${serviceName(slot)}.plist`), "generated-plist");
+  expect(snapshotOriginalService(pool, slot)).toBe(backup);
+  expect(readFileSync(join(backup, ".path"), "utf8")).toBe("original-path");
+  expect(readFileSync(join(backup, "snapshot.json"), "utf8")).toBe(snapshot);
+  expect(existsSync(join(backup, ".service"))).toBe(false);
+  expect(existsSync(join(backup, "service.plist"))).toBe(false);
+});
+
+test("legacy backups without presence metadata require an explicit inventoried migration", () => {
+  const pool = fixture();
+  const slot = pool.slots[0];
+  const backup = join(pool.root, "config", `${slot.id}-original`);
+  mkdirSync(backup, { recursive: true });
+  writeFileSync(join(backup, ".path"), "preserve-this");
+  expect(() => snapshotOriginalService(pool, slot)).toThrow("inventoried snapshot.json");
+  expect(readFileSync(join(backup, ".path"), "utf8")).toBe("preserve-this");
+  expect(existsSync(join(backup, "snapshot.json"))).toBe(false);
+});
+
+test("a preexisting service remains the original snapshot after later template changes", () => {
+  const pool = fixture();
+  const slot = pool.slots[0];
+  mkdirSync(slot.directory, { recursive: true });
+  writeFileSync(join(slot.directory, ".service"), "original-service-name");
+  const agents = join(pool.home, "Library", "LaunchAgents");
+  mkdirSync(agents, { recursive: true });
+  const plist = join(agents, `${serviceName(slot)}.plist`);
+  writeFileSync(plist, "original-plist");
+  const backup = snapshotOriginalService(pool, slot);
+  writeFileSync(plist, "new-plist");
+  snapshotOriginalService(pool, slot);
+  expect(JSON.parse(readFileSync(join(backup, "snapshot.json"), "utf8")).files["service.plist"]).toBe(true);
+  expect(readFileSync(join(backup, "service.plist"), "utf8")).toBe("original-plist");
 });
 
 test("a listener from another repository or account consumes the same host budget", () => {
