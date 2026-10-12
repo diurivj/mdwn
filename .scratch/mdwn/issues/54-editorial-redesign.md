@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -70,3 +70,4 @@ Out of scope: share-management UI (no UI creates or manages Shares today, so the
 - 2026-10-11: Initial full regression before the review corrections: 403 Node + 382 Workers tests passed; browser suite 452 passed, one existing WebKit synthetic FileSystemEntry drag-and-drop case skipped. These initial results are not a final-head gate.
 - 2026-10-11: Follow-up review of tree `98397633ecd63b5acb533f3e333d2b3703577aad` passed Standards and confirmed the prior corrections, but identified a held cross-tab Session read surviving a new location. Centralized invalidation now supersedes reads on authentication changes, new locations, focus, and final subscriber cleanup while retaining same-location deduplication. A real two-tab, held-response regression failed before the correction and passed afterward in every browser. Also verified failed header sign-out cannot be hidden by an earlier Account-action success; React Router's `fetcher.reset()` clears that older result.
 - 2026-10-11: Final two-axis review of `9839763..40b99f95f7249fff7960be2284682c432aa2d824`: Standards **Pass**, Spec **Pass**, no new findings. Separate RR8/stack follow-up **Pass**: private request reads are abort-lifetime scoped, Session navigation remains a browser-only boolean subscription, stale completions cannot clear/publish over newer reads, navigation Forms preserve draft blockers, and Worker/D1/resource authority is unchanged. Installed RR 8.4.0 contracts and current client-data/fetcher/race documentation were checked. Verification so far: lint/typecheck/build, 17 real-WebCrypto lifetime tests, 39 focused cross-engine checks before the last Session refinement, and 24 cross-engine Session/workspace/review regressions afterward. Final clean-head preflight follows the commit; the PR carries its result. No merge or deployment is part of this continuation.
+- 2026-10-11: Merged via PR #61 (`1569edb`); status reconciled to done.

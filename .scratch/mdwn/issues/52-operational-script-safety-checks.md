@@ -4,7 +4,7 @@
 
 **Type:** maintenance
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -68,3 +68,4 @@ No application feature changes, production operations, blanket complexity limits
 - 2026-10-10: Filed from ticket 41's maintainer grilling. All lifecycle policies above were ratified there; implementation and checks remain open in this ticket. A docs-only ticket 41 does not claim these gaps are fixed.
 - 2026-10-11: Implemented the scoped TypeScript-AST and tracked-index check in `npm run lint` (and therefore existing CI/preflight lint steps); hardened shared writers/raw output; added current-run resource and artifact ledgers to smoke, rehearsal, proof, and restoration boundaries. Borrowed databases are never deleted, unresolved creations are reported without guessed deletion, and cleanup errors remain separate from operational errors. Wrangler disk debug logging is disabled in the operational runners. Added 83 safeguard tests; the focused safeguard/restore suites pass (109 tests), full `typecheck` and lint pass, and the real local Wrangler round trip passes with max-size synthetic ciphertexts. No credentials or live remote operations were needed. The unrelated ticket-41 edit is preserved. Pinned review, separate RR8/stack and final clean-head preflight evidence will be reported with the PR; current-head green CI remains required before merge.
 - 2026-10-11: Initial pinned review (`8c77fa3...8709f03`) found two Standards blockers (duplicate Wrangler failure wrapper and fixture comments without authoritative links), one advisory middle-man helper, and one Spec bug (offline preparation errors could print SQL excerpts). Fixed all of them: smoke reuses the shared runner, comments link to the scripting reference, the throw-only helper is removed, and unclassified operation/cleanup errors are retained in protected private diagnostics instead of interpolated into lifecycle messages. Added regressions for private SQL/cleanup errors and diagnostic-write failure. Separate RR8/stack result for this pin: **Not applicable — no application RR8/stack touchpoints**. Second pinned review (`8c77fa3...5c0a139`): Standards passed; Spec confirmed the private-error correction and found incomplete wildcard filename coverage. Aligned proof config, dotenv and rehearsal-evidence matchers with the documented ignore conventions, clarified the two evidence filename families, and added four red/green forced-index regressions. Separate RR8/stack result remains **Not applicable**. Final corrected scope will be re-reviewed before commit/publication.
+- 2026-10-11: Merged via PR #60 (`67467f2`); status reconciled to done.
