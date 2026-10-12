@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useFetcher } from "react-router";
 import type { clientAction, clientLoader } from "~/routes/account-shared-access";
+import { createUpkeepThrottle } from "~/shared/device/upkeep-throttle";
 import { cx } from "~/ui/cx";
 import { ShareIcon } from "~/ui/icons";
 
@@ -10,11 +11,10 @@ type Status = NonNullable<ReturnType<typeof useFetcher<typeof clientLoader | typ
  * Background upkeep starts at most once a minute per tab (ticket 57); the
  * explicit action on the Shared access page is never throttled. The last
  * status (booleans and counts only) is kept in memory so a remounted Files
- * page still shows it and continues a pass that reported more work.
+ * page still shows it and continues a pass that reported more work. Both
+ * reset with device state, so they never carry into another Session.
  */
-const UPKEEP_INTERVAL_MS = 60_000;
-let upkeepStartedAt: number | null = null;
-let lastStatus: Status | undefined;
+const sharedUpkeep = createUpkeepThrottle<Status>();
 
 /** Visiting Files processes bounded passes through the route's browser action.
  * No worker queue, plaintext job state, custom fetch lifecycle, or SSR data.
@@ -27,19 +27,18 @@ export function SharedProvisioning({ link = true, className }: { link?: boolean;
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    const now = Date.now();
-    if (upkeepStartedAt !== null && now - upkeepStartedAt < UPKEEP_INTERVAL_MS) {
+    if (!sharedUpkeep.due()) {
       setRecent(true);
       return;
     }
-    upkeepStartedAt = now;
+    sharedUpkeep.start();
     // A no-work visit is a read, not an action that needlessly revalidates Files.
     void load("/account/shared-access");
   }, [load]);
   useEffect(() => {
-    if (data) lastStatus = data;
+    if (data) sharedUpkeep.remember(data);
   }, [data]);
-  const status = data ?? (recent ? lastStatus : undefined);
+  const status = data ?? (recent ? sharedUpkeep.status() : undefined);
   useEffect(() => {
     if (state !== "idle" || !status) return;
     const more =
