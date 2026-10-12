@@ -89,6 +89,9 @@ test("the Owner shares a legacy File read-only from the workspace, and revoking 
     await expect(people.getByRole("listitem")).toContainText(identifier);
     await expect(people.getByRole("listitem")).toContainText("Waiting for acceptance");
     await expect(people.getByRole("listitem")).toContainText("Read-only");
+    // Preparing again is safe: pending envelopes upsert.
+    await people.getByRole("button", { name: "Prepare secure access", exact: true }).click();
+    await expect(people.getByRole("status").filter({ hasText: "Secure access prepared." })).toBeVisible();
 
     await r.reload();
     await acceptInvitation(r);
@@ -232,4 +235,37 @@ test("inviting an unknown or your own share identifier explains why nothing was 
   await expect(dialog.getByRole("region", { name: "People with access" })).toContainText(
     "Only you can open this File.",
   );
+});
+
+test("the Owner cancels a pending invitation from the Share dialog", async ({
+  browser,
+  page,
+  workspace,
+  workspaceScript,
+  baseURL,
+  server,
+}) => {
+  const origin = new URL(baseURL!).origin;
+  const recipient = await seededAccount(browser, server, origin, workspaceScript);
+  try {
+    const address = await workspace.db
+      .prepare("SELECT share_id FROM accounts WHERE id = ?")
+      .bind(recipient.accountId)
+      .first<{ share_id: string }>();
+    const dialog = await share(page, address!.share_id, "Read & write");
+    await expect(
+      dialog.getByRole("status").filter({ hasText: "Invitation sent and secure access prepared" }),
+    ).toBeVisible({ timeout: 60_000 });
+    const people = dialog.getByRole("region", { name: "People with access" });
+    await people.getByRole("button", { name: "Cancel invitation", exact: true }).click();
+    await people.getByRole("button", { name: "Confirm cancel", exact: true }).click();
+    await expect(dialog.getByRole("status").filter({ hasText: "Invitation cancelled." })).toBeVisible();
+    await expect(people).toContainText("Only you can open this File.");
+    expect(await workspace.db.prepare("SELECT count(*) AS total FROM shares").first()).toEqual({ total: 0 });
+    expect(await workspace.db.prepare("SELECT count(*) AS total FROM share_key_envelopes").first()).toEqual({
+      total: 0,
+    });
+  } finally {
+    await recipient.context.close();
+  }
 });

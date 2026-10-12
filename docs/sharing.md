@@ -10,7 +10,7 @@ Resource routes are thin React Router actions under `app/routes/api/`. All reque
 | --- | --- |
 | `POST /api/private/shares[?cursor=<opaque-id>]` | Incoming/outgoing pending Shares; outgoing rows add `recipientShareId` |
 | `POST /api/private/shares/address` | Only the caller's opaque share identifier |
-| `PUT /api/private/shares` | Owner invites an exact existing Account |
+| `PUT /api/private/shares` | Owner invites an exact existing Account; `409 key_rotation_required` while a write seal covers the target |
 | `POST /api/private/shares/:id/accept` | Recipient accepts; atomically creates a Grant and removes the Share |
 | `POST /api/private/shares/:id/decline` | Recipient hard-deletes the pending Share |
 | `DELETE /api/private/shares/:id` | Owner cancels the pending Share |
@@ -21,7 +21,7 @@ Resource routes are thin React Router actions under `app/routes/api/`. All reque
 | `POST /api/private/{shares,grants}/:id/keys[?cursor=<device-id>]` | Owner's scoped current device targets; active recipient's own envelope only |
 | `PUT /api/private/{shares,grants}/:id/keys` | Owner submits up to 20 signed device envelopes; an active Grant's current recipient holder may forward to its own Account's devices |
 | `POST /api/private/{shares,grants}/:id/comment-keys[?cursor=<object-id>]` | Required Private/retained Public-history capabilities, 20 per page |
-| `POST /api/private/{shares,grants}/:id/comment-keys/:objectId[?cursor=<device-id>]` | Owner's current device targets; active recipient's own envelope only |
+| `POST /api/private/{shares,grants}/:id/comment-keys/:objectId[?cursor=<device-id>]` | Owner's current device targets (for a Share, plus the Owner's own current `vault-recovery` source when one exists); active recipient's own envelope only |
 | `PUT /api/private/{shares,grants}/:id/comment-keys/:objectId` | Up to 20 signed Comment envelopes, pinned to current scope/epochs; current recipient holders may forward within their Account |
 | `POST /api/private/grants/:id/needs[?cursor=<device-id>]` | Owner's opaque device needs, 20 per page; recipient sees only its own |
 | `PUT /api/private/grants/:id/needs` | Proof-gated, idempotent current-coverage reconciliation with an empty object body |
@@ -46,7 +46,24 @@ Each control submits an explicit intent (`app/shared/sharing/sharing-intents.ts`
 
 The library sidebar's **Shared with me** section lists received Grant roots with the permission and, when invitations are pending, links "N invitations" to the Sharing page. It reads a tab-memory summary (`app/shared/sharing/shared-with-me-cache.ts`): 60 seconds, keyed by Account, refreshed after any sharing intent, primed by the Sharing page's own read, and re-read on window focus when older than 5 seconds. It is never stored or server-rendered, so remounting Files routes adds no relationship requests.
 
-Inviting from the workspace and preparing secure access (staging Grant and Comment-capability envelopes) are not in the UI yet; Shares are still created through `PUT /api/private/shares`.
+### Inviting and preparing secure access
+
+An owned File or folder has a **Share** action in the workspace (`app/sharing/share-dialog.tsx`). It is not offered for the Library root or for content shared with you, because Collaborators cannot reshare, and it waits for a File's draft to be saved. The dialog takes the recipient's exact share identifier and **Read only** or **Read & write**. On submit the Owner's browser:
+
+1. converts a legacy File to its own File capability first, with the snapshot's parent listing and key (`convertFileCapability`);
+2. invites with `PUT /api/private/shares`;
+3. prepares secure access (`prepareShare`), showing progress, and then says the recipient can accept from **Sharing** in their Account menu.
+
+A 404 means no other Account has that identifier; the dialog compares the caller's own identifier first and says you can't share with yourself (the server answers 404 for it too). `409 key_rotation_required` — the server refuses an invitation while a write seal covers the target, and the dialog hides the form when its first page of pending secure access updates (20 jobs) targets the item or an ancestor — links to [secure access updates](key-rotation.md); `409 sharing_changed` asks to try again. The dialog lists that target's pending Shares and owned Grants with the Sharing page's own rows, loader (`fetcher.load("/account/sharing")`) and intents. Row intents submit with `defaultShouldRevalidate: false`, so they never reload Files or an unsaved draft; the dialog re-reads only its lists.
+
+`app/shared/sharing/share-staging-client.ts` `prepareShare(shareId)` stages, from this Owner device, the root Grant envelope and every required Comment-capability envelope for each current recipient device:
+
+- It reads every target first — `POST …/shares/:id/keys` and `…/comment-keys` pages, then each object's device pages — and requires one consistent snapshot (relationship, target, Grant epoch and both registry epochs, one signing device) before any upload. Cursors must advance and each listing reads at most 20 pages; a pass makes at most 2,000 requests.
+- The root key comes from the Owner's verified owned walk and each Comment key from the Owner's own `vault-recovery` envelope, returned only to the Owner's device by the share Comment-key target (`app/shared/sharing/owned-capabilities.ts`, shared unchanged with [shared-content provisioning](shared-provisioning.md)). If a capability has no such source, the pass prepares the others and reports that it could not finish; it never fabricates a key.
+- `PUT` packets carry at most 20 envelopes. An uncertain response is retried once with the same saved ciphertext bytes and a fresh Device proof; an envelope is never re-sealed for a retry.
+- `409 sharing_changed` restarts the pass once with fresh targets, then fails with actionable copy. Running it again is safe because pending Share envelopes upsert.
+
+**Prepare secure access** on each pending outgoing Share (Sharing page and Share dialog) runs the same pass. When the Owner opens the Sharing page, it also prepares the 5 newest pending Shares in the background, once per visit, so recipient devices enrolled after the invitation are covered without an unbounded job; failures stay quiet and the row action remains.
 
 ## Effective authority and the permission matrix
 
