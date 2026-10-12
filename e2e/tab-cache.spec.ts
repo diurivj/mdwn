@@ -10,16 +10,12 @@ import { test, expect } from "./workspace-fixture";
 
 const tree = (page: Page) => page.getByRole("navigation", { name: "Files", exact: true });
 
-async function openLibraryLink(page: Page) {
+async function openLibrary(page: Page) {
   await page
     .getByRole("complementary", { name: "Files tree", exact: true })
     .getByRole("link", { name: "Library", exact: true })
     .click();
   await expect(page).toHaveURL(/\/files$/);
-}
-
-async function openLibrary(page: Page) {
-  await openLibraryLink(page);
   await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
 }
 
@@ -235,10 +231,24 @@ test("memory never renders a listing behind the rollback checkpoint", async ({ p
   // A cold-loaded folder: nothing revalidates here in the background to meet the checkpoint first.
   await create(page, "Notes", "folder");
   await advanceRootCheckpoint(page, workspace.accountId, workspace.rootId);
-  await openLibraryLink(page);
-  // The cold walk then meets the same rollback check.
-  await expect(page.getByRole("heading", { name: "Files unavailable", exact: true })).toBeVisible();
-  await expect(tree(page).getByRole("link", { name: "Draft.md", exact: true })).toHaveCount(0);
+  const release = await holdPrivateResponses(page);
+  try {
+    await page
+      .getByRole("complementary", { name: "Files tree", exact: true })
+      .getByRole("link", { name: "Library", exact: true })
+      .click();
+    // Memory refuses the library: the navigation waits on the held network instead of rendering it.
+    await expect(page.getByRole("status").filter({ hasText: "Opening Library…" })).toBeAttached();
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toHaveCount(0);
+    await expect(page).not.toHaveURL(/\/files$/);
+    release();
+    // The cold walk then meets the same rollback check.
+    await expect(page.getByRole("heading", { name: "Files unavailable", exact: true })).toBeVisible();
+    await expect(tree(page).getByRole("link", { name: "Draft.md", exact: true })).toHaveCount(0);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  }
 });
 
 test("a background merge never replaces an open File's unsaved draft", async ({ page, workspace }) => {
