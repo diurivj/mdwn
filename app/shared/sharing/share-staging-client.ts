@@ -9,7 +9,7 @@ import {
   KeyRotationRequiredError,
   readAllPages,
   SharingChangedError,
-  sharingFailure,
+  throwSharingFailure,
   SharingNotFoundError,
   SharingPageLimitError,
 } from "./relationships-client";
@@ -141,7 +141,7 @@ async function pass(
     // Every read and signature in a pass comes from one Owner device.
     if (device !== null && exchange.device.deviceId !== device.deviceId) throw new SharingChangedError();
     device ??= exchange.device;
-    if (!exchange.response.ok) return sharingFailure(exchange.response);
+    if (!exchange.response.ok) return throwSharingFailure(exchange.response);
     return exchange.response.json() as Promise<unknown>;
   };
   const paged = <P extends { nextCursor: string | null }>(path: string, parse: (value: unknown) => P) =>
@@ -203,7 +203,7 @@ async function pass(
         envelopes: packet,
       });
       const response = await uploadSaved(path, body, signal);
-      if (!response.ok) await sharingFailure(response);
+      if (!response.ok) await throwSharingFailure(response);
       prepared += packet.length;
       options.onProgress?.({ prepared, total });
     }
