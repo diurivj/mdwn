@@ -10,12 +10,16 @@ import { test, expect } from "./workspace-fixture";
 
 const tree = (page: Page) => page.getByRole("navigation", { name: "Files", exact: true });
 
-async function openLibrary(page: Page) {
+async function openLibraryLink(page: Page) {
   await page
     .getByRole("complementary", { name: "Files tree", exact: true })
     .getByRole("link", { name: "Library", exact: true })
     .click();
   await expect(page).toHaveURL(/\/files$/);
+}
+
+async function openLibrary(page: Page) {
+  await openLibraryLink(page);
   await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
 }
 
@@ -125,23 +129,116 @@ test("a change from another device appears when the tab regains focus", async ({
   await other.close();
 });
 
-test("signing out in another tab clears this tab's remembered names", async ({ page, workspace }) => {
-  expect(workspace.fileId).toBeTruthy();
-  await openLibrary(page);
-  await waitForSharedProvisioning(page);
+/** Sign out from a second tab of the same browser. */
+async function signOutInAnotherTab(page: Page) {
   const other = await page.context().newPage();
-  await other.goto("/files");
-  await expect(other.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
-  await waitForSharedProvisioning(other);
+  await other.goto("/account/security");
   await other.getByRole("button", { name: "Account menu", exact: true }).click();
   await other.locator("#account-menu").getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(other).toHaveURL(/\/sign-in$/);
+  return other;
+}
 
-  // The next navigation here walks the tree again and finds no Session.
-  await tree(page).getByRole("link", { name: "Draft.md", exact: true }).click();
+/** Notes, holding Inside.md, both verified and remembered; returns on the library root, rendered from memory. */
+async function rememberNotes(page: Page) {
+  await create(page, "Notes", "folder");
+  await create(page, "Inside.md", "File");
+  await expect(tree(page).getByRole("link", { name: "Inside.md", exact: true })).toBeVisible();
+  await waitForSharedProvisioning(page);
+  await openLibrary(page);
+  // Notes is collapsed in the tree: only memory could show what it holds.
+  await expect(page.getByText("Inside.md", { exact: true })).toHaveCount(0);
+}
+
+/** Hold private tree, bootstrap and device-state responses until released. */
+async function holdPrivateResponses(page: Page) {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/\/api\/(private\/(tree\/|bootstrap$)|device\/state$)/, async (route) => {
+    await held;
+    await route.continue().catch(() => {
+      /* The page may have moved on. */
+    });
+  });
+  return release;
+}
+
+test("signing out in another tab clears names this tab remembers before its next navigation", async ({
+  page,
+  workspace,
+}) => {
+  expect(workspace.fileId).toBeTruthy();
+  await rememberNotes(page);
+  const release = await holdPrivateResponses(page);
+  try {
+    const other = await signOutInAnotherTab(page);
+    await page
+      .getByRole("list", { name: "Folder contents" })
+      .getByRole("link", { name: "Notes, folder", exact: true })
+      .click();
+    // The destination waits on the network instead of rendering remembered contents.
+    await expect(page.getByRole("status").filter({ hasText: "Opening Notes…" })).toBeAttached();
+    await expect(page.getByText("Inside.md", { exact: true })).toHaveCount(0);
+    release();
+    await expect(page.getByRole("heading", { name: "Files unavailable", exact: true })).toBeVisible();
+    await expect(page.getByText("Inside.md", { exact: true })).toHaveCount(0);
+    await other.close();
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  }
+});
+
+test("another tab's sign-out reloads an open folder once, so its names leave the screen", async ({
+  page,
+  workspace,
+}) => {
+  expect(workspace.fileId).toBeTruthy();
+  await rememberNotes(page);
+  await tree(page).getByRole("link", { name: "Notes", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Notes", exact: true })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Folder contents" }).getByRole("link")).toHaveText(["Inside.md"]);
+  const other = await signOutInAnotherTab(page);
+  // No navigation here: the page reloads through the cold walk and finds no Session.
   await expect(page.getByRole("heading", { name: "Files unavailable", exact: true })).toBeVisible();
-  await expect(page.getByText("Draft.md")).toHaveCount(0);
+  await expect(page.getByText("Inside.md", { exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/d\/[^/]+$/);
   await other.close();
+});
+
+/** Move this browser's rollback checkpoint for the library root past what the server holds, as a newer head seen in another tab would. */
+async function advanceRootCheckpoint(page: Page, accountId: string, rootId: string) {
+  await page.evaluate(
+    ({ key }) => {
+      const [revision] = JSON.parse(localStorage.getItem(key) ?? "[1]") as [number, string];
+      localStorage.setItem(key, JSON.stringify([revision + 1, "a-newer-head"]));
+    },
+    { key: `mdwn:files-listing:${accountId}:${rootId}` },
+  );
+}
+
+test("background revalidation rejects a remembered head behind the rollback checkpoint", async ({
+  page,
+  workspace,
+}) => {
+  await openLibrary(page);
+  await expect(tree(page).getByRole("link", { name: "Draft.md", exact: true })).toBeVisible();
+  await advanceRootCheckpoint(page, workspace.accountId, workspace.rootId);
+  // The server still answers the remembered head; the checkpoint makes it a replay.
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading", { name: "Files unavailable", exact: true })).toBeVisible();
+});
+
+test("memory never renders a listing behind the rollback checkpoint", async ({ page, workspace }) => {
+  // A cold-loaded folder: nothing revalidates here in the background to meet the checkpoint first.
+  await create(page, "Notes", "folder");
+  await advanceRootCheckpoint(page, workspace.accountId, workspace.rootId);
+  await openLibraryLink(page);
+  // The cold walk then meets the same rollback check.
+  await expect(page.getByRole("heading", { name: "Files unavailable", exact: true })).toBeVisible();
+  await expect(tree(page).getByRole("link", { name: "Draft.md", exact: true })).toHaveCount(0);
 });
 
 test("a background merge never replaces an open File's unsaved draft", async ({ page, workspace }) => {
