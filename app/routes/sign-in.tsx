@@ -4,7 +4,7 @@ import { Link, redirect, useFetcher } from "react-router";
 
 import { authFailure, authGet, authPost } from "~/auth/client";
 import type { AssertionStart } from "~/auth/contracts";
-import { hasDeviceBoundSession } from "~/auth/session.server";
+import { hasActiveDeviceSession } from "~/device/proof.server";
 import { getEnv } from "~/context/env";
 import { signDeviceProof, type DeviceProof } from "~/shared/device/proof";
 import { getDevice, updateRegistryEpoch } from "~/shared/device/store";
@@ -26,7 +26,7 @@ export function meta() {
  * still shows the sign-in page.
  */
 export async function loader({ request, context }: Route.LoaderArgs) {
-  if (await hasDeviceBoundSession(request, getEnv(context)).catch(() => false)) return redirect("/files");
+  if (await hasActiveDeviceSession(request, getEnv(context)).catch(() => false)) return redirect("/files");
   return null;
 }
 

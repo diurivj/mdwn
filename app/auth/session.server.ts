@@ -211,17 +211,6 @@ export async function getActiveSession(request: Request, env: Env): Promise<Acti
   };
 }
 
-/**
- * Whether this request already carries a normal Session bound to an Encryption
- * device, so signing in or up again would change nothing. An unbound Session
- * is not: a fresh Passkey assertion is how a browser's Session becomes bound.
- * Removing or replacing a device revokes the Sessions bound to it.
- */
-export async function hasDeviceBoundSession(request: Request, env: Env): Promise<boolean> {
-  const session = await getActiveSession(request, env);
-  return session?.purpose === "normal" && typeof session.deviceId === "string";
-}
-
 export function hasFreshAssertion(session: ActiveSession, now = Date.now()): boolean {
   return (
     session.purpose === "normal" &&

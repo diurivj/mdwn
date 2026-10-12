@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, redirect, useNavigate } from "react-router";
 
-import { hasDeviceBoundSession } from "~/auth/session.server";
+import { hasActiveDeviceSession } from "~/device/proof.server";
 import { getEnv } from "~/context/env";
 import { RecoveryDownload } from "~/recovery/recovery-download";
 import { recoveryCodesText, recoveryPhraseText } from "~/shared/account/recovery-text";
@@ -28,7 +28,7 @@ export function meta() {
 
 /** A device-bound Session already has an Account here; it reads nothing else. */
 export async function loader({ request, context }: Route.LoaderArgs) {
-  if (await hasDeviceBoundSession(request, getEnv(context)).catch(() => false)) return redirect("/files");
+  if (await hasActiveDeviceSession(request, getEnv(context)).catch(() => false)) return redirect("/files");
   return null;
 }
 

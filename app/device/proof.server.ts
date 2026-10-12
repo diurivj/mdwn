@@ -54,6 +54,19 @@ async function boundDevice(env: Env, sessionId: string): Promise<ActiveDevice | 
   );
 }
 
+/**
+ * Whether this request carries a live normal Session bound to a still-active
+ * Encryption device, so signing in or up again would change nothing. Any other
+ * Session can still sign in: a fresh Passkey assertion is how a browser's
+ * Session becomes bound.
+ */
+export async function hasActiveDeviceSession(request: Request, env: Env): Promise<boolean> {
+  const sessionId = await sessionCookieId(request, env);
+  if (!sessionId) return false;
+  const [session, device] = await Promise.all([getActiveSession(request, env), boundDevice(env, sessionId)]);
+  return session?.purpose === "normal" && session.deviceId !== undefined && device !== null;
+}
+
 /** Prospective Session ID is the sign-in challenge ID; no Session exists until the assertion completes. */
 export async function verifySignInDevice(
   env: Env,
