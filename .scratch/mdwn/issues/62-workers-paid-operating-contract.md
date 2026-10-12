@@ -48,3 +48,11 @@
   - Small product-copy change (approved in review): the `/support` page (`app/routes/support.tsx`) drops the claim that exhausted free capacity "fails closed rather than triggering paid spend". It now says donations help cover the mdwn domain and hosting costs, grant nothing and change nothing about how mdwn runs; the meta description's "future paid infrastructure" is replaced the same way. `e2e/support.spec.ts`, `tests/worker/support-page.test.ts` (updated first, red, then green), `docs/support-options.md` and the buildable-spec support line match.
   - The per-invocation D1 limit now has one authoritative entry in `docs/operations/d1-scripting.md`; `docs/operations.md`, `docs/import.md` and `docs/acceptance.md` link to it, and the Paid D1 section no longer repeats the reference's verified Free limits.
   - Tests run: `npx vitest run --config vitest.workers.config.ts tests/worker/support-page.test.ts` 1 failed then 4 passed; `npx playwright test e2e/support.spec.ts e2e/publications.spec.ts --workers=2` 13 passed in each of chromium, firefox and webkit; `npm run lint`, `npm run typecheck` pass; `npm test` Node 419 passed, Workers 397 passed.
+- 2026-10-12 (orchestrator): Integrated on `issue/53-57-58-remaining-tickets` with tickets 57, 58 and 61, and awaiting PR/merge.
+  - Reviewed with ticket 61 on `git diff eaf18e4...15da673` (SHA256 `64540f92cbb18a63602a05a11a9e1b607684a5a48017bacd39f7ebcbf7573f40`).
+  - Fixes landed in `4be2e61` and `c56937e`:
+    - one authoritative D1 limit entry;
+    - conditional Paid wording, since the subscription is unconfirmed;
+    - honest `/support` copy.
+  - Verified by the orchestrator. RR8/stack gate: **Pass** (no data-flow changes beyond the support page copy).
+  - Clean-head `npm run verify` passed at `e38eb71`. It covered lint, typecheck, namespace drift, 555 Node and 414 Workers tests, the build, the fresh-D1 smoke, export/restore, the bundle-secret check, and 545 browser tests across Chromium, Firefox and WebKit. The 1 existing WebKit skip remained; there were no failures and no retries. Whole-branch diff: `git diff 75e882c...e38eb71` (SHA256 `9d5ca20709f5cdf72e4bcf34ec54141e9e0977182f7a0d0589720ebc5df4fd91`).

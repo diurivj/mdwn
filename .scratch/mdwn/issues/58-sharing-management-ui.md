@@ -67,3 +67,27 @@ The maintainer chose the full flow, addressed by share identifier only.
     - `npm run lint` clean; `npm run typecheck` clean; `npm run build` passed.
     - `npm test`: Node 50 files / 445 tests and Workers 53 files / 394 tests passed, including every `tests/worker/*comment*` file unchanged.
     - `e2e/sharing-invite.spec.ts` (7) + `sharing-management.spec.ts` (5) + `shared-file.spec.ts` + `grant-provisioning.spec.ts` (7): 19 passed in each of Chromium, Firefox and WebKit, with `--workers=2` and no concurrent Playwright run.
+- 2026-10-12 (orchestrator): Integrated on `issue/53-57-58-remaining-tickets` with tickets 57, 61 and 62, and awaiting PR/merge. `CODING_STANDARDS.md` was read before each review.
+  - **Round 1.** Diff: `git diff eaf18e4...dbe2afb` (SHA256 `92e8d0d83fa8bd23510a113f06a3ce78eb5f0c3de32a96f79c288ff68b01c6f0`).
+    - Standards: no blocking findings; recommended "share behavior" fixes.
+    - Spec, blocking: imported Historical Comment threads could never be prepared.
+    - Spec, other:
+      - some failures were misreported: a seal after the invitation, and re-inviting the same Account;
+      - the Leave and expiry copy did not explain the secure access update;
+      - the "Only you can open" copy ignored shared parent folders;
+      - multi-device coverage was missing.
+    - Separate RR8/stack gate: **Pass**.
+    - Fixed in `0bf34fe`..`aa2b44e`.
+  - **Round 2.** Diff: `git diff dbe2afb...aa2b44e` (SHA256 `43256ae7c2e3e25673d32c7a831675f16bfe771cec60f0772e42837907dc02d7`).
+    - Standards: no blocking findings.
+    - Spec: **Pass**, apart from a browser path to the server's `already_shared`.
+    - Separate RR8/stack gate: **Pass**. Fetcher forms carry `defaultShouldRevalidate={false}` where a dialog sits over Files, and `file.tsx` honours it. Share staging stays browser-orchestrated for WebCrypto.
+    - Advisory fixes in `aa2b44e..5177eed` (SHA256 `5d4263afce7be51e7d0d6e54e5aab12cd2e825b901c902fd0c952d94c2a2f7d7`), verified by the orchestrator. That includes the shared Owner-source SQL fragments used by the Comments read; the authority fragments never reference the newly aliased tables.
+  - Integration (`eef85e2`, test-first):
+    - the Shared with me summary is private tab memory: it is cleared with it, and keeps nothing while a hidden tab stays expired;
+    - leaving a Grant clears private tab memory in every tab.
+  - Clean-head `npm run verify` passed at `e38eb71`. It covered lint, typecheck, namespace drift, 555 Node and 414 Workers tests, the build, the fresh-D1 smoke, export/restore, the bundle-secret check, and 545 browser tests across Chromium, Firefox and WebKit. The 1 existing WebKit skip remained; there were no failures and no retries. Whole-branch diff: `git diff 75e882c...e38eb71` (SHA256 `9d5ca20709f5cdf72e4bcf34ec54141e9e0977182f7a0d0589720ebc5df4fd91`).
+  - Open for the maintainer:
+    - sign-off on the Owner-only `import` source for imported Historical threads;
+    - sign-off on refusing invitations under a write seal (`409 key_rotation_required`);
+    - follow-up [66](66-imported-thread-grant-provisioning.md) for existing-Grant provisioning of imported threads.

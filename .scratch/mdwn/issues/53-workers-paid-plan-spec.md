@@ -37,6 +37,8 @@ The deferred opportunities in the research stay deferred. No child changes the a
 
 ## Comments
 
+- 2026-10-12 (orchestrator): Children 61 and 62 are implemented, reviewed and integrated on `issue/53-57-58-remaining-tickets` with tickets 57 and 58, and are awaiting PR/merge. Clean-head `npm run verify` passed at `e38eb71`. 63 stays `ready-for-human`, and 64 and 65 stay `needs-triage`.
+
 - 2026-10-12: The maintainer chose "cleanup + docs now". Children 61–65 are published; 61 and 62 are delivered together with tickets 57 and 58 in one pull request.
 
 - 2026-10-11: Synthesized from the Workers Paid research and maintainer agreement. The maintainer confirmed the Worker/D1, browser, and operational test boundaries while explicitly objecting to unnecessary test time, rehearsals, and Cloudflare resource requests. The spec therefore reuses current suites and Cron, keeps remote measurement narrow and opt-in, and does not create a new verification or billing platform. No application code, account configuration, deployment, or remote resource changed during publication.

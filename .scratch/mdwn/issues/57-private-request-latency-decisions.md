@@ -98,3 +98,29 @@ The maintainer approved items 1, 2, 3, 5 and 6 and the Smart Placement part of i
   - Cleanups: shared `isPlainRecord`; `MEMORY_CHANNEL`, `UPKEEP_INTERVAL_MS`, `invalidateTreeListings` module-private; dead re-export removed; `DeviceState` instead of the alias; `loseAccess` takes `Exclude<PrivateAccessState, "unavailable">`. Docs state the committed-nothing meaning of `device_proof_required`, the exact clear list, and what hidden expiry does and does not cover.
   - The memory-checkpoint browser test now holds tree, bootstrap and device-state responses; it failed with the memory check disabled and passes with it.
   - Tests: `npm run lint` passed; `npm run typecheck` passed; `npm test` passed (Node 55 files / 550 tests, Workers 56 files / 413 tests). `npm run build`; root and entry chunks reference neither channel nor the private client. Browser, `--workers=2`, each run started only with no other Playwright run active: `tab-cache`, `background-requests`, `private-tree-flow`, `tree-structure`, `editor-workspace`, `key-rotation`, `publications`, `shared-file`, `sharing-invite`, `sharing-management`, `device-private-access`, `device-enrollment` — 73 passed in each of Chromium, Firefox and WebKit, no flakes (including WebKit `publications`).
+- 2026-10-12 (orchestrator): Integrated on `issue/53-57-58-remaining-tickets` with tickets 58, 61 and 62, and awaiting PR/merge. `CODING_STANDARDS.md` was read before each review.
+  - **Round 1, decisions 1, 2, 4, 5, 6.** Diff: `git diff eaf18e4...139ad0b` (SHA256 `87b2bd4e331bf9cd3bc2884b1cbec03b193a8b50744c6b6453861d333b09977d`).
+    - Standards: one hard finding, the duplicated upkeep throttle under "share behavior", plus smells.
+    - Spec: the real other-tab sign-out path was untested, decision 1 had been edited in place, and the re-apply claim was too broad.
+    - Separate RR8/stack gate: **Pass**.
+    - Fixed in `e00aa58`..`6c85350`: `device_proof_spent`, the exact retry rule, one generation-aware throttle, and the approved text restored with a dated note.
+  - **Round 1, decision 3.** Diff: `git diff 139ad0b...c388936` (SHA256 `b85ca4f896773c10cda3fb7691ee4ea9e205c2e999e833ab622be65de6f0cc69`).
+    - Standards: the path rule and the invalidation wrapper were duplicated, and the cross-tab clear lived in the tree module.
+    - Spec: the revalidation shortcut skipped the rollback checkpoint; clearing on access errors was partial; the hidden expiry could be refilled; folders beyond 24 were served without a re-check; rotation did not broadcast.
+    - Separate RR8/stack gate: **Findings**, one race: a queued background revalidation was dropped after an aborted run.
+    - Fixed in `d8cb407`..`da87d7e`.
+  - **Round 2.** Diff: `git diff c388936...da87d7e` (SHA256 `81fbd19006486e142969683200558e1c7e024046ea512e0fcb768639af1e3417`).
+    - Spec: **Pass**, with low items.
+    - Standards: one blocking finding (the checkpoint and key rules were copied, and two checkpoint parsers disagreed) and one rare defect: an older walk could keep a retired Directory key after a Key rotation.
+    - Fixed on the integration branch in `eef85e2..ca5dffa` (SHA256 `978af12166a9b0393d309530e7af87c13b24f6285a4eb6a12625869b90686c6d`) and verified by the orchestrator. The fix keeps keys only with the entry proving their epoch, and adds one checkpoint parser and ordering rule, one `loseAccess` clear, shared proof-denial codes and `spentProof()`.
+    - Separate RR8/stack gate: **Pass**.
+      - `clientLoader`/`HydrateFallback` are unchanged.
+      - Background revalidation stays out of router revalidation, so File content is not refetched and drafts are not replaced; `changed` and `access` use `useRevalidator`.
+      - Navigation start aborts the page lifetime.
+      - Worker-side, there is one extra state read per proof request through the D1 helpers.
+  - Clean-head `npm run verify` passed at `e38eb71`. It covered lint, typecheck, namespace drift, 555 Node and 414 Workers tests, the build, the fresh-D1 smoke, export/restore, the bundle-secret check, and 545 browser tests across Chromium, Firefox and WebKit. The 1 existing WebKit skip remained; there were no failures and no retries. Whole-branch diff: `git diff 75e882c...e38eb71` (SHA256 `9d5ca20709f5cdf72e4bcf34ec54141e9e0977182f7a0d0589720ebc5df4fd91`).
+  - Open for the maintainer:
+    - sign-off on the decision 1 refinement note;
+    - after deploy, turn off Web Analytics automatic setup for `mdwn.me` and confirm Smart Placement.
+
+    D1 read replication stays deferred, as decided.
