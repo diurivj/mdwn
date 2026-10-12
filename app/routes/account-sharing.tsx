@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useFetcher } from "react-router";
 import { PrivateAccessError, type PrivateAccessState } from "~/shared/device/private-client";
 import { listRelationships, readShareIdentifier, type Relationships } from "~/shared/sharing/relationships-client";
+import { sharingLoadState } from "~/shared/sharing/sharing-errors";
 import { runSharingIntent, type SharingOutcome } from "~/shared/sharing/sharing-intents";
 import { sharedWithMe } from "~/shared/sharing/shared-with-me-cache";
 import {
@@ -27,7 +28,7 @@ export function meta() {
 
 type SharingData =
   | { state: "ready"; shareIdentifier: string; relationships: Relationships }
-  | { state: PrivateAccessState | "failed" };
+  | { state: PrivateAccessState | "too-large" | "failed" };
 
 /** Browser-only: no share identifier or relationship ever enters server HTML. */
 export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise<SharingData> {
@@ -45,7 +46,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs): Promise
     return { state: "ready", shareIdentifier, relationships };
   } catch (error) {
     if (request.signal.aborted) throw error;
-    return { state: error instanceof PrivateAccessError ? error.state : "failed" };
+    return { state: sharingLoadState(error) };
   }
 }
 
@@ -131,9 +132,11 @@ export default function AccountSharing({ loaderData }: Route.ComponentProps) {
         <p role="alert" className={cx(noticeClass("warning"), "mt-8 max-w-xl")}>
           {loaderData.state === "signed-out"
             ? "Sign in to manage sharing."
-            : loaderData.state === "failed" || loaderData.state === "unavailable"
-              ? "Sharing is unavailable right now. Refresh and try again."
-              : "Use an enrolled device to manage sharing."}
+            : loaderData.state === "too-large"
+              ? "This Account has more sharing relationships than this page can list. Nothing was changed."
+              : loaderData.state === "failed" || loaderData.state === "unavailable"
+                ? "Sharing is unavailable right now. Refresh and try again."
+                : "Use an enrolled device to manage sharing."}
         </p>
         <Link to="/account/device-access" className={cx(buttonClass("secondary", "sm"), "mt-6")}>
           Files access
