@@ -1,16 +1,20 @@
 import { test as appTest, expect } from "./fixtures";
-import { seedAccount, signInAccount } from "./support/seeded-account";
+import { seedAccount } from "./support/seeded-account";
 import { test as workspaceTest } from "./workspace-fixture";
 
 appTest("reconciles navigation after another tab signs in or signs out", async ({ browser, server, baseURL }) => {
   const account = await seedAccount(browser, server, baseURL!);
   const original = account.page;
   try {
-    await original.goto("/support");
+    await original.getByRole("banner").getByRole("link", { name: "Support", exact: true }).click();
     await expect(original.getByRole("banner").getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
     const other = await account.context.newPage();
-    await other.goto("/sign-in");
-    await signInAccount({ page: other });
+    // Establish the new tab's document once; its hydrated button, not a load notification, is readiness.
+    await other.goto("/sign-in", { waitUntil: "commit" });
+    const signIn = other.getByRole("button", { name: "Sign in with a passkey", exact: true });
+    await expect(signIn).toBeEnabled();
+    await signIn.click();
+    await expect(other).toHaveURL(/\/files$/);
     // Navigate without replacing the first tab's document or its in-memory store.
     await original
       .getByRole("navigation", { name: "Access", exact: true })

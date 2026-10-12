@@ -279,6 +279,9 @@ test("a lost signup commit response signs in with the persisted device without a
       payload = route.request().postDataJSON() as VerifyPayload;
       const response = await route.fetch();
       expect(response.status()).toBe(200);
+      // route.fetch() applies Set-Cookie to the shared jar even if we abort the response.
+      // Lose that header before any reload, otherwise signup redirects this bound Session to /files.
+      await context.clearCookies({ name: "__Host-mdwn_session" });
       committed();
       // Simulate response loss AFTER D1 commit; the UI receives only retry guidance.
       await route.abort("failed");
@@ -295,17 +298,17 @@ test("a lost signup commit response signs in with the persisted device without a
     });
     await committedResponse;
     await expect(page.getByRole("alert")).toContainText("sign in if your passkey was saved");
+    // Lost response headers must not leave a browser Session before the reload.
+    expect((await context.cookies()).some((cookie) => cookie.name === "__Host-mdwn_session")).toBe(false);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
     expect(payload).toBeDefined();
     expect(await count(env, "accounts")).toBe(1);
     const accountId = payload!.transcript.accountId;
     const deviceId = payload!.transcript.deviceId;
     await page.reload();
+    await expect(page).toHaveURL(/\/sign-up$/);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
-    // route.fetch() stored the commit's Session cookie in this context; a response
-    // lost on the network never reaches the browser, so its cookie is dropped too.
-    await context.clearCookies();
-    await page.goto(`${new URL(baseURL!).origin}/sign-in`, { waitUntil: "commit" });
+    await page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true }).click();
     await page.getByRole("button", { name: "Sign in with a passkey" }).click();
     // The persisted device binds the new Session, so sign-in opens the library rather than device access.
     await expect(page).toHaveURL(/\/files$/);
