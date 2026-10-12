@@ -9,6 +9,7 @@ import { PublishPanel } from "~/publications/publish-panel";
 import { PublicationLifecycle, type PublicationContext } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
+import { SharedWithMeSection } from "~/sharing/shared-with-me";
 import { cx } from "~/ui/cx";
 import {
   ArrowDownIcon,
@@ -745,10 +746,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             <p className="px-2 text-sm text-muted">Nothing here yet. Create your first File.</p>
           )}
         </div>
+        <SharedWithMeSection accountId={snapshot.access.actorAccountId} currentId={nodeId} />
         <div className="border-t border-line px-3 py-4 text-sm lg:px-4">
           <SharedProvisioning link={false} className="px-2 [&:not(:empty)]:mb-3" />
           <ul>
             {[
+              { to: "/account/sharing", label: "Sharing", icon: ShareIcon },
               { to: "/account/shared-access", label: "Shared access", icon: ShareIcon },
               ...(owner
                 ? [

@@ -133,13 +133,23 @@ export function savedExpanded(accountId: string): string[] {
  * another Account shared with them.
  */
 export function rootName(access: RootAccess): string {
-  if (access.rootKind === "file") return "Shared File";
-  return access.vaultId === access.actorAccountId ? "Library" : "Shared folder";
+  if (access.rootKind !== "file" && access.vaultId === access.actorAccountId) return "Library";
+  return sharedRootName(access.rootKind ?? "directory");
+}
+
+/** A received Grant root's generic label: its name stays encrypted from the recipient. */
+export function sharedRootName(kind: TreeKind): string {
+  return kind === "file" ? "Shared File" : "Shared folder";
 }
 
 /** `/files` is the library's own address; shared roots keep their node routes. */
 export function nodePath(access: RootAccess, nodeId: string, kind: TreeKind): string {
   if (kind === "directory" && nodeId === access.rootId && access.vaultId === access.actorAccountId) return "/files";
+  return sharedTargetPath(nodeId, kind);
+}
+
+/** A node's own route, as used for a shared target from either side of a Share or Grant. */
+export function sharedTargetPath(nodeId: string, kind: TreeKind): string {
   return `/${kind === "directory" ? "d" : "f"}/${nodeId}`;
 }
 
