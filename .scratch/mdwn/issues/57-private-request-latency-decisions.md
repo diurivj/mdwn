@@ -20,7 +20,7 @@ Measured on 2026-10-11:
 - Each navigation also starts background requests in parallel with the content: Session presence, shared-access provisioning (`grant-provisioning/next`), owned-key provisioning and, for Files, the Comment thread upkeep.
 - Before 56, every hashed asset was served `max-age=0, must-revalidate` and revalidated on each load (150–870 ms TTFB per asset from the maintainer's network).
 
-Done in 56: immutable caching for `/assets/*`; `/files` renders the root without a redirect and a second bootstrap (six sequential round trips to four); remembered expanded folders are fetched with the selected path; each private request and `/api/device/state` read the Session and its device/registry in parallel rather than one after the other (one fewer sequential D1 round trip per request); navigation shows the destination at once.
+Done in 56: immutable caching for `/assets/*`; `/files` renders the root without a redirect and a second bootstrap (six sequential round trips to four); remembered expanded folders are fetched with the selected path; each private request and `/api/device/state` read the Session and its device/registry in parallel rather than one after the other (one fewer sequential D1 round trip per request); navigation shows the destination at once; opening a Directory listing canonicalizes each name once instead of re-canonicalizing both names of every pair to find duplicates (500 entries: about 280 ms of that check in Node, removed).
 
 ## Decisions needed
 
