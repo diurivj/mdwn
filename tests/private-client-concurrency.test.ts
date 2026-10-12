@@ -689,9 +689,10 @@ describe("privateRequest device-state reuse (ticket 57)", () => {
       new PrivateAccessError("denied"),
     );
     expect(network.fetchImpl).toHaveBeenCalledTimes(header ? 3 : 4);
-    // The confirmed state is still reusable.
-    await settleReused("/api/private/after");
-    expect(network.fetchImpl).toHaveBeenCalledTimes(header ? 4 : 5);
+    // A final verification-time denial is a private-access error: tab memory,
+    // reusable state included, is cleared, so the next operation reads state.
+    await settleWithRead("/api/private/after", registryState);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(header ? 5 : 6);
   });
 
   it("treats a second denial as final", async () => {
@@ -862,5 +863,67 @@ describe("private tab memory and device state (ticket 57)", () => {
     } finally {
       unregister();
     }
+  });
+});
+
+describe("private-access errors clear private tab memory (ticket 57)", () => {
+  async function cleared(run: () => Promise<unknown>) {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await run().catch((error: unknown) => error);
+      return holder.mock.calls.length > 0;
+    } finally {
+      unregister();
+    }
+  }
+
+  it("clears on unprovisioned: a Session whose state names no device", async () => {
+    const read = network.queue(STATE_PATH);
+    read.response.resolve(Response.json({ ...registryState, deviceId: null }));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it("clears on stale: freshly read state older than this device", async () => {
+    devices.set(device.accountId, { ...device, registryEpoch: 2 });
+    const read = network.queue(STATE_PATH);
+    read.response.resolve(Response.json(registryState));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it("clears on device-lost when the local registry epoch cannot be refreshed", async () => {
+    vi.mocked(deviceStore.updateRegistryEpoch).mockRejectedValueOnce(new Error("blocked"));
+    const read = network.queue(STATE_PATH);
+    read.response.resolve(Response.json({ ...registryState, registryEpoch: 2 }));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it("clears on a final device_proof_required denial confirmed by the current state", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const denied = network.queue("/api/private/files");
+    denied.response.resolve(withState(registryState, { status: 403, body: PROOF_REQUIRED }));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it.each([
+    { name: "a spent proof", body: JSON.stringify({ error: "device_proof_spent" }) },
+    {
+      name: "a Public-participation suspension",
+      body: JSON.stringify({ error: PUBLIC_PARTICIPATION_SUSPENDED, suspendedUntil: NOW + 1 }),
+    },
+  ])("keeps tab memory on $name", async ({ body }) => {
+    await settleWithRead("/api/private/first", registryState);
+    const denied = network.queue("/api/private/publications/files/f/publish");
+    denied.response.resolve(withState(registryState, { status: 403, body }));
+    expect(
+      await cleared(() => privateRequest("/api/private/publications/files/f/publish", { method: "POST", body: "{}" })),
+    ).toBe(false);
+  });
+
+  it("keeps tab memory on a temporary network failure", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const lost = network.queue("/api/private/files");
+    lost.response.reject(new TypeError("network"));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(false);
   });
 });

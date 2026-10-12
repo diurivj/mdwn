@@ -102,8 +102,22 @@ export function deviceStateScope(): { accountId: string; deviceId: string } | nu
   return settled?.deviceId ? { accountId: settled.accountId, deviceId: settled.deviceId } : null;
 }
 
+/**
+ * A private-access error: this Session, device or registry can no longer open
+ * what the tab remembers, so all private tab memory is cleared first.
+ */
+function accessLost(state: Exclude<PrivateAccessState, "unavailable" | "denied"> | "denied"): never {
+  clearPrivateTabMemory();
+  throw new PrivateAccessError(state);
+}
+
 function adopt(state: RegistryState, generationAtStart: number) {
-  if (generation !== generationAtStart || !state.deviceId) return;
+  if (generation !== generationAtStart) return;
+  // A Session with no Encryption device can open nothing remembered.
+  if (!state.deviceId) {
+    clearPrivateTabMemory();
+    return;
+  }
   // A different Account, Session, device or registry epoch makes everything
   // this tab remembers outdated; the new state itself is still the current one.
   if (settled && (settled.accountId !== state.accountId || !sameState(settled, state))) clearPrivateTabMemory();
@@ -148,10 +162,7 @@ async function freshState(signal?: AbortSignal): Promise<RegistryState> {
   } catch {
     throw new PrivateAccessError("unavailable");
   }
-  if (read.status === 401) {
-    discardDeviceState();
-    throw new PrivateAccessError("signed-out");
-  }
+  if (read.status === 401) accessLost("signed-out");
   const state = read.status >= 200 && read.status <= 299 ? parseDeviceState(read.state) : null;
   if (!state) throw new PrivateAccessError("unavailable");
   if (!signal?.aborted) adopt(state, generationAtStart);
@@ -186,25 +197,22 @@ type Signing = { state: RegistryState; device: StoredDevice };
  * non-extractable device keys.
  */
 async function signingDevice(state: RegistryState, reused: boolean, signal?: AbortSignal): Promise<Signing> {
-  if (!state.deviceId) throw new PrivateAccessError("unprovisioned");
+  if (!state.deviceId) accessLost("unprovisioned");
   let device = await getDevice(state.accountId);
-  if (!device || device.deviceId !== state.deviceId) {
-    discardDeviceState();
-    throw new PrivateAccessError("device-lost");
-  }
+  if (!device || device.deviceId !== state.deviceId) accessLost("device-lost");
   if (device.registryEpoch > state.registryEpoch) {
     if (reused) return signingDevice(await freshState(signal), false, signal);
-    throw new PrivateAccessError("stale");
+    accessLost("stale");
   }
   if (device.registryEpoch < state.registryEpoch) {
     try {
       await updateRegistryEpoch(state.accountId, state.registryEpoch);
       device = await getDevice(state.accountId);
     } catch {
-      throw new PrivateAccessError("device-lost");
+      accessLost("device-lost");
     }
     if (!device || device.deviceId !== state.deviceId || device.registryEpoch !== state.registryEpoch) {
-      throw new PrivateAccessError("device-lost");
+      accessLost("device-lost");
     }
   }
   return { state, device };
@@ -229,7 +237,7 @@ async function send(url: URL, options: PrivateOptions, { state, device }: Signin
       body: options.body,
     });
   } catch {
-    throw new PrivateAccessError("device-lost");
+    accessLost("device-lost");
   }
   try {
     return await fetch(url.href, {
@@ -282,10 +290,7 @@ export async function privateExchange(path: string, options: PrivateOptions): Pr
   let reusedSigning = reused !== null && signing.state === reused;
   for (let retried = false; ; retried = true) {
     const response = await send(url, options, signing);
-    if (response.status === 401) {
-      discardDeviceState();
-      throw new PrivateAccessError("signed-out");
-    }
+    if (response.status === 401) accessLost("signed-out");
     const current = responseState(response, signing.state.accountId);
     if (current) adopt(current, generationAtStart);
     if (response.status !== 403) return { response, accountId: signing.state.accountId, device: signing.device };
@@ -296,8 +301,11 @@ export async function privateExchange(path: string, options: PrivateOptions): Pr
       ? { next: null, confirmed: current !== null }
       : await retryState(body, signing.state, current, reusedSigning, options.signal);
     if (!next) {
-      // Keep reusable state only when a current state confirmed it.
-      if (!confirmed) discardDeviceState();
+      // A final verification-time denial means this device cannot sign for
+      // the Session: an access error. Any other denial (a spent proof, for
+      // example) only stops reusing state that no current state confirmed.
+      if (body.error === "device_proof_required") accessLost("denied");
+      if (!confirmed) reusable = null;
       throw new PrivateAccessError("denied");
     }
     signing = await signingDevice(next, false, options.signal);
