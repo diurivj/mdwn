@@ -48,3 +48,5 @@ restore.manifest.json.status.json
 coverage/
 playwright-report/
 test-results/
+playwright-results.json
+playwright-summary.json

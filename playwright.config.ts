@@ -7,7 +7,11 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+    ...(process.env.CI ? ([["json", { outputFile: "playwright-results.json" }]] as const) : []),
+  ],
   outputDir: "test-results",
   use: {
     // Wrangler generates a local development certificate for the test Worker.

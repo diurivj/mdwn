@@ -261,13 +261,16 @@ purpose of a test is storage isolation.
 
 ## CI output
 
-The `CI` workflow runs on the repository-scoped Mac mini. All CI jobs must
+The `CI` workflow runs on the bounded `mini-m4pro-ci` ARM64 Mac mini pool. All CI jobs must
 pass at the current PR head before merging (see AGENTS.md). The persistent
 runner keeps npm's cache locally; CI disables `setup-node`'s GitHub cache
 restore/upload, which would otherwise transfer the account's entire npm cache.
 
 The `browser` CI job runs a non-fail-fast matrix with one job for each engine.
 Each job uses one Playwright worker; the local worker default stays automatic.
+Node Vitest uses at most two workers in CI, and Workers Vitest retains its
+two-worker limit. Verification and all browsers remain independent; the active
+runner listeners cap aggregate jobs across refs and repositories.
 A two-worker CI trial was rolled back after it pushed Firefox's heaviest tests
 past their timeouts on the two-vCPU runners. See [the worker-count pilot and rollout record](playwright-workers-benchmark.md)
 for the evidence.
@@ -277,6 +280,12 @@ Each matrix job uploads `playwright-report/` plus `test-results/`, including
 screenshots, videos, and traces retained for failures. These artifacts can
 contain page and application details; keep them within the repository's CI
 retention/access policy and never put real credentials in browser fixtures.
+CI also writes `playwright-results.json` and a compact `playwright-summary.json`
+with retry, flaky, failed, skipped, and timeout counts. Artifact names include
+the browser, run ID, and attempt; inspect retry counts even on a green run.
+The early runner diagnostic step verifies absolute writable cache/temp paths,
+native architecture, and tool-cache containment. Service environments and
+capacity qualification are documented in [ci-runner-pool.md](ci-runner-pool.md).
 
 The auth fixture installs Playwright’s virtual WebAuthn authenticator. Linux WebKit can lack the native `PublicKeyCredential` constructor, with Playwright supplying an object placeholder; the fixture replaces a non-function value with a constructor so SimpleWebAuthn reaches the virtual authenticator. This shim is confined to the test BrowserContext; application feature detection and Worker verification remain unchanged.
 
