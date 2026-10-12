@@ -195,7 +195,8 @@ export async function readAllPages<P extends { nextCursor: string | null }>(
   return pages;
 }
 
-async function failure(response: Response): Promise<never> {
+/** Map a failed sharing response to `SharingNotFoundError`, `SharingChangedError` or a generic failure. */
+export async function sharingFailure(response: Response): Promise<never> {
   if (response.status === 404) throw new SharingNotFoundError();
   if (response.status === 409) {
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
@@ -218,7 +219,7 @@ async function listAll<P extends { nextCursor: string | null }>(
     // Every page must belong to the Account the first page was read for.
     if (accountId !== null && exchange.accountId !== accountId) invalid();
     accountId = exchange.accountId;
-    if (!exchange.response.ok) return failure(exchange.response);
+    if (!exchange.response.ok) return sharingFailure(exchange.response);
     return parse(await exchange.response.json(), exchange.accountId);
   });
   return { accountId: accountId!, pages };
@@ -227,7 +228,7 @@ async function listAll<P extends { nextCursor: string | null }>(
 /** The caller's own opaque share identifier, for someone who wants to share with them. */
 export async function readShareIdentifier(signal?: AbortSignal): Promise<string> {
   const response = await privateRequest("/api/private/shares/address", { method: "POST", signal });
-  if (!response.ok) return failure(response);
+  if (!response.ok) return sharingFailure(response);
   return parseShareIdentifier(await response.json());
 }
 
@@ -259,7 +260,7 @@ export async function listRelationships(signal?: AbortSignal): Promise<Relations
 async function mutate(path: string, method: "POST" | "PATCH" | "DELETE", body: object, signal?: AbortSignal) {
   if (!isV7(path.split("/")[4])) throw new SharingNotFoundError();
   const response = await privateRequest(path, { method, body: JSON.stringify(body), signal });
-  if (!response.ok) return failure(response);
+  if (!response.ok) return sharingFailure(response);
   return object(await response.json());
 }
 

@@ -1,11 +1,9 @@
-import { openSymmetric } from "~/shared/crypto/enc-v1";
-import { openDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
 import { PrivateAccessError, privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
-import { loadAncestors, loadDirectory, loadFile, openChildDirectory, openRoot } from "~/shared/tree/client";
 import { decodeTreeBytes } from "~/shared/tree/wire";
 import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "./grant-keys";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "./comment-keys";
+import { openOwnedCommentKey, ownedKey } from "./owned-capabilities";
 
 type Context = GrantKeyContext | CommentKeyContext;
 type SourceEnvelope = Omit<Parameters<typeof openGrantKeyEnvelope>[0], "recipient">;
@@ -20,40 +18,6 @@ export async function readNextProvisioning(signal?: AbortSignal): Promise<Next> 
   const response = await privateRequest("/api/private/grant-provisioning/next", { method: "POST", signal });
   if (!response.ok) throw new Error("Shared access unavailable");
   return response.json() as Promise<Next>;
-}
-
-async function ownedKey(context: GrantKeyContext, signal?: AbortSignal) {
-  const access = await openRoot(signal);
-  if (access.actorAccountId !== context.ownerId) throw new Error("Owner device required");
-  const path = await loadAncestors(context.targetId, signal);
-  if (path[0] !== access.rootId) throw new Error("Invalid owned scope");
-  let key = access.rootKey,
-    keyEpoch = access.capability!.epoch;
-  for (let index = 0; index < path.length - 1; index++) {
-    const listing = await loadDirectory(access, path[index]!, key, signal);
-    const entry = listing.entries.find((entry) => entry.nodeId === path[index + 1]);
-    if (!entry) throw new Error("Changed owned scope");
-    if (entry.kind === "file") {
-      if (index !== path.length - 2 || context.targetKind !== "file") throw new Error("Invalid owned scope");
-      const file = await loadFile(access, context.targetId, key, signal);
-      if (
-        file.capability?.id !== context.capabilityId ||
-        file.capability.epoch !== context.capabilityEpoch ||
-        !file.capabilityKey
-      )
-        throw new Error("Changed File capability");
-      return file.capabilityKey;
-    }
-    key = await openChildDirectory(access, key, entry);
-    keyEpoch = entry.keyEpoch ?? 1;
-  }
-  if (
-    context.targetKind !== "directory" ||
-    context.capabilityId !== context.targetId ||
-    keyEpoch !== context.capabilityEpoch
-  )
-    throw new Error("Changed Directory capability");
-  return key;
 }
 
 /** Each pass handles at most twenty envelopes by default. Server coverage, not
@@ -110,32 +74,7 @@ export async function resumeGrantProvisioning(options: { signal?: AbortSignal; m
             })
           : await openGrantKeyEnvelope({ ...envelope, recipient: device.transportKeyPair });
     } else if (source.kind === "recovery" && "purpose" in context && state.accountId === context.ownerId) {
-      const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
-      if (!response.ok) throw new Error("Owned source unavailable");
-      const boot = (await response.json()) as { enrollmentEnvelope: string };
-      const root = await openDeviceEnrollmentEnvelope(
-        decodeTreeBytes(boot.enrollmentEnvelope),
-        device.transportKeyPair,
-        {
-          purpose: "device-enrollment",
-          vaultId: state.accountId,
-          objectId: device.deviceId,
-          keyId: device.deviceId,
-          keyEpoch: 1,
-          revision: 1,
-          recipientId: device.deviceId,
-        },
-      );
-      key = await openSymmetric(decodeTreeBytes(source.envelope), root, {
-        context: {
-          purpose: "vault-recovery",
-          vaultId: context.ownerId,
-          objectId: context.objectId,
-          keyId: context.capabilityId,
-          keyEpoch: context.capabilityEpoch,
-          revision: 1,
-        },
-      });
+      key = await openOwnedCommentKey(context, source.envelope, device, signal);
     } else if (source.kind === "owned" && !("purpose" in context)) key = await ownedKey(context, signal);
     else throw new Error("Invalid provisioning source");
     const publicKey = await crypto.subtle.importKey(
