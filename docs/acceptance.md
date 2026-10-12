@@ -83,6 +83,7 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Complete permission matrix; read-only Comment participation; direct-File structural denial | `tests/worker/effective-access.test.ts`, `tests/worker/private-comments.test.ts`. |
 | Overlapping Grant union/revocation independent | `tests/worker/effective-access.test.ts`, `tests/worker/grant-expiry.test.ts`. |
 | Revocation denies server access before rotation; new writes blocked until safe | `tests/worker/shared-tree.test.ts`, `tests/worker/key-rotation.test.ts`, `e2e/key-rotation.spec.ts`. |
+| An imported Historical thread reaches Grant Comment coverage and rotates like any Private thread | `tests/worker/grant-provisioning.test.ts` (the Owner-only import source, and no fabricated source without one), `tests/worker/key-rotation.test.ts` (revocation rotates an imported thread's capability and re-wraps its File-capability envelope). |
 | Conditional saves and paired Public updates; stale saves preserve the draft | `tests/worker/private-tree.test.ts`, `tests/worker/publications.test.ts` ("paired saves"), `e2e/editor-workspace.spec.ts` (stale conflict, overwrite). |
 | Byte-exact source limits, 90% feedback, paste/composition rejection, `Cmd/Ctrl+S`, navigation warnings, legacy reduction, Import Replace | `e2e/editor-workspace.spec.ts`, `tests/worker/private-tree.test.ts` (512 KiB bound), `tests/import-plan.test.ts`. |
 

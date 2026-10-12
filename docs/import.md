@@ -194,7 +194,11 @@ read path serves its envelope as a distinct `import` mode. The body, the
 displayed pseudonym, and the historical display timestamps are all encrypted
 `mdwn/enc-v1` records; timestamps are sealed under each Comment's own content
 key, so a thread-capability rotation rewraps the wrapper and leaves them
-readable, and no user-authored timestamp is ever plaintext at rest. Comments
+readable, and no user-authored timestamp is ever plaintext at rest. A File
+capability replacement first re-wraps the import envelope under the replacement
+File key; the thread's own rotation item then installs a fresh import envelope
+under the current File key instead of a `vault-recovery` row, so an imported
+thread revokes and re-delivers like any other Private thread. Comments
 are numbered server-side in sidecar order. All historical comments belong to
 the importing Account, so one thread attribution keeps the sidecar's displayed
 pseudonym for the history; a sidecar whose comments carry different pseudonyms
