@@ -132,7 +132,7 @@ test("launchd reservations include loaded zero-PID services and omit disabled en
 test("the official service entry point is preserved with slot environment and restart throttling", () => {
   const pool = fixture();
   const template =
-    "<key>ProgramArguments</key><array><string>{{RunnerRoot}}/runsvc.sh</string></array><key>RunAtLoad</key><true/><key>EnvironmentVariables</key><dict><key>ACTIONS_RUNNER_SVC</key><string>1</string></dict>";
+    "<key>ProgramArguments</key><array><string>{{RunnerRoot}}/runsvc.sh</string></array><key>RunAtLoad</key><true/><key>EnvironmentVariables</key><dict><key>ACTIONS_RUNNER_SVC</key><string>1</string></dict><key>SessionCreate</key><true/>";
   const result = serviceTemplate(template, pool, pool.slots[0]);
   expect(result).toContain("{{RunnerRoot}}/runsvc.sh");
   expect(result).toContain("<key>ThrottleInterval</key>");
@@ -140,4 +140,14 @@ test("the official service entry point is preserved with slot environment and re
   expect(result).toContain("<key>NPM_CONFIG_CACHE</key>");
   expect(result).toContain("<key>PLAYWRIGHT_BROWSERS_PATH</key>");
   expect(result).not.toContain("<key>HOME</key>");
+  expect(result).toMatch(/<key>SessionCreate<\/key>\s*<false\/>/);
+});
+
+test("an unrecognized security-session setting cannot silently break browser key storage", () => {
+  const pool = fixture();
+  const template = "<key>ACTIONS_RUNNER_SVC</key><string>1</string><key>RunAtLoad</key><true/>";
+  expect(() => serviceTemplate(template, pool, pool.slots[0])).toThrow("security-session setting");
+  expect(() =>
+    serviceTemplate(`${template}<key>SessionCreate</key><true/><key>SessionCreate</key><true/>`, pool, pool.slots[0]),
+  ).toThrow("security-session setting");
 });

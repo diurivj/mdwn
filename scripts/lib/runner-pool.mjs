@@ -140,12 +140,20 @@ export function serviceTemplate(template, pool, slot) {
     .map(([key, value]) => `      <key>${key}</key>\n      <string>${xml(value)}</string>`)
     .join("\n");
   if (!template.includes("<key>ACTIONS_RUNNER_SVC</key>")) throw new Error("Unrecognized official service template");
-  return template
-    .replace("<key>ACTIONS_RUNNER_SVC</key>", `${entries}\n      <key>ACTIONS_RUNNER_SVC</key>`)
-    .replace(
-      "<key>RunAtLoad</key>",
-      "<key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>30</integer>\n    <key>RunAtLoad</key>",
-    );
+  const securitySession = /<key>SessionCreate<\/key>\s*<(?:true|false)\s*\/>/g;
+  if ([...template.matchAll(securitySession)].length !== 1)
+    throw new Error("Unrecognized official service security-session setting");
+  return (
+    template
+      // A separate security session breaks WebKit's IndexedDB CryptoKey storage
+      // on this host. Keep the logged-in GUI user's session, not new credentials.
+      .replace(securitySession, "<key>SessionCreate</key>\n    <false/>")
+      .replace("<key>ACTIONS_RUNNER_SVC</key>", `${entries}\n      <key>ACTIONS_RUNNER_SVC</key>`)
+      .replace(
+        "<key>RunAtLoad</key>",
+        "<key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>30</integer>\n    <key>RunAtLoad</key>",
+      )
+  );
 }
 
 /** Count every listener, including other repositories/accounts. Loaded services

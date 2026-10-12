@@ -54,7 +54,16 @@ unit alongside a live foreign listener until their paths are inventoried.
 The generated templates in `ci/config/<slot>-service.plist.template` extend
 the installed official template, retain `runsvc.sh`, add explicit nonsecret
 environment paths, and throttle launchd restarts to 30 seconds. `.path` uses
-an explicit host PATH; HOME remains the account's actual home. Job diagnostics
+an explicit host PATH; HOME remains the account's actual home. They set
+`SessionCreate` to `false`: the bundled template's separate security session
+reproducibly caused WebKit `DataCloneError` when storing nonextractable
+CryptoKeys in IndexedDB on this host. The browser needs the existing GUI
+login security session; this changes no keychain password, login, or FileVault
+policy. With this personal-account arrangement, CI must be trusted with that
+session as well as the account's files. The WebKit CI job runs
+`node scripts/probe-ci-webkit-storage.mjs` after browser installation to check
+the actual service's nonextractable CryptoKey round trip before the full
+suite. Test this after any service/template change, not just listener availability. Job diagnostics
 check the effective tool cache under the slot's `_work`, rather than assuming
 a service setting took effect. Independent checkouts and the existing
 download-only Playwright preload remain essential.

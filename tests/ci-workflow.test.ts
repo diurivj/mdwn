@@ -11,7 +11,13 @@ const workflow: {
       "runs-on": string[];
       needs?: unknown;
       strategy?: { "fail-fast": boolean; "max-parallel"?: number; matrix: { browser: string[] } };
-      steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> }>;
+      steps: Array<{
+        uses?: string;
+        run?: string;
+        if?: string;
+        with?: Record<string, unknown>;
+        env?: Record<string, string>;
+      }>;
     }
   >;
 } = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
@@ -25,6 +31,16 @@ test.each(["verify", "browser"])("%s routes independent jobs to the bounded ARM6
   const install = workflow.jobs[job].steps.findIndex((step) => step.run === "npm ci");
   expect(diagnostics).toBeGreaterThan(-1);
   expect(diagnostics).toBeLessThan(install);
+});
+
+test("WebKit checks service CryptoKey storage after installation and before the unchanged browser suite", () => {
+  const steps = workflow.jobs.browser.steps;
+  const check = steps.findIndex((step) => step.run === "node scripts/probe-ci-webkit-storage.mjs");
+  const install = steps.findIndex((step) => step.run?.startsWith("npx playwright install "));
+  const suite = steps.findIndex((step) => step.run?.startsWith("npm run test:e2e "));
+  expect(check).toBeGreaterThan(install);
+  expect(check).toBeLessThan(suite);
+  expect(steps[check].if).toBe("matrix.browser == 'webkit'");
 });
 
 test("all three browsers remain independent with failure and retry diagnostics on each attempt", () => {
