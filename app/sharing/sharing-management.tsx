@@ -426,9 +426,7 @@ export function SharingOutcomeNotice({ outcome, className }: { outcome: SharingO
               : "That request was not valid. Refresh and try again."
             : outcome.state === "access"
               ? "Use an enrolled device with a current Session to manage sharing."
-              : outcome.state === "too-large"
-                ? "There are more sharing relationships than one page can show. Refresh and try again."
-                : "Sharing is unavailable right now. Refresh and try again.";
+              : "Sharing is unavailable right now. Refresh and try again.";
   return (
     <p role="alert" className={cx(noticeClass("warning"), className)}>
       {message}

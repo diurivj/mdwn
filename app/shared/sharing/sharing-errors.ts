@@ -1,4 +1,4 @@
-import { PrivateAccessError } from "~/shared/device/private-client";
+import { PrivateAccessError, type PrivateAccessState } from "~/shared/device/private-client";
 import { RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import {
   AlreadySharedError,
@@ -32,4 +32,10 @@ export function sharingFailure(error: unknown): SharingFailure {
   if (error instanceof RecoveryConfirmationPendingError) return "recovery";
   if (error instanceof PrivateAccessError) return "access";
   return "failed";
+}
+
+/** A sharing page load's outcome: an access state, too many relationships, or a failure to retry. */
+export function sharingLoadState(error: unknown): PrivateAccessState | "too-large" | "failed" {
+  if (error instanceof PrivateAccessError) return error.state;
+  return sharingFailure(error) === "too-large" ? "too-large" : "failed";
 }

@@ -15,6 +15,11 @@ export function currentRecoveryEnvelope(ownerId: string | SQL, objectId: string 
     AND k.recipient_id = 'vault-root' AND k.key_epoch = ${keyEpoch} AND k.superseded_at IS NULL`;
 }
 
+/** Correlated `import_comment_envelopes i`: an imported Historical thread's capability envelope at an exact capability and epoch. */
+export function importedThreadEnvelope(threadId: string | SQL, capabilityId: string, capabilityEpoch: number): SQL {
+  return sql`i.thread_id = ${threadId} AND i.capability_id = ${capabilityId} AND i.capability_epoch = ${capabilityEpoch}`;
+}
+
 export function recoverySource(ciphertext: ArrayBuffer) {
   return { kind: "recovery" as const, envelope: encodeTreeBytes(new Uint8Array(ciphertext)) };
 }
@@ -39,7 +44,7 @@ export async function ownedCommentSource(
   if (comment.purpose !== "private-comment-thread") return null;
   const imported = await db.get<{ ciphertext: ArrayBuffer }>(sql`SELECT i.ciphertext FROM import_comment_envelopes i
     JOIN comment_threads t ON t.id = i.thread_id AND t.owner_id = ${auth.accountId}
-    WHERE i.thread_id = ${comment.objectId} AND i.capability_id = ${comment.capabilityId}
-      AND i.capability_epoch = ${comment.capabilityEpoch} AND ${privateReadGuard(auth)}`);
+    WHERE ${importedThreadEnvelope(comment.objectId, comment.capabilityId, comment.capabilityEpoch)}
+      AND ${privateReadGuard(auth)}`);
   return imported ? { kind: "import" as const, envelope: encodeTreeBytes(new Uint8Array(imported.ciphertext)) } : null;
 }

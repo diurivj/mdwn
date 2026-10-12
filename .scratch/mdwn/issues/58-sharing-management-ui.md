@@ -54,3 +54,16 @@ The maintainer chose the full flow, addressed by share identifier only.
     - Node `tests/share-staging-client.test.ts` 8 passed (new: newest-5 selection). `tests/relationships-client.test.ts` 8 passed (typed page limit).
     - `npm run lint` clean; `npm run typecheck` clean; `npm test` Node 48 files / 440 tests, Workers 53 files / 393 tests, all passed.
     - Browser, with `sharing-invite` now 6 tests, `sharing-management` 5 and `shared-file` + `grant-provisioning` 7: 18 passed in each of Chromium, Firefox and WebKit. New coverage: no Share action on the Library root or on content shared with you; `already_shared` message; imported Historical Comments prepared and read by the Collaborator; two enrolled recipient devices both prepared by the Share dialog, with background provisioning blocked, and the File opened on both. The two-device test runs in well under a minute per engine.
+- 2026-10-12: Review round 2 fixes landed on `issue/58-sharing-management-ui`.
+  - **Changes.**
+    - The throwing response mapper is renamed `throwSharingFailure`.
+    - `currentRecoveryEnvelope` and the new `importedThreadEnvelope` are the single SQL fragments for the Owner recovery and imported-thread rules, used by both `owned-sources.server.ts` and the Comments read (`app/comments/envelopes.server.ts`), with the same authority SQL in the same statement.
+    - Owned walks and bootstraps report every private request to the pass budget, and the File capability for imported threads is memoized per File per pass.
+    - The Sharing page loader reports the relationship page cap as too large (`sharingLoadState`). The dead notice branch is removed.
+    - A browser race reaches the server's `409 already_shared`.
+    - Workers tests bind the import source to the current capability epoch and the Owner's own thread.
+  - **Red phase.** `tests/owned-capabilities.test.ts` failed with 0 of 5 requests counted and no stop at the budget. `memoizedByKey` and `sharingLoadState` failed as missing. The new import-source Workers test passed on the existing code; removing the epoch binding, or the thread-owner join, made it fail each time.
+  - **Tests.**
+    - `npm run lint` clean; `npm run typecheck` clean; `npm run build` passed.
+    - `npm test`: Node 50 files / 445 tests and Workers 53 files / 394 tests passed, including every `tests/worker/*comment*` file unchanged.
+    - `e2e/sharing-invite.spec.ts` (7) + `sharing-management.spec.ts` (5) + `shared-file.spec.ts` + `grant-provisioning.spec.ts` (7): 19 passed in each of Chromium, Firefox and WebKit, with `--workers=2` and no concurrent Playwright run.

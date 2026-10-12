@@ -9,7 +9,7 @@ import {
   KeyRotationRequiredError,
   readAllPages,
   SharingChangedError,
-  sharingFailure,
+  throwSharingFailure,
   SharingNotFoundError,
   SharingPageLimitError,
 } from "./relationships-client";
@@ -25,7 +25,7 @@ import { uploadSaved } from "./saved-upload";
 
 /** The server's per-request envelope bound. */
 export const MAX_ENVELOPES_PER_PACKET = 20;
-/** Every read, upload and owned-key bootstrap of one pass counts against this bound. */
+/** Every private request of one pass (target reads, uploads, owned walks and bootstraps) counts against this bound. */
 export const MAX_PASS_REQUESTS = 2_000;
 
 export type SharePreparationReason =
@@ -79,6 +79,19 @@ export function sameSnapshot(pass: Snapshot, context: Snapshot): boolean {
     context.ownerRegistryEpoch === pass.ownerRegistryEpoch &&
     context.recipientRegistryEpoch === pass.recipientRegistryEpoch
   );
+}
+
+/** One load per key for the lifetime of the returned function (one pass). */
+export function memoizedByKey<V>(load: (key: string) => Promise<V>): (key: string) => Promise<V> {
+  const loaded = new Map<string, Promise<V>>();
+  return (key) => {
+    let value = loaded.get(key);
+    if (!value) {
+      value = load(key);
+      loaded.set(key, value);
+    }
+    return value;
+  };
 }
 
 export class WorkBudget {
@@ -141,7 +154,7 @@ async function pass(
     // Every read and signature in a pass comes from one Owner device.
     if (device !== null && exchange.device.deviceId !== device.deviceId) throw new SharingChangedError();
     device ??= exchange.device;
-    if (!exchange.response.ok) return sharingFailure(exchange.response);
+    if (!exchange.response.ok) return throwSharingFailure(exchange.response);
     return exchange.response.json() as Promise<unknown>;
   };
   const paged = <P extends { nextCursor: string | null }>(path: string, parse: (value: unknown) => P) =>
@@ -203,14 +216,17 @@ async function pass(
         envelopes: packet,
       });
       const response = await uploadSaved(path, body, signal);
-      if (!response.ok) await sharingFailure(response);
+      if (!response.ok) await throwSharingFailure(response);
       prepared += packet.length;
       options.onProgress?.({ prepared, total });
     }
   };
 
-  budget.spend();
-  const rootKey = await ownedKey(snapshot, signal);
+  // Every private request of an owned walk or bootstrap counts against the pass bound.
+  const spend = () => budget.spend();
+  const rootKey = await ownedKey(snapshot, signal, spend);
+  // A File carrying several imported threads is walked to once per pass.
+  const fileKey = memoizedByKey((fileId) => ownedFileCapabilityKey(snapshot.ownerId, fileId, signal, spend));
   for (const page of root) {
     const envelopes = [];
     for (const target of page.devices)
@@ -240,16 +256,11 @@ async function pass(
       missing++;
       continue;
     }
-    budget.spend();
     const { devices: _devices, nextCursor: _cursor, source: _source, ...commentContext } = context;
     const key =
       source.kind === "recovery"
-        ? await openOwnedCommentKey(commentContext, source.envelope, signer, signal)
-        : await openImportedThreadCapability(
-            source.envelope,
-            await ownedFileCapabilityKey(commentContext.ownerId, commentContext.fileId, signal),
-            commentContext,
-          );
+        ? await openOwnedCommentKey(commentContext, source.envelope, signer, signal, spend)
+        : await openImportedThreadCapability(source.envelope, await fileKey(commentContext.fileId), commentContext);
     for (const page of pages) {
       const envelopes = [];
       for (const target of page.devices)

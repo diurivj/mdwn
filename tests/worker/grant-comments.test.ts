@@ -373,7 +373,7 @@ it("share Comment targets give only the Owner its own current vault-recovery sou
 });
 
 /** An imported Historical thread: its key is wrapped under the File capability, with no recovery row. */
-async function importedThread(owner: SharingAccount, fileId: string) {
+async function importedThread(owner: SharingAccount, fileId: string, threadOwner = owner, threadFileId = fileId) {
   const threadId = opaqueId(),
     epochId = opaqueId(),
     capabilityId = opaqueId(),
@@ -385,8 +385,8 @@ async function importedThread(owner: SharingAccount, fileId: string) {
     env.DB.prepare(`INSERT INTO comment_threads (id, owner_id, file_id, purpose, publication_id, current_epoch_id,
       next_sequence, created_at) VALUES (?, ?, ?, 'private', NULL, ?, 1, ?)`).bind(
       threadId,
-      owner.accountId,
-      fileId,
+      threadOwner.accountId,
+      threadFileId,
       epochId,
       now,
     ),
@@ -402,7 +402,7 @@ async function importedThread(owner: SharingAccount, fileId: string) {
     env.DB.prepare(`INSERT INTO import_comment_envelopes
       (thread_id, file_id, capability_id, capability_epoch, key_epoch, ciphertext) VALUES (?, ?, ?, 1, 1, ?)`).bind(
       threadId,
-      fileId,
+      threadFileId,
       capabilityId,
       new Uint8Array(40).fill(9),
     ),
@@ -484,5 +484,36 @@ it("share key and Comment-key targets and uploads report a write seal added afte
     const refused = await sharingRequest(owner, path, method, body);
     expect(refused.status, `${method} ${path}`).toBe(409);
     expect(await refused.json()).toEqual({ error: "key_rotation_required" });
+  }
+});
+
+it("the import source is never served for a stale capability epoch or another Account's thread", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    other = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const rotated = await importedThread(owner, await treeChild(owner, directoryId, "file"));
+  // The thread capability rotated: the registry is at epoch 2, the import row still at 1.
+  await env.DB.prepare("UPDATE sharing_comment_capabilities SET capability_epoch = 2 WHERE object_id = ?")
+    .bind(rotated.objectId)
+    .run();
+  // Registered under this Owner's File, but the thread and its import row belong to another Account.
+  const foreign = await importedThread(
+    owner,
+    await treeChild(owner, directoryId, "file"),
+    other,
+    await treeChild(other, other.rootId, "file"),
+  );
+  const { shareId } = await invite(owner, recipient, directoryId);
+  const listed = (await (await sharingRequest(owner, `/api/private/shares/${shareId}/comment-keys`)).json()) as {
+    capabilities: { objectId: string; threadId: string }[];
+  };
+  const targets = listed.capabilities.map((capability) => capability.objectId);
+  expect(targets).toEqual(expect.arrayContaining([rotated.objectId, foreign.objectId]));
+  for (const objectId of targets) {
+    const response = await sharingRequest(owner, `/api/private/shares/${shareId}/comment-keys/${objectId}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { capabilityEpoch: number; source?: unknown };
+    expect(body).not.toHaveProperty("source");
   }
 });

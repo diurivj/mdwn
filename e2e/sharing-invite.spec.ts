@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "./workspace-fixture";
 import { waitForSharedProvisioning } from "./support/navigation";
-import { enroll, provisioningNext, seededAccount, sharedMarkdown } from "./support/provisioning-fixtures";
+import { enroll, loadFixture, provisioningNext, seededAccount, sharedMarkdown } from "./support/provisioning-fixtures";
 import {
   ARCHIVE_COMMENTS_PATH,
   ARCHIVE_MANIFEST_PATH,
@@ -426,7 +426,8 @@ test("a recipient's two enrolled devices are both prepared by the Owner before a
         .bind(recipient.accountId)
         .first(),
     ).toEqual({ total: 2 });
-    // Only the Share dialog may stage keys here: no background provisioning on either side.
+    // Only the Share dialog may stage keys here: the Owner's background provisioning is blocked, and
+    // the recipient pages already abort it (`seededAccount`/`enroll`), so no device forwards keys.
     await page.route(provisioningNext, (route) => route.abort());
     const identifier = await ownIdentifier(recipient.page);
     const dialog = await share(page, identifier, "Read-only");
@@ -451,6 +452,58 @@ test("a recipient's two enrolled devices are both prepared by the Owner before a
     }
   } finally {
     await second.context.close();
+    await recipient.context.close();
+  }
+});
+
+test("an invitation sent elsewhere after the dialog loaded is refused by the server as already shared", async ({
+  browser,
+  page,
+  workspace,
+  workspaceScript,
+  baseURL,
+  server,
+}) => {
+  const origin = new URL(baseURL!).origin;
+  const recipient = await seededAccount(browser, server, origin, workspaceScript);
+  try {
+    const identifier = await ownIdentifier(recipient.page);
+    const folderId = await createFolder(page, "Race");
+    await page.getByRole("button", { name: "Share", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Share", exact: true });
+    const people = dialog.getByRole("region", { name: "People with access" });
+    await expect(people).toContainText("Only you can open this folder.");
+
+    // Another tab or device of the Owner invites the same Account meanwhile.
+    await loadFixture(page);
+    expect(
+      await page.evaluate(
+        async ({ targetId, shareId }) =>
+          (
+            await window.workspaceFixture.privateRequest("/api/private/shares", {
+              method: "PUT",
+              body: JSON.stringify({ targetId, recipient: { shareId }, permission: "read_only" }),
+            })
+          ).status,
+        { targetId: folderId, shareId: identifier },
+      ),
+    ).toBe(201);
+    // The dialog's rows are stale, so only the server can catch the duplicate.
+    await expect(people).toContainText("Only you can open this folder.");
+    const answers: number[] = [];
+    page.on("response", (response) => {
+      const url = new URL(response.url());
+      if (url.pathname === "/api/private/shares" && response.request().method() === "PUT")
+        answers.push(response.status());
+    });
+    await dialog.getByRole("textbox", { name: "Recipient’s share identifier" }).fill(identifier);
+    await dialog.getByRole("button", { name: "Share", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toHaveText(
+      "That Account already has an invitation or access for this item.",
+    );
+    expect(answers).toEqual([409]);
+    expect(await workspace.db.prepare("SELECT count(*) AS total FROM shares").first()).toEqual({ total: 1 });
+  } finally {
     await recipient.context.close();
   }
 });
