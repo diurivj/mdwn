@@ -14,7 +14,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { isSignupRecoveryConfirmationPending } from "~/shared/signup/recovery-gate";
 import type { FilesSnapshot } from "~/tree/navigation-client";
 import type { TreeKind } from "~/shared/tree/client";
-import { invalidateTreeListings } from "~/shared/tree/tab-tree-cache";
+import { whileChangingListings } from "~/shared/tree/tab-tree-cache";
 import { createImportOperations } from "./import-operations";
 import { inputsFromDataTransfer, inputsFromFiles } from "../shared/import/browser";
 import { ImportExecution, type ImportUploadProgress } from "../shared/import/execution";
@@ -200,10 +200,11 @@ export const ImportControl = forwardRef<ImportControlHandle, ImportControlProps>
       createImportOperations(),
     );
     importExecution.current = execution;
-    const outcome = await execution.run();
     // A commit, even an unconfirmed one, changes the target listing; this
     // page's revalidation below follows, and other tabs drop it (ticket 57).
-    if (outcome.status !== "cancelled") invalidateTreeListings(snapshot.access.actorAccountId, [target.directoryId]);
+    const outcome = await whileChangingListings(snapshot.access.actorAccountId, [target.directoryId], () =>
+      execution.run(),
+    );
     if (importExecution.current !== execution) return;
     importExecution.current = null;
     if (outcome.status === "committed") {

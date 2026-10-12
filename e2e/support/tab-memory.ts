@@ -3,11 +3,12 @@ import type { Page } from "@playwright/test";
 /**
  * Make this page forget its private tab memory (ticket 57), as another tab's
  * sign-in or sign-out does, so its next Files navigation walks the network
- * again. A second channel object in the same page receives the message.
+ * again (an open Files page also reloads once). A second channel object in
+ * the same page receives the message.
  */
 export async function forgetTabMemory(page: Page) {
   await page.evaluate(() => {
-    const channel = new BroadcastChannel("mdwn-tree");
+    const channel = new BroadcastChannel("mdwn-private-memory");
     channel.postMessage({ type: "clear" });
     channel.close();
   });

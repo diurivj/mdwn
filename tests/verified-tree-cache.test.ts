@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearPrivateTabMemory,
   clearWhenHidden,
+  parseMemoryMessage,
   registerPrivateTabMemory,
 } from "../app/shared/device/private-tab-memory";
 import type { DirectoryListing, RootAccess, TreeEntry } from "../app/shared/tree/client";
 import {
+  EXPANDED_CHECKED,
   invalidateMessage,
   parseTreeMessage,
   VerifiedTreeCache,
@@ -58,10 +60,21 @@ function verified(listings: DirectoryListing[], keys: Record<string, Uint8Array>
   };
 }
 
-/** A cache whose device state is controlled by the test, as private-client's would be. */
+/** A cache whose device state, rollback checkpoints and hidden expiry are controlled by the test. */
 function harness(limit?: number) {
-  const state = { generation: 1, scope: scope as TreeCacheScope | null };
-  const cache = new VerifiedTreeCache({ limit, generation: () => state.generation, scope: () => state.scope });
+  const state = {
+    generation: 1,
+    scope: scope as TreeCacheScope | null,
+    suspended: false,
+    checkpoints: new Map<string, { revision: number; digest: string }>(),
+  };
+  const cache = new VerifiedTreeCache({
+    limit,
+    generation: () => state.generation,
+    scope: () => state.scope,
+    suspended: () => state.suspended,
+    checkpoint: (vaultId, directoryId) => state.checkpoints.get(`${vaultId}:${directoryId}`) ?? null,
+  });
   return { cache, state };
 }
 
@@ -123,6 +136,48 @@ describe("VerifiedTreeCache path snapshots", () => {
     expect(Object.keys(snapshot!.listings).sort()).toEqual([ROOT, A, B].sort());
   });
 
+  it("serves no more remembered folders than one background revalidation checks", () => {
+    const { cache } = harness();
+    const folders = Array.from({ length: 30 }, (_, n) => id(100 + n));
+    cache.record(
+      verified(
+        [
+          listing(
+            ROOT,
+            folders.map((folder, n) => entry(folder, "directory", `F${n}`)),
+          ),
+          ...folders.map((f) => listing(f, [])),
+        ],
+        Object.fromEntries(folders.map((folder) => [folder, key(7)])),
+      ),
+      1,
+    );
+    const snapshot = cache.pathSnapshot(null, () => folders);
+    // The root plus EXPANDED_CHECKED remembered folders; the rest load the cold way.
+    expect(Object.keys(snapshot!.listings)).toHaveLength(1 + EXPANDED_CHECKED);
+    expect(Object.keys(snapshot!.listings)).toEqual([ROOT, ...folders.slice(0, EXPANDED_CHECKED)]);
+  });
+
+  it("misses a listing behind this browser's rollback checkpoint", () => {
+    const { cache, state } = harness();
+    cache.record(verified(tree(), { [A]: key(10), [B]: key(11) }), 1);
+    // Another tab, or a Key rotation, has verified a newer head of Notes since.
+    state.checkpoints.set(`${ACCOUNT}:${A}`, { revision: 3, digest: "d3" });
+    expect(cache.pathSnapshot({ nodeId: B, kind: "directory" })).toBeNull();
+    expect(cache.cached(A)).toBeNull();
+    expect(cache.pathSnapshot(null)).not.toBeNull();
+  });
+
+  it("misses a listing whose same-revision checkpoint names another head", () => {
+    const { cache, state } = harness();
+    cache.record(verified(tree()), 1);
+    state.checkpoints.set(`${ACCOUNT}:${ROOT}`, { revision: 2, digest: "forked" });
+    expect(cache.pathSnapshot(null)).toBeNull();
+    state.checkpoints.set(`${ACCOUNT}:${ROOT}`, { revision: 2, digest: "d2" });
+    cache.record(verified(tree()), 1);
+    expect(cache.pathSnapshot(null)).not.toBeNull();
+  });
+
   it("opens a Grant root by its target id", () => {
     const { cache } = harness();
     const owner = id(40);
@@ -169,21 +224,43 @@ describe("VerifiedTreeCache bounds and invalidation", () => {
     expect(cache.cached(ids[1]!)).not.toBeNull();
   });
 
-  it("invalidates Directory ids for the cached Account only and notifies subscribers", () => {
+  it("invalidates Directory ids for the cached Account only and tells subscribers of other tabs' changes", () => {
     const { cache } = harness();
     const changes: unknown[] = [];
-    cache.subscribe((change) => changes.push(change));
+    cache.subscribe((directoryIds) => changes.push(directoryIds));
     cache.record(verified(tree(), { [A]: key(10), [B]: key(11) }), 1);
 
     cache.invalidate(id(500), [A], "remote");
     expect(cache.pathSnapshot({ nodeId: B, kind: "directory" })).not.toBeNull();
     expect(changes).toEqual([]);
 
+    cache.invalidate(ACCOUNT, [B], "local");
+    expect(cache.cached(B)).toBeNull();
+    expect(changes).toEqual([]); // this tab's own changes reach its page through the change itself
+
     cache.invalidate(ACCOUNT, [A], "remote");
     expect(cache.cached(A)).toBeNull();
     expect(cache.pathSnapshot({ nodeId: F, kind: "file" })).toBeNull();
     expect(cache.pathSnapshot(null)).not.toBeNull();
-    expect(changes).toEqual([{ type: "invalidate", directoryIds: [A], origin: "remote" }]);
+    expect(changes).toEqual([[A]]);
+  });
+
+  it("never replaces a listing with an older revision or another head at the same revision", () => {
+    const { cache } = harness();
+    const newer = listing(
+      ROOT,
+      [entry(A, "directory", "Notes"), entry(D, "file", "Draft.md"), entry(id(14), "file", "New.md")],
+      3,
+    );
+    cache.record(verified([newer]), 1);
+    // A revalidation fetched before this page's own create committed arrives late.
+    cache.record(verified(tree()), 1);
+    expect(cache.cached(ROOT)?.listing).toBe(newer);
+    cache.record(
+      { access, listings: { [ROOT]: { listing: { ...newer, entries: [] }, digest: "other" } }, keys: {} },
+      1,
+    );
+    expect(cache.cached(ROOT)?.listing).toBe(newer);
   });
 
   it("forgets a root's access so the next load bootstraps it again", () => {
@@ -209,6 +286,15 @@ describe("VerifiedTreeCache clearing", () => {
     expect(cache.size).toBe(0);
   });
 
+  it("refuses to refill while the tab stays hidden after its hidden-timeout clear", () => {
+    const { cache, state } = harness();
+    state.suspended = true;
+    expect(cache.record(verified(tree()), 1)).toBe(false);
+    expect(cache.size).toBe(0);
+    state.suspended = false;
+    expect(cache.record(verified(tree()), 1)).toBe(true);
+  });
+
   it("refuses to record another Account's access or results from before a discard", () => {
     const { cache, state } = harness();
     expect(cache.record(verified(tree(), {}, { ...access, actorAccountId: id(6) }), 1)).toBe(false);
@@ -219,13 +305,10 @@ describe("VerifiedTreeCache clearing", () => {
 
   it("treats a changed device-state generation as a miss and a clear", () => {
     const { cache, state } = harness();
-    const changes: unknown[] = [];
-    cache.subscribe((change) => changes.push(change));
     cache.record(verified(tree()), 1);
     state.generation = 2;
     expect(cache.pathSnapshot(null)).toBeNull();
     expect(cache.size).toBe(0);
-    expect(changes).toEqual([{ type: "clear" }]);
   });
 
   it("clears everything on demand", () => {
@@ -258,48 +341,85 @@ describe("private tab memory", () => {
     expect(second).toHaveBeenCalledOnce();
   });
 
-  it("clears after the tab has been hidden for ten minutes, measured from visibilitychange", () => {
-    vi.useFakeTimers();
+  function visibilityPage() {
     const page = Object.assign(new EventTarget(), { visibilityState: "visible" as DocumentVisibilityState });
-    const clear = vi.fn();
-    const stop = clearWhenHidden(page, clear);
     const show = (visibilityState: DocumentVisibilityState) => {
       page.visibilityState = visibilityState;
       page.dispatchEvent(new Event("visibilitychange"));
     };
+    return { page, show };
+  }
+
+  it("clears after the tab has been hidden for ten minutes, measured from visibilitychange", () => {
+    vi.useFakeTimers();
+    const { page, show } = visibilityPage();
+    const clear = vi.fn();
+    const returned = vi.fn();
+    const watch = clearWhenHidden(page, { clear, returned });
 
     show("hidden");
     vi.advanceTimersByTime(9 * 60_000);
     show("visible");
     vi.advanceTimersByTime(60 * 60_000);
     expect(clear).not.toHaveBeenCalled(); // hidden for nine minutes only
+    expect(returned).not.toHaveBeenCalled();
 
     show("hidden");
     vi.advanceTimersByTime(10 * 60_000);
     expect(clear).toHaveBeenCalledOnce();
     show("visible");
     expect(clear).toHaveBeenCalledOnce();
-    stop();
+    expect(returned).toHaveBeenCalledOnce();
+    watch.stop();
+  });
+
+  it("stays expired until the tab is visible again, so nothing refills it while hidden", () => {
+    vi.useFakeTimers();
+    const { page, show } = visibilityPage();
+    const clear = vi.fn();
+    const watch = clearWhenHidden(page, { clear, returned: () => {} });
+    show("hidden");
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(watch.expired()).toBe(true);
+    vi.advanceTimersByTime(30 * 60_000);
+    show("hidden"); // a repeated hidden event does not end the expiry
+    expect(watch.expired()).toBe(true);
+    show("visible");
+    expect(watch.expired()).toBe(false);
+    expect(clear).toHaveBeenCalledOnce();
   });
 
   it("clears on return when a throttled hidden-tab timer has not fired yet", () => {
     vi.useFakeTimers();
-    const page = Object.assign(new EventTarget(), { visibilityState: "visible" as DocumentVisibilityState });
+    const { page, show } = visibilityPage();
     const clear = vi.fn();
-    clearWhenHidden(page, clear);
-    page.visibilityState = "hidden";
-    page.dispatchEvent(new Event("visibilitychange"));
+    const returned = vi.fn();
+    clearWhenHidden(page, { clear, returned });
+    show("hidden");
     // Browsers may delay timers in background tabs; only the clock moves here.
     vi.setSystemTime(Date.now() + 11 * 60_000);
-    page.visibilityState = "visible";
-    page.dispatchEvent(new Event("visibilitychange"));
+    show("visible");
     expect(clear).toHaveBeenCalledOnce();
+    expect(returned).toHaveBeenCalledOnce();
+  });
+
+  it("accepts exactly the tab-wide clear message", () => {
+    expect(parseMemoryMessage({ type: "clear" })).toEqual({ type: "clear" });
+    for (const value of [
+      { type: "clear", accountId: ACCOUNT },
+      { type: "invalidate", accountId: ACCOUNT, directoryIds: [A] },
+      Object.assign(Object.create({ inherited: true }), { type: "clear" }),
+      [{ type: "clear" }],
+      "clear",
+      null,
+    ])
+      expect(parseMemoryMessage(value)).toBeNull();
   });
 });
 
 describe("tree broadcast messages", () => {
-  it("accepts exactly the two id-only message shapes", () => {
-    expect(parseTreeMessage({ type: "clear" })).toEqual({ type: "clear" });
+  it("accepts exactly the id-only invalidation", () => {
+    expect(parseTreeMessage({ type: "clear" })).toBeNull(); // the tab-wide clear has its own channel
     expect(parseTreeMessage({ type: "invalidate", accountId: ACCOUNT, directoryIds: [A, B] })).toEqual({
       type: "invalidate",
       accountId: ACCOUNT,
@@ -308,7 +428,6 @@ describe("tree broadcast messages", () => {
   });
 
   it.each([
-    ["extra field on clear", { type: "clear", accountId: ACCOUNT }],
     ["extra field on invalidate", { type: "invalidate", accountId: ACCOUNT, directoryIds: [A], names: ["Notes"] }],
     ["missing ids", { type: "invalidate", accountId: ACCOUNT }],
     ["empty ids", { type: "invalidate", accountId: ACCOUNT, directoryIds: [] }],

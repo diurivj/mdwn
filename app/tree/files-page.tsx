@@ -8,7 +8,6 @@ import { declarePublicationAuthor } from "~/publications/publications-client";
 import { PublishPanel } from "~/publications/publish-panel";
 import { PublicationLifecycle, type PublicationContext } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
-import { treeCache } from "~/shared/tree/tab-tree-cache";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
 import { cx } from "~/ui/cx";
 import {
@@ -52,6 +51,7 @@ import {
   type TreeKind,
 } from "../shared/tree/client";
 import { FileEditor } from "./file-editor";
+import { useTabMemoryRevalidation } from "./use-tab-memory-revalidation";
 import {
   type Crumb,
   expandedPreferenceKey,
@@ -59,7 +59,6 @@ import {
   type FilesSnapshot,
   loadVerifiedDirectory,
   nodePath,
-  revalidateFilesPage,
   rootName,
   savedExpanded,
 } from "./navigation-client";
@@ -231,7 +230,6 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         : initial.snapshot,
     );
     setStatus(initial.status);
-    if (initial.status === "ready" && initial.fromMemory) setBackgroundDue(true);
     if (route.current !== `${kind}/${nodeId}`) {
       setDialog(null);
       setPublishOpen(false);
@@ -251,81 +249,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       );
   }, [initial, nodeId, kind, showExpanded]);
 
-  // Ticket 57: a page rendered from this tab's memory, a tab the person
-  // returns to, and a listing another tab changed are revalidated in the
-  // background. Updated listings, keys and names merge into the snapshot; the
-  // File and its in-memory draft are never replaced. A selected node that
-  // left its path, or lost private access, reloads through the cold walk, but
-  // only once a File's draft is saved.
-  const snapshotNow = useRef(snapshot);
-  useEffect(() => {
-    snapshotNow.current = snapshot;
-  }, [snapshot]);
-  const [backgroundDue, setBackgroundDue] = useState(false);
-  const [reloadDue, setReloadDue] = useState(false);
-  const background = useRef({ running: false, again: false });
-  const revalidateInBackground = useCallback(async () => {
-    const state = background.current;
-    if (state.running) {
-      state.again = true;
-      return;
-    }
-    state.running = true;
-    try {
-      do {
-        state.again = false;
-        const current = snapshotNow.current;
-        const signal = lifetime.current?.signal;
-        if (!current || !signal || signal.aborted) return;
-        const outcome = await revalidateFilesPage(current, kind, signal).catch(() => null);
-        if (!outcome || signal.aborted) return;
-        if (outcome.status === "changed" || outcome.status === "access") {
-          setReloadDue(true);
-          return;
-        }
-        if (outcome.status === "current")
-          setSnapshot((previous) => {
-            if (!previous || previous.access !== current.access) return previous;
-            const listings = { ...previous.listings, ...outcome.listings };
-            for (const id of outcome.removed) delete listings[id];
-            return { ...previous, listings, keys: { ...previous.keys, ...outcome.keys }, crumbs: outcome.crumbs };
-          });
-      } while (state.again);
-    } finally {
-      state.running = false;
-    }
-  }, [kind]);
-  useEffect(() => {
-    if (!reloadDue || (kind === "file" && !fileReady) || navigation.state !== "idle" || revalidator.state !== "idle")
-      return;
-    setReloadDue(false);
-    void revalidator.revalidate();
-  }, [reloadDue, kind, fileReady, navigation.state, revalidator]);
-  useEffect(() => {
-    if (!backgroundDue || status !== "ready") return;
-    setBackgroundDue(false);
-    void revalidateInBackground();
-  }, [backgroundDue, status, revalidateInBackground]);
-  useEffect(() => {
-    const returned = () => {
-      if (document.visibilityState === "visible") setBackgroundDue(true);
-    };
-    window.addEventListener("focus", returned);
-    document.addEventListener("visibilitychange", returned);
-    const unsubscribe = treeCache.subscribe((change) => {
-      if (
-        change.type === "invalidate" &&
-        change.origin === "remote" &&
-        change.directoryIds.some((id) => snapshotNow.current?.listings[id])
-      )
-        setBackgroundDue(true);
-    });
-    return () => {
-      window.removeEventListener("focus", returned);
-      document.removeEventListener("visibilitychange", returned);
-      unsubscribe();
-    };
-  }, []);
+  useTabMemoryRevalidation({ initial, snapshot, setSnapshot, status, kind, fileReady, lifetime });
 
   // Owner-side upkeep: opening any File ensures its one Private thread exists,
   // so a Collaborator never waits for an Owner to open the Comments inspector.

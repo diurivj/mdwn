@@ -1,4 +1,4 @@
-import { clearPrivateMemoryInAllTabs } from "~/shared/tree/tab-tree-cache";
+import { clearPrivateMemoryInAllTabs } from "~/shared/device/private-tab-memory";
 import { markSignedIn, markSignedOut } from "./session-presence";
 
 /**
@@ -6,7 +6,7 @@ import { markSignedIn, markSignedOut } from "./session-presence";
  * and this tab and every other tab forget the previous Session's private
  * memory, its reusable device state and verified listings and keys (ticket
  * 57). Kept apart from `session-presence` so the public shell's header does
- * not load the private-request or tree-memory modules.
+ * not load the private tab-memory module.
  */
 export function afterSignIn(): void {
   clearPrivateMemoryInAllTabs();

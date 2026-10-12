@@ -1,5 +1,8 @@
 import type { DirectoryListing, RootAccess, TreeKind } from "./client";
+import { EXPANDED_CHECKED, pathStep, restorableFolders, rootAccepts } from "./path-rules";
 import { isV7 } from "./wire";
+
+export { EXPANDED_CHECKED };
 
 /**
  * The tab's memory of what it has already verified in the private tree
@@ -7,13 +10,16 @@ import { isV7 } from "./wire";
  * with the head digest they were verified against, and opened Directory keys.
  * A revisit renders from it at once, then revalidates in the background.
  *
- * It holds no File content and no File capability or content key: a File is
- * fetched and opened every time it is shown. It lives in memory only, is
- * never persisted or posted, holds at most `limit` listings and keys (least
- * recently used first out), and belongs to one Account and Encryption device
- * at one device-state generation. A different scope or generation in device
- * state is a miss and clears it, so every discard of device state (sign-in,
- * sign-out, recovery, enrollment, `401`, mismatches) also forgets it.
+ * It holds no File content and no capability key of a File inside a cached
+ * Directory: a File is fetched and opened every time it is shown. (A received
+ * File Grant's root access is kept as Grant-root access.) It lives in memory
+ * only, is never persisted or posted, holds at most `limit` listings and keys
+ * (least recently used first out), and belongs to one Account and Encryption
+ * device at one device-state generation. A different scope or generation in
+ * device state is a miss and clears it, so every discard of device state
+ * also forgets it. It never serves a listing behind this browser's rollback
+ * checkpoint, never goes back to an older listing, and refuses to refill
+ * while the tab stays hidden after its hidden-timeout clear.
  */
 export type TreeCacheScope = { accountId: string; deviceId: string };
 export type VerifiedListing = { listing: DirectoryListing; digest: string };
@@ -29,9 +35,8 @@ export type PathSnapshot = {
   listings: Record<string, DirectoryListing>;
   keys: Record<string, Uint8Array>;
 };
-export type TreeCacheChange =
-  | { type: "invalidate"; directoryIds: string[]; origin: "local" | "remote" }
-  | { type: "clear" };
+/** The browser's rollback checkpoint for a listing (`rememberListing`), or null. */
+export type ListingCheckpoint = (vaultId: string, directoryId: string) => { revision: number; digest: string } | null;
 
 const DEFAULT_LIMIT = 200;
 /** Grant roots are few; this only bounds a long session that opens many. */
@@ -45,7 +50,10 @@ export class VerifiedTreeCache {
   readonly #limit: number;
   readonly #generation: () => number;
   readonly #scope: () => TreeCacheScope | null;
-  #filled: { generation: number; scope: TreeCacheScope } | null = null;
+  readonly #suspended: () => boolean;
+  readonly #checkpoint: ListingCheckpoint;
+  /** The device state this memory was filled under. */
+  #owner: { generation: number; scope: TreeCacheScope } | null = null;
   #libraryRootId: string | null = null;
   readonly #roots = new Map<string, RootAccess>();
   /** Map order is recency: the first entry is the least recently used. */
@@ -53,12 +61,20 @@ export class VerifiedTreeCache {
   readonly #keys = new Map<string, KeyRecord>();
   /** Child node id → the cached Directory listing that contains it. */
   readonly #parents = new Map<string, string>();
-  readonly #listeners = new Set<(change: TreeCacheChange) => void>();
+  readonly #listeners = new Set<(directoryIds: string[]) => void>();
 
-  constructor(options: { limit?: number; generation: () => number; scope: () => TreeCacheScope | null }) {
+  constructor(options: {
+    limit?: number;
+    generation: () => number;
+    scope: () => TreeCacheScope | null;
+    suspended?: () => boolean;
+    checkpoint?: ListingCheckpoint;
+  }) {
     this.#limit = options.limit ?? DEFAULT_LIMIT;
     this.#generation = options.generation;
     this.#scope = options.scope;
+    this.#suspended = options.suspended ?? (() => false);
+    this.#checkpoint = options.checkpoint ?? (() => null);
   }
 
   /** Cached listings. */
@@ -66,16 +82,13 @@ export class VerifiedTreeCache {
     return this.#listings.size;
   }
 
-  /** The Account this memory belongs to, or null when it is empty or outdated. */
-  get accountId(): string | null {
-    return this.#current() ? this.#filled!.scope.accountId : null;
-  }
-
   /**
    * The root and every listing and key on the target's path, rebuilt from
-   * cached parent links, or null unless all of them are cached and agree. A
-   * null target is the Account's own library root. Remembered expanded
-   * folders are included when a listing already included reveals them.
+   * cached parent links, or null unless all of them are cached, current and
+   * accepted by the path rule. A null target is the Account's own library
+   * root. At most `EXPANDED_CHECKED` remembered expanded folders are added,
+   * the ones a listing already included reveals: no more than one background
+   * revalidation checks.
    */
   pathSnapshot(
     target: { nodeId: string; kind: TreeKind } | null,
@@ -96,43 +109,37 @@ export class VerifiedTreeCache {
       }
       access = this.#roots.get(path[0]!);
     }
-    if (!access) return null;
     const kind = target?.kind ?? "directory";
-    if (access.rootKind === "file" && (kind !== "file" || path.length !== 1)) return null;
+    if (!access || !rootAccepts(access, path, kind)) return null;
     const listings: Record<string, DirectoryListing> = {};
     const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
     const directories = kind === "file" ? path.slice(0, -1) : path;
     for (let index = 0; index < directories.length; index++) {
       const directoryId = directories[index]!;
-      const record = this.#listings.get(directoryId);
-      if (!record || !keys[directoryId]) return null;
-      listings[directoryId] = record.listing;
-      const next = path[index + 1];
-      if (!next) continue;
-      const entry = record.listing.entries.find((child) => child.nodeId === next);
-      const last = index === path.length - 2;
-      if (!entry || entry.kind !== (last ? kind : "directory")) return null;
+      const listing = this.#servable(access, directoryId);
+      if (!listing || !keys[directoryId]) return null;
+      listings[directoryId] = listing;
+      if (index === path.length - 1) continue;
+      const entry = pathStep(listing, path, index, kind);
+      if (!entry) return null;
       if (entry.kind === "directory") {
-        const key = this.#key(next, entry.keyEpoch ?? 1);
+        const key = this.#key(entry.nodeId, entry.keyEpoch ?? 1);
         if (!key) return null;
-        keys[next] = key;
+        keys[entry.nodeId] = key;
       }
     }
-    // Restore remembered folders level by level, as a cold load would, from memory only.
     const pending = new Set(remembered(access.actorAccountId).filter((id) => !listings[id]));
-    for (let added = true; added && pending.size; ) {
-      added = false;
-      for (const id of pending) {
-        const parent = this.#parents.get(id);
-        const entry = parent && listings[parent]?.entries.find((child) => child.nodeId === id);
-        if (!entry) continue;
-        pending.delete(id);
-        const record = this.#listings.get(id);
-        const key = entry.kind === "directory" ? this.#key(id, entry.keyEpoch ?? 1) : null;
-        if (!record || !key) continue;
-        listings[id] = record.listing;
+    for (let added = 0; added < EXPANDED_CHECKED && pending.size; ) {
+      const level = restorableFolders(pending, listings, keys);
+      if (!level.length) break;
+      for (const { id, entry } of level) {
+        if (added >= EXPANDED_CHECKED) break;
+        const listing = this.#servable(access, id);
+        const key = this.#key(id, entry.keyEpoch ?? 1);
+        if (!listing || !key) continue;
+        listings[id] = listing;
         keys[id] = key;
-        added = true;
+        added++;
       }
     }
     for (const id of Object.keys(listings)) this.#touch(this.#listings, id);
@@ -146,14 +153,17 @@ export class VerifiedTreeCache {
 
   /**
    * Keep what a verified walk opened. `since` is the device-state generation
-   * the walk started under: results from before a discard, or for an Account
-   * other than device state's, are refused. Returns whether it was kept.
+   * the walk started under: results from before a discard, for an Account
+   * other than device state's, or while the tab stays hidden after its
+   * hidden-timeout clear are refused. A listing never replaces a newer one,
+   * or another head at the same revision. Returns whether anything was kept.
    */
   record(tree: VerifiedTree, since: number): boolean {
     const scope = this.#scope();
     if (since !== this.#generation() || !scope || scope.accountId !== tree.access.actorAccountId) return false;
-    if (this.#filled && (this.#filled.generation !== since || !sameScope(this.#filled.scope, scope))) this.clear();
-    this.#filled = { generation: since, scope };
+    if (this.#suspended()) return false;
+    if (this.#owner && (this.#owner.generation !== since || !sameScope(this.#owner.scope, scope))) this.clear();
+    this.#owner = { generation: since, scope };
     const { access } = tree;
     this.#roots.delete(access.rootId);
     this.#roots.set(access.rootId, access);
@@ -164,6 +174,13 @@ export class VerifiedTreeCache {
     }
     for (const [directoryId, verified] of Object.entries(tree.listings)) {
       if (verified.listing.directoryId !== directoryId) continue;
+      const held = this.#listings.get(directoryId);
+      if (
+        held &&
+        (held.listing.entriesRevision > verified.listing.entriesRevision ||
+          (held.listing.entriesRevision === verified.listing.entriesRevision && held.digest !== verified.digest))
+      )
+        continue;
       this.#dropListing(directoryId);
       this.#listings.set(directoryId, verified);
       for (const child of verified.listing.entries) {
@@ -188,11 +205,15 @@ export class VerifiedTreeCache {
     return true;
   }
 
-  /** Drop these Directories' listings. Keys stay, checked against the next verified parent. */
+  /**
+   * Drop these Directories' listings. Keys stay, checked against the next
+   * verified parent. Subscribers hear only other tabs' changes: this tab's
+   * own changes reach its page through the change itself.
+   */
   invalidate(accountId: string, directoryIds: readonly string[], origin: "local" | "remote"): void {
-    if (!this.#current() || this.#filled!.scope.accountId !== accountId) return;
+    if (!this.#current() || this.#owner!.scope.accountId !== accountId) return;
     for (const id of directoryIds) this.#dropListing(id);
-    this.#emit({ type: "invalidate", directoryIds: [...directoryIds], origin });
+    if (origin === "remote") this.#emit([...directoryIds]);
   }
 
   /** Forget a root's access, so the next load opens it again. */
@@ -202,17 +223,16 @@ export class VerifiedTreeCache {
   }
 
   clear(): void {
-    const had = this.#filled !== null || this.#roots.size > 0 || this.#listings.size > 0;
-    this.#filled = null;
+    this.#owner = null;
     this.#libraryRootId = null;
     this.#roots.clear();
     this.#listings.clear();
     this.#keys.clear();
     this.#parents.clear();
-    if (had) this.#emit({ type: "clear" });
   }
 
-  subscribe(listener: (change: TreeCacheChange) => void): () => void {
+  /** Hear which Directories another tab changed. */
+  subscribe(listener: (directoryIds: string[]) => void): () => void {
     this.#listeners.add(listener);
     return () => {
       this.#listeners.delete(listener);
@@ -221,11 +241,27 @@ export class VerifiedTreeCache {
 
   /** Whether the memory still belongs to device state's current scope and generation; clears it if not. */
   #current(): boolean {
-    if (!this.#filled) return false;
+    if (!this.#owner) return false;
     const scope = this.#scope();
-    if (this.#generation() === this.#filled.generation && scope && sameScope(scope, this.#filled.scope)) return true;
+    if (this.#generation() === this.#owner.generation && scope && sameScope(scope, this.#owner.scope)) return true;
     this.clear();
     return false;
+  }
+
+  /** A cached listing this browser's rollback checkpoint has not moved past; a listing behind it is dropped. */
+  #servable(access: RootAccess, directoryId: string): DirectoryListing | null {
+    const record = this.#listings.get(directoryId);
+    if (!record) return null;
+    const checkpoint = this.#checkpoint(access.vaultId, directoryId);
+    if (
+      checkpoint &&
+      (checkpoint.revision > record.listing.entriesRevision ||
+        (checkpoint.revision === record.listing.entriesRevision && checkpoint.digest !== record.digest))
+    ) {
+      this.#dropListing(directoryId);
+      return null;
+    }
+    return record.listing;
   }
 
   #key(directoryId: string, epoch: number): Uint8Array | null {
@@ -250,10 +286,10 @@ export class VerifiedTreeCache {
     map.set(id, value);
   }
 
-  #emit(change: TreeCacheChange): void {
+  #emit(directoryIds: string[]): void {
     for (const listener of [...this.#listeners]) {
       try {
-        listener(change);
+        listener(directoryIds);
       } catch {
         // A subscriber's failure must not stop the others.
       }
@@ -267,26 +303,23 @@ function sameScope(a: TreeCacheScope, b: TreeCacheScope): boolean {
 
 /**
  * What tabs tell each other on the `mdwn-tree` BroadcastChannel: which
- * Directories changed, or that everything must be forgotten. Ids only — never
- * a name, key, ciphertext or snapshot — and receivers accept nothing else.
+ * Directories changed. Ids only — never a name, key, ciphertext or snapshot —
+ * and receivers accept nothing else. The tab-wide clear has its own channel
+ * (`private-tab-memory.ts`).
  */
-export type TreeMessage = { type: "invalidate"; accountId: string; directoryIds: string[] } | { type: "clear" };
+export type TreeMessage = { type: "invalidate"; accountId: string; directoryIds: string[] };
 export const TREE_CHANNEL = "mdwn-tree";
 const MAX_MESSAGE_IDS = 256;
 
-function plainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
 /** Strictly validate a received message: exact fields, opaque ids only. */
 export function parseTreeMessage(value: unknown): TreeMessage | null {
-  if (!plainObject(value)) return null;
-  const fields = Object.keys(value).sort().join(",");
-  if (value.type === "clear") return fields === "type" ? { type: "clear" } : null;
-  if (value.type !== "invalidate" || fields !== "accountId,directoryIds,type") return null;
-  const { accountId, directoryIds } = value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return null;
+  const record = value as Record<string, unknown>;
+  if (record.type !== "invalidate" || Object.keys(record).sort().join(",") !== "accountId,directoryIds,type")
+    return null;
+  const { accountId, directoryIds } = record;
   if (
     !isV7(accountId) ||
     !Array.isArray(directoryIds) ||

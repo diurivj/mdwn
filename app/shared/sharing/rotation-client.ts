@@ -2,7 +2,7 @@ import { publicAttributionKeyContext, publicCommentKeyContext } from "~/shared/c
 import { createSymmetricWriter, openSymmetric } from "~/shared/crypto/enc-v1";
 import { loadPrivateBrowser, type PrivateAccountContext } from "~/shared/device/private-browser";
 import { privateRequest } from "~/shared/device/private-client";
-import { clearPrivateTabMemory } from "~/shared/device/private-tab-memory";
+import { clearPrivateMemoryInAllTabs } from "~/shared/device/private-tab-memory";
 import { newOpaqueId } from "~/shared/opaque-id";
 import {
   createListingHead,
@@ -605,7 +605,7 @@ export async function resumeKeyRotation(jobId: string, options: Options = {}) {
     );
   } finally {
     // A pass may have promoted new Directory keys and listings: nothing this
-    // tab remembers about the tree is current any more (ticket 57).
-    clearPrivateTabMemory();
+    // tab or another remembers about the tree is current any more (ticket 57).
+    clearPrivateMemoryInAllTabs();
   }
 }

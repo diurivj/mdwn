@@ -21,7 +21,7 @@ import {
   type StoredListingHead,
 } from "./listing";
 export { rememberListing } from "./listing";
-import { invalidateTreeListings } from "./tab-tree-cache";
+import { whileChangingListings } from "./tab-tree-cache";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
 import { fileCapabilityContext, rememberFile, type FileCapability } from "./file-capability-client";
 import { createFileHead, verifyFileHead, type FileHead } from "./file-head";
@@ -558,19 +558,6 @@ export async function signListingChange(
   });
 }
 
-/**
- * Send a structural change. Whatever its outcome, the request may have
- * changed these listings (or found them changed elsewhere), so this tab and
- * the others drop what they remember of them (ticket 57).
- */
-async function changingListings<T>(access: RootAccess, directoryIds: string[], send: () => Promise<T>): Promise<T> {
-  try {
-    return await send();
-  } finally {
-    invalidateTreeListings(access.actorAccountId, directoryIds);
-  }
-}
-
 export async function createTreeChild(
   access: RootAccess,
   parentId: string,
@@ -624,7 +611,7 @@ export async function createTreeChild(
     };
   }
   const head = await signListingChange(access, listing, parentKey, [...listing.entries, input]);
-  return changingListings(access, [parentId], async () => {
+  return whileChangingListings(access.actorAccountId, [parentId], async () => {
     const result = await jsonResource<{ nodeId: string; entriesRevision: number }>(
       `/api/private/tree/directories/${parentId}/children`,
       "PUT",
@@ -677,7 +664,7 @@ export async function reorderTreeChild(
     orderCiphertext: orders.find((order) => order.nodeId === item.nodeId)?.orderCiphertext ?? item.orderCiphertext,
   }));
   const head = await signListingChange(access, listing, parentKey, updated);
-  return changingListings(access, [listing.directoryId], async () => {
+  return whileChangingListings(access.actorAccountId, [listing.directoryId], async () => {
     const result = await jsonResource<{ entriesRevision: number }>(
       `/api/private/tree/nodes/${nodeId}/order`,
       "PATCH",
@@ -765,7 +752,7 @@ export async function moveTreeChild(
     ),
     signListingChange(access, destination, destinationKey, [...destination.entries, updated]),
   ]);
-  return changingListings(access, [source.directoryId, destination.directoryId], async () => {
+  return whileChangingListings(access.actorAccountId, [source.directoryId, destination.directoryId], async () => {
     const result = await jsonResource<{ sourceEntriesRevision: number; destinationEntriesRevision: number }>(
       `/api/private/tree/nodes/${nodeId}/parent`,
       "PATCH",
@@ -816,7 +803,7 @@ export async function deleteTreeChild(
     listing.entries.filter((entry) => entry.nodeId !== nodeId),
   );
   const changed = entry.kind === "directory" ? [listing.directoryId, nodeId] : [listing.directoryId];
-  return changingListings(access, changed, async () => {
+  return whileChangingListings(access.actorAccountId, changed, async () => {
     const result = await jsonResource<{ entriesRevision: number }>(
       `/api/private/tree/nodes/${nodeId}`,
       "DELETE",
@@ -858,7 +845,7 @@ export async function renameTreeChild(
     parentKey,
     listing.entries.map((item) => (item.nodeId === nodeId ? { ...item, ...input } : item)),
   );
-  return changingListings(access, [parentId], async () => {
+  return whileChangingListings(access.actorAccountId, [parentId], async () => {
     const result = await jsonResource<{ entriesRevision: number }>(
       `/api/private/tree/nodes/${nodeId}/name`,
       "PATCH",
