@@ -923,7 +923,9 @@ describe("private-access errors clear private tab memory (ticket 57)", () => {
   it("keeps tab memory on a temporary network failure", async () => {
     await settleWithRead("/api/private/first", registryState);
     const lost = network.queue("/api/private/files");
+    const request = cleared(() => privateRequest("/api/private/files", { method: "GET" }));
+    await lost.started;
     lost.response.reject(new TypeError("network"));
-    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(false);
+    expect(await request).toBe(false);
   });
 });
