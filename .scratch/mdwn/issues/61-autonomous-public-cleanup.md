@@ -21,13 +21,20 @@
 
 ## Acceptance criteria
 
-- [ ] A real, authorized Unpublishing seal followed only by scheduled invocations reaches final deletion, across several invocations when the backlog exceeds one invocation's bound (Workers test, real D1).
-- [ ] The File, its Private comment thread and envelopes, unrelated Publications and other Owners' content survive, verified by direct D1 inspection on top of request-boundary checks.
-- [ ] Interleaved browser and scheduled batches, a scheduled run after File hard deletion, and a run after a later Publication was created all leave consistent state and delete nothing extra.
-- [ ] Existing security retention still runs in an invocation that also has a teardown backlog, and a failing duty does not stop the others.
-- [ ] The Publish panel copy distinguishes sealed, pending cleanup and completed, and a browser test covers leaving after confirmation and later seeing cleanup complete.
-- [ ] No queue, Workflow, Durable Object, new Worker, new binding or new Cron schedule.
+- [x] A real, authorized Unpublishing seal followed only by scheduled invocations reaches final deletion, across several invocations when the backlog exceeds one invocation's bound (Workers test, real D1).
+- [x] The File, its Private comment thread and envelopes, unrelated Publications and other Owners' content survive, verified by direct D1 inspection on top of request-boundary checks.
+- [x] Interleaved browser and scheduled batches, a scheduled run after File hard deletion, and a run after a later Publication was created all leave consistent state and delete nothing extra.
+- [x] Existing security retention still runs in an invocation that also has a teardown backlog, and a failing duty does not stop the others.
+- [x] The Publish panel copy distinguishes sealed, pending cleanup and completed, and a browser test covers leaving after confirmation and later seeing cleanup complete.
+- [x] No queue, Workflow, Durable Object, new Worker, new binding or new Cron schedule.
 
 ## Comments
 
 - 2026-10-12: Published as the first approved child of 53.
+- 2026-10-12: Implemented on `issue/61-62-workers-paid-slices` (awaiting orchestrator review).
+  - `app/publications/publications.server.ts`: one shared statement set, `teardownBatch` (the existing `deletedCommentBatch(…, TEARDOWN_COMMENT_BATCH, marker)` or `teardownStatements(…)`), used by the browser's proof-guarded `teardownPublication` unchanged in behavior and by the new `continueSealedTeardown`. The scheduled path selects the oldest sealed teardown (`publication_teardowns.created_at`, then id) and commits one batch per invocation in one atomic D1 batch: deferred-FK pragma, a CAS anchor on the sealed row (state `deleting` plus its teardown row), and dependents gated by the Publication row still being `deleting` (true until the final statement). The code comment explains why sealed state is valid authority inside one serialized D1 transaction while the proof path needs a per-invocation token, why the marker omits the teardown row, and why the File-keyed `publication_requests` delete is safe (the partial unique index admits no later Publication while the sealed row exists).
+  - `app/retention/scheduled-maintenance.server.ts` (new): ordered, isolated duties (retention first, teardown last), fixed content-free failure reports, the invocation still fails when any duty failed. The worst-case D1 budget is 41 statements in 8 calls (≤ 50 even if every batched statement counts), tabulated beside the duty list. `workers/app.ts` calls it.
+  - Publish panel and `PublicationLifecycle`: sealed/pending copy ("Public access has ended. Deletion continues automatically, even after you close this page.") and a `deletionComplete` state shown only after an authoritative read finds the sealed Publication gone.
+  - Docs: `CONTEXT.md` Unpublishing, `docs/publications.md` (Scheduled completion), `docs/operations.md` (duties, bounds, budget, failure visibility), `docs/buildable-spec.md` §9.6 and lists, `docs/comments.md`, `docs/acceptance.md`.
+  - No queue, Workflow, Durable Object, Worker, binding, Cron schedule or migration was added.
+  - Tests run: `npx vitest run --config vitest.workers.config.ts tests/worker/scheduled-teardown.test.ts` 8 passed (red first: 7/7 failed before the implementation); `npx vitest run --config vitest.config.ts tests/publication-lifecycle.test.ts` 24 passed (the two new cases failed first); `npx playwright test e2e/publications.spec.ts --workers=2` 10 passed in each of chromium, firefox and webkit; `npm run lint` pass; `npm run typecheck` pass; `npm test` Node 44 files / 419 tests passed, Workers 53 files / 394 tests passed.

@@ -381,6 +381,43 @@ describe("PublicationLifecycle", () => {
     expect(lifecycle.getState().state?.publication).toBeNull();
   });
 
+  it("reports completed deletion only after observing the sealed Publication disappear", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    // This page stopped driving teardown; scheduled maintenance finishes it.
+    const nextState = stateQueue([deletingState(), deletingState(), baseState(), activeState("link-2")]);
+    fake.handlers.loadState = async () => nextState();
+    fake.handlers.continueTeardown = async () => {
+      throw new Error("network lost");
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState()).toMatchObject({ teardownFailed: true, deletionComplete: false });
+    expect(lifecycle.getState().state?.publication?.state).toBe("deleting");
+
+    lifecycle.detachPanel();
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState().state?.publication).toBeNull();
+    expect(lifecycle.getState().deletionComplete).toBe(true);
+
+    // A later Publication is not the deleted one.
+    await lifecycle.refresh();
+    expect(lifecycle.getState().deletionComplete).toBe(false);
+  });
+
+  it("never reports completed deletion for a File it never saw sealed", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    fake.handlers.loadState = async () => baseState();
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState()).toMatchObject({ panel: "ready", deletionComplete: false });
+  });
+
   it("surfaces a failed teardown without auto-restarting, and resumes on retry", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);

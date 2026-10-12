@@ -5,9 +5,16 @@ Ticket [31](../.scratch/mdwn/issues/31-retention-and-operations.md); [ADR-0002](
 ## Scheduled retention
 
 `wrangler.jsonc` schedules the same Worker handler every 15 minutes in local,
-preview, and production. `workers/app.ts` awaits every maintenance operation;
-a failure propagates to the Cron outcome rather than being swallowed. Blanket
-request logs/traces remain disabled under the privacy policy.
+preview, and production. `workers/app.ts` calls
+`app/retention/scheduled-maintenance.server.ts`, which runs each duty in order
+— security retention first, then sealed Unpublishing teardown — and isolates
+them: a duty that throws is reported, and the remaining duties still run. After
+all duties the invocation fails if any duty failed, so the Cron outcome still
+shows it. Reports are content-free: one fixed `console.error` line per failed
+duty (`Scheduled maintenance duty failed: <duty>`) and a thrown
+`Scheduled maintenance failed: <duties>`, never the underlying error, SQL,
+identifiers, ciphertext or counts. Blanket request logs/traces remain disabled
+under the privacy policy.
 
 The handler removes:
 
@@ -25,10 +32,16 @@ The handler removes:
 - Bounded expired-Grant envelope/provisioning dependents, **not** the Grant's
   write seal or a cryptographic job. Browser-authorized rotation still owns that
   lifecycle (`app/sharing/grant-expiry.server.ts`).
+- One batch of an Unpublishing the Owner already sealed: the oldest pending
+  teardown's next bounded batch (at most 200 Public Comments, or the final
+  transaction once none remain). Only a `deleting` Publication with its
+  teardown row qualifies; no Session, Device proof or key is used. See
+  [Publications](publications.md#scheduled-completion).
 
 No retention statement deletes current Files, representations, envelopes,
-Recovery capsules, registry/devices, passkeys, active Grants, Publications,
-Comments, or Import commit markers. `import_commits` is durable visibility
+Recovery capsules, registry/devices, passkeys, active Grants, active
+Publications, Private Comments, or Import commit markers; Public Comments and
+other Public material are removed only for a Publication the Owner sealed. `import_commits` is durable visibility
 metadata, not staging authority. Migration 0027 removes its FK to the ephemeral
 Import session, reinstalls the immutable-marker trigger after the rebuild, and
 checks its originating session/account/target with an INSERT trigger instead.
@@ -45,11 +58,36 @@ Security-event writes reserve one 15-minute Cron interval before the 30-day
 retention maximum, including the event's Network-bucket headroom. Provider Time
 Travel/backups are outside application-level deletion.
 
+### Scheduled bounds and D1 budget
+
+The account's Workers Paid subscription is not yet confirmed. Workers Free
+allows 50 D1 queries per invocation and does not say whether each statement of
+a `batch()` counts, so every duty together must fit even if every statement
+counts. The worst case is 41 statements in 8 D1 calls:
+
+| Duty | Worst-case D1 statements |
+| --- | --- |
+| Abuse records | 3 (one batch) |
+| Public Comment reports | 1 |
+| Signup proofs and challenges | 3 (one batch) |
+| Security material and Import staging | 8 (one batch) |
+| Expired-Grant dependents | 1 SELECT + 3 (one batch) |
+| Unpublishing teardown | 1 SELECT + 21 (one batch: deferred-FK pragma, sealed-state anchor and the 19-statement final transaction; a Comment batch is 4) |
+
+The table and its arithmetic live beside the duty list; raising a bound or
+adding a duty must keep the total within 50 until the plan is confirmed.
+`tests/worker/scheduled-teardown.test.ts` counts the statements of a real
+invocation. Teardown throughput is one batch per run (at most 200 Public
+Comments, or one final transaction): a backlog eventually drains, but no
+deletion deadline is promised. A teardown failure leaves its Publication sealed
+for the next run.
+
 ### Verify maintenance
 
 ```sh
 npx --no-install vitest run --config vitest.workers.config.ts \
-  tests/worker/retention.test.ts tests/worker/abuse-controls.test.ts
+  tests/worker/retention.test.ts tests/worker/abuse-controls.test.ts \
+  tests/worker/scheduled-teardown.test.ts
 ```
 
 These are real workerd/D1 scheduled-event tests: expired/live mixtures,

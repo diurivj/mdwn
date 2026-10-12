@@ -98,6 +98,7 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Rotation preserves the logical thread; unpublish destroys it; a later Publication is fresh | `tests/worker/publication-lifecycle.test.ts`, `e2e/publications.spec.ts`. |
 | Unpublishing removes only the Publication's Public-thread material; the File's Private thread survives | `tests/worker/publication-lifecycle.test.ts`, `tests/worker/comment-dependent-deletion.test.ts` (the Private thread keeps its Comments, imported Historical Comment metadata and capability envelope). |
 | Interrupted teardown stays sealed and Owner-resumable | `tests/worker/publication-lifecycle.test.ts`. |
+| Scheduled maintenance finishes a sealed teardown without the Owner's browser, deleting nothing else | `tests/worker/scheduled-teardown.test.ts`, `e2e/publications.spec.ts` ("finishes Unpublishing through scheduled maintenance…"). |
 | Pseudonym update is all-old or all-new, never mixed | `tests/worker/pseudonym-update.test.ts`, `e2e/pseudonym-update.spec.ts`. |
 
 ### 12.5 Import, export, and deletion

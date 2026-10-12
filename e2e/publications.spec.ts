@@ -472,3 +472,77 @@ test("unpublishes with a counted confirmation, shows bounded progress, and publi
     await readerContext.close();
   }
 });
+
+test("finishes Unpublishing through scheduled maintenance after the page stops deleting", async ({
+  page,
+  server,
+  workspace,
+}) => {
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const thread = await workspace.db
+    .prepare(
+      "SELECT id AS threadId, current_epoch_id AS epochId FROM comment_threads WHERE file_id = ? AND purpose = 'public'",
+    )
+    .bind(workspace.fileId)
+    .first<{ threadId: string; epochId: string }>();
+  expect(thread).not.toBeNull();
+  // More opaque Comment rows than one scheduled run deletes.
+  for (let sequence = 1; sequence <= 250; sequence++) {
+    await workspace.db
+      .prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision,
+        body_ciphertext, body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, X'01', 1, X'01', 1, 1, 1)`)
+      .bind(objectId(), thread!.threadId, thread!.epochId, workspace.accountId, sequence)
+      .run();
+  }
+  const toggle = page.getByRole("button", { name: "Publish", exact: true });
+  await toggle.click();
+  await expect(panel).toHaveCount(0);
+  await toggle.click();
+  await expect(panel.getByRole("button", { name: "Unpublish…" })).toBeVisible();
+  // The page never manages to drive a teardown batch, as if it had been closed.
+  const teardownPath = `**/api/private/publications/files/${workspace.fileId}/teardown`;
+  await page.route(teardownPath, (route) => route.abort());
+
+  await panel.getByRole("button", { name: "Unpublish…" }).click();
+  await panel.getByRole("button", { name: "Unpublish and permanently delete 250 Public Comments" }).click();
+  await expect(panel.getByText("Deleting public material…")).toBeVisible();
+  await expect(
+    panel.getByText("Public access has ended. Deletion continues automatically, even after you close this page."),
+  ).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Continue deleting" })).toBeVisible();
+  await expect(panel.getByText("Public material deleted.", { exact: false })).toHaveCount(0);
+  const publications = () =>
+    workspace.db
+      .prepare("SELECT count(*) AS n FROM publications WHERE file_id = ? AND state = 'deleting'")
+      .bind(workspace.fileId)
+      .first<{ n: number }>();
+  expect(await publications()).toEqual({ n: 1 });
+
+  // Scheduled maintenance, not the browser, finishes the sealed teardown.
+  const worker = server.getWorker();
+  for (let run = 0; run < 10 && (await publications())?.n; run++) {
+    const result = await worker.scheduled({ cron: "*/15 * * * *", scheduledTime: new Date() });
+    expect(result.outcome).toBe("ok");
+  }
+  expect(await publications()).toEqual({ n: 0 });
+  expect(
+    await workspace.db
+      .prepare("SELECT count(*) AS n FROM comments WHERE thread_id = ?")
+      .bind(thread!.threadId)
+      .first<{ n: number }>(),
+  ).toEqual({ n: 0 });
+
+  await page.unroute(teardownPath);
+  await toggle.click();
+  await expect(panel).toHaveCount(0);
+  await toggle.click();
+  await expect(
+    panel.getByText("Public material deleted. The old Public link and its Public Comments are gone."),
+  ).toBeVisible();
+  await expect(panel.getByText("Deleting public material…")).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Publish File" })).toBeVisible();
+});

@@ -1,13 +1,9 @@
 import { createRequestHandler } from "@react-router/cloudflare";
 import { RouterContextProvider } from "react-router";
 import { envContext } from "~/context/env";
-import { purgeExpiredSignupProofs } from "~/device/proof.server";
-import { purgeExpiredAbuseRecords } from "~/shared/security/abuse-control.server";
-import { purgeExpiredPublicCommentReports } from "~/shared/security/public-participation.server";
-import { purgeExpiredSecurityMaterial } from "~/retention/retention.server";
+import { runScheduledMaintenance } from "~/retention/scheduled-maintenance.server";
 import { buildSecurityHeaders, DYNAMIC_CACHE_CONTROL, generateCspNonce } from "~/shared/security/headers";
 import { cspNonceContext } from "~/shared/security/nonce";
-import { purgeExpiredGrantDependents } from "~/sharing/grant-expiry.server";
 
 /**
  * The event object the fetch handler passes to the adapter. The adapter's
@@ -50,11 +46,7 @@ const requestHandler = createRequestHandler<Env>({
 
 export default {
   async scheduled(_controller, env) {
-    await purgeExpiredAbuseRecords(env.DB);
-    await purgeExpiredPublicCommentReports(env.DB);
-    await purgeExpiredSignupProofs(env);
-    await purgeExpiredSecurityMaterial(env);
-    await purgeExpiredGrantDependents(env);
+    await runScheduledMaintenance(env);
   },
 
   async fetch(request, env, ctx) {

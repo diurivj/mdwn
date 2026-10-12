@@ -45,7 +45,7 @@ Signup is open. The product is never monetized: there is no billing, subscriptio
 - Historical audit logging.
 - Jurisdiction-specific privacy notices and pre-launch legal review.
 - Resumable hard deletion of Directory trees larger than 500 nodes.
-- Durable queue-backed autonomous Public-material teardown.
+- Queue-, Workflow- or Durable Object-backed Public-material teardown. The existing 15-minute scheduled maintenance finishes sealed teardowns instead ([ticket 61](../.scratch/mdwn/issues/61-autonomous-public-cleanup.md)).
 
 ### 1.2 Support and funding
 
@@ -753,8 +753,8 @@ A Collaborator's Publication request never creates public access until Owner app
 1. Publish panel states the irreversible effect and current opaque Public Comment count, for example **Unpublish and permanently delete 12 Public Comments**.
 2. Owner confirms.
 3. The seal transaction removes the link and denies every anonymous/authenticated Public route.
-4. The Owner's browser drives idempotent bounded deletion batches for the Public representation, thread/epochs/Comments, envelopes, attribution, requests, teardown state, and Publication row.
-5. UI shows **Deleting public material…** and progress. Only the Owner may resume after interruption.
+4. The Owner's browser, while open, and the 15-minute scheduled maintenance drive the same idempotent bounded deletion batches for the Public representation, thread/epochs/Comments, envelopes, attribution, requests, teardown state, and Publication row. Only the committed seal authorizes scheduled cleanup; it uses no Session, Device proof or key.
+5. UI distinguishes sealed access and pending cleanup (**Deleting public material…**, with progress, stating that deletion continues automatically after the page closes) from completed deletion. Only the Owner may resume from a browser after interruption; scheduled maintenance resumes regardless.
 6. No new Publication is allowed until cleanup completes.
 7. A later Publication is entirely fresh.
 
@@ -900,7 +900,7 @@ Hard deletion removes application-level live records and leaves no app-visible t
 - File deletion is explicit and includes all private/public/comment/share/key dependents.
 - Directory deletion is all-or-nothing up to 500 nodes.
 - Over-cap Directory deletion changes nothing and directs the user to reduce the subtree; resumable large deletion is outside the MVP.
-- Publication unpublish seals synchronously and tears down in bounded Owner-browser batches.
+- Publication unpublish seals synchronously and tears down in bounded batches driven by the Owner's browser or scheduled maintenance.
 - Cancelled/expired Import sessions become unreachable and are purged.
 - One-use WebAuthn challenges and recovery codes are deleted on use.
 - Short-lived counters and Security events expire under the bounds above.
@@ -967,7 +967,7 @@ The MVP is conformant only when automated tests plus required manual/security ch
 - Signed-in but unauthorized Accounts receive no Collaborators-only data.
 - Owner/author Comment mutation rules are enforced server-side.
 - Link rotation preserves the logical Public thread; unpublish destroys it and a later Publication starts fresh.
-- Interrupted teardown remains sealed and is Owner-resumable.
+- Interrupted teardown remains sealed, is Owner-resumable, and is finished by later scheduled maintenance runs.
 - Pseudonym update presents all-old or all-new state, never mixed committed attribution.
 
 ### 12.5 Import, export, and deletion

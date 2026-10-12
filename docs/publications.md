@@ -209,9 +209,12 @@ route and Public-thread endpoint denies access from that moment, and triggers
 forbid a sealed Publication from gaining a link, representation, thread or
 `active` state again.
 
-The Owner's browser then drives idempotent bounded batches through
-`POST …/teardown`, showing **Deleting public material…** with progress. Each call
-hard-deletes at most 200 Public Comments; once none remain, one transaction
+Two drivers then run the same idempotent bounded batches, built from one
+statement set (`teardownBatch`): the Owner's browser through
+`POST …/teardown` while the page is open, and the 15-minute scheduled
+maintenance (see [scheduled duties](operations.md#scheduled-retention)) whether
+or not any browser returns. Each batch hard-deletes at most 200 Public
+Comments; once none remain, one transaction
 removes the thread and its epochs, Comments, attributions and reports, staged
 pseudonym-update items, Owner and device envelopes, capabilities, link
 wrappers, Public representations, author
@@ -223,6 +226,32 @@ lost response or interrupted browser is resumed by any Owner device; no other
 Account can read progress or delete anything. The File's partial unique index
 keeps it unpublished until cleanup completes, and a later Publication starts
 entirely fresh with new identifiers and an empty thread.
+
+### Scheduled completion
+
+Only durable sealed state authorizes scheduled cleanup: a `deleting`
+Publication with its `publication_teardowns` row, which only the Owner's
+proof-guarded seal creates. Scheduled maintenance never simulates a Session,
+consumes a Device proof or opens a key. Each run picks the oldest pending
+teardown (`publication_teardowns.created_at`, then id) and commits one batch for
+it in one atomic D1 batch. Its anchor is a compare-and-set on the sealed row,
+and every dependent statement is gated by that row still being `deleting` —
+true until the batch's own last statement removes it. The browser path keeps
+its Device-proof anchor and per-invocation token. Every statement is keyed by
+the Publication's id, File and Owner, so interleaved browser and scheduled
+batches, a run after File hard deletion (which already removed the rows) and a
+later Publication of the same File are all harmless. A failed batch rolls back,
+the Publication stays sealed and the next run retries; access never reopens and
+nothing claims completion. There is no deletion deadline: a backlog drains one
+batch per run.
+
+The Publish panel distinguishes the three states. While sealed it shows
+**Deleting public material…** with progress and says Public access has ended
+and deletion continues automatically, even after the page closes; **Continue
+deleting** appears when this page's own batch failed. Only after an
+authoritative read finds the sealed Publication gone does it say **Public
+material deleted**; it never claims physical deletion before the final
+transaction.
 
 ## Public reader
 
@@ -302,14 +331,22 @@ batches, idempotent completion after zero remaining Comments, non-Owner
 denial, no participation-limit
 blocking, every public row and ciphertext removed, the File's Private thread
 untouched, and a fresh later
-Publication). `e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
+Publication). `tests/worker/scheduled-teardown.test.ts` seals real
+Publications and runs the Worker's `scheduled` entry point: completion across
+several bounded runs with no browser call, survival of the File, its Private
+thread and other Publications and Owners by direct D1 inspection, interleaved
+browser batches, File hard deletion, a later Publication, security retention
+beside a backlog, isolated duty failures and the per-invocation D1 statement
+budget. `e2e/publications.spec.ts` publishes from the Publish panel, reads the link in a
 fresh anonymous context and proves the fragment never reaches a request,
 header, cookie, console message or D1 row while saves keep the link live. It
 also covers fragment-only navigation, adversarial front-matter presentation,
 collapsed panels/lost responses after the real Worker commits creation, retries
 that lose to an earlier pending commit, paired saves with expanded titles, link
-rotation with a surviving Comment, and an unpublish whose counted confirmation,
-bounded progress and fresh later Publication are asserted.
+rotation with a surviving Comment, an unpublish whose counted confirmation,
+bounded progress and fresh later Publication are asserted, and an unpublish
+whose page never drives teardown, which scheduled maintenance completes while
+the panel shows pending and then completed deletion.
 
 See [enc-v1](enc-v1.md), [serving and security](serving-and-security.md),
 [sharing](sharing.md), [public pseudonym update](pseudonym-update.md) and [tree structure](tree-structure.md).
