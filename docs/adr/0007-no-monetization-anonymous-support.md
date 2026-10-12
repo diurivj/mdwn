@@ -19,3 +19,10 @@ mdwn will never charge for access: there is no billing, subscription, advertisin
 - Receiving cryptocurrency may carry tax or reporting obligations in the operator's jurisdiction; that is an operator concern, not a product design.
 - If a mobile client is ever built, store policies (notably Apple's) may disallow in-app cryptocurrency donation links; the support surface stays on the web.
 - The evaluated private donation options and their trade-offs are recorded in [`docs/support-options.md`](../support-options.md).
+
+
+## Superseded in part (2026-10-12)
+
+Two capacity and funding premises are superseded: that having no support surface is viable "since the MVP runs on Workers Free and D1 Free", and the consequence that "capacity exhaustion still fails closed rather than triggering paid spend". The maintainer has decided to pay for Workers Paid (about $5 per month targeted, $10 as an intervention boundary; the subscription itself is not yet confirmed). Usage beyond the included allowances is metered, so some capacity exhaustion becomes overage, bounded only by application limits and the operator's [intervention runbook](../operations.md#intervention-runbook), never by a provider spending cap.
+
+Unchanged: mdwn is never monetized and has no billing, entitlement or paid tier; donations grant nothing and are never stored. The hosting subscription is the operator's cost, not a product feature.

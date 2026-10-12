@@ -30,7 +30,7 @@ export function meta() {
     {
       name: "description",
       content:
-        "Optional anonymous cryptocurrency donations covering mdwn's domain and future paid infrastructure. Donations grant nothing, and mdwn runs identically without them.",
+        "Optional anonymous cryptocurrency donations that help cover mdwn's domain and hosting costs. Donations grant nothing and change nothing about how mdwn runs.",
     },
   ];
 }
@@ -90,9 +90,8 @@ export default function Support({ loaderData }: Route.ComponentProps) {
             What donations cover
           </h2>
           <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-            Donations fund the mdwn domain and any future paid infrastructure. That is all they fund. mdwn runs
-            identically whether or not donations arrive, and when free capacity is exhausted it fails closed rather than
-            triggering paid spend.
+            Donations help cover the mdwn domain and hosting costs. That is all they fund. They grant nothing and change
+            nothing about how mdwn runs, whether or not they arrive.
           </p>
         </section>
 

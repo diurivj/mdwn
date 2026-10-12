@@ -54,7 +54,7 @@ Whatever option is chosen, the implementation must respect section 1.2 and the s
 - Addresses and QR codes are static or generated locally; no third-party script, widget, tracker, or analytics is embedded.
 - If a hosted page (BTCPay or NOWPayments) is used, the support page links out to it rather than embedding it.
 - Donations create no D1 record, no entitlement, and no product behavior change.
-- The page states plainly what donations fund and that mdwn runs identically without them.
+- The page states plainly what donations fund (the domain and hosting costs) and that they change nothing about how mdwn runs.
 
 ## Operational notes
 
@@ -76,5 +76,5 @@ The page is `GET /support` (`app/routes/support.tsx`), linked from the home foot
 - Addresses are operator-published Worker `vars` — `SUPPORT_MONERO_ADDRESS`, `SUPPORT_BITCOIN_ADDRESS`, `SUPPORT_LIGHTNING_ADDRESS`, `SUPPORT_ETHEREUM_ADDRESS` — set per environment in `wrangler.jsonc`, or locally in `.dev.vars`. They are public page content, not secrets. An unset or empty value hides that asset; the page never shows a placeholder or an invented address. The Ethereum entry is one EVM address; it accepts ETH and ERC-20 tokens (for example USDC) on the network named in the page note, and nothing bridges or converts assets.
 - QR codes are generated locally on the server from the exact displayed address string with the vendored `qrcode` package (`app/support/qr.server.ts`). No third-party QR service, remote image, script, widget, tracker, or analytics is involved, and the page makes no external request.
 - The route reads no Session and no cookie, writes no D1 row or operational record, and returns the same page to every visitor. It carries the global strict CSP plus `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow, noarchive`.
-- Donations grant nothing: there is no entitlement state, and the copy states plainly that mdwn runs identically without them and that capacity exhaustion fails closed rather than triggering paid spend.
+- Donations grant nothing: there is no entitlement state, and the copy states plainly that donations help cover the domain and hosting costs and change nothing about how mdwn runs. It makes no claim about how capacity exhaustion is billed: under the intended Workers Paid baseline ([operations policy](operations.md#workers-paid-operating-policy), ADR-0007 supersession note) usage beyond the included allowances is metered.
 - Tests: `tests/support-options.test.ts` (parsing/filtering), `tests/worker/support-page.test.ts` (request boundary, no cookie, no D1 write, hardening headers), and `e2e/support.spec.ts` (footer link, rendered addresses and inline QR SVGs, strict CSP, zero external requests across Chromium, Firefox, and WebKit).

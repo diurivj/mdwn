@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
 import { inspectEnvelope, type EnvelopeContext } from "~/shared/crypto/enc-v1";
 import { HPKE_SUITE } from "~/shared/crypto/enc-v1/format";
-import { createDb, sql } from "~/shared/db/client.server";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import {
   authorizePrivateRequest,
   commitPrivateBatch,
@@ -976,7 +976,8 @@ async function rotatePublication(
  * Unpublish (ticket 25): seal first, delete later. One transaction removes the
  * active link, flips the Publication irreversibly to `deleting`, and pins the
  * opaque Public Comment count. Every Public route denies access immediately;
- * only the Owner's browser then drives bounded deletion batches.
+ * the Owner's browser and scheduled maintenance (`continueSealedTeardown`)
+ * then drive the same bounded deletion batches.
  */
 async function unpublishPublication(
   env: Env,
@@ -1027,11 +1028,21 @@ async function unpublishPublication(
 
 type TeardownState = { id: string; comment_total: number; comments_remaining: number };
 
+/** The one sealed Publication a teardown batch names, keyed by its own id,
+ * File and Owner so no statement can reach a later Publication of the File. */
+type SealedPublication = { id: string; fileId: string; ownerId: string };
+
+/** The `publications` row of `publication` while it is still sealed. */
+function sealedRow({ id, fileId, ownerId }: SealedPublication): SQL {
+  return sql`id = ${id} AND file_id = ${fileId} AND owner_id = ${ownerId} AND state = 'deleting'`;
+}
+
 /** Every non-Comment row teardown removes, including the Publication itself.
  * The shared Comment-dependent module removes the Publication's Public-thread
  * graph (see `teardownPublication`); this function owns what is not
  * Comment-dependent. */
-function teardownStatements(publicationId: string, fileId: string, ownerId: string, marker: SQL): SQL[] {
+function teardownStatements(publication: SealedPublication, marker: SQL): SQL[] {
+  const { id: publicationId, fileId, ownerId } = publication;
   return [
     ...deletedCommentDependents({ kind: "publication", ownerId, publicationId }, marker),
     sql`DELETE FROM public_representations WHERE publication_id = ${publicationId} AND ${marker}`,
@@ -1043,9 +1054,22 @@ function teardownStatements(publicationId: string, fileId: string, ownerId: stri
     sql`DELETE FROM publication_authors WHERE publication_id = ${publicationId} AND ${marker}`,
     sql`DELETE FROM publication_requests WHERE file_id = ${fileId} AND owner_id = ${ownerId} AND ${marker}`,
     sql`DELETE FROM publication_teardowns WHERE publication_id = ${publicationId} AND ${marker}`,
-    sql`DELETE FROM publications WHERE id = ${publicationId} AND file_id = ${fileId}
-      AND owner_id = ${ownerId} AND state = 'deleting' AND ${marker}`,
+    sql`DELETE FROM publications WHERE ${sealedRow(publication)} AND ${marker}`,
   ];
+}
+
+/**
+ * The single statement set of one teardown batch, shared by the Owner's
+ * browser and scheduled maintenance so the two cannot drift: while Public
+ * Comments remain, at most `TEARDOWN_COMMENT_BATCH` of them; once none remain,
+ * the final transaction. Callers differ only in the authority `marker` that
+ * gates every statement, and must defer foreign keys.
+ */
+function teardownBatch(publication: SealedPublication, commentsRemaining: number, marker: SQL): readonly SQL[] {
+  const { id, ownerId } = publication;
+  return commentsRemaining > 0
+    ? deletedCommentBatch({ kind: "publication", ownerId, publicationId: id }, TEARDOWN_COMMENT_BATCH, marker)
+    : teardownStatements(publication, marker);
 }
 
 /**
@@ -1082,6 +1106,7 @@ async function teardownPublication(
       ? publicationChanged()
       : Response.json({ done: true, commentTotal: 0, commentsRemaining: 0 }, { headers });
   }
+  const sealed: SealedPublication = { id: publication.id, fileId, ownerId: auth.accountId };
   const now = Date.now();
   let committed = false;
   try {
@@ -1090,16 +1115,8 @@ async function teardownPublication(
       auth,
       (guard) => sql`
       UPDATE publications SET updated_at = ${now}
-      WHERE id = ${publication.id} AND file_id = ${fileId} AND state = 'deleting'
-        AND owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
-      (marker) =>
-        publication.comments_remaining > 0
-          ? deletedCommentBatch(
-              { kind: "publication", ownerId: auth.accountId, publicationId: publication.id },
-              TEARDOWN_COMMENT_BATCH,
-              marker,
-            )
-          : teardownStatements(publication.id, fileId, auth.accountId, marker),
+      WHERE ${sealedRow(sealed)} AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
+      (marker) => teardownBatch(sealed, publication.comments_remaining, marker),
       { deferForeignKeys: true },
     );
   } catch {
@@ -1126,6 +1143,69 @@ async function teardownPublication(
   return stillSealed
     ? publicationChanged()
     : Response.json({ done: true, commentTotal: publication.comment_total, commentsRemaining: 0 }, { headers });
+}
+
+/**
+ * Scheduled maintenance's share of Unpublishing (ticket 61): it finishes a
+ * teardown the Owner already authorized, so cleanup no longer depends on the
+ * Owner's browser returning. Only durable sealed state starts it — a
+ * `deleting` Publication with its `publication_teardowns` row, which only the
+ * Owner's proof-guarded seal transaction creates and triggers keep
+ * irreversible. It never simulates a Session, consumes a Device proof or opens
+ * a key, and it removes only what the browser path would.
+ *
+ * Bounds: one Publication per invocation and one `teardownBatch` for it — at
+ * most `TEARDOWN_COMMENT_BATCH` Comments, or the final transaction once none
+ * remain. A backlog drains over successive runs; there is no deadline. The D1
+ * statement budget is accounted for with every other duty in
+ * `app/retention/scheduled-maintenance.server.ts`.
+ *
+ * Fairness: the target is the least recently attempted sealed Publication
+ * (`updated_at`, which the seal sets and every attempt — scheduled or browser —
+ * advances). The attempt marker commits on its own before the batch, so a
+ * Publication whose batch keeps failing moves to the back of the queue instead
+ * of blocking every later teardown.
+ */
+export async function continueSealedTeardown(env: Env): Promise<void> {
+  const db = createDb(env.DB);
+  const target = await db.get<{
+    id: string;
+    file_id: string;
+    owner_id: string;
+    comments_remaining: number;
+  }>(sql`
+    SELECT p.id, p.file_id, p.owner_id, ${publicCommentCount(sql`p.id`)} AS comments_remaining
+    FROM publication_teardowns t JOIN publications p ON p.id = t.publication_id AND p.owner_id = t.owner_id
+    WHERE p.state = 'deleting' ORDER BY p.updated_at, p.id LIMIT 1`);
+  if (!target) return;
+  const publication: SealedPublication = { id: target.id, fileId: target.file_id, ownerId: target.owner_id };
+  // The attempt marker carries no authority: it only reorders the queue, and
+  // matches nothing once the Publication is gone.
+  await db.run(sql`UPDATE publications SET updated_at = ${Date.now()} WHERE ${sealedRow(publication)}`);
+  // Authority is the sealed predicate itself, re-evaluated by every statement.
+  // The browser path's authority is a consumable Device proof, which its anchor
+  // spends, so later statements cannot re-check it and a replayed proof ID
+  // would still match an earlier invocation's row; a fresh token is the only
+  // marker unique to the invocation that passed the guard. Here the authority
+  // is durable state that stays true until this transaction itself ends it,
+  // and one D1 batch is one serialized transaction
+  // (docs/operations/d1-scripting.md), so no other writer can change it
+  // between statements. A stale target — completed by the browser, removed
+  // with its File, or followed by a later Publication since the SELECT — fails
+  // the predicate in every statement and deletes nothing; a repeated or
+  // interleaved batch is simply idempotent. The predicate omits the teardown
+  // row because the final statement set deletes that row just before the
+  // Publication row; the two are created together by the seal and removed
+  // together only here or by File deletion, so `deleting` alone identifies the
+  // same sealed state. `publication_requests` is keyed by File: while this
+  // sealed row exists the partial unique index admits no later Publication of
+  // the File, so those requests can only be the ones the browser path would
+  // also remove.
+  const sealed = sql`EXISTS (SELECT 1 FROM publications WHERE ${sealedRow(publication)})`;
+  await atomicSqlBatch(env.DB, [
+    sql`PRAGMA defer_foreign_keys = ON`,
+    ...teardownBatch(publication, target.comments_remaining, sealed),
+  ]);
 }
 
 /** Resource-only, proof-guarded Publication API. Reads are bodyless POSTs. */

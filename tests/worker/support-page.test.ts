@@ -50,8 +50,9 @@ describe("anonymous support page", () => {
 
   it("states what donations cover and that donations grant nothing", async () => {
     const html = await (await SELF.fetch("https://mdwn.test/support")).text();
-    expect(html).toMatch(/domain/i);
-    expect(html).toMatch(/runs identically|works the same/i);
+    expect(html).toMatch(/domain and hosting costs/i);
+    expect(html).toMatch(/change nothing about how mdwn runs/i);
+    expect(html).not.toMatch(/paid spend|future paid infrastructure/i);
     expect(html).toMatch(/no badge/i);
     expect(html).toMatch(/no account/i);
   });

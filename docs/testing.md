@@ -329,7 +329,7 @@ for criteria the per-feature tests left implicit:
   drawer, and pins the accessible names/roles of the editor, preview, save
   status, thread tabs, and Comment composer.
 
-The disposable remote Workers Free + D1 release gate is
+The disposable remote Workers + D1 release gate is
 `node scripts/import-proof.mjs`; it covers the Import protocol plus a
 maximum-source create/save, staged Replace invisibility, one-byte-over
 rejection, active-Publication paired updates, stale-conflict preservation, and
