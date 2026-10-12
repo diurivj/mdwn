@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
-function controller(command: "start" | "stop", busy: boolean) {
+function controller(command: "start" | "stop", busy: boolean, dualDomains = false) {
   const root = mkdtempSync(join(tmpdir(), "mdwn-pool-recovery-"));
   const directory = join(root, "ci/runners/one");
   mkdirSync(directory, { recursive: true });
@@ -36,7 +36,15 @@ function controller(command: "start" | "stop", busy: boolean) {
         join(root, "pool.json"),
         "one",
       ],
-      { encoding: "utf8", env: { ...process.env, MDWN_POOL_TEST_ROOT: root, MDWN_POOL_TEST_BUSY: String(busy) } },
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MDWN_POOL_TEST_ROOT: root,
+          MDWN_POOL_TEST_BUSY: String(busy),
+          MDWN_POOL_TEST_DUAL_DOMAINS: String(dualDomains),
+        },
+      },
     );
     const commands: { executable: string; args: string[] }[] = readFileSync(join(root, "commands.jsonl"), "utf8")
       .trim()
@@ -66,4 +74,12 @@ test("a busy stop leaves the pool routing label intact", () => {
   expect(result.status).not.toBe(0);
   expect(result.stderr).toContain("still has an executing job");
   expect(result.commands.some((command) => command.args.includes("DELETE"))).toBe(false);
+});
+
+test("equal service labels in user and GUI domains consume separate reservations", () => {
+  const result = controller("start", false, true);
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("host-wide listener budget");
+  expect(result.commands.some((command) => command.args.includes("POST"))).toBe(false);
+  expect(result.commands.some((command) => command.executable === "./svc.sh")).toBe(false);
 });

@@ -20,6 +20,34 @@ function sqliteFiles(directory, depth = 0) {
   });
 }
 
+/** @param {number} pid @returns {number[]} */
+function processFamily(pid) {
+  const rows = execFileSync("/bin/ps", ["-axo", "pid=,ppid="], { encoding: "utf8" })
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/).map(Number));
+  const owned = new Set([pid]);
+  for (let previous = -1; previous !== owned.size; ) {
+    previous = owned.size;
+    for (const [child, parent] of rows) if (owned.has(parent)) owned.add(child);
+  }
+  return [...owned];
+}
+
+/** @param {number[]} pids */
+function listeningSockets(pids) {
+  const output = execFileSync("/usr/sbin/lsof", ["-nP", "-a", "-p", pids.join(","), "-iTCP", "-sTCP:LISTEN", "-Fpn"], {
+    encoding: "utf8",
+  });
+  let pid = 0;
+  return output.split("\n").flatMap((line) => {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    if (!line.startsWith("n")) return [];
+    const address = line.slice(1);
+    return [{ pid, address, port: Number(address.slice(address.lastIndexOf(":") + 1)) }];
+  });
+}
+
 if (process.argv[2] === "--child") {
   const { createTestHarness } = await import("wrangler");
   const before = new Set(sqliteFiles(process.env.TMPDIR ?? ""));
@@ -139,23 +167,35 @@ if (process.argv[2] === "--child") {
       child.send({ ...message, id });
     });
   }
+  let evidence;
+  /** @type {number[]} */
+  const observedPids = [];
   try {
     const info = await Promise.all(
       children.map((child, index) => ask(child, { op: "seed", sentinel: `slot-${index + 1}` })),
     );
+    for (const entry of info) {
+      entry.processes = processFamily(entry.pid);
+      entry.listeners = listeningSockets(entry.processes);
+      observedPids.push(...entry.processes);
+    }
     assert.notEqual(info[0].url, info[1].url);
     assert.notEqual(info[0].temp, info[1].temp);
+    const firstPorts = new Set(info[0].listeners.map((/** @type {{port: number}} */ socket) => socket.port));
+    assert(info[1].listeners.every((/** @type {{port: number}} */ socket) => !firstPorts.has(socket.port)));
     assert(info.every((entry) => entry.arch === "arm64" && entry.sqlite.length > 0));
     assert(info[0].sqlite.every((/** @type {string} */ path) => !info[1].sqlite.includes(path)));
     assert.equal(await ask(children[0], { op: "read" }), "slot-1");
     assert.equal(await ask(children[1], { op: "read" }), "slot-2");
     await ask(children[0], { op: "reset" });
     assert.equal(await ask(children[1], { op: "read" }), "slot-2");
-    writeFileSync(
-      output,
-      `${JSON.stringify({ sha: shas[0], slots: slots.map((slot) => slot.id), checkouts, harnesses: info, resetPreservedOtherDatabase: true }, null, 2)}\n`,
-    );
-    console.log(`Two-harness isolation passed; evidence: ${output}`);
+    evidence = {
+      sha: shas[0],
+      slots: slots.map((slot) => slot.id),
+      checkouts,
+      harnesses: info,
+      resetPreservedOtherDatabase: true,
+    };
   } finally {
     await Promise.all(
       children.map(async (child) => {
@@ -170,4 +210,11 @@ if (process.argv[2] === "--child") {
       }),
     );
   }
+  const live = new Set(execFileSync("/bin/ps", ["-axo", "pid="], { encoding: "utf8" }).trim().split(/\s+/).map(Number));
+  assert(
+    observedPids.every((pid) => !live.has(pid)),
+    "a harness left a job-owned process running",
+  );
+  writeFileSync(output, `${JSON.stringify({ ...evidence, ownedProcessesClosed: true }, null, 2)}\n`);
+  console.log(`Two-harness isolation and scoped cleanup passed; evidence: ${output}`);
 }

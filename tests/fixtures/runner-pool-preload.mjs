@@ -26,9 +26,11 @@ childProcess.execFileSync = (executable, args) => {
 };
 childProcess.spawnSync = (executable, args) => {
   if (executable !== "launchctl") throw new Error(`Unmocked subprocess ${executable}`);
+  const loaded =
+    args[1] === "gui/501" || (args[1] === "user/501" && process.env.MDWN_POOL_TEST_DUAL_DOMAINS === "true");
   return {
     status: 0,
-    stdout: args[1] === "gui/501" ? "services = {\n  100 - actions.runner.owner-repo.one\n}\n" : "services = {}\n",
+    stdout: loaded ? "services = {\n  100 - actions.runner.owner-repo.one\n}\n" : "services = {}\n",
     stderr: "",
   };
 };

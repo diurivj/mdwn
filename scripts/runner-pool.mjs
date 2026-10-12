@@ -81,7 +81,7 @@ function loadedServices() {
     for (const label of parseLaunchdRunners(result.stdout)) {
       // Foreign reservations count conservatively in addition to live
       // listeners, since this pool does not own their installation paths.
-      labels.add(domain.endsWith(`/${account.uid}`) ? label : `${domain}/${label}`);
+      labels.add(domain === `gui/${account.uid}` ? label : `${domain}/${label}`);
     }
   }
   return [...labels];
