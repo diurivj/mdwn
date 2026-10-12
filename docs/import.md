@@ -312,7 +312,7 @@ an acknowledgment remains unconfirmed.
 
 ## Release gate: disposable remote proof
 
-Ticket 26 requires a disposable remote Workers Free + D1 proof before release
+Ticket 26 requires a disposable remote Workers + D1 proof before release
 whenever encryption-persistence schema changes and for release candidates. It
 must cover exact-boundary acceptance and one-unit-over rejection (128 KiB
 manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk,
@@ -347,6 +347,10 @@ staged Replace invisibility, paired active-Publication saves, stale-conflict
 preservation, and a missing-sequence rejection. Because D1 Free hard-fails an
 invocation above 50 queries and Workers Free reports `exceededCpu` for
 over-budget invocations, a clean pass on a Free account is the budget evidence.
+On a Workers Paid account (1,000 D1 queries per invocation and a larger CPU
+default) a pass no longer demonstrates that fit, so it remains the recorded
+2026-10-05/06 evidence for the current bounds until
+[ticket 65](../.scratch/mdwn/issues/65-larger-import-envelope.md) replaces them.
 
 Executed 2026-10-05 on a Workers Free account: the first run exposed two
 `exceededCpu` 503s on the largest invocations, so staging was made more
@@ -357,7 +361,8 @@ subsequent full runs passed 10/10 with zero failed invocations across 91
 observed requests, including the worst-case upload and commit, then deleted
 the disposable Worker and D1. Re-run it after any change to the staging
 schema, bounds, or commit path; if it fails, reduce the bounded plan or make
-the commit more efficient — never require a paid plan.
+the commit more efficient; do not rely on Workers Paid headroom without the
+evidence ticket 65 requires.
 
 Executed 2026-10-06 for ticket 33 at `15cf4df`: the extended 14-test release
 gate passed on a disposable Workers Free + D1 deployment in 150.6 s and

@@ -26,11 +26,19 @@
 
 ## Acceptance criteria
 
-- [ ] The policy, runbook and Time Travel facts are in `docs/operations.md`, with sources, and no text claims a hard spending cap, an active subscription or measured production capacity.
-- [ ] Each of the four ADRs keeps its original decision and gains a dated supersession note naming the changed premise.
-- [ ] No remaining current-tense doc presents Workers Free or zero overage as the operating requirement, except as recorded history.
-- [ ] Biome and the documentation-touching checks still pass. No application code, config or remote resource changes.
+- [x] The policy, runbook and Time Travel facts are in `docs/operations.md`, with sources, and no text claims a hard spending cap, an active subscription or measured production capacity.
+- [x] Each of the four ADRs keeps its original decision and gains a dated supersession note naming the changed premise.
+- [x] No remaining current-tense doc presents Workers Free or zero overage as the operating requirement, except as recorded history.
+- [x] Biome and the documentation-touching checks still pass. No application code, config or remote resource changes.
 
 ## Comments
 
 - 2026-10-12: Published as the second approved child of 53.
+- 2026-10-12: Written on `issue/61-62-workers-paid-slices` (documentation only; awaiting orchestrator review).
+  - `docs/operations.md` gains the **Workers Paid operating policy**: budget ($5 target, $10 intervention boundary) with the explicit statement that neither alerts nor application limits cap the invoice; fixed fees, usage overages, taxes and domain costs kept apart with the Paid rate card; account-wide allowances; $1/$3 overage warnings through Cloudflare budget alerts; an operator checklist whose first step confirms the actual plan and usage model; the intervention runbook; and Paid D1 capacity with the 30-day Time Travel window as operational recovery only. Sources: the research note and the Cloudflare pricing, limits, Time Travel, budget-alert, Billable Usage, billing, tax and metrics pages it cites. The Time Travel rehearsal text, validated-limits note and rehearsal row-write note now distinguish Free from Paid without changing their evidence.
+  - Dated "Superseded in part (2026-10-12)" sections appended to ADR-0002, 0005, 0006 and 0007, each naming the changed Free-only or fixed-cost premise and what stays; original text untouched.
+  - Reconciled current-tense statements: `docs/buildable-spec.md` (§1 item 10, §3.5 capacity line, §9.8 proof gate, §10.1 posture, §12 proof wording), `docs/security-review.md`, `docs/security-review-request.md`, `docs/acceptance.md`, `docs/import.md`, `docs/testing.md`, `README.md`, `docs/operations/d1-scripting.md` (a documented, not exercised, Paid limits line) and `docs/support-options.md`. Import limits, rate limits, the 50-statement Import evidence and privacy contracts are unchanged; the import docs now note that a proof pass on a Paid account no longer demonstrates the 50-statement fit.
+  - `docs/workers-paid-plan.md` status is now in progress with links to 61–65.
+  - Left as recorded history: dated evidence in `docs/operations.md` and `docs/import.md`, and `docs/architecture-deepening.md` (an approved design pinned to an earlier snapshot). Open follow-up outside this documentation ticket: the `/support` page copy (`app/routes/support.tsx`, asserted by `e2e/support.spec.ts`) still says exhausted free capacity fails closed rather than triggering paid spend; `docs/support-options.md` now flags it.
+  - No claim of an active subscription, configured alerts or measured production capacity. No application code, config or remote change.
+  - Checks: `npm run lint` pass (Biome, operational-safety check); `npm run typecheck` pass; `npm test` Node 44 files / 419 tests passed, Workers 53 files / 394 tests passed.

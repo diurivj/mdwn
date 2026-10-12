@@ -21,7 +21,7 @@ The MVP must provide:
 7. A persistent split editor/preview workspace with responsive narrow-screen behavior.
 8. Browser-generated Markdown ZIP export and browser-preflighted Markdown import.
 9. Hard deletion of bounded File/Directory trees and irreversible Public-material teardown.
-10. Privacy-preserving abuse controls that remain within Cloudflare Workers Free and D1 Free capacity.
+10. Privacy-preserving abuse controls that need no paid add-on or tracking and keep usage within the budgeted [Workers Paid operating policy](operations.md#workers-paid-operating-policy). (Originally specified as remaining within Workers Free and D1 Free capacity; superseded in part on 2026-10-12, see ADR-0005.)
 
 Signup is open. The product is never monetized: there is no billing, subscription, advertising, or paid feature tier.
 
@@ -131,7 +131,7 @@ Evaluated private donation options and their trade-offs are recorded in [`suppor
 - Protected `main` applies reviewed D1 migrations and deploys the Worker through GitHub Actions.
 - Production values use Cloudflare Secrets. Local values use an ignored `.dev.vars` file.
 - No secret may enter the client bundle.
-- Capacity exhaustion fails closed; the system does not trigger automatic paid spend.
+- Application capacity bounds fail closed. Under the intended Workers Paid baseline, usage beyond the included allowances is metered overage that no alert or application limit caps; the [Workers Paid operating policy](operations.md#workers-paid-operating-policy) governs warnings and intervention. (Originally: no automatic paid spend; superseded in part on 2026-10-12, see ADR-0007.)
 
 ### 3.6 Security posture
 
@@ -822,7 +822,7 @@ Unsupported, invalid, or oversized input identifies the safe local item/problem 
 6. The final small transaction writes the immutable commit marker. Every normal query's commit-marker predicate makes the complete hierarchy and any authorized Replace visible together; a staged Replace leaves the old representation current until that marker exists.
 7. Cancelled, expired, disconnected, mismatched, or failed sessions create no visible content and are cleaned up. Imported historical Private Comment data starts in a fresh thread as historical display data; it does not reinstate former capabilities or author mutation authority.
 
-A disposable remote Workers Free + D1 proof is a release gate for this plan. It must validate exact and one-unit-over limits, retries/mismatches, expiry/failure/stale-authority cases, no-visible-partial-tree behavior, and that every permitted worst-case upload/commit fits the 50-statement D1 Free invocation limit. If the proof fails, reduce the bounded plan or make it more efficient; never silently require a paid plan.
+A disposable remote Workers + D1 proof is a release gate for this plan. It must validate exact and one-unit-over limits, retries/mismatches, expiry/failure/stale-authority cases, no-visible-partial-tree behavior, and that every permitted worst-case upload/commit fits the 50-statement D1 Free invocation limit. If the proof fails, reduce the bounded plan or make it more efficient. Workers Paid is now the intended baseline, but its larger query budget does not by itself justify larger bounds: the current envelope and this 50-statement fit stay authoritative until [ticket 65](../.scratch/mdwn/issues/65-larger-import-envelope.md) records evidence for a replacement.
 
 ### 9.9 Recover Vault content onto a replacement Encryption device
 
@@ -850,7 +850,7 @@ A disposable remote Workers Free + D1 proof is a release gate for this plan. It 
 
 ### 10.1 Infrastructure posture
 
-- Workers Free plus D1 Free only.
+- Workers and D1 under the budgeted [Workers Paid operating policy](operations.md#workers-paid-operating-policy): about $5 per month targeted, $10 as an intervention boundary, and no provider-enforced spending cap. This supersedes the original Workers Free plus D1 Free posture (2026-10-12, ADR-0002 and ADR-0005); Paid capacity is not a reason to add Turnstile, Durable Objects or weaker controls.
 - No automatic paid upgrade, Durable Object counter service, Turnstile, CAPTCHA, tracking, or visitor-identifying cookie.
 - One Free WAF rule is a coarse registration-route circuit breaker: 30 requests per 10 seconds with 10-second mitigation.
 - D1 application checks are the policy source of truth.
@@ -974,7 +974,7 @@ The MVP is conformant only when automated tests plus required manual/security ch
 
 - Export plaintext is produced only in the browser and includes only owned content and defined historical Private Comment data.
 - Every local import bound/preflight failure—including source/archive limits, Unicode namespace profile, manifest, field, descriptor, chunk, aggregate, and Historical-Comment limits—creates no session, upload, or visible row.
-- The remote Workers Free + D1 proof covers exact-boundary acceptance and one-byte/one-record-over rejection for the 128 KiB staging manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk, every canonical ciphertext cap, and 1,000 Historical Comments. It uses browser-built maximum legal expanded input plus legal high-node/high-Historical-Comment cases, with synthetic protocol tests for chunk/count boundaries a source distribution cannot reach.
+- The remote Workers + D1 proof covers exact-boundary acceptance and one-byte/one-record-over rejection for the 128 KiB staging manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk, every canonical ciphertext cap, and 1,000 Historical Comments. It uses browser-built maximum legal expanded input plus legal high-node/high-Historical-Comment cases, with synthetic protocol tests for chunk/count boundaries a source distribution cannot reach.
 - The same remote proof shows every permitted worst-case upload and commit fits the 50-statement D1 Free invocation limit; exact duplicate retries are idempotent; mismatched retries, missing sequences, malformed descriptors, cancellation, expiry, disconnect, stale authority/revision, and failed commit create no marker or visible data; and a staged Replace retains the old representation until a successful marker.
 - Shared-target imports assign every new descendant to the target Owner and never create authority.
 - Uncommitted Import records are excluded from every normal query class.
@@ -989,7 +989,7 @@ The MVP is conformant only when automated tests plus required manual/security ch
 - Migration rollback posture is rehearsed on non-production data.
 - Accessibility-sensitive controls are keyboard/screen-reader usable.
 - An independent security review occurs before end-to-end-security claims.
-- A disposable remote Workers Free + D1 deployment is a release gate whenever encryption-persistence schema changes and for release candidates (not necessarily every pull request). It proves exact-limit create/save/Replace/import behavior, one-byte-excess rejection, active-Publication paired updates, stale-conflict preservation, and the deployed D1 constraint.
+- A disposable remote Workers + D1 deployment is a release gate whenever encryption-persistence schema changes and for release candidates (not necessarily every pull request). It proves exact-limit create/save/Replace/import behavior, one-byte-excess rejection, active-Publication paired updates, stale-conflict preservation, and the deployed D1 constraint.
 
 ## 13. Recommended dependency order
 

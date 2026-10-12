@@ -2,6 +2,163 @@
 
 Ticket [31](../.scratch/mdwn/issues/31-retention-and-operations.md); [ADR-0002](adr/0002-cloudflare-workers-and-d1.md).
 
+## Workers Paid operating policy
+
+Ticket [62](../.scratch/mdwn/issues/62-workers-paid-operating-contract.md);
+[Budgeted Workers Paid adoption](workers-paid-plan.md) §1–2 and §5; pricing
+facts from the [Workers Paid research](../.scratch/mdwn/research/workers-paid-budget.md),
+checked 2026-10-11 against the Cloudflare pages cited below. Prices are USD
+before tax.
+
+Workers Paid is mdwn's **intended** operating baseline (maintainer decision,
+2026-10-12). This document does not record an active subscription, configured
+alerts or measured production capacity: none has been confirmed. Until the
+checklist's first step confirms the plan, operate within Workers Free limits —
+including D1's 50 queries per invocation — and keep every current product
+bound. Paying changes neither the Import, rate or source limits nor the
+privacy model.
+
+**Budget.** Target about **$5 per month**: the Workers Paid subscription with
+usage inside the included allowances. **$10 per month** is the intended
+maximum and the intervention boundary, not an enforced limit.
+
+**Neither alerts nor application limits cap the invoice.** Workers Paid is
+metered, and Cloudflare documents no account-wide hard spending cutoff for this
+pay-as-you-go setup: Paid requests are uncapped, and budget alerts explicitly
+do not pause or cap usage ([Workers limits][workers-limits],
+[budget alerts][alerts]). Billing data is daily, not a real-time circuit
+breaker. A CPU limit, rate limit or application rejection reduces what one
+invocation or one Account can consume; it caps neither the number of
+invocations nor accumulated storage or rows written, and an early rejection
+can still be a billed request. Never describe an estimate, alert or
+application limit as a spending cap. If an absolute billing guarantee is ever
+required, stop capacity expansion and surface the mismatch instead.
+
+### What the invoice contains
+
+Keep these apart; the operating estimate covers only the first two.
+
+| Part | What it is |
+| --- | --- |
+| Fixed fees | Workers Paid is **$5/month per account** — not per Worker or database. Other subscriptions (a zone plan, a separately started product) are further fixed fees. The Billable Usage view excludes fixed fees ([Billable Usage][billable-usage]). |
+| Usage overages | Charges for each meter beyond its included monthly allowance (below). |
+| Taxes | Applied by jurisdiction on top of both ([sales tax][tax]). Every figure here is before tax, so "$5" cannot promise $5 charged. |
+| Domain costs | Registration and renewal are billed separately from Workers ([how billing works][billing]). |
+
+| Meter | Included with Workers Paid | Overage |
+| --- | --- | --- |
+| Worker requests | 10M/month | $0.30/M |
+| Worker CPU | 30M CPU-ms/month | $0.02/M CPU-ms |
+| D1 rows read | 25B/month | $0.001/M |
+| D1 rows written | 50M/month | $1.00/M |
+| D1 stored data | 5 GB | $0.75/GB-month |
+
+Sources: [Workers pricing][workers-pricing], [D1 pricing][d1-pricing]. Static
+assets served without Worker execution are free; SSR, API and
+`run_worker_first` requests are billable even when they return an asset
+([Static Assets billing][assets]). D1 bills scanned and changed rows, not
+queries: deletes, index maintenance, retention scans, restore imports and
+rehearsals all count.
+
+### Account-wide allowances
+
+Included allowances belong to the **account**, shared by every Worker,
+database and project on it: production and preview, both environments' Cron
+(96 invocations a day each, 2,880 per 30 days), Import staging, restore
+rehearsals, Import proofs, and any non-mdwn project. D1 storage is summed across
+all databases. Attribute mdwn's share separately from account totals; never
+compare an mdwn-only estimate against the account invoice or count one
+allowance twice.
+
+### Early warnings
+
+Use the provider's own billing notifications; mdwn adds no billing poller or
+dashboard. Starting points are **$1 and $3 of usage overage**. Because the
+Billable Usage view and its alerts measure overage and exclude the $5
+subscription, those correspond to roughly $6 and $8 before tax only when Workers
+Paid is the account's sole subscription; adjust them for actual taxes and other
+subscriptions rather than treating $6/$8 as invoice totals. A $5 overage alert
+already means about $10 before tax. Alerts notify; they do not stop service
+([budget alerts][alerts], [Billable Usage][billable-usage]). Creating them is an
+operator change that needs explicit authorization; this document does not
+claim they exist.
+
+### Operator checklist
+
+1. **Confirm the account's actual plan and usage model**: Free or Workers
+   Paid, and current Standard pricing or a legacy model. A decision to pay is
+   not evidence of a subscription. Record only the date and the result in the
+   ticket, never account identifiers or billing details.
+2. List other subscriptions and projects on the account that share
+   allowances or add fixed fees.
+3. Read current Billable Usage, Worker requests and CPU
+   ([Workers metrics][workers-metrics]) and D1 rows read, rows written and
+   storage ([D1 metrics][d1-metrics]) for production and preview. Aggregate
+   metrics suffice; do not enable blanket request logs.
+4. With authorization, create the $1 and $3 overage alerts.
+5. Note the applicable tax treatment and domain renewal dates as separate
+   line items.
+6. Recheck each billing cycle, and before any capacity change (tickets
+   [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md)–[65](../.scratch/mdwn/issues/65-larger-import-envelope.md)).
+
+### Intervention runbook
+
+When an overage alert fires, or the month's total approaches $10:
+
+1. **Inspect the affected meter.** Find which meter (requests, CPU, rows
+   written, rows read, storage) and which Worker, database or project drives
+   it, using Billable Usage and aggregate metrics. Diagnose with aggregate SQL
+   counts; never enable blanket logs or persist identifiers or ciphertext.
+2. **Stop discretionary work**: Import proofs, restore rehearsals, preview
+   load, benchmarks and other optional remote runs.
+3. **Restrict growth-producing operations** as appropriate — for example a
+   reviewed change that tightens an existing rate limit or pauses new Imports
+   or signups.
+4. **Keep data-exit and security operations available** while the platform
+   is: export, Hard deletion, Unpublishing and its scheduled teardown, Session
+   revocation, sign-out and recovery.
+5. Record the meter, cause and action in aggregate terms.
+
+There is no automatic spending controller; every step is an operator decision.
+
+### Paid D1 capacity and Time Travel
+
+| Limit | Workers Free | Workers Paid |
+| --- | --- | --- |
+| Database size | 500 MB | 10 GB per database |
+| Account storage | 5 GB | 5 GB included and shared, then billed; 1 TB default limit |
+| D1 queries per Worker invocation | 50 | 1,000 |
+| Row, string or BLOB | 2 MB | 2 MB (unchanged) |
+| Query or batch duration | 30 s | 30 s (unchanged) |
+| Time Travel | 7 days | **30 days** |
+
+Sources: [D1 limits][d1-limits], [D1 pricing][d1-pricing],
+[Time Travel][time-travel]. Free exhausts a daily quota and fails until 00:00
+UTC; Paid bills usage beyond the allowance instead.
+
+Time Travel is always on and has no extra charge. It is **operational
+recovery** for a bad migration or manual repair (see
+[Migration rollback rehearsal](#migration-rollback-rehearsal)): not
+user-visible File history, not a restore feature, and a restore rolls back
+every intervening write. Live deletion — Hard deletion, Unpublishing teardown,
+retention — does not immediately erase provider history: deleted rows stay
+restorable by the operator for up to 30 days on Paid (7 on Free). No new backup
+system is added, and the plan change alone does not require a new restore
+rehearsal.
+
+[workers-pricing]: https://developers.cloudflare.com/workers/platform/pricing/
+[workers-limits]: https://developers.cloudflare.com/workers/platform/limits/
+[assets]: https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/
+[d1-pricing]: https://developers.cloudflare.com/d1/platform/pricing/
+[d1-limits]: https://developers.cloudflare.com/d1/platform/limits/
+[time-travel]: https://developers.cloudflare.com/d1/reference/time-travel/
+[alerts]: https://developers.cloudflare.com/billing/manage/budget-alerts/
+[billable-usage]: https://developers.cloudflare.com/billing/manage/billable-usage/
+[billing]: https://developers.cloudflare.com/billing/understand/how-billing-works/
+[tax]: https://developers.cloudflare.com/billing/understand/sales-tax/
+[workers-metrics]: https://developers.cloudflare.com/workers/observability/metrics-and-analytics/
+[d1-metrics]: https://developers.cloudflare.com/d1/observability/metrics-analytics/
+
 ## Scheduled retention
 
 `wrangler.jsonc` schedules the same Worker handler every 15 minutes in local,
@@ -262,9 +419,11 @@ disposal or provider backup erasure.
 
 ## Migration rollback rehearsal
 
-Time Travel is the primary rollback mechanism. **Workers Free retains seven
-days, not 30** (30 is Paid); capture an exact bookmark and a protected pre-change
-export before a risky migration/manual repair. An export can block queries;
+Time Travel is the primary rollback mechanism. It retains **30 days on Workers
+Paid but only seven on Workers Free**; until the account's plan is confirmed
+(see the [operator checklist](#operator-checklist)), assume seven. Capture an
+exact bookmark and a protected pre-change export before a risky
+migration/manual repair. An export can block queries;
 choose a maintenance window. Never print its presigned download URL or include
 an export containing real data in a PR, repository, or public artifact.
 
@@ -379,9 +538,11 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
    local temp state with `trash <dir>`, or deleting and recreating the
    disposable remote database, then restoring into the fresh target.
 
-   Validated limits (Workers Free): 100 KB per statement, 2 MB per row/BLOB,
-   500 MB per database, 5 GB import file, 30 s per query, and 7 days of Time
-   Travel. The tool uses no paid feature. Digest verification pages 20 rows at
+   Validated limits (Workers Free, 2026-10-06): 100 KB per statement, 2 MB per
+   row/BLOB, 500 MB per database, 5 GB import file, 30 s per query, and 7 days
+   of Time Travel. Workers Paid raises only the database size and Time Travel
+   window ([Paid D1 capacity](#paid-d1-capacity-and-time-travel)). The tool
+   uses no paid feature. Digest verification pages 20 rows at
    a time, so verification cost scales with data size. `$PREPARED` and
    `$MANIFEST` contain restored data or its digests: keep them local, never
    commit, upload, or print them, and trash them when finished.
@@ -393,9 +554,10 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
    npm run db:restore:rehearsal -- [--keep] [--evidence /tmp/rehearsal-evidence.md]
    ```
 
-   The rehearsal consumes the account's D1 Free daily row-write quota (shared
-   with production Cron writes); a quota error aborts it before any restore and
-   the disposable databases are still deleted. Run at most one full remote
+   The rehearsal consumes the account's D1 rows written, shared with
+   production Cron writes: on Free, the daily quota, where a quota error aborts
+   it before any restore and the disposable databases are still deleted; on
+   Paid, the shared monthly allowance and then billed overage. Run at most one full remote
    rehearsal per day, check current usage in the Cloudflare dashboard first,
    and prefer the local round trip (`npm run db:restore:local`) while iterating
    on the tooling itself.

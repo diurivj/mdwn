@@ -16,8 +16,8 @@ A release candidate is a commit whose full gate has passed at that exact head.
 #    check, Chromium/Firefox/WebKit browser suites).
 npm run verify
 
-# 2. Disposable remote Workers Free + D1 release gate. Provisions a throwaway
-#    Worker and D1 on the signed-in Free account, applies the committed
+# 2. Disposable remote Workers + D1 release gate. Provisions a throwaway
+#    Worker and D1 on the signed-in account, applies the committed
 #    migrations, seeds one device-bound Session, runs the remote proof, and
 #    deletes everything again.
 node scripts/import-proof.mjs
@@ -40,7 +40,7 @@ been completed; see [security-review.md](security-review.md).
 
 Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 (real `workerd` + D1 via `@cloudflare/vitest-plugin`), `tests/proof/*.test.ts`
-(disposable remote Free deployment, not part of `npm test`), and
+(disposable remote deployment, not part of `npm test`), and
 `e2e/*.spec.ts` (real built Worker in Chromium, Firefox, and WebKit).
 
 ### 12.1 Privacy and cryptography
@@ -108,7 +108,7 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Export plaintext only in the browser; owned content + defined Historical Comment data | `tests/export-collect.test.ts`, `e2e/export-owned-files.spec.ts`. |
 | Every preflight/bound failure creates no session, upload, or visible row | `tests/import-source.test.ts`, `tests/import-review.test.ts`, `tests/import-plan.test.ts`, `e2e/import-preflight.spec.ts`. |
 | Remote proof covers exact boundaries and one-over rejection (manifest, chunk, aggregate, chunk count, records/chunk, canonical caps, Historical Comments) | `tests/proof/import-proof.test.ts` plus the extended release-gate tests (create/save/Replace/paired Publication/stale/missing sequence), run by `scripts/import-proof.mjs`. Preflight accepts exactly 1,000 Historical Comments and rejects the 1,001st (`tests/import-source.test.ts`, `tests/import-plan.test.ts`); a legal plan cannot upload 1,000 because the 2,000-record/40-chunk ceiling binds first (`tests/import-plan.test.ts`), and the deployed `CHECK` rejects a declared 1,001 (`tests/proof/import-proof.test.ts`). |
-| Worst-case upload/commit fits the D1 Free 50-statement invocation limit | A clean pass of the proof on a genuine Free account: D1 Free hard-fails above 50 queries and Workers Free reports `exceededCpu` for over-budget invocations (`docs/import.md`). |
+| Worst-case upload/commit fits the D1 Free 50-statement invocation limit | A clean pass of the proof on a genuine Free account: D1 Free hard-fails above 50 queries and Workers Free reports `exceededCpu` for over-budget invocations (`docs/import.md`). On a Workers Paid account (1,000 queries per invocation) a pass no longer demonstrates the 50-statement fit. |
 | Retry idempotence; mismatches, missing sequences, malformed descriptors, cancellation, expiry, disconnect, stale authority, failed commit create no marker or visible data; staged Replace stays old until the marker | `tests/proof/import-proof.test.ts`, `tests/worker/import-staging.test.ts`. |
 | Shared-target imports assign every new descendant to the target Owner and create no authority | `tests/worker/import-shared-target.test.ts`, `tests/worker/shared-tree.test.ts`, `tests/import-targets.test.ts`. |
 | Uncommitted Import records excluded from every normal query class | `tests/worker/import-staging.test.ts`, `tests/worker/import-shared-target.test.ts` (tree listing, direct File read, owned-file scope). |
@@ -125,7 +125,7 @@ Test locations: `tests/*.test.ts` (Node unit), `tests/worker/*.test.ts`
 | Migration rollback rehearsed on non-production data | `docs/operations.md` ("Migration rollback rehearsal"): Time Travel restore and a reordered synthetic export on a disposable remote D1. General production-sized export restoration remains open in [ticket 38](../.scratch/mdwn/issues/38-d1-export-database-restoration.md). |
 | Accessibility-sensitive controls are keyboard/screen-reader usable | `e2e/accessibility.spec.ts` (keyboard-only creation, labelled regions/tabs/composer, narrow drawer) plus the role-based selectors across the browser suite. |
 | Independent security review before end-to-end-security claims | [security-review.md](security-review.md) is the readiness brief and [security-review-request.md](security-review-request.md) is the engagement document (scope, access, attack checklist, deliverables); the review itself is commissioned by the maintainer and must complete before any such claim. |
-| Disposable remote Free deployment release gate (maximum-source create/save, Replace/import, one-byte-excess, paired Public updates, stale conflicts, deployed D1 constraint) | `scripts/import-proof.mjs` + `tests/proof/import-proof.test.ts`, extended by ticket 33. The create/save exact case uses the maximum legal 262,144-byte Markdown source — the largest a real browser can produce; the canonical 512 KiB decoded-representation ceiling is exercised as an exact-size Import record and as a one-over save rejection. A synthesized 512 KiB private create was observed to exceed Workers Free CPU intermittently and is outside the UI-reachable path. |
+| Disposable remote deployment release gate (maximum-source create/save, Replace/import, one-byte-excess, paired Public updates, stale conflicts, deployed D1 constraint) | `scripts/import-proof.mjs` + `tests/proof/import-proof.test.ts`, extended by ticket 33. The create/save exact case uses the maximum legal 262,144-byte Markdown source — the largest a real browser can produce; the canonical 512 KiB decoded-representation ceiling is exercised as an exact-size Import record and as a one-over save rejection. A synthesized 512 KiB private create was observed to exceed Workers Free CPU intermittently and is outside the UI-reachable path. |
 
 ## Known boundaries and follow-ups
 

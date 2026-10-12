@@ -193,7 +193,9 @@ findings:
   boundary.
 - Provider-managed backups/Time Travel are outside application-level deletion
   guarantees; generalized production-sized export restore is open (ticket 38).
-- Workers Free + D1 Free capacity fails closed; no automatic paid spend.
+- Capacity is bounded by application limits; under the intended Workers Paid
+  baseline, usage beyond included allowances is metered and nothing caps the
+  invoice ([operations policy](operations.md#workers-paid-operating-policy)).
 - No account deletion, account-wide export, notifications, attachments,
   search, or jurisdiction-specific notices in the MVP.
 - Public-comment reports are category-only signals, not moderation content.
