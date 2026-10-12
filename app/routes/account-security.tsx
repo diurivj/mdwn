@@ -272,9 +272,9 @@ export default function AccountSecurity({ loaderData, actionData }: Route.Compon
                 </ol>
                 <div className="mt-4">
                   <RecoveryDownload
-                    filename="mdwn-recovery-codes.txt"
+                    name="mdwn-recovery-codes"
                     text={recoveryCodesText(result.codes, loaderData.identifier)}
-                    label="Download codes (.txt)"
+                    label="Download codes"
                   />
                 </div>
               </div>

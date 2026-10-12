@@ -238,11 +238,13 @@ export default function SignUp() {
           </ol>
           <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
             <RecoveryDownload
-              filename="mdwn-recovery-phrase.txt"
+              name="mdwn-recovery-phrase"
               text={recoveryPhraseText(secrets.phrase)}
-              label="Download phrase (.txt)"
+              label="Download phrase"
             />
-            <p className="text-xs text-muted">Saved by your browser only. Keep it apart from your recovery codes.</p>
+            <p className="text-xs text-muted">
+              Saved by your browser only. A .gz opens with a double-click; keep it apart from your recovery codes.
+            </p>
           </div>
           <form onSubmit={checkWords} className="mt-8 border border-line bg-sand p-6 sm:p-8">
             <p className="font-medium">Verify your copy by entering these words:</p>
@@ -300,9 +302,9 @@ export default function SignUp() {
           </ol>
           <div className="mt-4">
             <RecoveryDownload
-              filename="mdwn-recovery-codes.txt"
+              name="mdwn-recovery-codes"
               text={recoveryCodesText(secrets.recoveryCodes, prepared?.transcriptBase.accountId)}
-              label="Download codes (.txt)"
+              label="Download codes"
             />
           </div>
           <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">

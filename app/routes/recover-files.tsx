@@ -117,9 +117,9 @@ export default function RecoverFiles({ loaderData }: Route.ComponentProps) {
               </p>
               <div className="mt-5 flex flex-wrap gap-2">
                 <RecoveryDownload
-                  filename="mdwn-recovery-phrase.txt"
+                  name="mdwn-recovery-phrase"
                   text={recoveryPhraseText(phrase)}
-                  label="Download phrase (.txt)"
+                  label="Download phrase"
                 />
                 <button type="button" className={buttonClass("secondary", "sm")} onClick={forgetRecoveryPhrase}>
                   <CheckIcon />I saved this phrase

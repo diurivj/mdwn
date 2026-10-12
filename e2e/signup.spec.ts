@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import type { Browser, Page } from "@playwright/test";
 import type { TestHarness } from "wrangler";
 
@@ -127,14 +128,25 @@ async function signedProof(page: Page, accountId: string) {
   }, accountId);
 }
 
-/** Clicks a button that saves a file from the browser and returns its name and text. */
-async function download(page: Page, button: string): Promise<{ name: string; text: string }> {
+/** Clicks a button that saves a file from the browser and returns its name and bytes. */
+async function download(page: Page, button: string): Promise<{ name: string; bytes: Buffer }> {
   const event = page.waitForEvent("download");
   await page.getByRole("button", { name: button, exact: true }).click();
   const file = await event;
   const parts: Buffer[] = [];
   for await (const part of (await file.createReadStream())!) parts.push(Buffer.from(part));
-  return { name: file.suggestedFilename(), text: Buffer.concat(parts).toString("utf8") };
+  return { name: file.suggestedFilename(), bytes: Buffer.concat(parts) };
+}
+
+/** Saves both forms of one recovery file: the gzip download and its plain text carry the same text. */
+async function recoveryFile(page: Page, label: string, name: string): Promise<string> {
+  const compressed = await download(page, `${label} (.txt.gz)`);
+  expect(compressed.name).toBe(`${name}.txt.gz`);
+  const text = gunzipSync(compressed.bytes).toString("utf8");
+  const plain = await download(page, `${label} as plain text (.txt)`);
+  expect(plain.name).toBe(`${name}.txt`);
+  expect(plain.bytes.toString("utf8")).toBe(text);
+  return text;
 }
 
 test("signs up atomically with a bound device and gates recovery material before private access", async ({
@@ -163,9 +175,8 @@ test("signs up atomically with a bound device and gates recovery material before
     const words = (await page.locator("section ol li").allTextContents()).map((word) =>
       word.replace(/^\d+\.\s*/, "").trim(),
     );
-    const phraseFile = await download(page, "Download phrase (.txt)");
-    expect(phraseFile.name).toBe("mdwn-recovery-phrase.txt");
-    expect(phraseFile.text.match(/^ ?\d+\. \S+$/gm)?.map((line) => line.replace(/^ ?\d+\. /, ""))).toEqual(words);
+    const phraseFile = await recoveryFile(page, "Download phrase", "mdwn-recovery-phrase");
+    expect(phraseFile.match(/^ ?\d+\. \S+$/gm)?.map((line) => line.replace(/^ ?\d+\. /, ""))).toEqual(words);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toEqual(
       expect.any(String),
     );
@@ -188,10 +199,9 @@ test("signs up atomically with a bound device and gates recovery material before
         const codes = (await page.locator("section ol li").allTextContents()).map((code) =>
           code.replace(/^\d+\.\s*/, "").trim(),
         );
-        const codesFile = await download(page, "Download codes (.txt)");
-        expect(codesFile.name).toBe("mdwn-recovery-codes.txt");
-        for (const code of codes) expect(codesFile.text).toContain(code);
-        for (const word of words) expect(codesFile.text).not.toContain(` ${word}\n`);
+        const codesFile = await recoveryFile(page, "Download codes", "mdwn-recovery-codes");
+        for (const code of codes) expect(codesFile).toContain(code);
+        for (const word of words) expect(codesFile).not.toContain(` ${word}\n`);
         // Saving a file is local: it starts no signup request.
         expect(signupRequests).toEqual([]);
       },
