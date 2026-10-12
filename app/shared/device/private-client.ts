@@ -1,4 +1,5 @@
 import { PUBLIC_PARTICIPATION_SUSPENDED } from "~/shared/security/public-participation";
+import { clearPrivateTabMemory, registerPrivateTabMemory } from "./private-tab-memory";
 import { signDeviceProof, type DeviceProof } from "./proof";
 import { getDevice, type StoredDevice, updateRegistryEpoch } from "./store";
 
@@ -92,13 +93,25 @@ function sameState(a: RegistryState, b: RegistryState): boolean {
  */
 const REUSE_MS = 10_000;
 let reusable: { state: RegistryState; at: number } | null = null;
+/** The last adopted state, kept past the reuse window: a change in it is a Session, device or registry change. */
+let settled: RegistryState | null = null;
 /** Bumped by every discard, so a read or header from before it never revives old state. */
 let generation = 0;
 
-/** Forget reusable device state. Call on sign-in, sign-out and recovery. */
-export function discardDeviceState(): void {
+// Device state is the first private tab-memory holder: clearing tab memory
+// discards it, and discarding it clears every other holder.
+registerPrivateTabMemory(() => {
   reusable = null;
+  settled = null;
   generation++;
+});
+
+/**
+ * Forget reusable device state and, with it, all private tab memory such as
+ * verified listings and keys. Call on sign-in, sign-out and recovery.
+ */
+export function discardDeviceState(): void {
+  clearPrivateTabMemory();
 }
 
 /** Changes with every discard, so a caller keeping another per-Session fact
@@ -107,8 +120,18 @@ export function deviceStateGeneration(): number {
   return generation;
 }
 
+/** The Account and Encryption device of the last adopted state, until the next discard. */
+export function deviceStateScope(): { accountId: string; deviceId: string } | null {
+  return settled?.deviceId ? { accountId: settled.accountId, deviceId: settled.deviceId } : null;
+}
+
 function adopt(state: RegistryState, since: number) {
-  if (generation === since && state.deviceId) reusable = { state, at: Date.now() };
+  if (generation !== since || !state.deviceId) return;
+  // A different Account, Session, device or registry epoch makes everything
+  // this tab remembers outdated; the new state itself is still the current one.
+  if (settled && (settled.accountId !== state.accountId || !sameState(settled, state))) clearPrivateTabMemory();
+  settled = state;
+  reusable = { state, at: Date.now() };
 }
 
 function reusableState(): RegistryState | null {

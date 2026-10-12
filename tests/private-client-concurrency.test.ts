@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  deviceStateGeneration,
+  deviceStateScope,
   discardDeviceState,
   PrivateAccessError,
   PrivatePolicyError,
@@ -8,6 +10,7 @@ import {
   privateRequest,
   PUBLIC_PARTICIPATION_SUSPENDED,
 } from "../app/shared/device/private-client";
+import { clearPrivateTabMemory, registerPrivateTabMemory } from "../app/shared/device/private-tab-memory";
 import { verifyDeviceProof, type DeviceProof } from "../app/shared/device/proof";
 import * as deviceStore from "../app/shared/device/store";
 import type { StoredDevice } from "../app/shared/device/store";
@@ -765,5 +768,50 @@ describe("privateRequest device-state reuse (ticket 57)", () => {
     await first;
     await settleWithRead("/api/private/second", registryState);
     expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("private tab memory and device state (ticket 57)", () => {
+  it("clears every registered holder when device state is discarded", async () => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await settleWithRead("/api/private/first", registryState);
+      expect(deviceStateScope()).toEqual({ accountId: "account-1", deviceId: "device-1" });
+      discardDeviceState();
+      expect(holder).toHaveBeenCalledOnce();
+      expect(deviceStateScope()).toBeNull();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("discards reusable device state when tab memory is cleared", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const before = deviceStateGeneration();
+    clearPrivateTabMemory();
+    expect(deviceStateGeneration()).toBe(before + 1);
+    await settleWithRead("/api/private/second", registryState);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    { name: "registry epoch", next: { ...registryState, registryEpoch: 2 } },
+    { name: "Session", next: { ...registryState, sessionBinding: "another-session" } },
+  ])("clears tab memory when the adopted $name changes, then signs with the new state", async ({ next }) => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await settleWithRead("/api/private/first", registryState);
+      await settleReused("/api/private/second", withState(registryState));
+      expect(holder).not.toHaveBeenCalled();
+      await settleReused("/api/private/third", withState(next));
+      expect(holder).toHaveBeenCalledOnce();
+      const { init } = await settleReused("/api/private/fourth");
+      expect(network.fetchImpl).toHaveBeenCalledTimes(5);
+      await verifiedProof(init, device, { ...next, method: "GET", url: `${ORIGIN}/api/private/fourth` });
+    } finally {
+      unregister();
+    }
   });
 });
