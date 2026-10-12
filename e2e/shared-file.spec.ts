@@ -456,10 +456,10 @@ for (const targetKind of ["file", "directory"] as const)
             response.request().method() === "PUT" &&
             new URL(response.url()).pathname === `/api/private/grants/${grantId}/keys`,
         );
-        await page
-          .getByRole("complementary", { name: "Files tree", exact: true })
-          .getByRole("link", { name: "Library", exact: true })
-          .click();
+        // Background upkeep starts at most once a minute per tab (ticket 57),
+        // and the fixture's File page already ran it; a new document starts it.
+        await waitForSharedProvisioning(page);
+        await page.goto(new URL("/files", baseURL!).href);
         await expect(page).toHaveURL(/\/files$/);
         expect((await automaticDelivery).status()).toBe(200);
         await page

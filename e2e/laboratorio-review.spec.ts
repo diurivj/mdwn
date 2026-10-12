@@ -15,6 +15,11 @@ appTest("reconciles navigation after another tab signs in or signs out", async (
     await expect(signIn).toBeEnabled();
     await signIn.click();
     await expect(other).toHaveURL(/\/files$/);
+    // Session presence is re-read when a tab is returned to, not on every
+    // navigation (ticket 57). Headless engines differ in native tab focus
+    // delivery, so dispatch the browser event the subscription listens for.
+    await original.bringToFront();
+    await original.evaluate(() => window.dispatchEvent(new Event("focus")));
     // Navigate without replacing the first tab's document or its in-memory store.
     await original
       .getByRole("navigation", { name: "Access", exact: true })
@@ -38,7 +43,7 @@ appTest("reconciles navigation after another tab signs in or signs out", async (
 });
 
 workspaceTest(
-  "a new location supersedes a Session read captured before another tab signs out",
+  "a focus return supersedes a Session read captured before another tab signs out",
   async ({ page, context, workspace }) => {
     expect(workspace.fileId).toBeTruthy();
     const other = await context.newPage();
@@ -69,7 +74,8 @@ workspaceTest(
       await page.reload();
       await requested;
       // A real same-origin mutation in the other tab, without moving focus away
-      // from the original. The next location must reconcile independently.
+      // from the original. Navigation alone no longer re-reads Session presence
+      // (ticket 57); returning to the tab must reconcile independently.
       expect(
         await other.evaluate(
           async () =>
@@ -84,6 +90,8 @@ workspaceTest(
       ).toBe(200);
       await page.getByRole("banner").getByRole("link", { name: "Support", exact: true }).click();
       await expect(page).toHaveURL(/\/support$/);
+      expect(reads).toBe(1);
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
       await expect(page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
       await expect.poll(() => reads).toBeGreaterThan(1);
       const response = page.waitForResponse((result) => new URL(result.url()).pathname === "/api/auth/session");

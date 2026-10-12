@@ -1,6 +1,6 @@
 import { redirect } from "react-router";
 
-import { ownedProvisioningKind } from "~/shared/device/owned-provision-client";
+import { ownedProvisioningUpkeep } from "~/shared/device/owned-provision-client";
 import { FilesFallback } from "~/tree/files-fallback";
 import { FilesPage } from "~/tree/files-page";
 import { loadLibraryPage } from "~/tree/navigation-client";
@@ -23,7 +23,7 @@ export function meta() {
  */
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   // An unreadable job is "unknown": device access then resumes it rather than assume it finished.
-  const provisioning = ownedProvisioningKind(request.signal).catch(() => "unknown" as const);
+  const provisioning = ownedProvisioningUpkeep(request.signal).catch(() => "unknown" as const);
   const page = await loadLibraryPage(request.signal);
   if (page.status === "access" || (await provisioning) !== null) return redirect("/account/device-access");
   return page;

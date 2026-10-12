@@ -101,6 +101,12 @@ export function discardDeviceState(): void {
   generation++;
 }
 
+/** Changes with every discard, so a caller keeping another per-Session fact
+ * in memory (such as a finished background check) can tell it is outdated. */
+export function deviceStateGeneration(): number {
+  return generation;
+}
+
 function adopt(state: RegistryState, since: number) {
   if (generation === since && state.deviceId) reusable = { state, at: Date.now() };
 }

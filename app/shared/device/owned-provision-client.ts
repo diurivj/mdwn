@@ -4,7 +4,7 @@ import {
   openVaultRecoveryEnvelope,
   sealOwnedDeviceEnvelope,
 } from "~/shared/crypto/vault";
-import { privateRequest } from "~/shared/device/private-client";
+import { deviceStateGeneration, privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
 import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
@@ -25,6 +25,26 @@ export async function ownedProvisioningKind(signal?: AbortSignal): Promise<"reco
   if (!response.ok) throw new Error("Owned provisioning job unavailable");
   const next = (await response.json()) as Next;
   return next.state === "pending" ? (next.kind === "enrollment_owned" ? "enrollment" : "recovery") : null;
+}
+
+/**
+ * Background upkeep reads the job at most once a minute per tab (ticket 57).
+ * Only a "no job" answer is remembered: a job starts only when this browser's
+ * Session recovers or enrolls a device, and those discard device state, which
+ * makes the remembered answer outdated. Memory only, never persisted.
+ */
+const UPKEEP_INTERVAL_MS = 60_000;
+let noOwnedJob: { at: number; generation: number } | null = null;
+
+/** `ownedProvisioningKind` for route upkeep: a recent "no job" answer is reused. */
+export async function ownedProvisioningUpkeep(signal?: AbortSignal): Promise<"recovery" | "enrollment" | null> {
+  const now = Date.now();
+  if (noOwnedJob && noOwnedJob.generation === deviceStateGeneration() && now - noOwnedJob.at < UPKEEP_INTERVAL_MS)
+    return null;
+  const generation = deviceStateGeneration();
+  const kind = await ownedProvisioningKind(signal);
+  noOwnedJob = kind === null ? { at: now, generation } : null;
+  return kind;
 }
 
 /** Each request handles one opaque owned key; a later visit safely resumes the cursor. */
