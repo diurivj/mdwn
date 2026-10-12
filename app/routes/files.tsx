@@ -16,15 +16,16 @@ export function meta() {
 
 /**
  * The library's stable address: its root folder, opened from the same
- * bootstrap that proves this browser can open it. Anything else — no Session,
- * no Encryption device, or an owned-key job still in progress — hands over to
- * device access, which explains what is missing and resumes the job.
+ * bootstrap that proves this browser can open it. No Session or Encryption
+ * device, or an owned-key job still in progress, hands over to device access,
+ * which explains what is missing and resumes the job; a root that fails after
+ * that shows the library's own unavailable state.
  */
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   // An unreadable job is "unknown": device access then resumes it rather than assume it finished.
   const provisioning = ownedProvisioningKind(request.signal).catch(() => "unknown" as const);
   const page = await loadLibraryPage(request.signal);
-  if (page.status !== "ready" || (await provisioning) !== null) return redirect("/account/device-access");
+  if (page.status === "access" || (await provisioning) !== null) return redirect("/account/device-access");
   return page;
 }
 

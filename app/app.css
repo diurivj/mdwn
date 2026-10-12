@@ -437,5 +437,7 @@
     animation-duration: 0.01ms !important;
     /* biome-ignore lint/complexity/noImportantStyles: stop infinite decoration. */
     animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: staggered entrances appear together. */
+    animation-delay: 0ms !important;
   }
 }

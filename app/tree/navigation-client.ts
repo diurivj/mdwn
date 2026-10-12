@@ -163,8 +163,8 @@ const EXPANDED_PREFETCH = 24;
 async function selectedPath(
   target: { nodeId: string; kind: TreeKind } | null,
   signal: AbortSignal,
+  root: Promise<RootAccess> = prefetch(openRoot(signal)),
 ): Promise<FilesSnapshot> {
-  const root = prefetch(openRoot(signal));
   let path: string[];
   let access: RootAccess;
   if (target) {
@@ -272,9 +272,22 @@ export function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSigna
   return settle(selectedPath({ nodeId, kind }, signal), signal);
 }
 
-/** The Account's own library root, opened by its bootstrap without a separate path read. */
-export function loadLibraryPage(signal: AbortSignal): Promise<FilesPageData> {
-  return settle(selectedPath(null, signal), signal);
+/**
+ * The Account's own library root, opened by its bootstrap without a separate
+ * path read. A bootstrap that fails is reported as `access`: the Session or
+ * this browser's Encryption device needs attention, not the library.
+ */
+export async function loadLibraryPage(
+  signal: AbortSignal,
+): Promise<FilesPageData | { status: "access"; snapshot: null }> {
+  const root = prefetch(openRoot(signal));
+  try {
+    await root;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return { status: "access", snapshot: null };
+  }
+  return settle(selectedPath(null, signal, root), signal);
 }
 
 async function settle(walk: Promise<FilesSnapshot>, signal: AbortSignal): Promise<FilesPageData> {
