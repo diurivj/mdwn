@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -77,3 +77,4 @@
   - **Large folders.** `openDirectory` found duplicate sibling names by comparing every pair, canonicalizing both names each time (about 280 ms for 500 entries in Node). It now canonicalizes each name once and uses a set of comparison keys; `tests/directory-listing-names.test.ts` signs real listings for both outcomes. The 500-entry over-cap test passed 14/14 repetitions in Chromium and Firefox and every full run since.
   - **Evidence.** Clean-head `npm run verify` passed at `a27e2e4`: lint, typecheck, namespace drift, 417 Node and 386 Workers tests, build, fresh-D1 smoke, export/restore, bundle-secret check, and 476 browser tests with the 1 existing WebKit skip, no failures and no retries. An earlier full run on the same tree also passed 476/1/0.
   - **Review** of `git diff 414d912..a27e2e4` (SHA256 `df2395195700db7ed7a20152c125894fb39a7b236b2ea91e0e7f7b539afd6526`), CODING_STANDARDS.md read first: **Standards: Pass; Spec: Pass**, no blocking findings. **Separate RR8/stack gate: Pass.** Sign-in and sign-up server loaders return only a redirect or null, with `.server` imports confined to them and `no-store` documents. `/files` and every private read stay in browser `clientLoader`s behind public `HydrateFallback`s. The pseudonym fetcher and sign-in `clientAction` keep their pending, invalid and redirect states. Private-request authority still comes from D1 Session storage and the unchanged read/write guards. Gzip and the listing check are browser-only and keep their semantics. Checked against installed RR 8.4.0, `app/routes.ts`, spec §3, serving §1, `docs/testing.md` and ADR-0002.
+- 2026-10-12: Completed and merged into `main` via [PR #63](https://github.com/diurivj/mdwn/pull/63), merge commit `ad04d182f227a053d1702d6693811522191437fc`. Earlier pending verification notes are historical; tickets 57–59 remain separate follow-ups.
