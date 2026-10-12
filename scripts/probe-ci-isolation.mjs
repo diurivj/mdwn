@@ -170,14 +170,18 @@ if (process.argv[2] === "--child") {
   let evidence;
   /** @type {number[]} */
   const observedPids = [];
+  /** @param {number} pid */
+  function observe(pid) {
+    const processes = processFamily(pid);
+    observedPids.push(...processes);
+    return { processes, listeners: listeningSockets(processes) };
+  }
   try {
     const info = await Promise.all(
       children.map((child, index) => ask(child, { op: "seed", sentinel: `slot-${index + 1}` })),
     );
     for (const entry of info) {
-      entry.processes = processFamily(entry.pid);
-      entry.listeners = listeningSockets(entry.processes);
-      observedPids.push(...entry.processes);
+      Object.assign(entry, observe(entry.pid));
     }
     assert.notEqual(info[0].url, info[1].url);
     assert.notEqual(info[0].temp, info[1].temp);
@@ -189,6 +193,9 @@ if (process.argv[2] === "--child") {
     assert.equal(await ask(children[1], { op: "read" }), "slot-2");
     await ask(children[0], { op: "reset" });
     assert.equal(await ask(children[1], { op: "read" }), "slot-2");
+    // reset starts a replacement runtime, which must also be tracked through
+    // scoped shutdown rather than inferred from the original process family.
+    for (const entry of info) entry.afterReset = observe(entry.pid);
     evidence = {
       sha: shas[0],
       slots: slots.map((slot) => slot.id),
