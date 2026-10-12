@@ -55,7 +55,7 @@ export function SettingsSection({
   );
 }
 
-const ACCOUNT_NAV = [
+export const ACCOUNT_NAV = [
   { to: "/account/device-access", label: "Files access" },
   { to: "/account/security", label: "Account security" },
   { to: "/account/devices", label: "Encryption devices" },
@@ -67,10 +67,20 @@ const ACCOUNT_NAV = [
 
 /**
  * The Account area: its own navigation beside (or, on narrow screens, above) the
- * page. Renders the page's single <main> landmark.
+ * page. Renders the page's single <main> landmark. A placeholder for a page
+ * still loading passes that page's `pathname` so its navigation entry is current.
  */
-export function AccountLayout({ children, busy }: { children: ReactNode; busy?: boolean }) {
-  const { pathname } = useLocation();
+export function AccountLayout({
+  children,
+  busy,
+  pathname,
+}: {
+  children: ReactNode;
+  busy?: boolean;
+  pathname?: string;
+}) {
+  const location = useLocation();
+  const currentPath = pathname ?? location.pathname;
   // Account navigation leads nowhere without a Session: a signed-out visitor sees only the page.
   const signedOut = useSessionPresence() === "signed-out";
   return (
@@ -85,7 +95,7 @@ export function AccountLayout({ children, busy }: { children: ReactNode; busy?: 
         <p className="eyebrow hidden px-3 text-muted lg:block">Your account</p>
         <ul className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] lg:mx-0 lg:mt-3 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:px-0">
           {ACCOUNT_NAV.map((item) => {
-            const current = pathname === item.to;
+            const current = currentPath === item.to;
             return (
               <li key={item.to} className="shrink-0">
                 <Link
@@ -105,7 +115,7 @@ export function AccountLayout({ children, busy }: { children: ReactNode; busy?: 
           })}
         </ul>
       </nav>
-      <div className={cx("min-w-0 animate-fade", signedOut && "mx-auto w-full max-w-2xl")}>{children}</div>
+      <div className={cx("min-w-0 animate-enter", signedOut && "mx-auto w-full max-w-2xl")}>{children}</div>
     </main>
   );
 }
@@ -132,8 +142,8 @@ export function FocusLayout({
               : "max-w-xl",
         )}
       >
-        {aside && <div className="animate-fade lg:pt-6">{aside}</div>}
-        <div className="min-w-0 animate-fade">{children}</div>
+        {aside && <div className="animate-enter lg:pt-6">{aside}</div>}
+        <div className="min-w-0 animate-enter">{children}</div>
       </div>
     </main>
   );

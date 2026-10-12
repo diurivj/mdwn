@@ -91,6 +91,7 @@ export function LandingPage() {
   return (
     <main>
       <Hero />
+      <Why />
       <HowItWorks />
       <Features />
       <Privacy />
@@ -130,6 +131,40 @@ function Hero() {
         </div>
         <div className="min-w-0 border-t border-ink py-10 lg:col-span-7 lg:flex lg:items-center lg:border-t-0 lg:py-16 lg:pl-10 xl:pl-16">
           <EditorIllustration className="w-full" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Why() {
+  return (
+    <section
+      id="why"
+      aria-labelledby="why-title"
+      className="border-b border-ink bg-ink text-paper selection:bg-paper selection:text-ink"
+    >
+      <div className="container-page grid gap-8 py-16 sm:py-24 lg:grid-cols-12 lg:gap-10">
+        <p className="eyebrow text-paper/70 lg:col-span-4 lg:pt-3">Why we built mdwn</p>
+        <div className="lg:col-span-8">
+          <h2
+            id="why-title"
+            className="font-display text-[2.5rem] font-light leading-[1.02] tracking-[-0.035em] text-balance sm:text-6xl"
+          >
+            In this agentic era, the only human thing we can defend is our privacy.
+          </h2>
+          <div className="mt-10 grid gap-6 border-t border-paper/25 pt-8 text-[15px] leading-relaxed text-paper/75 md:grid-cols-2 md:gap-10">
+            <p>
+              Agents now read, summarize and learn from almost everything we put online. Drafts become training data,
+              notes become someone else’s context, and the unfinished thinking that makes writing human turns into
+              input.
+            </p>
+            <p>
+              We can’t stop that, but we can keep your words out of it. mdwn encrypts your writing in your browser
+              before it leaves your device, so neither we nor any agent we could run can read it. Privacy here is not a
+              promise in a policy; it is how the product is built.
+            </p>
+          </div>
         </div>
       </div>
     </section>
@@ -319,7 +354,7 @@ function Questions() {
 function FinalCall() {
   return (
     <section className="bg-sand">
-      <div className="container-page flex flex-col gap-8 py-14 sm:py-20 lg:flex-row lg:items-end lg:justify-between">
+      <div className="container-page flex flex-col gap-8 py-14 sm:py-20 xl:flex-row xl:items-end xl:justify-between">
         <div className="max-w-2xl">
           <p className="eyebrow text-muted">Free, private, portable</p>
           <h2 className="mt-6 text-4xl font-light leading-[1.04] tracking-[-0.035em] text-balance sm:text-5xl">
@@ -329,7 +364,8 @@ function FinalCall() {
             Create an account with a passkey. Export everything you own whenever you like.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3 lg:max-w-sm">
+        {/* Two equal columns: the actions share one width and one baseline. */}
+        <div className="grid w-full shrink-0 gap-3 sm:w-[32rem] sm:grid-cols-2">
           <Link to="/sign-up" className={buttonClass("primary", "lg")}>
             Create your account <ArrowRightIcon />
           </Link>

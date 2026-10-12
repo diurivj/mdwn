@@ -118,7 +118,7 @@ export default function EnrollDevice({ loaderData }: Route.ComponentProps) {
             <p>This browser can open your Files.</p>
           </PageIntro>
           <Link to="/account/device-access" className={cx(buttonClass("primary", "lg"), "mt-8")}>
-            Open your Files
+            Open your library
             <ArrowRightIcon />
           </Link>
         </>

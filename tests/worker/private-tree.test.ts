@@ -1870,11 +1870,11 @@ describe("private tree", () => {
     const f = await fixture();
     const folder = await directoryRequest(f, "Private heading");
     expect((await request(f, `/api/private/tree/directories/${f.rootId}/children`, "PUT", folder)).status).toBe(201);
-    for (const path of [`/d/${folder.nodeId}`, `/f/${folder.nodeId}`]) {
+    for (const path of ["/files", `/d/${folder.nodeId}`, `/f/${folder.nodeId}`]) {
       const document = await SELF.fetch(`https://mdwn.test${path}`, { headers: { cookie: f.session.cookie } });
       expect(document.status).toBe(200);
       const html = await document.text();
-      expect(html).toContain("Opening Files");
+      expect(html).toContain("Opening your library");
       expect(html).not.toContain("Private heading");
       expect(html).not.toContain(folder.nameCiphertext);
     }

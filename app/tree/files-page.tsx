@@ -1,4 +1,4 @@
-import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/shared/comments/comments-client";
 import { ExportControl } from "~/export/export-control";
@@ -25,9 +25,12 @@ import {
   MoveIcon,
   PencilIcon,
   RefreshIcon,
+  ShareIcon,
   TrashIcon,
   UserIcon,
 } from "~/ui/icons";
+import { SkeletonLines } from "~/ui/page-layouts";
+import { useDelayedFlag, usePendingLocation } from "~/ui/pending-navigation";
 import { buttonClass, fieldClass, labelClass, noticeClass, textButtonClass } from "~/ui/styles";
 
 import {
@@ -49,7 +52,49 @@ import {
   type TreeKind,
 } from "../shared/tree/client";
 import { FileEditor } from "./file-editor";
-import { expandedPreferenceKey, savedExpanded, type FilesPageData, type FilesSnapshot } from "./navigation-client";
+import {
+  type Crumb,
+  expandedPreferenceKey,
+  type FilesPageData,
+  type FilesSnapshot,
+  nodePath,
+  rootName,
+  savedExpanded,
+} from "./navigation-client";
+
+type Destination = { nodeId: string; kind: TreeKind; name: string | null; crumbs: Crumb[] | null };
+
+/**
+ * A workspace link's target described from what this page already decrypted:
+ * its name and breadcrumb path when a loaded listing contains it. Nothing is
+ * fetched, so the next page still renders only its own verified walk.
+ */
+function destinationOf(pathname: string, snapshot: FilesSnapshot): Destination | null {
+  const { access } = snapshot;
+  const match = /^\/([df])\/([^/]+)$/.exec(pathname);
+  if (pathname !== "/files" && !match) return null;
+  const ownRoot = access.vaultId === access.actorAccountId;
+  if (!match && !ownRoot)
+    return { nodeId: "", kind: "directory", name: "Library", crumbs: [{ id: "", name: "Library" }] };
+  const nodeId = match ? match[2]! : access.rootId;
+  const kind: TreeKind = match?.[1] === "f" ? "file" : "directory";
+  const crumbs: Crumb[] = [];
+  let current = nodeId;
+  for (let depth = 0; depth <= 100; depth++) {
+    if (current === access.rootId) {
+      crumbs.unshift({ id: current, name: rootName(access) });
+      return { nodeId, kind, name: crumbs.at(-1)!.name, crumbs };
+    }
+    const parent = Object.values(snapshot.listings).find((listing) =>
+      listing.entries.some((entry) => entry.nodeId === current),
+    );
+    const entry = parent?.entries.find((item) => item.nodeId === current);
+    if (!parent || !entry) break;
+    crumbs.unshift({ id: current, name: entry.name });
+    current = parent.directoryId;
+  }
+  return { nodeId, kind, name: crumbs.at(-1)?.id === nodeId ? crumbs.at(-1)!.name : null, crumbs: null };
+}
 
 type DialogFields = {
   kind: TreeKind;
@@ -92,10 +137,18 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [snapshot, setSnapshot] = useState<FilesSnapshot | null>(initial.snapshot);
   const [status, setStatus] = useState<FilesPageData["status"]>(initial.status);
   const [expanded, setExpanded] = useState<string[]>([]);
+  // The latest expanded set, for folder loads that complete after other changes.
+  const expandedNow = useRef<string[]>([]);
+  const showExpanded = useCallback((next: string[]) => {
+    expandedNow.current = next;
+    setExpanded(next);
+  }, []);
   const [drawer, setDrawer] = useState(false);
   const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
+  // Folders shown open while their listing loads after an expand click.
+  const [opening, setOpening] = useState<ReadonlySet<string>>(() => new Set());
   // One lifecycle per File page. It retains every prepared candidate for this
   // page's lifetime, orders reads and drives Unpublishing teardown; complete
   // links stay only in browser memory, never in persistent storage. It is
@@ -137,7 +190,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const onNavigationStart = useCallback(() => {
     lifetime.current?.abort();
     lifetime.current = new AbortController();
-    if (submission.current) setMessage("Navigation interrupted this operation. Refresh Files before trying again.");
+    if (submission.current) setMessage("Navigation interrupted this operation. Refresh the page before trying again.");
     submission.current = false;
     setSubmitting(false);
     setDialog(null);
@@ -184,7 +237,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       route.current = `${kind}/${nodeId}`;
     }
     if (initial.snapshot)
-      setExpanded(
+      showExpanded(
         Array.from(
           new Set([
             ...savedExpanded(initial.snapshot.access.actorAccountId),
@@ -193,7 +246,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           ]),
         ),
       );
-  }, [initial, nodeId, kind]);
+  }, [initial, nodeId, kind, showExpanded]);
 
   // Owner-side upkeep: opening any File ensures its one Private thread exists,
   // so a Collaborator never waits for an Owner to open the Comments inspector.
@@ -222,13 +275,16 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
 
   async function toggle(entry: TreeEntry) {
     const signal = lifetime.current?.signal;
-    if (!snapshot || entry.kind !== "directory" || !signal || signal.aborted) return;
-    if (expanded.includes(entry.nodeId)) {
-      const next = expanded.filter((id) => id !== entry.nodeId);
-      setExpanded(next);
-      localStorage.setItem(expandedPreferenceKey(snapshot.access.actorAccountId), JSON.stringify(next));
+    if (!snapshot || entry.kind !== "directory" || !signal || signal.aborted || opening.has(entry.nodeId)) return;
+    const preference = expandedPreferenceKey(snapshot.access.actorAccountId);
+    if (expandedNow.current.includes(entry.nodeId)) {
+      const next = expandedNow.current.filter((id) => id !== entry.nodeId);
+      showExpanded(next);
+      localStorage.setItem(preference, JSON.stringify(next));
       return;
     }
+    // Open at once; the folder's fresh listing replaces its placeholder when it arrives.
+    setOpening((current) => new Set(current).add(entry.nodeId));
     try {
       const parentId = Object.values(snapshot.listings).find((listing) =>
         listing.entries.some((child) => child.nodeId === entry.nodeId),
@@ -246,11 +302,18 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             listings: { ...previous.listings, [entry.nodeId]: listing },
           },
       );
-      const next = [...expanded, entry.nodeId];
-      setExpanded(next);
-      localStorage.setItem(expandedPreferenceKey(snapshot.access.actorAccountId), JSON.stringify(next));
+      // Several folders may open at once; each completion extends the latest set.
+      const next = [...expandedNow.current, entry.nodeId];
+      showExpanded(next);
+      localStorage.setItem(preference, JSON.stringify(next));
     } catch {
       if (!signal.aborted) setMessage("This folder could not be opened. Refresh and try again.");
+    } finally {
+      setOpening((current) => {
+        const next = new Set(current);
+        next.delete(entry.nodeId);
+        return next;
+      });
     }
   }
 
@@ -300,7 +363,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             ...fields,
             operation: "move",
             destinationId: snapshot.access.rootId,
-            path: [{ id: snapshot.access.rootId, name: "Files" }],
+            path: [{ id: snapshot.access.rootId, name: rootName(snapshot.access) }],
           }
         : action.operation === "delete"
           ? { ...fields, operation: "delete", consent: false }
@@ -409,7 +472,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         setDialog(null);
         if (current.operation === "delete") {
           submission.current = false;
-          navigate(`/d/${current.parentId}`);
+          navigate(nodePath(active.access, current.parentId, "directory"));
         } else revalidator.revalidate();
       } else {
         const entry = parent.entries.find((item) => item.nodeId === current.nodeId);
@@ -452,12 +515,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       } else if (error instanceof TreeCommitUncertainError) {
         setDialog(null);
         setMessage(
-          "The change may have been saved, but its local checkpoint failed. Refresh Files before trying again.",
+          "The change may have been saved, but its local checkpoint failed. Refresh the page before trying again.",
         );
       } else if (error instanceof RecoveryConfirmationPendingError) {
         setDialog(null);
         setMessage("Confirm your saved recovery phrase and codes before creating Files.");
-      } else setMessage("The change could not be confirmed. Refresh Files before trying again.");
+      } else setMessage("The change could not be confirmed. Refresh the page before trying again.");
     } finally {
       if (!signal.aborted) {
         submission.current = false;
@@ -488,26 +551,35 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     } else await submit({ ...current, review: undefined, needsRefresh: true });
   }
 
-  const pendingPath = navigation.state === "loading" ? navigation.location?.pathname : undefined;
+  // A link navigation's destination, previewed from what this page already
+  // decrypted: it is selected in the tree at once, and its frame replaces this
+  // page's content if loading takes long enough to notice.
+  const pendingLocation = usePendingLocation();
+  const destination = useMemo(
+    () => (pendingLocation && snapshot ? destinationOf(pendingLocation.pathname, snapshot) : null),
+    [pendingLocation, snapshot],
+  );
+  const pending = destination && destination.nodeId !== nodeId ? destination : null;
+  const showPending = useDelayedFlag(pending !== null);
+  const selectedId = pending?.nodeId ?? nodeId;
 
   function directoryItems(directoryId: string, depth = 0): React.ReactNode {
     if (!snapshot || depth > 100) return null;
     const listing = snapshot.listings[directoryId];
     if (!listing) return null;
     return listing.entries.map((entry) => {
-      const open = expanded.includes(entry.nodeId);
-      const to = `/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`;
+      const loading = opening.has(entry.nodeId);
+      const open = expanded.includes(entry.nodeId) || loading;
       const current = entry.nodeId === nodeId;
-      const pending = pendingPath === to && !current;
+      const arriving = pending?.nodeId === entry.nodeId;
       return (
         <div key={entry.nodeId}>
           <div
             className={cx(
               "flex items-center border-l-2 pr-2 text-sm transition-colors",
-              current
+              entry.nodeId === selectedId
                 ? "border-ink bg-paper text-ink"
                 : "border-transparent text-ink-soft hover:bg-paper hover:text-ink",
-              pending && "bg-paper/70 text-ink",
             )}
             style={{ paddingLeft: `${depth * 14 + 2}px` }}
           >
@@ -525,7 +597,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
               <span className="size-7 shrink-0" aria-hidden="true" />
             )}
             <Link
-              to={to}
+              to={nodePath(snapshot.access, entry.nodeId, entry.kind)}
               onClick={() => setDrawer(false)}
               aria-current={current ? "page" : undefined}
               className="flex min-w-0 flex-1 items-center gap-2 py-1.5"
@@ -536,12 +608,24 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                 <FileIcon className="text-muted" />
               )}
               <span className="truncate">{entry.name}</span>
-              {pending && (
+              {arriving && (
                 <span aria-hidden="true" className="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
               )}
             </Link>
           </div>
-          {entry.kind === "directory" && open && directoryItems(entry.nodeId, depth + 1)}
+          {entry.kind === "directory" &&
+            open &&
+            (snapshot.listings[entry.nodeId] ? (
+              directoryItems(entry.nodeId, depth + 1)
+            ) : (
+              <div
+                aria-hidden="true"
+                className="flex h-8 animate-fade items-center"
+                style={{ paddingLeft: `${(depth + 1) * 14 + 30}px` }}
+              >
+                <span className="skeleton h-3 w-28" />
+              </div>
+            ))}
         </div>
       );
     });
@@ -553,7 +637,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         <p>This File or folder is unavailable.</p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <Link to="/files" className={buttonClass("primary")}>
-            Back to your Files
+            Back to your library
           </Link>
           <Link to="/account/device-access" className={buttonClass("secondary")}>
             Files access
@@ -596,7 +680,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       </EmptyState>
     );
 
-  const selected = snapshot.crumbs.at(-1)?.name ?? "Files";
+  const selected = snapshot.crumbs.at(-1)?.name ?? rootName(snapshot.access);
+  const eyebrow = kind === "file" ? "Markdown" : nodeId === snapshot.access.rootId ? null : "Folder";
+  const crumbs = showPending ? (pending?.crumbs ?? []) : snapshot.crumbs;
+  const crumbKind = showPending ? pending?.kind : kind;
   const owner = snapshot.access.actorAccountId === snapshot.access.vaultId;
   const structuralParent = kind === "directory" ? nodeId : snapshot.file?.parentId;
   const canCreate =
@@ -610,7 +697,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const position = siblings.findIndex((entry) => entry.nodeId === nodeId);
   const folderEntries = kind === "directory" ? (snapshot.listings[nodeId]?.entries ?? []) : [];
   return (
-    <main className="w-full lg:grid lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-[17.5rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)]">
+    <main
+      aria-busy={showPending || undefined}
+      className="w-full lg:grid lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-[17.5rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)]"
+    >
       {(kind === "directory" || editorParent !== snapshot.file?.parentId) && (
         <NavigationIntentObserver onStart={onNavigationStart} />
       )}
@@ -630,7 +720,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         aria-label="Files tree"
       >
         <div className="flex items-center justify-between gap-3 border-b border-line py-3 pr-3 pl-5 lg:hidden">
-          <p className="eyebrow text-muted">Your Files</p>
+          <p className="eyebrow text-muted">{rootName(snapshot.access)}</p>
           <button type="button" onClick={() => setDrawer(false)} className={buttonClass("ghost", "sm")}>
             <CloseIcon />
             Close tree
@@ -638,14 +728,15 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         </div>
         <div className="flex-1 px-3 py-5 lg:px-4 lg:py-7">
           <Link
-            to={`/${snapshot.access.rootKind === "file" ? "f" : "d"}/${snapshot.access.rootId}`}
+            to={nodePath(snapshot.access, snapshot.access.rootId, snapshot.access.rootKind ?? "directory")}
             onClick={() => setDrawer(false)}
+            aria-current={nodeId === snapshot.access.rootId ? "page" : undefined}
             className={cx(
               "mb-4 block border-b border-line px-2 pb-4 font-display text-[1.7rem] font-light leading-tight tracking-tight transition-colors hover:text-ink",
-              nodeId === snapshot.access.rootId ? "text-ink" : "text-ink-soft",
+              selectedId === snapshot.access.rootId ? "text-ink" : "text-ink-soft",
             )}
           >
-            {snapshot.access.rootKind === "file" ? "Shared File" : "Files"}
+            {rootName(snapshot.access)}
           </Link>
           <nav aria-label="Files" className="space-y-px">
             {directoryItems(snapshot.access.rootId)}
@@ -654,35 +745,34 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             <p className="px-2 text-sm text-muted">Nothing here yet. Create your first File.</p>
           )}
         </div>
-        <div className="space-y-3 border-t border-line px-5 py-5 text-sm">
-          <SharedProvisioning />
-          {owner && (
-            <ul className="space-y-1.5">
-              <li>
+        <div className="border-t border-line px-3 py-4 text-sm lg:px-4">
+          <SharedProvisioning link={false} className="px-2 [&:not(:empty)]:mb-3" />
+          <ul>
+            {[
+              { to: "/account/shared-access", label: "Shared access", icon: ShareIcon },
+              ...(owner
+                ? [
+                    { to: "/account/pseudonym", label: "Public pseudonym", icon: UserIcon },
+                    { to: "/account/key-rotations", label: "Secure access updates", icon: KeyIcon },
+                  ]
+                : []),
+            ].map(({ to, label, icon: Icon }) => (
+              <li key={to}>
                 <Link
-                  to="/account/pseudonym"
-                  className="flex items-center gap-2 text-ink-soft transition hover:text-ink"
+                  to={to}
+                  className="flex items-center gap-2 px-2 py-1.5 text-ink-soft transition-colors hover:bg-paper hover:text-ink"
                 >
-                  <UserIcon className="text-muted" />
-                  Public pseudonym
+                  <Icon className="text-muted" />
+                  {label}
                 </Link>
               </li>
-              <li>
-                <Link
-                  to="/account/key-rotations"
-                  className="flex items-center gap-2 text-ink-soft transition hover:text-ink"
-                >
-                  <KeyIcon className="text-muted" />
-                  Secure access updates
-                </Link>
-              </li>
-            </ul>
-          )}
+            ))}
+          </ul>
         </div>
       </aside>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only File drop target; the Import control exposes a labelled file picker for keyboard users. */}
       <section
-        className="min-w-0 animate-fade px-4 pt-5 pb-16 sm:px-6 lg:px-10 lg:pt-8"
+        className="min-w-0 px-4 pt-5 pb-16 sm:px-6 lg:px-10 lg:pt-8"
         onDragOver={(event) => {
           if (importControl.current?.canAcceptDrop()) {
             event.preventDefault();
@@ -704,201 +794,215 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             <FolderIcon />
             Tree
           </button>
-          <nav aria-label="Breadcrumbs" className="min-w-0">
-            <ol className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-[13px] text-muted">
-              {snapshot.crumbs.map((crumb, index) => (
-                <li key={crumb.id} className="flex min-w-0 items-center gap-1">
-                  {index > 0 && <ChevronRightIcon className="size-3 text-muted/60" />}
-                  <Link
-                    to={`/${index === snapshot.crumbs.length - 1 && kind === "file" ? "f" : "d"}/${crumb.id}`}
-                    className={cx(
-                      "truncate px-1.5 py-0.5 transition-colors hover:bg-ink/5 hover:text-ink",
-                      index === snapshot.crumbs.length - 1 && "text-ink-soft",
-                    )}
-                  >
-                    {crumb.name}
-                  </Link>
-                </li>
-              ))}
-            </ol>
-          </nav>
-          {busy && (
+          {/* A lone root crumb would only repeat the title below it. */}
+          {crumbs.length > 1 && (
+            <nav aria-label="Breadcrumbs" className="min-w-0">
+              <ol className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-[13px] text-muted">
+                {crumbs.map((crumb, index) => (
+                  <li key={crumb.id} className="flex min-w-0 items-center gap-1">
+                    {index > 0 && <ChevronRightIcon className="size-3 text-muted/60" />}
+                    <Link
+                      to={
+                        index === crumbs.length - 1 && crumbKind === "file"
+                          ? `/f/${crumb.id}`
+                          : nodePath(snapshot.access, crumb.id, "directory")
+                      }
+                      className={cx(
+                        "truncate px-1.5 py-0.5 transition-colors hover:bg-ink/5 hover:text-ink",
+                        index === crumbs.length - 1 && "text-ink-soft",
+                      )}
+                    >
+                      {crumb.name}
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          )}
+          {busy && !showPending && (
             <p role="status" className="ml-auto inline-flex items-center gap-2 text-[13px] text-muted">
               <span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-accent" />
-              Updating Files…
+              Updating…
             </p>
           )}
         </div>
-
-        <div className="mt-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
-          <div className="min-w-0 max-w-full">
-            <p className="eyebrow text-muted">{kind === "file" ? "Markdown File" : "Folder"}</p>
-            <h1 className="mt-2 break-words font-display text-4xl font-light leading-[1.05] tracking-tight sm:text-[2.75rem]">
-              {selected}
-            </h1>
+        {showPending && pending && <PendingNode kind={pending.kind} name={pending.name} />}
+        <div className={showPending ? "hidden" : "animate-enter"}>
+          <div className="mt-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
+            <div className="min-w-0 max-w-full">
+              {eyebrow && <p className="eyebrow mb-2 text-muted">{eyebrow}</p>}
+              <h1 className="break-words font-display text-4xl font-light leading-[1.05] tracking-tight sm:text-[2.75rem]">
+                {selected}
+              </h1>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {canCreate && (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy || recoveryPending}
+                    onClick={() => startCreate("file")}
+                    className={buttonClass("primary", "sm")}
+                  >
+                    <FilePlusIcon />
+                    New File
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || recoveryPending}
+                    onClick={() => startCreate("directory")}
+                    className={buttonClass("secondary", "sm")}
+                  >
+                    <FolderPlusIcon />
+                    New folder
+                  </button>
+                </>
+              )}
+              {kind === "file" && snapshot.file && (
+                <button
+                  type="button"
+                  aria-expanded={publishOpen}
+                  onClick={() => setPublishOpen((open) => !open)}
+                  className={cx(buttonClass("secondary", "sm"), publishOpen && "border-ink/40 bg-ink/[0.04]")}
+                >
+                  <GlobeIcon />
+                  {owner ? "Publish" : "Request publication"}
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {canCreate && (
-              <>
-                <button
-                  type="button"
-                  disabled={busy || recoveryPending}
-                  onClick={() => startCreate("file")}
-                  className={buttonClass("primary", "sm")}
-                >
-                  <FilePlusIcon />
-                  New File
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || recoveryPending}
-                  onClick={() => startCreate("directory")}
-                  className={buttonClass("secondary", "sm")}
-                >
-                  <FolderPlusIcon />
-                  New folder
-                </button>
-              </>
-            )}
-            {kind === "file" && snapshot.file && (
-              <button
-                type="button"
-                aria-expanded={publishOpen}
-                onClick={() => setPublishOpen((open) => !open)}
-                className={cx(buttonClass("secondary", "sm"), publishOpen && "border-ink/40 bg-ink/[0.04]")}
-              >
-                <GlobeIcon />
-                {owner ? "Publish" : "Request publication"}
+
+          {canChangeStructure && (
+            <div className="mt-4 flex flex-wrap items-center gap-1 border-y border-line py-1.5">
+              <button type="button" disabled={structureBlocked} onClick={startRename} className={textButtonClass()}>
+                <PencilIcon />
+                Rename
               </button>
-            )}
-          </div>
-        </div>
-
-        {canChangeStructure && (
-          <div className="mt-4 flex flex-wrap items-center gap-1 border-y border-line py-1.5">
-            <button type="button" disabled={structureBlocked} onClick={startRename} className={textButtonClass()}>
-              <PencilIcon />
-              Rename
-            </button>
-            <button
-              type="button"
-              disabled={structureBlocked}
-              onClick={() => startStructural({ operation: "move" })}
-              className={textButtonClass()}
-            >
-              <MoveIcon />
-              Move
-            </button>
-            {(["up", "down"] as const).map((direction) => (
               <button
-                key={direction}
                 type="button"
-                disabled={
-                  structureBlocked ||
-                  position < 0 ||
-                  (direction === "up" ? position === 0 : position === siblings.length - 1)
-                }
-                onClick={() => startStructural({ operation: "reorder", direction })}
+                disabled={structureBlocked}
+                onClick={() => startStructural({ operation: "move" })}
                 className={textButtonClass()}
               >
-                {direction === "up" ? <ArrowUpIcon /> : <ArrowDownIcon />}
-                Move {direction}
+                <MoveIcon />
+                Move
               </button>
-            ))}
-            <button
-              type="button"
-              disabled={structureBlocked}
-              onClick={() => startStructural({ operation: "delete" })}
-              className={textButtonClass("danger")}
-            >
-              <TrashIcon />
-              Delete
-            </button>
-            {kind === "file" && !fileReady && (
-              <p role="status" className="ml-auto px-2 text-xs text-muted">
-                Save your draft before changing this File’s name or location, order, or deleting it.
-              </p>
-            )}
-          </div>
-        )}
-        {recoveryPending && (
-          <p role="status" className={cx(noticeClass("warning"), "mt-4")}>
-            Confirm your saved recovery phrase and codes before creating Files.
-          </p>
-        )}
-        {message && (
-          <p role="alert" className={cx(noticeClass("danger"), "mt-4")}>
-            {message}
-          </p>
-        )}
-        {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (
-          <PublishPanel lifecycle={publicationLifecycle} fileReady={fileReady && !busy} />
-        )}
-        {kind === "file" ? (
-          <>
-            <div className="mt-6 inline-flex max-w-full flex-wrap border border-line bg-sand lg:hidden">
-              {(
-                [
-                  ["edit", "Edit", () => setView("edit")],
-                  ["preview", "Preview", () => setView("preview")],
-                  ["comments", "Comments", () => setView("comments")],
-                ] as const
-              ).map(([value, label, show]) => (
+              {(["up", "down"] as const).map((direction) => (
                 <button
-                  key={value}
+                  key={direction}
                   type="button"
-                  onClick={show}
-                  aria-pressed={view === value}
-                  className="eyebrow px-4 py-2.5 text-ink-soft transition-colors hover:bg-paper aria-pressed:bg-ink aria-pressed:text-paper"
+                  disabled={
+                    structureBlocked ||
+                    position < 0 ||
+                    (direction === "up" ? position === 0 : position === siblings.length - 1)
+                  }
+                  onClick={() => startStructural({ operation: "reorder", direction })}
+                  className={textButtonClass()}
                 >
-                  {label}
+                  {direction === "up" ? <ArrowUpIcon /> : <ArrowDownIcon />}
+                  Move {direction}
                 </button>
               ))}
+              <button
+                type="button"
+                disabled={structureBlocked}
+                onClick={() => startStructural({ operation: "delete" })}
+                className={textButtonClass("danger")}
+              >
+                <TrashIcon />
+                Delete
+              </button>
+              {kind === "file" && !fileReady && (
+                <p role="status" className="ml-auto px-2 text-xs text-muted">
+                  Save your draft before changing this File’s name or location, order, or deleting it.
+                </p>
+              )}
             </div>
-            {editorParent === snapshot.file?.parentId ? (
-              <FileEditor
-                key={`${nodeId}/${snapshot.file?.parentId}`}
-                fileId={nodeId}
-                snapshot={snapshot}
-                view={view}
-                showEdit={() => setView("edit")}
-                onShowPreview={() => setView("preview")}
-                onShowComments={() => setView("comments")}
-                onStructuralReady={setStructuralReady}
-                structuralBusy={busy || dialog !== null}
-                onNavigationStart={onNavigationStart}
-                onCurrent={(file, listing) =>
-                  setSnapshot(
-                    (previous) =>
-                      previous && {
-                        ...previous,
-                        file,
-                        listings: listing
-                          ? { ...previous.listings, [listing.directoryId]: listing }
-                          : previous.listings,
-                      },
-                  )
-                }
-              />
-            ) : (
-              <p role="status" className="mt-6 text-sm text-muted">
-                Opening moved File…
-              </p>
-            )}
-          </>
-        ) : (
-          <FolderContents entries={folderEntries} canCreate={canCreate} pendingPath={pendingPath} />
-        )}
-        <div className="mt-12 grid divide-y divide-line border-y border-line md:grid-cols-2 md:divide-x md:divide-y-0">
-          <ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} />
-          <ImportControl
-            ref={importControl}
-            snapshot={snapshot}
-            nodeId={nodeId}
-            kind={kind}
-            disabled={busy || recoveryPending}
-            onRefresh={() => void revalidator.revalidate()}
-          />
+          )}
+          {recoveryPending && (
+            <p role="status" className={cx(noticeClass("warning"), "mt-4")}>
+              Confirm your saved recovery phrase and codes before creating Files.
+            </p>
+          )}
+          {message && (
+            <p role="alert" className={cx(noticeClass("danger"), "mt-4")}>
+              {message}
+            </p>
+          )}
+          {kind === "file" && snapshot.file && publishOpen && publicationLifecycle && (
+            <PublishPanel lifecycle={publicationLifecycle} fileReady={fileReady && !busy} />
+          )}
+          {kind === "file" ? (
+            <>
+              <div className="mt-6 inline-flex max-w-full flex-wrap border border-line bg-sand lg:hidden">
+                {(
+                  [
+                    ["edit", "Edit", () => setView("edit")],
+                    ["preview", "Preview", () => setView("preview")],
+                    ["comments", "Comments", () => setView("comments")],
+                  ] as const
+                ).map(([value, label, show]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={show}
+                    aria-pressed={view === value}
+                    className="eyebrow px-4 py-2.5 text-ink-soft transition-colors hover:bg-paper aria-pressed:bg-ink aria-pressed:text-paper"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {editorParent === snapshot.file?.parentId ? (
+                <FileEditor
+                  key={`${nodeId}/${snapshot.file?.parentId}`}
+                  fileId={nodeId}
+                  snapshot={snapshot}
+                  view={view}
+                  showEdit={() => setView("edit")}
+                  onShowPreview={() => setView("preview")}
+                  onShowComments={() => setView("comments")}
+                  onStructuralReady={setStructuralReady}
+                  structuralBusy={busy || dialog !== null}
+                  onNavigationStart={onNavigationStart}
+                  onCurrent={(file, listing) =>
+                    setSnapshot(
+                      (previous) =>
+                        previous && {
+                          ...previous,
+                          file,
+                          listings: listing
+                            ? { ...previous.listings, [listing.directoryId]: listing }
+                            : previous.listings,
+                        },
+                    )
+                  }
+                />
+              ) : (
+                <p role="status" className="mt-6 text-sm text-muted">
+                  Opening moved File…
+                </p>
+              )}
+            </>
+          ) : (
+            <FolderContents
+              entries={folderEntries}
+              canCreate={canCreate}
+              access={snapshot.access}
+              arrivingId={pending?.nodeId}
+            />
+          )}
+          <div className="mt-12 grid divide-y divide-line border border-line md:grid-cols-2 md:divide-x md:divide-y-0">
+            <ExportControl snapshot={snapshot} nodeId={nodeId} kind={kind} />
+            <ImportControl
+              ref={importControl}
+              snapshot={snapshot}
+              nodeId={nodeId}
+              kind={kind}
+              disabled={busy || recoveryPending}
+              onRefresh={() => void revalidator.revalidate()}
+            />
+          </div>
         </div>
       </section>
       {dialog && (
@@ -1103,15 +1207,17 @@ function EmptyState({
 function FolderContents({
   entries,
   canCreate,
-  pendingPath,
+  access,
+  arrivingId,
 }: {
   entries: TreeEntry[];
   canCreate: boolean;
-  pendingPath: string | undefined;
+  access: FilesSnapshot["access"];
+  arrivingId: string | undefined;
 }) {
   if (!entries.length)
     return (
-      <div className="mt-8 flex flex-col items-center border-y border-line px-6 py-16 text-center">
+      <div className="mt-8 flex flex-col items-center border border-line px-6 py-16 text-center">
         <span className="grid size-12 place-items-center border border-line bg-cream">
           <FolderIcon className="size-5 text-muted" />
         </span>
@@ -1125,34 +1231,81 @@ function FolderContents({
     );
   return (
     <ul aria-label="Folder contents" className="mt-8 divide-y divide-line border-y border-ink">
-      {entries.map((entry) => {
-        const to = `/${entry.kind === "directory" ? "d" : "f"}/${entry.nodeId}`;
-        return (
-          <li key={entry.nodeId}>
-            <Link
-              to={to}
-              aria-label={`${entry.name}, ${entry.kind === "directory" ? "folder" : "File"}`}
-              className={cx(
-                "group flex min-w-0 items-center gap-3 px-2 py-4 transition-colors hover:bg-cream sm:gap-4 sm:px-4",
-                pendingPath === to && "bg-cream",
-              )}
-            >
-              <span className="grid size-11 shrink-0 place-items-center border border-line bg-cream text-ink-soft">
-                {entry.kind === "directory" ? <FolderIcon className="size-5" /> : <FileIcon className="size-5" />}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-display text-xl font-light tracking-tight text-ink">
-                  {entry.name}
-                </span>
-                <span className="eyebrow mt-1 block text-muted">
-                  {entry.kind === "directory" ? "Folder" : "Markdown File"}
-                </span>
-              </span>
-              <ChevronRightIcon className="size-4 text-muted transition-colors group-hover:text-ink" />
-            </Link>
-          </li>
-        );
-      })}
+      {entries.map((entry, index) => (
+        <li key={entry.nodeId} className="animate-enter stagger" style={{ "--stagger": index } as CSSProperties}>
+          <Link
+            to={nodePath(access, entry.nodeId, entry.kind)}
+            aria-label={`${entry.name}, ${entry.kind === "directory" ? "folder" : "File"}`}
+            className={cx(
+              "group flex min-w-0 items-center gap-3 px-2 py-3.5 transition-colors hover:bg-cream sm:gap-4 sm:px-4",
+              arrivingId === entry.nodeId && "bg-cream",
+            )}
+          >
+            <span className="grid size-10 shrink-0 place-items-center border border-line bg-cream text-ink-soft">
+              {entry.kind === "directory" ? <FolderIcon className="size-5" /> : <FileIcon className="size-5" />}
+            </span>
+            <span className="min-w-0 flex-1 truncate font-display text-xl font-light tracking-tight text-ink">
+              {entry.name}
+            </span>
+            <ChevronRightIcon className="size-4 text-muted transition-colors group-hover:text-ink" />
+          </Link>
+        </li>
+      ))}
     </ul>
+  );
+}
+
+/**
+ * A workspace destination's frame while its verified walk runs: the name this
+ * page already knows and placeholders shaped like the content it will show.
+ */
+function PendingNode({ kind, name }: { kind: TreeKind; name: string | null }) {
+  return (
+    <div className="animate-fade">
+      <p role="status" className="sr-only">
+        Opening {name ?? (kind === "file" ? "File" : "folder")}…
+      </p>
+      <div aria-hidden="true">
+        <div className="mt-5">
+          <p className="eyebrow mb-2 text-muted">{kind === "file" ? "Markdown" : "Folder"}</p>
+          {name ? (
+            <p className="truncate font-display text-4xl font-light leading-[1.05] tracking-tight text-ink sm:text-[2.75rem]">
+              {name}
+            </p>
+          ) : (
+            <div className="skeleton h-10 w-2/3 max-w-md sm:h-11" />
+          )}
+        </div>
+        {kind === "file" ? (
+          <>
+            <div className="mt-8 flex items-center justify-between gap-4">
+              <div className="skeleton h-3 w-44 max-sm:hidden" />
+              <div className="skeleton ml-auto h-7 w-20" />
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2 lg:gap-5">
+              {["source", "preview"].map((pane) => (
+                <div key={pane} className={cx("border border-line bg-cream", pane === "preview" && "max-lg:hidden")}>
+                  <div className="flex min-h-12 items-center border-b border-line px-5">
+                    <div className="skeleton h-3 w-28" />
+                  </div>
+                  <div className="h-[62vh] min-h-[22rem] px-5 py-5">
+                    <SkeletonLines lines={5} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <ul className="mt-8 divide-y divide-line border-y border-ink">
+            {[64, 48, 56].map((width) => (
+              <li key={width} className="flex items-center gap-3 px-2 py-3.5 sm:gap-4 sm:px-4">
+                <span className="skeleton size-10 shrink-0" />
+                <span className="skeleton h-5" style={{ width: `${width}%` }} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }

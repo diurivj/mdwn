@@ -51,7 +51,7 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
                 : "Setting up your Files securely…"}
             </p>
           )}
-          <div className="mt-8 grid border-y border-line sm:grid-cols-2">
+          <div className="mt-8 grid border border-line sm:grid-cols-2">
             {loaderData.rootId && (
               <Link to={`/d/${loaderData.rootId}`} className={cx(tileClass, "bg-ink text-paper hover:bg-ink-soft")}>
                 <FolderIcon className="size-6 text-paper" />
@@ -69,7 +69,7 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
               <ArrowRightIcon className="mt-6 size-5 text-muted" />
             </Link>
           </div>
-          <div className="mt-6 border-y border-line bg-cream p-6 text-sm">
+          <div className="mt-6 border border-line bg-cream p-6 text-sm">
             <SharedProvisioning />
           </div>
         </>
@@ -92,7 +92,7 @@ export default function DeviceAccess({ loaderData }: Route.ComponentProps) {
                 : "This Session has no active Encryption device. A passkey alone cannot open private material."}
             </p>
           </PageIntro>
-          <div className="mt-8 grid border-y border-line sm:grid-cols-2">
+          <div className="mt-8 grid border border-line sm:grid-cols-2">
             <Link to="/enroll-device" className={cx(tileClass, "bg-ink text-paper hover:bg-ink-soft")}>
               <QrIcon className="size-6 text-paper" />
               <span className="mt-6 font-display text-3xl font-light leading-tight tracking-tight">

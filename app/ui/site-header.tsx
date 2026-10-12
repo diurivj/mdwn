@@ -22,34 +22,26 @@ import { buttonClass } from "./styles";
 
 type NavItem = { to: string; label: string; current?: (pathname: string) => boolean };
 
+const SUPPORT: NavItem = { to: "/support", label: "Support", current: (pathname) => pathname === "/support" };
+
 const PUBLIC_NAV: NavItem[] = [
+  { to: "/#why", label: "Why mdwn" },
   { to: "/#how-it-works", label: "How it works" },
   { to: "/#privacy", label: "Privacy" },
   { to: "/#publishing", label: "Publishing" },
-  { to: "/support", label: "Support", current: (pathname) => pathname === "/support" },
+  SUPPORT,
 ];
 
-const APP_NAV: NavItem[] = [
-  {
-    to: "/files",
-    label: "Files",
-    current: (pathname) => pathname === "/files" || pathname.startsWith("/d/") || pathname.startsWith("/f/"),
-  },
-  {
-    to: "/account/security",
-    label: "Account",
-    current: (pathname) => pathname.startsWith("/account/") && pathname !== "/account/devices",
-  },
-  {
-    to: "/account/devices",
-    label: "Devices",
-    current: (pathname) => pathname === "/account/devices" || pathname.startsWith("/enroll-device"),
-  },
-  { to: "/support", label: "Support", current: (pathname) => pathname === "/support" },
-];
+/** Signed in, every Account destination lives in the Account menu; Support stays in view. */
+const APP_NAV: NavItem[] = [SUPPORT];
+
+const LIBRARY: NavItem = {
+  to: "/files",
+  label: "Library",
+  current: (pathname) => pathname === "/files" || pathname.startsWith("/d/") || pathname.startsWith("/f/"),
+};
 
 const ACCOUNT_LINKS: { to: string; label: string; icon: ComponentType<{ className?: string }> }[] = [
-  { to: "/files", label: "Your Files", icon: FolderIcon },
   { to: "/account/security", label: "Account security", icon: ShieldIcon },
   { to: "/account/devices", label: "Encryption devices", icon: DevicesIcon },
   { to: "/enroll-device/approve", label: "Approve a device", icon: QrIcon },
@@ -58,11 +50,15 @@ const ACCOUNT_LINKS: { to: string; label: string; icon: ComponentType<{ classNam
   { to: "/account/key-rotations", label: "Secure access updates", icon: KeyIcon },
 ];
 
+const menuLinkClass =
+  "flex items-center gap-3 px-3 py-2.5 text-sm text-ink-soft transition-colors hover:bg-sand hover:text-ink aria-[current=page]:bg-sand aria-[current=page]:text-ink";
+
 /**
- * The sticky site header. Navigation follows the browser's Session presence,
- * which is unknown during server rendering: public pages start on the public
- * navigation and Account/Files pages on the app navigation, so the common case
- * never flips after hydration.
+ * The sticky site header. It keeps one shape for everyone: the same container,
+ * height and pair of controls (a quiet action, then the primary one). Navigation
+ * follows the browser's Session presence, which is unknown during server
+ * rendering: public pages start on the public navigation and Account/library
+ * pages on the Account navigation, so the common case never flips after hydration.
  */
 export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
   const presence = useSessionPresence();
@@ -73,16 +69,17 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
   const nav = signedIn ? APP_NAV : PUBLIC_NAV;
   const closeMenu = () => menu.current?.close();
   const closeAccountMenu = () => accountMenu.current?.hidePopover();
-  const onFiles = pathname === "/files" || pathname.startsWith("/d/") || pathname.startsWith("/f/");
+  const inLibrary = LIBRARY.current!(pathname);
 
   return (
     // A solid background rather than a translucent blur: blurring whatever scrolls
     // underneath costs a GPU pass on every frame and made scrolling stutter.
-    <header className="sticky top-0 z-40 border-b border-ink bg-paper">
+    <header data-chrome={chrome} className="sticky top-0 z-40 border-b border-ink bg-paper">
       <div
         className={cx(
           "grid h-16 grid-cols-[1fr_auto_1fr] items-center gap-4 lg:flex lg:justify-between",
-          chrome === "workspace" ? "px-4 sm:px-6" : "container-page",
+          // The library spans the window; its header keeps the page container's gutters.
+          chrome === "workspace" ? "w-full px-5 lg:px-10" : "container-page",
         )}
       >
         <button
@@ -123,20 +120,21 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
         <div className="-mr-1 flex items-center gap-2 justify-self-end">
           {signedIn ? (
             <>
-              {!onFiles && (
-                <Link to="/files" className={cx(buttonClass("primary", "sm"), "max-sm:hidden")}>
-                  <FolderIcon />
-                  Open Files
-                </Link>
-              )}
               <button
                 type="button"
                 popoverTarget="account-menu"
-                className="grid size-10 place-items-center border border-ink/40 text-ink-soft transition-colors hover:border-ink hover:bg-sand hover:text-ink"
+                className={cx(buttonClass("ghost", "sm"), "max-sm:px-2.5")}
                 aria-label="Account menu"
               >
-                <UserIcon className="size-[18px]" />
+                <UserIcon />
+                <span className="max-sm:hidden">Account</span>
               </button>
+              {!inLibrary && (
+                <Link to={LIBRARY.to} prefetch="intent" className={cx(buttonClass("primary", "sm"), "max-sm:hidden")}>
+                  <FolderIcon />
+                  Open library
+                </Link>
+              )}
             </>
           ) : (
             <>
@@ -156,7 +154,16 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
 
       {signedIn && (
         <div id="account-menu" ref={accountMenu} popover="auto" className="menu-popover">
-          <p className="eyebrow px-3 pb-2 pt-1.5 text-muted">Your account</p>
+          <Link
+            to={LIBRARY.to}
+            onClick={closeAccountMenu}
+            aria-current={inLibrary ? "page" : undefined}
+            className={menuLinkClass}
+          >
+            <FolderIcon className="size-4 text-muted" />
+            Library
+          </Link>
+          <p className="eyebrow mt-1 border-t border-line px-3 pb-2 pt-3 text-muted">Your account</p>
           <ul>
             {ACCOUNT_LINKS.map(({ to, label, icon: Icon }) => (
               <li key={to}>
@@ -164,7 +171,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
                   to={to}
                   onClick={closeAccountMenu}
                   aria-current={pathname === to ? "page" : undefined}
-                  className="flex items-center gap-3 px-3 py-2.5 text-sm text-ink-soft transition-colors hover:bg-sand hover:text-ink aria-[current=page]:bg-sand aria-[current=page]:text-ink"
+                  className={menuLinkClass}
                 >
                   <Icon className="size-4 text-muted" />
                   {label}
@@ -211,7 +218,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
 
           <nav aria-label="Main" className="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6">
             <ul className="divide-y divide-line">
-              {nav.map((item) => (
+              {(signedIn ? [LIBRARY, ...nav] : nav).map((item) => (
                 <li key={item.to}>
                   <SectionLink
                     to={item.to}
@@ -226,7 +233,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
             </ul>
             {signedIn && (
               <ul className="mt-4 space-y-1 border-t border-line pt-4 pb-6">
-                {ACCOUNT_LINKS.slice(1).map(({ to, label, icon: Icon }) => (
+                {ACCOUNT_LINKS.map(({ to, label, icon: Icon }) => (
                   <li key={to}>
                     <Link
                       to={to}

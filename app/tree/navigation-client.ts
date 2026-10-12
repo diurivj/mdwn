@@ -128,38 +128,77 @@ export function savedExpanded(accountId: string): string[] {
   }
 }
 
+/**
+ * The workspace root's name: the person's own library, or the folder or File
+ * another Account shared with them.
+ */
+export function rootName(access: RootAccess): string {
+  if (access.rootKind === "file") return "Shared File";
+  return access.vaultId === access.actorAccountId ? "Library" : "Shared folder";
+}
+
+/** `/files` is the library's own address; shared roots keep their node routes. */
+export function nodePath(access: RootAccess, nodeId: string, kind: TreeKind): string {
+  if (kind === "directory" && nodeId === access.rootId && access.vaultId === access.actorAccountId) return "/files";
+  return `/${kind === "directory" ? "d" : "f"}/${nodeId}`;
+}
+
 /** Start a read now and observe its failure only when it is awaited, in the order a sequential walk would. */
 function prefetch<T>(read: Promise<T>): Promise<T> {
   read.catch(() => {});
   return read;
 }
 
+/** Remembered folders fetched alongside the selected path; any beyond this load level by level. */
+const EXPANDED_PREFETCH = 24;
+
 /**
  * Every request is a full network round trip, so the walk sends independent
  * requests together: the root and the path at once, then every Directory
- * listing on the path with the File. Keys still open strictly down the path,
- * each verified listing yielding the next key, and failures surface in the
- * order the walk reaches them.
+ * listing on the path with the File and the remembered expanded folders.
+ * Keys still open strictly down the path, each verified listing yielding the
+ * next key, and failures surface in the order the walk reaches them. A null
+ * target opens the Account's own library root, which needs no path read.
  */
-async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesSnapshot> {
+async function selectedPath(
+  target: { nodeId: string; kind: TreeKind } | null,
+  signal: AbortSignal,
+): Promise<FilesSnapshot> {
   const root = prefetch(openRoot(signal));
   let path: string[];
-  try {
-    path = await loadAncestors(nodeId, signal);
-  } catch (error) {
-    await root; // An unavailable root explains the failure before an unknown path does.
-    throw error;
+  let access: RootAccess;
+  if (target) {
+    try {
+      path = await loadAncestors(target.nodeId, signal);
+    } catch (error) {
+      await root; // An unavailable root explains the failure before an unknown path does.
+      throw error;
+    }
+    access = await root;
+    if (path[0] !== access.rootId) access = await openReceivedGrantRoot(access, path[0]!, signal);
+  } else {
+    access = await root;
+    path = [access.rootId];
   }
-  let access = await root;
-  if (path[0] !== access.rootId) access = await openReceivedGrantRoot(access, path[0]!, signal);
+  const nodeId = target?.nodeId ?? access.rootId;
+  const kind = target?.kind ?? "directory";
   if (access.rootKind === "file" && (kind !== "file" || path.length !== 1)) throw new TreeNotFoundError();
   const directories = new Map(
     (kind === "file" ? path.slice(0, -1) : path).map((id) => [id, prefetch(fetchDirectory(id, signal))]),
   );
   const fetchedFile = kind === "file" ? prefetch(fetchFile(nodeId, signal)) : null;
+  // Fetching ciphertext early opens nothing: the restore below still decrypts
+  // only folders that a verified listing reveals.
+  const remembered = savedExpanded(access.actorAccountId);
+  const early = new Map(
+    remembered
+      .filter((id) => !directories.has(id))
+      .slice(0, EXPANDED_PREFETCH)
+      .map((id) => [id, prefetch(fetchDirectory(id, signal))]),
+  );
   const listings: Record<string, DirectoryListing> = {};
   const keys: Record<string, Uint8Array> = { [access.rootId]: access.rootKey };
-  const crumbs: Crumb[] = [{ id: access.rootId, name: access.rootKind === "file" ? "Shared File" : "Files" }];
+  const crumbs: Crumb[] = [{ id: access.rootId, name: rootName(access) }];
   let file: FilesSnapshot["file"] = null;
   for (let index = 0; index < path.length; index++) {
     const parent = path[index]!;
@@ -193,8 +232,8 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
   }
   // Preferences are browser-only, never encoded in a deep link. Restore only
   // descendants discoverable through a decrypted Directory in this Account,
-  // one level per pass, with each level's Directories loaded together.
-  const pending = new Set(savedExpanded(access.actorAccountId));
+  // one level per pass, with each level's Directories opened together.
+  const pending = new Set(remembered);
   for (let pass = 0; pass < 201 && pending.size; pass++) {
     const level: Promise<boolean>[] = [];
     for (const id of pending) {
@@ -212,7 +251,10 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
           try {
             const key = await openChildDirectory(access, parentKey, entry);
             keys[id] = key;
-            listings[id] = await loadDirectory(access, id, key, signal);
+            const fetched = early.get(id);
+            listings[id] = fetched
+              ? await openDirectory(access, id, key, await fetched)
+              : await loadDirectory(access, id, key, signal);
             return true;
           } catch {
             return false; // An old local preference must not block opening the selected object.
@@ -226,9 +268,18 @@ async function selectedPath(nodeId: string, kind: TreeKind, signal: AbortSignal)
 }
 
 /** Browser-only clientLoader data; SSR renders a public HydrateFallback instead. */
-export async function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesPageData> {
+export function loadFilesPage(nodeId: string, kind: TreeKind, signal: AbortSignal): Promise<FilesPageData> {
+  return settle(selectedPath({ nodeId, kind }, signal), signal);
+}
+
+/** The Account's own library root, opened by its bootstrap without a separate path read. */
+export function loadLibraryPage(signal: AbortSignal): Promise<FilesPageData> {
+  return settle(selectedPath(null, signal), signal);
+}
+
+async function settle(walk: Promise<FilesSnapshot>, signal: AbortSignal): Promise<FilesPageData> {
   try {
-    return { status: "ready", snapshot: await selectedPath(nodeId, kind, signal) };
+    return { status: "ready", snapshot: await walk };
   } catch (error) {
     if (signal.aborted) throw error;
     return {

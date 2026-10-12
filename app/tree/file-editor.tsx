@@ -129,20 +129,7 @@ export function FileEditor({
   return (
     <>
       <div className="mt-6 flex flex-wrap items-center gap-2">
-        <p
-          role="status"
-          aria-label="File save status"
-          className={cx(
-            "eyebrow inline-flex items-center gap-2 border border-current/20 px-3 py-1.5 transition-colors",
-            statusTone[status],
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className={cx("size-1.5 rounded-full bg-current", status === "Saving" && "animate-pulse")}
-          />
-          {status}
-        </p>
+        {canEdit && <p className="hidden text-xs text-muted sm:block">Saves automatically · ⌘S or Ctrl+S</p>}
         {!canEdit && (
           <p role="status" className="eyebrow border border-line bg-cream px-3 py-1.5 text-ink-soft">
             Read-only — you can comment
@@ -172,7 +159,20 @@ export function FileEditor({
             )}
           </div>
         )}
-        {canEdit && <p className="ml-auto hidden text-xs text-muted sm:block">Saves automatically · ⌘S or Ctrl+S</p>}
+        <p
+          role="status"
+          aria-label="File save status"
+          className={cx(
+            "eyebrow ml-auto inline-flex items-center gap-2 border border-current/20 px-3 py-1.5 transition-colors",
+            statusTone[status],
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className={cx("size-1.5 rounded-full bg-current", status === "Saving" && "animate-pulse")}
+          />
+          {status}
+        </p>
       </div>
       {status === "Couldn't save" && (
         <section aria-label="Draft recovery" className={cx(noticeClass("warning"), "mt-4 space-y-3")}>
