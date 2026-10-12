@@ -6,7 +6,7 @@ export function EditorIllustration({ className }: { className?: string }) {
   return (
     <div aria-hidden="true" className={cx("min-w-0 border border-ink bg-cream", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ink px-5 py-3">
-        <p className="eyebrow text-muted">Specimen 01</p>
+        <p className="eyebrow text-muted">Markdown example</p>
         <p className="font-mono text-[11px] uppercase tracking-wide">field-notes.md</p>
       </div>
       <div className="grid grid-cols-2 divide-x divide-line">
@@ -71,7 +71,7 @@ export function LinkIllustration({ className }: { className?: string }) {
   return (
     <figure className={cx("min-w-0 border border-ink bg-cream", className)}>
       <div aria-hidden="true">
-        <p className="eyebrow border-b border-ink px-5 py-3 text-muted">Specimen 02 — Public link</p>
+        <p className="eyebrow border-b border-ink px-5 py-3 text-muted">Public link example</p>
         <div className="border-b border-line p-5 sm:p-8">
           <p className="break-all font-mono text-xs leading-loose text-ink-soft">
             mdwn.me/p/Q2x8vR4mT0kZ…<span className="border-b border-ink text-ink">#v1.k3Ff9wQ…</span>

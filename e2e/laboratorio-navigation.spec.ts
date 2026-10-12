@@ -11,12 +11,18 @@ test("lands on the Laboratorio page and navigates its sections without document 
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Write in Markdown. Keep the key.");
   await expect(page.getByRole("main")).toHaveCount(1);
+  await expect(page.getByRole("navigation", { name: "Main", exact: true }).getByRole("link")).toHaveText([
+    "How it works",
+    "Privacy",
+    "Publishing",
+    "Support",
+  ]);
   await page.evaluate(() => document.fonts.ready);
   const heading = page.getByRole("heading", { level: 1 });
   expect(await heading.evaluate((node) => getComputedStyle(node).fontFamily)).toContain("Inter Tight Variable");
   await expect(heading).toHaveCSS("font-weight", "300");
   await expect(page.locator("body")).toHaveCSS("background-color", "rgb(238, 236, 230)");
-  const label = page.getByText("01 — Private Markdown", { exact: true });
+  const label = page.getByText("Private Markdown", { exact: true });
   expect(await label.evaluate((node) => getComputedStyle(node).fontFamily)).toContain("Courier Prime");
   await expect(page.getByRole("main").getByRole("link", { name: "Create your account" }).first()).toHaveCSS(
     "border-radius",
@@ -46,6 +52,32 @@ test("lands on the Laboratorio page and navigates its sections without document 
   expect(errors).toEqual([]);
 });
 
+test("uses plain labels for unordered content and keeps meaningful numbers", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".eyebrow").filter({ hasText: /^\d+\s*—|^Specimen \d+|^Q\.\d+$/ })).toHaveCount(0);
+  await expect(page.getByRole("contentinfo").locator(".eyebrow")).toHaveText(["Product", "Access", "Independent"]);
+
+  const features = page.getByRole("region", { name: "A quiet place for serious writing", exact: true });
+  await expect(features.getByRole("list")).toHaveJSProperty("tagName", "UL");
+  await expect(features.getByRole("listitem")).toHaveCount(6);
+  await expect(features.locator(".eyebrow").filter({ hasText: /^\d+$/ })).toHaveCount(0);
+  await expect(features.getByText(".md / 256 KiB", { exact: true })).toBeVisible();
+
+  const privacy = page.getByRole("region", { name: "Your words never reach us readable", exact: true });
+  await expect(privacy.locator("dt")).toHaveText([
+    "Keys live on your devices",
+    "Even names are encrypted",
+    "Nothing to sell",
+  ]);
+  await expect(page.locator("summary").first()).toHaveText("Can mdwn read my Files?");
+  await expect(page.locator("summary").filter({ hasText: /^Q\.\d+/ })).toHaveCount(0);
+  await expect(page.getByText("What is the 24-word recovery phrase for?", { exact: true })).toBeVisible();
+
+  for (const id of ["how-it-works", "publishing"]) {
+    await expect(page.locator(`#${id} ol li > span`)).toHaveText(["01", "02", "03"]);
+  }
+});
+
 test("mobile menu supports keyboard dismissal, section links and account entry", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -55,6 +87,12 @@ test("mobile menu supports keyboard dismissal, section links and account entry",
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
+  await expect(menu.getByRole("navigation", { name: "Main", exact: true }).getByRole("link")).toHaveText([
+    "How it works",
+    "Privacy",
+    "Publishing",
+    "Support",
+  ]);
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
   await expect(trigger).toBeFocused();

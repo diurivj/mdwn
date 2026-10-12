@@ -99,7 +99,7 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
           <Logo />
           <nav aria-label="Main" className="hidden lg:block">
             <ul className="flex items-center gap-1 font-mono text-[11px] uppercase tracking-[0.06em] xl:gap-3">
-              {nav.map((item, index) => {
+              {nav.map((item) => {
                 const current = item.current?.(pathname) ?? false;
                 return (
                   <li key={item.to}>
@@ -111,9 +111,6 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
                         current ? "border-ink text-ink" : "border-transparent text-ink-soft",
                       )}
                     >
-                      <span aria-hidden="true" className="mr-2 hidden text-muted xl:inline">
-                        0{index + 1}
-                      </span>
                       {item.label}
                     </SectionLink>
                   </li>
@@ -214,17 +211,14 @@ export function SiteHeader({ chrome }: { chrome: Exclude<Chrome, "reader"> }) {
 
           <nav aria-label="Main" className="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6">
             <ul className="divide-y divide-line">
-              {nav.map((item, index) => (
+              {nav.map((item) => (
                 <li key={item.to}>
                   <SectionLink
                     to={item.to}
                     onClick={closeMenu}
                     aria-current={item.current?.(pathname) ? "page" : undefined}
-                    className="flex items-baseline gap-4 py-4 text-[1.75rem] font-light leading-tight transition-colors hover:bg-sand aria-[current=page]:underline"
+                    className="block py-4 text-[1.75rem] font-light leading-tight transition-colors hover:bg-sand aria-[current=page]:underline"
                   >
-                    <span aria-hidden="true" className="eyebrow text-muted">
-                      0{index + 1}
-                    </span>
                     {item.label}
                   </SectionLink>
                 </li>

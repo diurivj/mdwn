@@ -9,6 +9,9 @@ test("opens Files from site navigation, retains account navigation and fits a na
   await mainNav.getByRole("link", { name: "Files", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
   await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
+  await expect(mainNav.getByRole("link")).toHaveText(["Files", "Account", "Devices", "Support"]);
+  const fileLink = page.getByRole("list", { name: "Folder contents" }).getByRole("link", { name: "Draft.md, File" });
+  await expect(fileLink).toHaveText(/^Draft\.md\s*Markdown File$/);
   await expect(mainNav.getByRole("link", { name: "Files", exact: true })).toHaveAttribute("aria-current", "page");
   await mainNav.getByRole("link", { name: "Account", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Account security", exact: true })).toBeVisible();
@@ -30,6 +33,14 @@ test("opens Files from site navigation, retains account navigation and fits a na
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("workspace-mobile.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "Open menu", exact: true }).click();
+  await expect(
+    page
+      .getByRole("dialog", { name: "Menu", exact: true })
+      .getByRole("navigation", { name: "Main", exact: true })
+      .locator("ul")
+      .first()
+      .getByRole("link"),
+  ).toHaveText(["Files", "Account", "Devices", "Support"]);
   await page
     .getByRole("dialog", { name: "Menu", exact: true })
     .getByRole("link", { name: "Account", exact: true })
