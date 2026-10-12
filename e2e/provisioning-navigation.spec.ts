@@ -44,10 +44,10 @@ for (const source of ["file", "device-access"] as const) {
         // An in-app transition must work even before the background import finishes.
         await page
           .getByRole("complementary", { name: "Files tree", exact: true })
-          .getByRole("link", { name: "Files", exact: true })
+          .getByRole("link", { name: "Library", exact: true })
           .click();
-        await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
-        await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
+        await expect(page).toHaveURL(/\/files$/);
+        await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
         release();
         await waitForSharedProvisioning(page);
       } else {

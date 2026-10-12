@@ -5,6 +5,7 @@ import { TEST_SESSION_COOKIE_SECRET } from "./fixtures";
 import { newPublicationIdentifier } from "../app/shared/publications/capability";
 import type { GrantKeyContext } from "../app/shared/sharing/grant-keys";
 import type { CommentKeyContext } from "../app/shared/sharing/comment-keys";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 test.use({ initialSource: "# Shared secret\n\nOnly the target File." });
 
@@ -326,6 +327,7 @@ for (const targetKind of ["file", "directory"] as const)
               .bind(workspace.rootId)
               .first(),
           ).toEqual(listingBefore);
+          await waitForSharedProvisioning(recipient);
           await recipient.reload();
           await expect(recipient.getByRole("textbox", { name: "Markdown source", exact: true })).toHaveValue(
             "# Saved directly",
@@ -456,12 +458,12 @@ for (const targetKind of ["file", "directory"] as const)
         );
         await page
           .getByRole("complementary", { name: "Files tree", exact: true })
-          .getByRole("link", { name: "Files", exact: true })
+          .getByRole("link", { name: "Library", exact: true })
           .click();
-        await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+        await expect(page).toHaveURL(/\/files$/);
         expect((await automaticDelivery).status()).toBe(200);
         await page
-          .getByRole("region", { name: "Shared access provisioning", exact: true })
+          .getByRole("complementary", { name: "Files tree", exact: true })
           .getByRole("link", { name: "Shared access", exact: true })
           .click();
         await expect(page).toHaveURL(new URL("/account/shared-access", baseURL!).href);
@@ -499,6 +501,8 @@ for (const targetKind of ["file", "directory"] as const)
             grantId,
           ),
         ).toBe(200);
+        // Settle the fresh File document before revoking its access, not after denial.
+        await waitForSharedProvisioning(pendingDevice);
         // Move only the persisted deadline across the external time boundary, not browser proof clocks.
         await workspace.db.prepare("UPDATE grants SET expires_at = 1 WHERE id = ?").bind(grantId).run();
         await pendingDevice.reload();

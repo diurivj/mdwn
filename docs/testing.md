@@ -179,6 +179,29 @@ NODE_OPTIONS='--import=./scripts/playwright-download-network.mjs' npx playwright
 Remove the workaround after an upstream fix is verified with an empty browser
 cache on the runner's network, not just an install that reuses cached binaries.
 
+Playwright stays on 1.63.0 for now. Its bundled Firefox can lose the commit of
+a page's first navigation to a document sent with COOP, so `goto` hangs although
+the page has loaded ([upstream issue](https://github.com/microsoft/playwright/issues/42731)).
+A local 200-trial plain-HTML repro stalled 71 times, and waiting for `commit`
+stalls too. The `firefox` project therefore sets
+`browser.tabs.remote.useCrossOriginOpenerPolicy` to `false`: only that test
+browser stops applying COOP, while the Worker still sends the header (asserted
+by `tests/headers.test.ts`) and Chromium and WebKit still enforce it. No e2e
+test depends on COOP enforcement. Playwright 1.64.0 fixes the defect
+([fix and regression](https://github.com/microsoft/playwright/pull/42788); 0 of
+200 in the same repro). Upgrade and drop the preference (ticket 59) once the
+WebKit prompt below has been approved on every Mac that runs the suite,
+including the CI runner account.
+
+On macOS, a newly installed WebKit asks for access to the **Playwright WebCrypto
+Master Key** Keychain item the first time it stores a browser key handle in
+IndexedDB, and key storage hangs until someone answers
+([upstream report](https://github.com/microsoft/playwright/issues/20850)).
+Playwright 1.64's WebKit does this on a Mac that ran 1.63; expect the same after
+any browser upgrade. Approve it from the desktop of the account that runs the
+tests; do not automate Keychain access, export non-extractable keys, or skip
+WebKit to pass the gate.
+
 The configured Playwright projects are named `chromium`, `firefox`, and
 `webkit`. To focus on one engine:
 
@@ -277,6 +300,12 @@ Each matrix job uploads `playwright-report/` plus `test-results/`, including
 screenshots, videos, and traces retained for failures. These artifacts can
 contain page and application details; keep them within the repository's CI
 retention/access policy and never put real credentials in browser fixtures.
+
+Playwright 1.63 restarts a copied virtual credential's `signCount` at zero, so
+`primeSyncedPasskey` advances the copy once to match its source. Playwright 1.64
+keeps the counter: that upgrade must prime only a zero-counter copy, or the
+extra assertion exhausts the enrollment fixture's catch-up attempts. The
+production verifier's counter checks remain unchanged.
 
 The auth fixture installs Playwright’s virtual WebAuthn authenticator. Linux WebKit can lack the native `PublicKeyCredential` constructor, with Playwright supplying an object placeholder; the fixture replaces a non-function value with a constructor so SimpleWebAuthn reaches the virtual authenticator. This shim is confined to the test BrowserContext; application feature detection and Worker verification remain unchanged.
 

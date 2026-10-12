@@ -223,14 +223,14 @@ An Account has:
 - an opaque unique share identifier;
 - an optional unique share handle addressed only by exact match;
 - an encrypted Account profile;
-- a generated Public pseudonym, separate from authentication and share addressing; and
+- a Public pseudonym its person chooses, separate from authentication and share addressing; and
 - zero email addresses and zero passwords.
 
 There is no Account directory or fuzzy discovery.
 
 ### 5.2 Signup
 
-1. Before requesting the registration challenge, the browser generates every piece of local bootstrap material: client-minted UUIDv7 Account ID, hidden root Directory node ID, and device ID; a non-extractable P-256 HPKE transport key pair and a separate non-extractable P-256 device-assertion signing key pair; the Vault root key, the root Directory capability key, and that capability's `vault-recovery` Key envelope under the Vault root key; the first device's `device-enrollment` Key envelope carrying the Vault root key; the 256-bit Vault recovery secret and its phrase, the public recovery salt, the recovery-enrollment key pair, the generation-1 Recovery capsule, and the matching recovery-verification public key; the encrypted Account profile carrying the generated Public pseudonym, protected under Account-owned Vault root material; and ten authentication recovery-code hashes.
+1. Before requesting the registration challenge, the browser generates every piece of local bootstrap material: client-minted UUIDv7 Account ID, hidden root Directory node ID, and device ID; a non-extractable P-256 HPKE transport key pair and a separate non-extractable P-256 device-assertion signing key pair; the Vault root key, the root Directory capability key, and that capability's `vault-recovery` Key envelope under the Vault root key; the first device's `device-enrollment` Key envelope carrying the Vault root key; the 256-bit Vault recovery secret and its phrase, the public recovery salt, the recovery-enrollment key pair, the generation-1 Recovery capsule, and the matching recovery-verification public key; the encrypted Account profile carrying the Public pseudonym the person chose (a suggestion is offered), protected under Account-owned Vault root material; and ten authentication recovery-code hashes.
 2. Apply global and network registration-challenge limits before creating a challenge.
 3. Create a random, registration-purpose-bound, five-minute challenge.
 4. Require browser proof of work: find an 8-byte nonce for which `SHA-256(challenge-bytes || nonce)` has 18 leading zero bits.
@@ -413,7 +413,7 @@ Public-thread audience behavior:
 
 ### 6.7 Public pseudonym
 
-- Every Account has one generated, non-identifying Public pseudonym used in all Comments and optional Publication attribution.
+- Every Account has one Public pseudonym used in all Comments and optional Publication attribution. Its person writes it at signup and on each change, or keeps a suggestion such as “Quiet Heron 27”. The browser normalizes it (NFC, trimmed, single spaces) and accepts 2–32 characters without control, format, private-use or unassigned characters, keeping the zero-width joiners. It is not unique, and need not be identifying; the service only stores it encrypted, so it cannot check it.
 - It is distinct from the share identifier/handle and authentication identity.
 - It may be changed at most once every 30 days.
 - A change runs as an exclusive browser-driven Pseudonym-update job across all encrypted attribution contexts. Normal work is blocked while the UI shows progress.

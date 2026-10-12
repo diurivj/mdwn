@@ -1,5 +1,6 @@
 import type { Page, Request } from "@playwright/test";
 import { installWorkspaceScript, test, expect } from "./workspace-fixture";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 const changed = "This folder changed on another device. Nothing was added, replaced, or overwritten.";
 async function create(page: Page, name: string, kind: "File" | "folder") {
@@ -9,6 +10,14 @@ async function create(page: Page, name: string, kind: "File" | "folder") {
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   return new URL(page.url()).pathname.split("/").at(-1)!;
+}
+async function openDraft(page: Page, fileId: string) {
+  await page
+    .getByRole("navigation", { name: "Files", exact: true })
+    .getByRole("link", { name: "Draft.md", exact: true })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/f/${fileId}$`));
+  await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
 }
 async function confirmDelete(page: Page) {
   await page.getByRole("button", { name: "Delete", exact: true }).click();
@@ -70,16 +79,21 @@ for (const sourceKind of ["file", "directory"] as const)
         await confirmDelete(page);
         await expect.poll(() => Boolean(release)).toBe(true);
         await page.goBack();
+        // While its loader runs, the library previews the Back destination in place of the deleted source.
+        const opening = page.getByRole("status").filter({ hasText: `Opening ${destinationName}…` });
         if (pendingLoader) {
           await expect.poll(() => Boolean(releaseBack)).toBe(true);
-          await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeVisible();
+          await expect(opening).toBeAttached();
+          await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeHidden();
         } else await expect(page.getByRole("heading", { name: destinationName, exact: true })).toBeVisible();
         release!();
         await settled;
         await page.waitForTimeout(300); // Allow the held response's continuation to run.
         await expect(page).toHaveURL(new RegExp(`${destinationUrl}$`));
         if (pendingLoader) {
-          await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeVisible();
+          // The settled deletion neither navigates nor restores the source over the newer Back preview.
+          await expect(opening).toBeAttached();
+          await expect(page.getByRole("heading", { name: sourceName, exact: true })).toBeHidden();
           releaseBack!();
         }
         await expect(page.getByRole("heading", { name: destinationName, exact: true })).toBeVisible();
@@ -90,6 +104,7 @@ for (const sourceKind of ["file", "directory"] as const)
     });
 
 test("selected File order survives reload", async ({ page, workspace }) => {
+  expect(workspace.fileId).toBeTruthy();
   await page.getByRole("button", { name: "New File", exact: true }).click();
   await page.getByRole("textbox", { name: "Name", exact: true }).fill("Second.md");
   await page.getByRole("button", { name: "Create", exact: true }).click();
@@ -111,9 +126,9 @@ test("selected File order survives reload", async ({ page, workspace }) => {
   // Stay in-app: document navigation can cancel the provisioning route's lazy import.
   await page
     .getByRole("complementary", { name: "Files tree", exact: true })
-    .getByRole("link", { name: "Files", exact: true })
+    .getByRole("link", { name: "Library", exact: true })
     .click();
-  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+  await expect(page).toHaveURL(/\/files$/);
   await expect(page.getByRole("button", { name: "Move up", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
 });
@@ -125,7 +140,7 @@ test("moves a File with contents after canonical collision review, then deletes 
   await create(page, "Destination", "folder");
   const folder = await create(page, "Nested destination", "folder");
   await create(page, "DRAFT.md", "File");
-  await page.goto(`/f/${workspace.fileId}`);
+  await openDraft(page, workspace.fileId);
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await source.fill("# Contents travel with this File");
   await source.press("ControlOrMeta+s");
@@ -149,10 +164,12 @@ test("moves a File with contents after canonical collision review, then deletes 
   await source.fill("# Saved using the new parent key");
   await source.press("ControlOrMeta+s");
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await waitForSharedProvisioning(page);
   await page.reload();
   await expect(source).toHaveValue("# Saved using the new parent key");
   await confirmDelete(page);
   await expect(page).toHaveURL(new RegExp(`/d/${folder}$`));
+  await waitForSharedProvisioning(page);
   await page.goto(`/f/${workspace.fileId}`);
   await expect(page.getByRole("heading", { name: "Not found", exact: true })).toBeVisible();
   const deleted = await page.getByRole("main").innerText();
@@ -162,12 +179,18 @@ test("moves a File with contents after canonical collision review, then deletes 
 });
 
 test("hard-deletes a Directory and all descendants", async ({ page, workspace }) => {
+  expect(workspace.rootId).toBeTruthy();
   const folder = await create(page, "Delete tree", "folder");
   const nested = await create(page, "Nested", "folder");
   const file = await create(page, "Descendant.md", "File");
-  await page.goto(`/d/${folder}`);
+  await page
+    .getByRole("navigation", { name: "Files", exact: true })
+    .getByRole("link", { name: "Delete tree", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: "Delete tree", exact: true })).toBeVisible();
   await confirmDelete(page);
-  await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+  await expect(page).toHaveURL(/\/files$/);
+  await waitForSharedProvisioning(page);
   for (const path of [`/d/${folder}`, `/d/${nested}`, `/f/${file}`]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { name: "Not found", exact: true })).toBeVisible();
@@ -183,7 +206,7 @@ for (const affected of ["source", "destination"] as const) {
     workspace,
   }) => {
     const folder = await create(page, "Destination", "folder");
-    await page.goto(`/f/${workspace.fileId}`);
+    await openDraft(page, workspace.fileId);
     await page.getByRole("button", { name: "Move", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Move", exact: true });
     await dialog.getByRole("button", { name: "Open destination Destination", exact: true }).click();
@@ -244,6 +267,19 @@ test("over-cap Directory deletion changes nothing and asks the user to reduce th
 }) => {
   test.setTimeout(90_000);
   const folder = await create(page, "Large folder", "folder");
+  const reloadLargeFolder = async () => {
+    // This persistence check loads 500 real encrypted entries, not a fast UI-only fixture.
+    const listing = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === `/api/private/tree/directories/${folder}`,
+    );
+    await page.reload();
+    const response = await listing;
+    expect(response.status()).toBe(200);
+    expect(await response.finished()).toBeNull();
+    await expect(page.getByRole("heading", { name: "Large folder", exact: true })).toBeVisible();
+  };
   // Seed at the real D1 boundary, using actual browser encryption and a signed Directory listing.
   await page.addScriptTag({ url: new URL("/__test__/workspace.js", page.url()).href });
   const seeded = await page.evaluate(
@@ -327,8 +363,7 @@ test("over-cap Directory deletion changes nothing and asks the user to reduce th
       folder,
     )
     .run();
-  await page.reload();
-  await expect(page.getByRole("heading", { name: "Large folder", exact: true })).toBeVisible();
+  await reloadLargeFolder();
   await confirmDelete(page);
   await expect(page.getByRole("alert")).toHaveText(
     "This folder contains more than 500 nodes. Reduce the subtree by moving or deleting smaller folders or Files first. Nothing was deleted.",
@@ -337,8 +372,8 @@ test("over-cap Directory deletion changes nothing and asks the user to reduce th
     .getByRole("dialog", { name: "Delete permanently", exact: true })
     .getByRole("button", { name: "Cancel", exact: true })
     .click();
-  await page.reload();
-  await expect(page.getByRole("heading", { name: "Large folder", exact: true })).toBeVisible();
+  await waitForSharedProvisioning(page);
+  await reloadLargeFolder();
   await page.getByRole("button", { name: "Expand Large folder", exact: true }).click();
   await expect(
     page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: /^Child / }),
@@ -348,7 +383,7 @@ test("over-cap Directory deletion changes nothing and asks the user to reduce th
 for (const operation of ["move", "delete"] as const) {
   test(`blocks custom paste while a ${operation} holds the saved File frozen`, async ({ page, workspace }) => {
     const folder = operation === "move" ? await create(page, "Paste target", "folder") : undefined;
-    if (folder) await page.goto(`/f/${workspace.fileId}`);
+    if (folder) await openDraft(page, workspace.fileId);
     const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
     await source.fill("# Saved before structure");
     await source.press("ControlOrMeta+s");
@@ -390,7 +425,7 @@ for (const operation of ["move", "delete"] as const) {
             .getByRole("navigation", { name: "Breadcrumbs" })
             .getByRole("link", { name: "Paste target", exact: true }),
         ).toHaveAttribute("href", `/d/${folder}`);
-      else await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+      else await expect(page).toHaveURL(/\/files$/);
     } finally {
       release?.();
     }
@@ -432,4 +467,34 @@ test("structural controls protect pending, failed, saving, and composing File dr
   await source.dispatchEvent("compositionend");
   await expect(page.getByRole("button", { name: "Move", exact: true })).toBeEnabled();
   await expect(source).toHaveValue("# Pending draft stays here");
+});
+
+test("a created or deleted node's own navigation is not reported as an interruption", async ({ page, workspace }) => {
+  await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
+  expect(workspace.fileId).toBeTruthy();
+  // Hold each destination's path read so the departing page stays rendered while it loads.
+  await page.route("**/api/private/tree/nodes/*/ancestors", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await route.continue().catch(() => {
+      /* A later navigation may cancel this loader. */
+    });
+  });
+  await page.evaluate(() => {
+    const seen = { interrupted: false };
+    Object.assign(window, { interruptionProbe: seen });
+    new MutationObserver(() => {
+      if (document.body.textContent?.includes("Navigation interrupted")) seen.interrupted = true;
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  const interrupted = () =>
+    page.evaluate(
+      () => (window as unknown as { interruptionProbe: { interrupted: boolean } }).interruptionProbe.interrupted,
+    );
+  await create(page, "From a File.md", "File");
+  await create(page, "From a File folder", "folder");
+  await create(page, "From a folder.md", "File");
+  await confirmDelete(page);
+  await expect(page.getByRole("heading", { name: "From a File folder", exact: true })).toBeVisible();
+  expect(await interrupted()).toBe(false);
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });

@@ -98,6 +98,30 @@ describe("private endpoint device lifecycle", () => {
     expect(await candidate.json()).toMatchObject({ deviceId: null, candidateActive: true });
   });
 
+  it("reads a Session's device beside it but honours it only while that Session is live", async () => {
+    const ended = Date.now() - 1;
+    for (const end of [
+      `revoked_at = ${ended}`,
+      `idle_expires_at = ${ended}`,
+      `created_at = ${ended - 1_000}, idle_expires_at = ${ended}, absolute_expires_at = ${ended}`,
+    ]) {
+      const { account, bound, deviceId, read, sign } = await fixture();
+      const proof = await sign();
+      expect((await read(bound.cookie, proof)).status).toBe(200);
+      await env.DB.prepare(`UPDATE sessions SET ${end} WHERE id = ?`).bind(bound.id).run();
+      // The device and its registry are untouched; only the Session ended.
+      expect(await env.DB.prepare("SELECT state FROM encryption_devices WHERE id = ?").bind(deviceId).first()).toEqual({
+        state: "active",
+      });
+      const refused = await read(bound.cookie, proof);
+      expect(refused.status, end).toBe(403);
+      expect(JSON.stringify(await refused.json())).not.toContain("capsule");
+      const state = await SELF.fetch("https://mdwn.test/api/device/state", { headers: { cookie: bound.cookie } });
+      expect(state.status, end).toBe(401);
+      expect(JSON.stringify(await state.json())).not.toContain(account.accountId);
+    }
+  });
+
   it("binds the entire request, never consumes a read proof, and exposes no ciphertext on invalid proof", async () => {
     const { account, bound, read, sign, url } = await fixture();
     const good = await sign();

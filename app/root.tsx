@@ -9,9 +9,9 @@ import courierLatin from "@fontsource/courier-prime/files/courier-prime-latin-40
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { useChrome } from "./ui/chrome";
+import { type Chrome, useChrome } from "./ui/chrome";
 import { ArrowRightIcon } from "./ui/icons";
-import { NavigationProgress } from "./ui/navigation-progress";
+import { usePendingPage } from "./ui/pending-page";
 import { SiteFooter } from "./ui/site-footer";
 import { SiteHeader } from "./ui/site-header";
 import { buttonClass } from "./ui/styles";
@@ -48,9 +48,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Header and footer around a page, chosen by the route's `handle.chrome`. */
-function SiteChrome({ children, footer = true }: { children: React.ReactNode; footer?: boolean }) {
-  const chrome = useChrome();
+/** Header and footer around a page, chosen by the route's `handle.chrome` unless a pending destination's applies. */
+function SiteChrome({
+  children,
+  chrome,
+  footer = true,
+}: {
+  children: React.ReactNode;
+  chrome?: Chrome;
+  footer?: boolean;
+}) {
+  const routeChrome = useChrome();
+  chrome ??= routeChrome;
   if (chrome === "reader") return children;
   return (
     <>
@@ -70,13 +79,15 @@ function SiteChrome({ children, footer = true }: { children: React.ReactNode; fo
 }
 
 export default function App() {
+  const pending = usePendingPage(useChrome());
   return (
-    <>
-      <NavigationProgress />
-      <SiteChrome>
+    <SiteChrome chrome={pending?.chrome}>
+      {pending?.page}
+      {/* The page being left stays mounted, hidden, until its destination renders. */}
+      <div className={pending ? "hidden" : "contents"}>
         <Outlet />
-      </SiteChrome>
-    </>
+      </div>
+    </SiteChrome>
   );
 }
 

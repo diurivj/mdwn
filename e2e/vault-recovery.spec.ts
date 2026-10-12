@@ -108,7 +108,8 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
     // the Vault-recovery cutover itself proves global Session and device revocation.
     await original.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await original.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(original.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // Its device is still active, so sign-in binds the Session and opens the library.
+    await expect(original.page).toHaveURL(/\/files$/);
     expect(
       (
         await original.page.evaluate(
@@ -172,7 +173,7 @@ test("a recovery code, replacement Passkey, fresh assertion and phrase restore o
     if (!stillAuthenticated.authenticated) {
       await replacement.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
       await replacement.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-      await expect(replacement.page.getByText("Signed in.", { exact: false })).toBeVisible();
+      await expect(replacement.page).toHaveURL(/\/(files|account\/device-access)$/);
     }
     await replacement.page.goto(`${origin}/recover-files`, { waitUntil: "commit" });
     await expect(replacement.page.getByRole("heading", { name: "Save your new recovery phrase" })).toBeVisible({

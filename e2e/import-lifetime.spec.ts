@@ -109,6 +109,7 @@ for (const stage of ["preparation", "opening", "upload", "commit"] as const) {
     page,
     workspace,
   }) => {
+    expect(workspace.rootId).toBeTruthy();
     const writes: { method: string; path: string }[] = [];
     const cleanups: string[] = [];
     page.on("request", (request) => {
@@ -131,10 +132,10 @@ for (const stage of ["preparation", "opening", "upload", "commit"] as const) {
       // pointer overlay; this is an SPA disposal, not a document reload.
       await page
         .getByRole("navigation", { name: "Breadcrumbs" })
-        .getByRole("link", { name: "Files", exact: true })
+        .getByRole("link", { name: "Library", exact: true })
         .press("Enter");
-      await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
-      await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
+      await expect(page).toHaveURL(/\/files$/);
+      await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
       await waitForSharedProvisioning(page);
       // A new view can already review a new selection before the old result arrives.
       await page.getByTestId("import-files-input").setInputFiles({

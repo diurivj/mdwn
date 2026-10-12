@@ -462,7 +462,7 @@ function ReviewSummary({ review }: { review: ImportReview }) {
   return (
     <>
       <dl
-        className="mt-5 grid grid-cols-2 gap-x-6 gap-y-2 border-y border-line bg-sand p-4 text-sm sm:grid-cols-[auto_minmax(0,1fr)] [&>dt]:font-mono [&>dt]:text-[12px] [&>dt]:uppercase [&>dt]:tracking-[0.12em] [&>dt]:text-muted [&>dd]:font-medium [&>dd]:text-ink"
+        className="mt-5 grid grid-cols-2 gap-x-6 gap-y-2 border border-line bg-sand p-4 text-sm sm:grid-cols-[auto_minmax(0,1fr)] [&>dt]:font-mono [&>dt]:text-[12px] [&>dt]:uppercase [&>dt]:tracking-[0.12em] [&>dt]:text-muted [&>dd]:font-medium [&>dd]:text-ink"
         data-testid="import-summary"
       >
         <dt>Source items</dt>

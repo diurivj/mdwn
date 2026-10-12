@@ -158,16 +158,3 @@ export async function exportOwnedFiles(
     incompleteCommentFiles: collected.incompleteCommentFiles,
   };
 }
-
-/** Hand one finished archive to the browser's download UI; nothing leaves the device. */
-export function downloadExport(result: ExportResult): void {
-  const url = URL.createObjectURL(result.blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = result.filename;
-  anchor.rel = "noopener";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30_000);
-}

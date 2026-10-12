@@ -5,6 +5,7 @@ import { build } from "vite";
 import type { TestHarness } from "wrangler";
 import { expect } from "../fixtures";
 import { coseP256PublicKey } from "./passkey";
+import { waitForSharedProvisioning } from "./navigation";
 
 declare global {
   interface Window {
@@ -70,6 +71,7 @@ export async function seedAccount(browser: Browser, server: TestHarness, baseURL
       route.fulfill({ contentType: "text/javascript", body: source }),
     );
     await page.goto(new URL("/sign-in", baseURL).href);
+    await expect(page.getByRole("button", { name: "Sign in with a passkey" })).toBeEnabled();
     await page.addScriptTag({ url: new URL("/__test__/seeded-account.js", baseURL).href });
     const material = await page.evaluate(() => window.seededAccountFixture.prepareAccount());
     const { accountId, deviceId, rootDirectoryId, phrase, recoveryCodes } = material;
@@ -142,9 +144,18 @@ export async function seedAccount(browser: Browser, server: TestHarness, baseURL
   }
 }
 
-/** Real WebAuthn sign-in only; deliberately does not visit a provisioning page. */
+/**
+ * Real WebAuthn sign-in. Signing in opens the library, which hands a browser
+ * without an active Encryption device over to device access.
+ */
 export async function signInAccount({ page }: Pick<SeededAccount, "page">): Promise<void> {
-  await page.goto(new URL("/sign-in", page.url()).href);
+  if (new URL(page.url()).pathname !== "/sign-in") await page.goto(new URL("/sign-in", page.url()).href);
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(page.getByText("Signed in.", { exact: false })).toBeVisible();
+  await expect(page).toHaveURL(/\/(files|account\/device-access)$/);
+  // Finish the initial private-page import before callers deliberately replace its document.
+  // An unprovisioned device-access visit has no SharedProvisioning region.
+  if (new URL(page.url()).pathname === "/files") {
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+    await waitForSharedProvisioning(page);
+  }
 }

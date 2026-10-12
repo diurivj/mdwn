@@ -153,7 +153,8 @@ async function signInSeededAccount(
   );
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   const verifyPayload = (await verificationRequest).postDataJSON() as VerifyPayload;
-  await expect(page.getByText("Signed in")).toBeVisible();
+  // Without an Encryption device, signing in opens the library, which hands over to device access.
+  await expect(page).toHaveURL(/\/account\/device-access$/);
 
   return {
     accountId,

@@ -274,9 +274,9 @@ test("a disposed unconfirmed attempt cannot refresh or replace a newer view", as
     await held.evaluate((gate) => gate.reached);
     await page
       .getByRole("navigation", { name: "Breadcrumbs" })
-      .getByRole("link", { name: "Files", exact: true })
+      .getByRole("link", { name: "Library", exact: true })
       .press("Enter");
-    await expect(page).toHaveURL(new RegExp(`/d/${workspace.rootId}$`));
+    await expect(page).toHaveURL(/\/files$/);
     await waitForSharedProvisioning(page);
     page.on("request", (request) => {
       if (new URL(request.url()).pathname === `/api/private/tree/directories/${workspace.rootId}`) targetRefreshes += 1;

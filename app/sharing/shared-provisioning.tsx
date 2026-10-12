@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 import { Link, useFetcher } from "react-router";
 import type { clientAction, clientLoader } from "~/routes/account-shared-access";
+import { cx } from "~/ui/cx";
 import { ShareIcon } from "~/ui/icons";
 
 /** Visiting Files processes bounded passes through the route's browser action.
- * No worker queue, plaintext job state, custom fetch lifecycle, or SSR data. */
-export function SharedProvisioning() {
+ * No worker queue, plaintext job state, custom fetch lifecycle, or SSR data.
+ * A caller that lists the Shared access page itself omits the link. */
+export function SharedProvisioning({ link = true, className }: { link?: boolean; className?: string }) {
   const fetcher = useFetcher<typeof clientLoader | typeof clientAction>();
   const started = useRef(false);
   const { load, submit, state, data } = fetcher;
@@ -29,7 +31,7 @@ export function SharedProvisioning() {
   // The initial idle render precedes the first load; it is not a completed check.
   return (
     <section
-      className="space-y-2 text-sm"
+      className={cx("space-y-2 text-sm", className)}
       aria-label="Shared access provisioning"
       aria-busy={state !== "idle" || data === undefined}
     >
@@ -42,10 +44,12 @@ export function SharedProvisioning() {
       {data && "state" in data && data.state === "failed" && (
         <p className="text-warning">Shared provisioning paused safely.</p>
       )}
-      <Link to="/account/shared-access" className="flex items-center gap-2 text-ink-soft transition hover:text-ink">
-        <ShareIcon className="text-muted" />
-        Shared access
-      </Link>
+      {link && (
+        <Link to="/account/shared-access" className="flex items-center gap-2 text-ink-soft transition hover:text-ink">
+          <ShareIcon className="text-muted" />
+          Shared access
+        </Link>
+      )}
     </section>
   );
 }

@@ -10,7 +10,7 @@ export function meta() {
     {
       name: "description",
       content:
-        "mdwn is an end-to-end-encrypted home for Markdown: write and organize Files, open them on the devices you approve, and publish a page when you choose.",
+        "In this agentic era, the only human thing we can defend is our privacy. mdwn is an end-to-end-encrypted home for Markdown: write and organize Files, open them on the devices you approve, and publish a page when you choose.",
     },
   ];
 }

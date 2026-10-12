@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { test, expect } from "./fixtures";
 import { seedAccount, signInAccount } from "./support/seeded-account";
 import { primeSyncedPasskey } from "./support/passkey";
+import { waitForSharedProvisioning } from "./support/navigation";
 
 test.setTimeout(240_000);
 
@@ -50,7 +51,8 @@ test("a synced Passkey needs QR approval before the second browser can open File
     candidate = await withPasskey(browser, origin, passkey);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // Without an Encryption device here, signing in opens device access.
+    await expect(candidate.page).toHaveURL(/\/account\/device-access$/);
     await candidate.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
     await expect(candidate.page.getByRole("heading", { name: "Restore private access" })).toBeVisible();
     await candidate.page.getByRole("link", { name: "Enroll this device" }).click();
@@ -167,6 +169,7 @@ test("a synced Passkey needs QR approval before the second browser can open File
     await candidate.page.unroute("**/api/private/recovery-provision/next");
     await candidate.page.goto(`${origin}/account/device-access`, { waitUntil: "commit" });
     await expect(candidate.page.getByRole("heading", { name: "Private access ready" })).toBeVisible();
+    await waitForSharedProvisioning(candidate.page);
     expect(sent.every((request) => !request.includes(rawSecret) && !request.includes("Second device"))).toBe(true);
     const devices = await env.DB.prepare("SELECT state FROM encryption_devices ORDER BY created_at").all<{
       state: string;
@@ -262,7 +265,8 @@ test("lost candidate keys, expiry, and stale registry state restart without acti
     candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // Without an Encryption device here, signing in opens device access.
+    await expect(candidate.page).toHaveURL(/\/account\/device-access$/);
     await candidate.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
 
     const start = async () => {
@@ -345,7 +349,8 @@ test("approval tampering, stale freshness, and a removed approver never activate
     candidate = await withPasskey(browser, origin, (await original.context.credentials.get())[0]!);
     await candidate.page.goto(`${origin}/sign-in`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(candidate.page.getByText("Signed in.", { exact: false })).toBeVisible();
+    // Without an Encryption device here, signing in opens device access.
+    await expect(candidate.page).toHaveURL(/\/account\/device-access$/);
     await candidate.page.goto(`${origin}/enroll-device`, { waitUntil: "commit" });
     await candidate.page.getByRole("button", { name: "Create pairing QR code" }).click();
     await expect(candidate.page.getByRole("heading", { name: "Scan this QR code" })).toBeVisible();

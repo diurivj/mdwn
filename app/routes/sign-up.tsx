@@ -1,23 +1,42 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router";
+import { Link, redirect, useNavigate } from "react-router";
 
+import { hasActiveDeviceSession } from "~/device/proof.server";
+import { getEnv } from "~/context/env";
+import { RecoveryDownload } from "~/recovery/recovery-download";
+import { recoveryCodesText, recoveryPhraseText } from "~/shared/account/recovery-text";
+import {
+  PSEUDONYM_MAX_CHARACTERS,
+  PSEUDONYM_PROBLEMS,
+  pseudonymProblem,
+  suggestPseudonym,
+} from "~/shared/account/pseudonym";
 import { commitSignup, confirmSignupRecovery, prepareSignup, type PreparedSignup } from "~/signup/bootstrap";
 import { HoneypotField } from "~/shared/security/honeypot-field";
 import { HONEYPOT_FIELD_NAME } from "~/shared/security/honeypot";
 import { cx } from "~/ui/cx";
-import { ArrowRightIcon, CheckIcon, FolderIcon, KeyIcon, LockIcon, ShieldIcon } from "~/ui/icons";
+import { CheckIcon, KeyIcon, LockIcon, RefreshIcon, ShieldIcon } from "~/ui/icons";
 import { FocusLayout, PageIntro } from "~/ui/page-layouts";
 import { markSignedIn } from "~/ui/session-presence";
-import { buttonClass, fieldClass, linkClass, noticeClass } from "~/ui/styles";
+import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
+
+import type { Route } from "./+types/sign-up";
 
 export function meta() {
   return [{ title: "Sign up — mdwn" }];
 }
 
-type Stage = "ready" | "working" | "phrase" | "codes" | "done" | "failed";
+/** A device-bound Session already has an Account here; it reads nothing else. */
+export async function loader({ request, context }: Route.LoaderArgs) {
+  if (await hasActiveDeviceSession(request, getEnv(context)).catch(() => false)) return redirect("/files");
+  return null;
+}
+
+type Stage = "ready" | "working" | "phrase" | "codes" | "failed";
 
 export default function SignUp() {
   const [stage, setStage] = useState<Stage>("ready");
+  const navigate = useNavigate();
   const [hydrated, setHydrated] = useState(false);
   const mounted = useRef(false);
   const controller = useRef<AbortController | null>(null);
@@ -35,17 +54,23 @@ export default function SignUp() {
   const [indices, setIndices] = useState<number[]>([]);
   const [words, setWords] = useState(["", "", ""]);
   const [mismatch, setMismatch] = useState(false);
+  // Suggested after hydration, so the server-rendered page is the same for everyone.
+  const [pseudonym, setPseudonym] = useState("");
+  useEffect(() => {
+    setPseudonym(suggestPseudonym());
+  }, []);
+  const pseudonymIssue = hydrated ? pseudonymProblem(pseudonym) : null;
   const busy = useRef(false);
 
   async function createAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy.current) return;
+    if (busy.current || pseudonymProblem(pseudonym)) return;
     busy.current = true;
     setStage("working");
     setPrepared(null);
     try {
       honeypot.current = String(new FormData(event.currentTarget).get(HONEYPOT_FIELD_NAME) ?? "");
-      const created = await prepareSignup();
+      const created = await prepareSignup(pseudonym);
       if (!mounted.current) return;
       const positions = Array.from({ length: 24 }, (_, index) => index);
       for (let i = positions.length - 1; i > 0; i--) {
@@ -92,7 +117,8 @@ export default function SignUp() {
       controller.current = current;
       await commitSignup(prepared, honeypot.current, current.signal);
       markSignedIn();
-      if (mounted.current) setStage("done");
+      // Signed in: the new library is home. Its recovery material has been shown for the last time.
+      if (mounted.current) navigate("/files", { replace: true });
     } catch {
       // Storage must be writable; network failures may still follow a commit.
       if (mounted.current) setStage("failed");
@@ -112,36 +138,76 @@ export default function SignUp() {
       </PageIntro>
       {(stage === "ready" || stage === "working" || stage === "failed") && (
         <>
-          <ul className="mt-8 divide-y divide-line border-y border-line bg-paper text-sm">
-            {(
-              [
-                [LockIcon, "Your recovery phrase", "24 words that can restore your Files. mdwn never receives them."],
-                [ShieldIcon, "Ten recovery codes", "One-time codes that let you add a passkey if you lose them all."],
-                [KeyIcon, "Your passkey", "Your browser creates it last. There is no password, ever."],
-              ] as const
-            ).map(([Icon, title, body]) => (
-              <li key={title} className="flex gap-4 py-5">
-                <span className="grid size-10 shrink-0 place-items-center border border-line bg-cream text-ink">
-                  <Icon />
-                </span>
-                <span>
-                  <span className="block font-medium text-ink">{title}</span>
-                  <span className="mt-0.5 block leading-relaxed text-ink-soft">{body}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-          {stage === "failed" && (
-            <p role="alert" className={cx(noticeClass("danger"), "mt-6")}>
-              We could not create your account. Try again, or sign in if your passkey was saved.
-            </p>
-          )}
           <form className="mt-8" onSubmit={createAccount}>
+            <div className="border border-line bg-cream p-6 sm:p-7">
+              <label className={labelClass} htmlFor="signup-pseudonym">
+                Public pseudonym
+              </label>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <div className="min-w-0 flex-1 basis-48">
+                  <input
+                    id="signup-pseudonym"
+                    value={pseudonym}
+                    onChange={(event) => setPseudonym(event.target.value)}
+                    disabled={!hydrated || stage === "working"}
+                    maxLength={PSEUDONYM_MAX_CHARACTERS * 2}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={pseudonymIssue ? true : undefined}
+                    aria-describedby={pseudonymIssue ? "signup-pseudonym-problem" : "signup-pseudonym-help"}
+                    className={fieldClass()}
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={!hydrated || stage === "working"}
+                  onClick={() => setPseudonym(suggestPseudonym())}
+                  className={buttonClass("secondary")}
+                >
+                  <RefreshIcon />
+                  Suggest
+                </button>
+              </div>
+              {pseudonymIssue ? (
+                <p id="signup-pseudonym-problem" role="alert" className="mt-2 text-sm text-danger">
+                  {PSEUDONYM_PROBLEMS[pseudonymIssue]}
+                </p>
+              ) : (
+                <p id="signup-pseudonym-help" className="mt-2 text-xs leading-relaxed text-muted">
+                  The name others see on your comments and on pages that credit you. It doesn’t have to be your real
+                  name, and you can change it later.
+                </p>
+              )}
+            </div>
+            <ul className="mt-6 divide-y divide-line border-y border-line bg-paper text-sm">
+              {(
+                [
+                  [LockIcon, "Your recovery phrase", "24 words that can restore your Files. mdwn never receives them."],
+                  [ShieldIcon, "Ten recovery codes", "One-time codes that let you add a passkey if you lose them all."],
+                  [KeyIcon, "Your passkey", "Your browser creates it last. There is no password, ever."],
+                ] as const
+              ).map(([Icon, title, body]) => (
+                <li key={title} className="flex gap-4 py-5">
+                  <span className="grid size-10 shrink-0 place-items-center border border-line bg-cream text-ink">
+                    <Icon />
+                  </span>
+                  <span>
+                    <span className="block font-medium text-ink">{title}</span>
+                    <span className="mt-0.5 block leading-relaxed text-ink-soft">{body}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {stage === "failed" && (
+              <p role="alert" className={cx(noticeClass("danger"), "mt-6")}>
+                We could not create your account. Try again, or sign in if your passkey was saved.
+              </p>
+            )}
             <HoneypotField />
             <button
               type="submit"
-              disabled={!hydrated || stage === "working"}
-              className={cx(buttonClass("primary", "lg"), "w-full")}
+              disabled={!hydrated || stage === "working" || pseudonymIssue !== null}
+              className={cx(buttonClass("primary", "lg"), "mt-8 w-full")}
             >
               {stage === "working" ? "Creating your account…" : "Create account"}
             </button>
@@ -160,7 +226,7 @@ export default function SignUp() {
         <section className="mt-10">
           <h2 className="font-display text-3xl font-light leading-tight tracking-tight">Save your recovery phrase</h2>
           <p className="mt-2 text-ink-soft">
-            Write these 24 words down and keep them somewhere safe. They cannot be recovered for you.
+            Write these 24 words down, or save them as a text file you keep offline. They cannot be recovered for you.
           </p>
           <ol className="mt-6 grid grid-cols-2 gap-x-6 border border-line bg-cream px-6 py-4 sm:grid-cols-3 md:grid-cols-4">
             {secrets.phrase.split(" ").map((word, index) => (
@@ -170,6 +236,16 @@ export default function SignUp() {
               </li>
             ))}
           </ol>
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <RecoveryDownload
+              name="mdwn-recovery-phrase"
+              text={recoveryPhraseText(secrets.phrase)}
+              label="Download phrase"
+            />
+            <p className="text-xs text-muted">
+              Saved by your browser only. A .gz opens with a double-click; keep it apart from your recovery codes.
+            </p>
+          </div>
           <form onSubmit={checkWords} className="mt-8 border border-line bg-sand p-6 sm:p-8">
             <p className="font-medium">Verify your copy by entering these words:</p>
             <div className="mt-4 grid gap-4 sm:grid-cols-3">
@@ -224,6 +300,13 @@ export default function SignUp() {
               </li>
             ))}
           </ol>
+          <div className="mt-4">
+            <RecoveryDownload
+              name="mdwn-recovery-codes"
+              text={recoveryCodesText(secrets.recoveryCodes, prepared?.transcriptBase.accountId)}
+              label="Download codes"
+            />
+          </div>
           <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
             <button type="button" onClick={confirmCodes} className={buttonClass("primary", "lg")}>
               I saved my phrase and codes
@@ -231,26 +314,6 @@ export default function SignUp() {
             <p className="text-sm text-muted">Next, your browser creates your passkey.</p>
           </div>
         </section>
-      )}
-      {stage === "done" && (
-        <div className={cx(noticeClass("success"), "mt-8 animate-rise")}>
-          <p>
-            <span className="font-medium">Your account is ready.</span> Your recovery material will not be shown again.
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link to="/files" className={buttonClass("primary", "sm")}>
-              <FolderIcon />
-              Open your Files
-            </Link>
-            <Link to="/account/device-access" className={buttonClass("secondary", "sm")}>
-              Check private access
-            </Link>
-            <Link to="/account/security" className={buttonClass("ghost", "sm")}>
-              Add a second passkey
-              <ArrowRightIcon />
-            </Link>
-          </div>
-        </div>
       )}
     </FocusLayout>
   );

@@ -45,7 +45,7 @@ export default function Support({ loaderData }: Route.ComponentProps) {
             in one of the cryptocurrencies below. This page needs no account, sets no cookies, and records nothing.
           </p>
         </PageIntro>
-        <div className="self-end border-y border-ink bg-sand p-6 text-ink">
+        <div className="self-end border border-ink bg-sand p-6 text-ink">
           <HeartIcon className="size-6 text-ink" />
           <p className="mt-6 font-display text-2xl font-light leading-snug tracking-tight">Optional support only.</p>
           <p className="mt-2 text-sm leading-relaxed text-ink-soft">mdwn is never monetized and has no billing.</p>
@@ -84,7 +84,7 @@ export default function Support({ loaderData }: Route.ComponentProps) {
         )}
       </section>
 
-      <div className="mt-14 grid divide-y divide-line border-y border-line bg-sand md:grid-cols-3 md:divide-x md:divide-y-0">
+      <div className="mt-14 grid divide-y divide-line border border-line bg-sand md:grid-cols-3 md:divide-x md:divide-y-0">
         <section className="p-6 sm:p-7" aria-labelledby="funding-heading">
           <h2 id="funding-heading" className="font-display text-2xl font-light leading-tight tracking-tight">
             What donations cover
