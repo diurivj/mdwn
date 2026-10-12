@@ -172,6 +172,16 @@ export function createAccountSessionStorage(env: Env): SessionStorage<StoredSess
   });
 }
 
+/**
+ * The signed Session identifier the request's cookie carries, verified but not
+ * yet looked up: callers may read rows keyed by it alongside `getActiveSession`,
+ * which alone decides whether that Session is live.
+ */
+export async function sessionCookieId(request: Request, env: Env): Promise<string | null> {
+  const id: unknown = await sessionCookie(env).parse(request.headers.get("cookie"));
+  return typeof id === "string" && id ? id : null;
+}
+
 /** Reads D1 only. Session use never extends the idle lifetime implicitly. */
 export async function getActiveSession(request: Request, env: Env): Promise<ActiveSession | null> {
   const storage = createAccountSessionStorage(env);

@@ -7,7 +7,7 @@ import {
   webauthnChallenges,
   sql,
 } from "~/shared/db/client.server";
-import { getActiveSession, type ActiveSession } from "~/auth/session.server";
+import { getActiveSession, sessionCookieId, type ActiveSession } from "~/auth/session.server";
 import { sessionBindingDigest, verifyDeviceProof, type DeviceProof } from "../shared/device/proof";
 
 const COARSE_PROOF_MS = 86_400_000;
@@ -37,6 +37,23 @@ async function activeDevice(env: Env, accountId: string, deviceId: string): Prom
   );
 }
 
+/**
+ * The active device bound to the Session row this signed identifier names,
+ * whether or not that Session is still live: the caller decides liveness.
+ * A Session's device binding never changes after the Session is created.
+ */
+async function boundDevice(env: Env, sessionId: string): Promise<ActiveDevice | null> {
+  return (
+    (await createDb(env.DB).get<ActiveDevice>(sql`
+    SELECT d.assertion_public_key, r.registry_epoch
+    FROM sessions s
+    JOIN encryption_devices d ON d.id = s.device_id AND d.account_id = s.account_id AND d.state = 'active'
+    JOIN account_encryption_identities r ON r.account_id = d.account_id
+    WHERE s.id = ${sessionId}
+  `)) ?? null
+  );
+}
+
 /** Prospective Session ID is the sign-in challenge ID; no Session exists until the assertion completes. */
 export async function verifySignInDevice(
   env: Env,
@@ -60,15 +77,22 @@ export async function verifySignInDevice(
   return valid ? proof.deviceId : null;
 }
 
-/** No persistent read-proof consumption: identical read requests cannot mutate anything. */
+/**
+ * No persistent read-proof consumption: identical read requests cannot mutate
+ * anything. Every D1 read is a network round trip, so the Session's bound
+ * device is read beside the Session itself, keyed by the same signed
+ * identifier; it counts only once `getActiveSession` finds that Session live.
+ */
 export async function authorizePrivateRequest(
   request: Request,
   env: Env,
   proof: unknown,
   body: string | Uint8Array = "",
 ): Promise<AuthorizedDevice | null> {
-  const session = await getActiveSession(request, env);
-  return session ? authorizeDeviceForSession(env, session, request, proof, body) : null;
+  const sessionId = await sessionCookieId(request, env);
+  if (!sessionId) return null;
+  const [session, device] = await Promise.all([getActiveSession(request, env), boundDevice(env, sessionId)]);
+  return session ? verifySessionDevice(session, device, request, proof, body) : null;
 }
 
 export async function authorizeDeviceForSession(
@@ -79,7 +103,24 @@ export async function authorizeDeviceForSession(
   body: string | Uint8Array = "",
 ): Promise<AuthorizedDevice | null> {
   if (session.purpose !== "normal" || !session.deviceId) return null;
-  const device = await activeDevice(env, session.accountId, session.deviceId);
+  return verifySessionDevice(
+    session,
+    await activeDevice(env, session.accountId, session.deviceId),
+    request,
+    proof,
+    body,
+  );
+}
+
+/** The proof must come from this Session's active device, at its current registry epoch. */
+async function verifySessionDevice(
+  session: ActiveSession,
+  device: ActiveDevice | null,
+  request: Request,
+  proof: unknown,
+  body: string | Uint8Array,
+): Promise<AuthorizedDevice | null> {
+  if (session.purpose !== "normal" || !session.deviceId) return null;
   if (
     !device ||
     !(await verifyDeviceProof(proof, new Uint8Array(device.assertion_public_key), {

@@ -50,6 +50,8 @@ The CSP is single-value, nonce-based, and allows first-party resources only (`sc
 The policy lives in `app/shared/security/headers.ts` (pure) and is asserted by `tests/headers.test.ts`.
 Camera access is limited to this origin for the device-enrollment QR scanner and still requires browser permission.
 
+Workers Static Assets answers requests for build files before the Worker runs, so the Worker's headers do not reach them. `public/_headers` (copied into `build/client/`) marks the content-hashed `/assets/*` files `Cache-Control: public, max-age=31536000, immutable`: a changed file gets a new name, so a browser never needs to revalidate one. Other static files keep the platform's revalidating default.
+
 ## 3. Secrets and environment variables
 
 - **Production/preview values** are Cloudflare Secrets, read via `env.NAME`. Never via `vars`, never shipped in the bundle. CI uploads the Session signing and abuse-control HMAC secrets together with reviewed Worker code using `wrangler deploy --secrets-file`; omitted existing secrets, including `HEALTHZ_TOKEN`, are preserved. Do not use `wrangler secret put` to prepare this release: that command immediately deploys a Worker version.
