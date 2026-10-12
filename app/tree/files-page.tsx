@@ -52,6 +52,7 @@ import {
   type TreeEntry,
   type TreeKind,
 } from "../shared/tree/client";
+import { keyOpenedFrom } from "~/shared/tree/path-rules";
 import { FileEditor } from "./file-editor";
 import { useTabMemoryRevalidation } from "./use-tab-memory-revalidation";
 import {
@@ -301,7 +302,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       const parentKey = parentId && snapshot.keys[parentId];
       if (!parentKey) throw new Error("private tree unavailable");
       const key = await openChildDirectory(snapshot.access, parentKey, entry);
-      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, signal);
+      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, entry.keyEpoch ?? 1, signal);
       if (signal.aborted) return;
       setSnapshot(
         (previous) =>
@@ -351,7 +352,14 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       ...(current.operation === "delete" && current.kind === "directory" ? [current.nodeId] : []),
     ]);
     const listings = { ...snapshot.listings };
-    for (const id of ids) listings[id] = await loadVerifiedDirectory(snapshot.access, id, snapshot.keys[id]!, signal);
+    for (const id of ids)
+      listings[id] = await loadVerifiedDirectory(
+        snapshot.access,
+        id,
+        snapshot.keys[id]!,
+        keyOpenedFrom(snapshot.listings, id)?.epoch ?? null,
+        signal,
+      );
     signal.throwIfAborted();
     const next = { ...snapshot, listings };
     setSnapshot(next);
@@ -390,7 +398,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     try {
       const parentId = dialog.destinationId;
       const key = await openChildDirectory(snapshot.access, snapshot.keys[parentId]!, entry);
-      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, signal);
+      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, entry.keyEpoch ?? 1, signal);
       if (signal.aborted) return;
       setSnapshot(
         (previous) =>

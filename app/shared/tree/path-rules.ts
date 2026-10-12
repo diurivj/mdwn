@@ -93,29 +93,47 @@ export function restorableFolders(
   return level;
 }
 
+/**
+ * Whether `parent` — an accepted listing — has a Directory entry for
+ * `childId` at this key epoch. A Directory key is kept only with the accepted
+ * entry that proves its epoch, so a key opened from an older entry (before a
+ * Key rotation, say) never stands beside a newer listing.
+ */
+export function keyProven(parent: DirectoryListing | undefined, childId: string, epoch: number): boolean {
+  const entry = parent?.entries.find((child) => child.nodeId === childId);
+  return entry?.kind === "directory" && (entry.keyEpoch ?? 1) === epoch;
+}
+
+/** The parent and key epoch of the Directory entry a key was opened from, in the listings it was opened with. */
+export function keyOpenedFrom(
+  listings: Readonly<Record<string, DirectoryListing>>,
+  childId: string,
+): { parentId: string; epoch: number } | null {
+  for (const listing of Object.values(listings)) {
+    const entry = listing.entries.find((child) => child.nodeId === childId);
+    if (entry?.kind === "directory") return { parentId: listing.directoryId, epoch: entry.keyEpoch ?? 1 };
+  }
+  return null;
+}
+
 type Opened = { listings: Record<string, DirectoryListing>; keys: Record<string, Uint8Array> };
 
 /**
  * Merge a later result over what a page holds without going backwards: a
  * listing is replaced only by one at the same or a newer revision (one
  * browser's rollback checkpoint makes a same-revision listing the same head),
- * and a child key only with the parent listing that proves it.
+ * and a child key only when the merged parent entry proves its epoch.
  */
 export function mergeListings(previous: Opened, update: Opened): Opened {
   const listings = { ...previous.listings };
-  const accepted = new Set<string>();
   for (const [id, listing] of Object.entries(update.listings)) {
     const held = previous.listings[id];
-    if (held && held.entriesRevision > listing.entriesRevision) continue;
-    listings[id] = listing;
-    accepted.add(id);
+    if (!held || held.entriesRevision <= listing.entriesRevision) listings[id] = listing;
   }
   const keys = { ...previous.keys };
   for (const [id, key] of Object.entries(update.keys)) {
-    const parent = Object.values(update.listings).find((listing) =>
-      listing.entries.some((entry) => entry.nodeId === id),
-    );
-    if (!keys[id] || (parent && accepted.has(parent.directoryId))) keys[id] = key;
+    const source = keyOpenedFrom(update.listings, id);
+    if (source ? keyProven(listings[source.parentId], id, source.epoch) : !keys[id]) keys[id] = key;
   }
   return { listings, keys };
 }

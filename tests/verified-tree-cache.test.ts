@@ -7,8 +7,8 @@ import {
   registerPrivateTabMemory,
 } from "../app/shared/device/private-tab-memory";
 import type { DirectoryListing, RootAccess, TreeEntry } from "../app/shared/tree/client";
+import { EXPANDED_CHECKED } from "../app/shared/tree/path-rules";
 import {
-  EXPANDED_CHECKED,
   invalidateMessage,
   parseTreeMessage,
   VerifiedTreeCache,
@@ -47,16 +47,19 @@ function entry(nodeId: string, kind: "directory" | "file", name: string, keyEpoc
     ...(keyEpoch === undefined ? {} : { keyEpoch }),
   };
 }
-function listing(directoryId: string, entries: TreeEntry[], entriesRevision = 2): DirectoryListing {
-  return { directoryId, entriesRevision, entries, canCreate: true };
+function listing(directoryId: string, entries: TreeEntry[], entriesRevision = 2, keyEpoch?: number): DirectoryListing {
+  return { directoryId, entriesRevision, entries, canCreate: true, ...(keyEpoch === undefined ? {} : { keyEpoch }) };
 }
+/** What a walk records: each key carries the epoch of the entry it was opened from, in this walk's own listings. */
 function verified(listings: DirectoryListing[], keys: Record<string, Uint8Array> = {}, root = access) {
+  const epochOf = (id: string) =>
+    listings.flatMap((item) => item.entries).find((child) => child.nodeId === id)?.keyEpoch ?? 1;
   return {
     access: root,
     listings: Object.fromEntries(
       listings.map((item) => [item.directoryId, { listing: item, digest: `d${item.entriesRevision}` }]),
     ),
-    keys,
+    keys: Object.fromEntries(Object.entries(keys).map(([id, value]) => [id, { key: value, epoch: epochOf(id) }])),
   };
 }
 
@@ -66,7 +69,7 @@ function harness(limit?: number) {
     generation: 1,
     scope: scope as TreeCacheScope | null,
     suspended: false,
-    checkpoints: new Map<string, { revision: number; digest: string }>(),
+    checkpoints: new Map<string, { revision: number; digest: string } | "malformed">(),
   };
   const cache = new VerifiedTreeCache({
     limit,
@@ -166,6 +169,13 @@ describe("VerifiedTreeCache path snapshots", () => {
     expect(cache.pathSnapshot({ nodeId: B, kind: "directory" })).toBeNull();
     expect(cache.cached(A)).toBeNull();
     expect(cache.pathSnapshot(null)).not.toBeNull();
+  });
+
+  it("misses a listing whose checkpoint is malformed, as the cold walk refuses it", () => {
+    const { cache, state } = harness();
+    cache.record(verified(tree()), 1);
+    state.checkpoints.set(`${ACCOUNT}:${ROOT}`, "malformed");
+    expect(cache.pathSnapshot(null)).toBeNull();
   });
 
   it("misses a listing whose same-revision checkpoint names another head", () => {
@@ -268,6 +278,34 @@ describe("VerifiedTreeCache bounds and invalidation", () => {
     cache.record(verified(tree()), 1);
     cache.forgetRoot(ROOT);
     expect(cache.pathSnapshot(null)).toBeNull();
+  });
+});
+
+describe("VerifiedTreeCache across a Key rotation", () => {
+  // Before the rotation: Notes (A) at key epoch 1. After it: epoch 2, a new key, new revisions.
+  const before = () =>
+    verified([listing(ROOT, [entry(A, "directory", "Notes", 1)], 2), listing(A, [], 2, 1)], { [A]: key(10) });
+  const after = () =>
+    verified([listing(ROOT, [entry(A, "directory", "Notes", 2)], 3), listing(A, [], 3, 2)], { [A]: key(20) });
+
+  it.each([
+    ["the older walk records last", [after, before]],
+    ["the older walk records first", [before, after]],
+  ])("keeps the rotated key and listing when %s", (_label, order) => {
+    const { cache } = harness();
+    for (const walk of order) cache.record(walk(), 1);
+    const snapshot = cache.pathSnapshot({ nodeId: A, kind: "directory" });
+    expect(snapshot?.keys[A]).toEqual(key(20));
+    expect(snapshot?.listings[A]?.keyEpoch).toBe(2);
+    expect(snapshot?.listings[ROOT]?.entriesRevision).toBe(3);
+  });
+
+  it("never replaces root access with an older capability epoch", () => {
+    const { cache } = harness();
+    const rotated = { ...access, rootKey: key(30), capability: { id: ROOT, epoch: 2 } };
+    cache.record(verified([listing(ROOT, [], 3, 2)], {}, rotated), 1);
+    cache.record(verified([listing(ROOT, [], 2, 1)], {}, access), 1);
+    expect(cache.pathSnapshot(null)?.access).toBe(rotated);
   });
 });
 

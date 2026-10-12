@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DirectoryListing, RootAccess, TreeEntry } from "../app/shared/tree/client";
 import {
+  keyProven,
   mergeListings,
   pathCrumbs,
   pathStep,
@@ -88,6 +89,21 @@ describe("monotonic listing merges", () => {
     expect(merged.listings.notes).toBe(listings.notes);
     expect(merged.keys.made).toEqual(key(9));
     expect(merged.keys.notes).toEqual(key(4));
+  });
+
+  it("keeps a child key only with the accepted parent entry that proves its epoch, across a rotation", () => {
+    const rotatedEntry = { ...entry("notes", "directory", "Notes"), keyEpoch: 2 };
+    const rotated = listing("root", [rotatedEntry], 3);
+    // A revalidation fetched before the rotation committed arrives late.
+    const merged = mergeListings(
+      { listings: { root: rotated }, keys: { notes: key(20) } },
+      { listings: { root: listings.root }, keys: { notes: key(10) } },
+    );
+    expect(merged.listings.root).toBe(rotated);
+    expect(merged.keys.notes).toEqual(key(20));
+    expect(keyProven(rotated, "notes", 2)).toBe(true);
+    expect(keyProven(rotated, "notes", 1)).toBe(false);
+    expect(keyProven(listings.root, "draft", 1)).toBe(false); // a File entry proves no Directory key
   });
 
   it("takes a newer or equal revision", () => {

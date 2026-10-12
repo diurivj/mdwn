@@ -1,8 +1,7 @@
 import type { DirectoryListing, RootAccess, TreeKind } from "./client";
-import { EXPANDED_CHECKED, pathStep, restorableFolders, rootAccepts } from "./path-rules";
+import { headBehind, type ListingMark } from "./listing";
+import { EXPANDED_CHECKED, keyProven, pathStep, restorableFolders, rootAccepts } from "./path-rules";
 import { isV7 } from "./wire";
-
-export { EXPANDED_CHECKED };
 
 /**
  * The tab's memory of what it has already verified in the private tree
@@ -23,10 +22,12 @@ export { EXPANDED_CHECKED };
  */
 export type TreeCacheScope = { accountId: string; deviceId: string };
 export type VerifiedListing = { listing: DirectoryListing; digest: string };
+/** An opened Directory key with the key epoch of the entry it was opened from. */
+export type OpenedKey = { key: Uint8Array; epoch: number };
 export type VerifiedTree = {
   access: RootAccess;
   listings: Record<string, VerifiedListing>;
-  keys: Record<string, Uint8Array>;
+  keys: Record<string, OpenedKey>;
 };
 export type PathSnapshot = {
   access: RootAccess;
@@ -35,8 +36,8 @@ export type PathSnapshot = {
   listings: Record<string, DirectoryListing>;
   keys: Record<string, Uint8Array>;
 };
-/** The browser's rollback checkpoint for a listing (`rememberListing`), or null. */
-export type ListingCheckpoint = (vaultId: string, directoryId: string) => { revision: number; digest: string } | null;
+/** The browser's rollback checkpoint for a listing (`listingCheckpoint`): none, a head, or unreadable. */
+export type ListingCheckpoint = (vaultId: string, directoryId: string) => ListingMark | null | "malformed";
 
 const DEFAULT_LIMIT = 200;
 /** Grant roots are few; this only bounds a long session that opens many. */
@@ -44,7 +45,10 @@ const ROOT_LIMIT = 32;
 /** The private path bound the Worker enforces (ticket 16). */
 const MAX_DEPTH = 101;
 
-type KeyRecord = { key: Uint8Array; epoch: number };
+const markOf = (verified: VerifiedListing): ListingMark => ({
+  revision: verified.listing.entriesRevision,
+  digest: verified.digest,
+});
 
 export class VerifiedTreeCache {
   readonly #limit: number;
@@ -58,7 +62,7 @@ export class VerifiedTreeCache {
   readonly #roots = new Map<string, RootAccess>();
   /** Map order is recency: the first entry is the least recently used. */
   readonly #listings = new Map<string, VerifiedListing>();
-  readonly #keys = new Map<string, KeyRecord>();
+  readonly #keys = new Map<string, OpenedKey>();
   /** Child node id → the cached Directory listing that contains it. */
   readonly #parents = new Map<string, string>();
   readonly #listeners = new Set<(directoryIds: string[]) => void>();
@@ -156,7 +160,11 @@ export class VerifiedTreeCache {
    * the walk started under: results from before a discard, for an Account
    * other than device state's, or while the tab stays hidden after its
    * hidden-timeout clear are refused. A listing never replaces a newer one,
-   * or another head at the same revision. Returns whether anything was kept.
+   * or another head at the same revision; root access never replaces one
+   * with a newer capability epoch; and a key is kept only when the held
+   * parent entry proves the epoch it was opened from. So an older walk that
+   * records last (across a Key rotation, say) cannot bring back a retired
+   * key. Returns whether anything was kept.
    */
   record(tree: VerifiedTree, since: number): boolean {
     const scope = this.#scope();
@@ -165,8 +173,11 @@ export class VerifiedTreeCache {
     if (this.#owner && (this.#owner.generation !== since || !sameScope(this.#owner.scope, scope))) this.clear();
     this.#owner = { generation: since, scope };
     const { access } = tree;
-    this.#roots.delete(access.rootId);
-    this.#roots.set(access.rootId, access);
+    const heldRoot = this.#roots.get(access.rootId);
+    if (!heldRoot || (heldRoot.capability?.epoch ?? 1) <= (access.capability?.epoch ?? 1)) {
+      this.#roots.delete(access.rootId);
+      this.#roots.set(access.rootId, access);
+    }
     if (access.vaultId === access.actorAccountId) this.#libraryRootId = access.rootId;
     for (const rootId of this.#roots.keys()) {
       if (this.#roots.size <= ROOT_LIMIT) break;
@@ -175,30 +186,22 @@ export class VerifiedTreeCache {
     for (const [directoryId, verified] of Object.entries(tree.listings)) {
       if (verified.listing.directoryId !== directoryId) continue;
       const held = this.#listings.get(directoryId);
-      if (
-        held &&
-        (held.listing.entriesRevision > verified.listing.entriesRevision ||
-          (held.listing.entriesRevision === verified.listing.entriesRevision && held.digest !== verified.digest))
-      )
-        continue;
+      if (held && headBehind(markOf(held), markOf(verified))) continue;
       this.#dropListing(directoryId);
       this.#listings.set(directoryId, verified);
       for (const child of verified.listing.entries) {
         this.#parents.set(child.nodeId, directoryId);
         // A key opened from an older entry no longer matches its parent's verified listing.
         const key = this.#keys.get(child.nodeId);
-        if (key && (child.kind !== "directory" || key.epoch !== (child.keyEpoch ?? 1))) this.#keys.delete(child.nodeId);
+        if (key && !keyProven(verified.listing, child.nodeId, key.epoch)) this.#keys.delete(child.nodeId);
       }
     }
-    for (const [directoryId, key] of Object.entries(tree.keys)) {
+    for (const [directoryId, opened] of Object.entries(tree.keys)) {
       if (this.#roots.has(directoryId)) continue; // Root keys belong to their access.
       const parent = this.#parents.get(directoryId);
-      const entry = parent
-        ? this.#listings.get(parent)?.listing.entries.find((child) => child.nodeId === directoryId)
-        : undefined;
-      if (entry?.kind !== "directory") continue; // A key is kept only with the entry that proves its epoch.
+      if (!keyProven(parent ? this.#listings.get(parent)?.listing : undefined, directoryId, opened.epoch)) continue;
       this.#keys.delete(directoryId);
-      this.#keys.set(directoryId, { key, epoch: entry.keyEpoch ?? 1 });
+      this.#keys.set(directoryId, opened);
     }
     while (this.#listings.size > this.#limit) this.#dropListing(this.#listings.keys().next().value!);
     while (this.#keys.size > this.#limit) this.#keys.delete(this.#keys.keys().next().value!);
@@ -253,11 +256,7 @@ export class VerifiedTreeCache {
     const record = this.#listings.get(directoryId);
     if (!record) return null;
     const checkpoint = this.#checkpoint(access.vaultId, directoryId);
-    if (
-      checkpoint &&
-      (checkpoint.revision > record.listing.entriesRevision ||
-        (checkpoint.revision === record.listing.entriesRevision && checkpoint.digest !== record.digest))
-    ) {
+    if (checkpoint === "malformed" || (checkpoint && headBehind(checkpoint, markOf(record)))) {
       this.#dropListing(directoryId);
       return null;
     }

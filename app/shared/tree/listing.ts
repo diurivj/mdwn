@@ -246,37 +246,48 @@ export async function openDirectoryListing(
 
 const checkpointKey = (vaultId: string, directoryId: string) => `mdwn:files-listing:${vaultId}:${directoryId}`;
 
-/** The browser-local high-water mark `rememberListing` keeps, or null when there is none or it is unreadable. */
-export function listingCheckpoint(vaultId: string, directoryId: string): { revision: number; digest: string } | null {
+/** A listing head as the rollback checkpoint orders it. */
+export type ListingMark = { revision: number; digest: string };
+
+/**
+ * The one ordering rule for listing heads: `candidate` is behind `held` when
+ * its revision is older, or the same with another digest. Used by the
+ * checkpoint below and by the tab's verified memory (ticket 57).
+ */
+export function headBehind(held: ListingMark, candidate: ListingMark): boolean {
+  return (
+    candidate.revision < held.revision || (candidate.revision === held.revision && candidate.digest !== held.digest)
+  );
+}
+
+/**
+ * The browser-local high-water mark `rememberListing` keeps: null when there
+ * is none, `"malformed"` when it cannot be read. Every reader refuses a
+ * malformed one alike: the cold walk throws, and memory misses.
+ */
+export function listingCheckpoint(vaultId: string, directoryId: string): ListingMark | null | "malformed" {
   if (typeof window === "undefined") return null;
+  const stored = localStorage.getItem(checkpointKey(vaultId, directoryId));
+  if (stored === null) return null;
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(checkpointKey(vaultId, directoryId)) ?? "null");
-    return Array.isArray(parsed) && typeof parsed[0] === "number" && typeof parsed[1] === "string"
+    const parsed: unknown = JSON.parse(stored);
+    return Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === "number" &&
+      typeof parsed[1] === "string"
       ? { revision: parsed[0], digest: parsed[1] }
-      : null;
+      : "malformed";
   } catch {
-    return null;
+    return "malformed";
   }
 }
 
 /** Browser-local high-water mark detects rolled-back/same-revision heads across navigations. */
 export function rememberListing(vaultId: string, directoryId: string, revision: number, digest: string): void {
   if (typeof window === "undefined") return;
-  const key = checkpointKey(vaultId, directoryId);
-  const previous = localStorage.getItem(key);
-  if (previous) {
-    const parsed: unknown = JSON.parse(previous);
-    if (
-      !Array.isArray(parsed) ||
-      parsed.length !== 2 ||
-      typeof parsed[0] !== "number" ||
-      typeof parsed[1] !== "string" ||
-      revision < parsed[0] ||
-      (revision === parsed[0] && digest !== parsed[1])
-    )
-      throw new Error("replayed-manifest");
-  }
-  localStorage.setItem(key, JSON.stringify([revision, digest]));
+  const held = listingCheckpoint(vaultId, directoryId);
+  if (held === "malformed" || (held && headBehind(held, { revision, digest }))) throw new Error("replayed-manifest");
+  localStorage.setItem(checkpointKey(vaultId, directoryId), JSON.stringify([revision, digest]));
 }
 
 /** The trusted digest is established by a verified device signature, never the envelope header. */

@@ -6,6 +6,7 @@ import { openGrantKeyEnvelope, type GrantKeyContext } from "~/shared/sharing/gra
 import {
   type Crumb,
   EXPANDED_CHECKED,
+  keyOpenedFrom,
   kindName,
   mergeListings,
   pathCrumbs,
@@ -16,7 +17,7 @@ import {
   sharedRootName,
 } from "~/shared/tree/path-rules";
 import { treeCache } from "~/shared/tree/tab-tree-cache";
-import type { VerifiedListing } from "~/shared/tree/verified-tree-cache";
+import type { OpenedKey, VerifiedListing } from "~/shared/tree/verified-tree-cache";
 import {
   fetchDirectory,
   fetchFile,
@@ -173,6 +174,17 @@ function listingsOf(verified: Readonly<Record<string, VerifiedListing>>): Record
   return Object.fromEntries(Object.entries(verified).map(([id, item]) => [id, item.listing]));
 }
 
+/** The keys a walk records, each with the epoch of the entry it was opened from in that walk's own listings. */
+function recordedKeys(access: RootAccess, opened: Opened): Record<string, OpenedKey> {
+  const listings = listingsOf(opened.verified);
+  const keys: Record<string, OpenedKey> = {};
+  for (const [id, key] of Object.entries(opened.keys)) {
+    const source = id === access.rootId ? null : keyOpenedFrom(listings, id);
+    if (source) keys[id] = { key, epoch: source.epoch };
+  }
+  return keys;
+}
+
 /**
  * Every request is a full network round trip, so the walk sends independent
  * requests together: the root and the path at once, then every Directory
@@ -288,7 +300,14 @@ async function restoreExpanded(
 async function walk(target: Target, signal: AbortSignal, root?: Promise<RootAccess>) {
   const since = deviceStateGeneration();
   const { snapshot, verified } = await selectedPath(target, signal, root);
-  treeCache.record({ access: snapshot.access, listings: verified, keys: snapshot.keys }, since);
+  treeCache.record(
+    {
+      access: snapshot.access,
+      listings: verified,
+      keys: recordedKeys(snapshot.access, { verified, keys: snapshot.keys }),
+    },
+    since,
+  );
   return snapshot;
 }
 
@@ -382,16 +401,22 @@ async function settle(opening: Promise<FilesSnapshot>, signal: AbortSignal): Pro
   }
 }
 
-/** Open a Directory for the page (an expanded folder, a move destination) and remember it. */
+/**
+ * Open a Directory for the page (an expanded folder, a move destination) and
+ * remember it. `keyEpoch` is the epoch of the entry `key` was opened from;
+ * without one the listing is remembered but the key is not.
+ */
 export async function loadVerifiedDirectory(
   access: RootAccess,
   directoryId: string,
   key: Uint8Array,
+  keyEpoch: number | null,
   signal: AbortSignal,
 ): Promise<DirectoryListing> {
   const since = deviceStateGeneration();
   const verified = await verify(access, directoryId, key, await fetchDirectory(directoryId, signal));
-  treeCache.record({ access, listings: { [directoryId]: verified }, keys: { [directoryId]: key } }, since);
+  const keys: Record<string, OpenedKey> = keyEpoch === null ? {} : { [directoryId]: { key, epoch: keyEpoch } };
+  treeCache.record({ access, listings: { [directoryId]: verified }, keys }, since);
   return verified.listing;
 }
 
@@ -492,7 +517,7 @@ export async function revalidateFilesPage(
       signal,
     );
     signal.throwIfAborted();
-    treeCache.record({ access, listings: opened.verified, keys: opened.keys }, since);
+    treeCache.record({ access, listings: opened.verified, keys: recordedKeys(access, opened) }, since);
     return {
       status: "current",
       listings: listingsOf(opened.verified),
