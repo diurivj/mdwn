@@ -71,6 +71,23 @@ export interface SecurityHeadersInput {
  */
 export const DYNAMIC_CACHE_CONTROL = "no-store";
 
+/** HTML additionally forbids transformation: Cloudflare documents that
+ * `no-transform` stops it injecting the Web Analytics beacon into a page. */
+export const DOCUMENT_CACHE_CONTROL = "no-store, no-transform";
+
+/**
+ * The Cache-Control a response leaves the Worker with. An unset value gets the
+ * dynamic default; HTML always carries `no-transform`, appended to any
+ * directives a route chose rather than replacing them.
+ */
+export function responseCacheControl(contentType: string | null, existing: string | null): string {
+  const html = /^\s*text\/html\b/i.test(contentType ?? "");
+  if (existing === null || !existing.trim()) return html ? DOCUMENT_CACHE_CONTROL : DYNAMIC_CACHE_CONTROL;
+  if (!html || existing.split(",").some((directive) => directive.trim().toLowerCase() === "no-transform"))
+    return existing;
+  return `${existing}, no-transform`;
+}
+
 export function buildCspHeader(input: SecurityHeadersInput): string {
   return buildCsp(normalizeCspNonce(input.nonce), input.dev);
 }

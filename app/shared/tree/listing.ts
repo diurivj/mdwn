@@ -244,10 +244,25 @@ export async function openDirectoryListing(
   rememberListing(options.vaultId, options.directoryId, options.revision, options.head?.digest ?? "");
 }
 
+const checkpointKey = (vaultId: string, directoryId: string) => `mdwn:files-listing:${vaultId}:${directoryId}`;
+
+/** The browser-local high-water mark `rememberListing` keeps, or null when there is none or it is unreadable. */
+export function listingCheckpoint(vaultId: string, directoryId: string): { revision: number; digest: string } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(checkpointKey(vaultId, directoryId)) ?? "null");
+    return Array.isArray(parsed) && typeof parsed[0] === "number" && typeof parsed[1] === "string"
+      ? { revision: parsed[0], digest: parsed[1] }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Browser-local high-water mark detects rolled-back/same-revision heads across navigations. */
 export function rememberListing(vaultId: string, directoryId: string, revision: number, digest: string): void {
   if (typeof window === "undefined") return;
-  const key = `mdwn:files-listing:${vaultId}:${directoryId}`;
+  const key = checkpointKey(vaultId, directoryId);
   const previous = localStorage.getItem(key);
   if (previous) {
     const parsed: unknown = JSON.parse(previous);

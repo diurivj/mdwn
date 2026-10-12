@@ -256,6 +256,35 @@ needs no request-body logging. A failed/missed run invalidates the timing
 headroom; repair it immediately and check backlog counts using aggregate SQL,
 never enable blanket logs or persist ciphertext/identifiers in diagnostics.
 
+## Smart Placement
+
+The preview and production Workers set `placement: { "mode": "smart" }` in
+their `env` blocks of `wrangler.jsonc` (ticket 57); the never-deployed local
+Worker does not, so `npm run build` and the browser harness are unchanged.
+`tests/wrangler-config.test.ts` asserts this through Wrangler's own config
+resolution.
+
+- **What it does.** Cloudflare may run the Worker's fetch handler in a
+  location close to its back end, here D1 (`mdwn-db-production` is in WNAM),
+  instead of the colo that received the request. Every private page makes
+  several sequential D1 reads, so fewer cross-region round trips matter more
+  than edge proximity. It affects fetch handlers only: the 15-minute
+  `scheduled` retention handler is unchanged. On low traffic Cloudflare may not
+  have enough requests to decide and reports `INSUFFICIENT_INVOCATIONS`; the
+  Worker then keeps running at the receiving colo, which is today's behavior.
+- **Verify after a deploy.** Responses from a placed Worker carry a
+  `cf-placement` header (`local-<colo>` or `remote-<colo>`), for example
+  `curl -sI https://mdwn.me/api/auth/session | grep -i cf-placement`. The
+  Worker's Settings page in the dashboard shows the placement status
+  (`SUCCESS`, `INSUFFICIENT_INVOCATIONS`, or an error). Compare the TTFB of a
+  small API response before and after.
+- **Roll back.** Remove the `placement` block from both environments, merge,
+  and let the `deploy` workflow redeploy. Nothing else depends on it.
+
+D1 read replication stays disabled (ticket 57's decision 4): a lagging replica
+could still serve a read after a revocation or device removal, so it needs its
+own design for consistent authorization first.
+
 ## Foreign keys and query plans
 
 ```sh

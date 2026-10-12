@@ -1,18 +1,19 @@
-import { useEffect, useSyncExternalStore } from "react";
-import { useLocation } from "react-router";
+import { useSyncExternalStore } from "react";
 
 /**
  * Whether this browser currently has a Session, for choosing navigation only.
- * It reads the boolean `/api/auth/session` answer after hydration, never Account
- * data, so the server-rendered shell stays identical for every visitor. Every
- * private page still authorizes its own requests.
+ * It reads the boolean `/api/auth/session` answer once after hydration, when
+ * the tab regains focus or becomes visible, and after authentication changes;
+ * not on every navigation (ticket 57). It never reads Account data, so the
+ * server-rendered shell stays identical for every visitor. Every private page
+ * still authorizes its own requests.
  */
 export type SessionPresence = "unknown" | "signed-in" | "signed-out";
 
 let presence: SessionPresence = "unknown";
 let pending: Promise<void> | null = null;
 let revision = 0;
-let locationKey: string | undefined;
+let hydrated = false;
 const listeners = new Set<() => void>();
 
 function publish(next: SessionPresence) {
@@ -48,7 +49,8 @@ function invalidateRead() {
   pending = null;
 }
 
-/** A completed sign-in or sign-out needs no request to know the answer. */
+/** A completed sign-in or sign-out needs no request to know the answer.
+ * Routes call these through `auth-changes`, which also discards device state. */
 export function markSignedIn() {
   invalidateRead();
   publish("signed-in");
@@ -73,11 +75,16 @@ function subscribe(listener: () => void) {
     window.addEventListener("focus", refreshOnReturn);
     document.addEventListener("visibilitychange", refreshOnReturn);
   }
+  // The first subscriber after hydration reads once. A later layout that
+  // remounts the header keeps the known answer; focus and visibility returns
+  // pick up another tab's change.
+  if (!hydrated) {
+    hydrated = true;
+    void refreshSessionPresence();
+  }
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0) {
-      locationKey = undefined;
-      invalidateRead();
       window.removeEventListener("focus", refreshOnReturn);
       document.removeEventListener("visibilitychange", refreshOnReturn);
     }
@@ -85,20 +92,9 @@ function subscribe(listener: () => void) {
 }
 
 export function useSessionPresence(): SessionPresence {
-  const { key } = useLocation();
-  const value = useSyncExternalStore(
+  return useSyncExternalStore(
     subscribe,
     () => presence,
     () => "unknown" as const,
   );
-  useEffect(() => {
-    // A new location must not join a read from before another tab changed the
-    // cookie. Header and Account subscribers at the same location still share.
-    if (locationKey !== key) {
-      locationKey = key;
-      invalidateRead();
-    }
-    void refreshSessionPresence();
-  }, [key]);
-  return value;
 }

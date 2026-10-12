@@ -11,7 +11,7 @@ import { getDevice, updateRegistryEpoch } from "~/shared/device/store";
 import { cx } from "~/ui/cx";
 import { KeyIcon } from "~/ui/icons";
 import { FocusLayout, PageIntro } from "~/ui/page-layouts";
-import { markSignedIn } from "~/ui/session-presence";
+import { afterSignIn } from "~/ui/auth-changes";
 import { buttonClass, linkClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/sign-in";
@@ -65,7 +65,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
       request.signal,
       "failed",
     );
-    markSignedIn();
+    afterSignIn();
     if (result.bound) return redirect("/files");
     // The Passkey created an unprovisioned Session. If the local device only
     // had a stale epoch, refresh its cached authority; binding still needs

@@ -5,6 +5,7 @@ import {
   buildSecurityHeaders,
   generateCspNonce,
   normalizeCspNonce,
+  responseCacheControl,
 } from "../app/shared/security/headers";
 
 const NONCE = "testNonceValue123456";
@@ -82,5 +83,26 @@ describe("nonce generation", () => {
     expect(normalizeCspNonce("short")).toBe("");
     expect(normalizeCspNonce('has spaces and quotes "')).toBe("");
     expect(normalizeCspNonce("okBase64urlValue_12345")).toBe("okBase64urlValue_12345");
+  });
+});
+
+describe("response Cache-Control", () => {
+  it("defaults HTML to no-store, no-transform so Cloudflare cannot inject its analytics beacon", () => {
+    expect(responseCacheControl("text/html; charset=utf-8", null)).toBe("no-store, no-transform");
+    expect(responseCacheControl("TEXT/HTML", "")).toBe("no-store, no-transform");
+  });
+
+  it("keeps exactly no-store for every other dynamic response", () => {
+    for (const contentType of ["application/json", "text/plain", "text/x-component", "application/octet-stream", null])
+      expect(responseCacheControl(contentType, null)).toBe("no-store");
+  });
+
+  it("appends no-transform to a route's own HTML directives instead of replacing them", () => {
+    expect(responseCacheControl("text/html", "private, max-age=0")).toBe("private, max-age=0, no-transform");
+    expect(responseCacheControl("text/html", "no-store, No-Transform")).toBe("no-store, No-Transform");
+  });
+
+  it("leaves a route's own non-HTML directives alone", () => {
+    expect(responseCacheControl("application/json", "private, max-age=60")).toBe("private, max-age=60");
   });
 });

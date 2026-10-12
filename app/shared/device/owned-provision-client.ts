@@ -5,6 +5,7 @@ import {
   sealOwnedDeviceEnvelope,
 } from "~/shared/crypto/vault";
 import { privateRequest } from "~/shared/device/private-client";
+import { createUpkeepThrottle } from "~/shared/device/upkeep-throttle";
 import { getDevice } from "~/shared/device/store";
 import { decodeBytes, encodeBytes } from "~/shared/signup/protocol";
 
@@ -25,6 +26,23 @@ export async function ownedProvisioningKind(signal?: AbortSignal): Promise<"reco
   if (!response.ok) throw new Error("Owned provisioning job unavailable");
   const next = (await response.json()) as Next;
   return next.state === "pending" ? (next.kind === "enrollment_owned" ? "enrollment" : "recovery") : null;
+}
+
+/**
+ * Background upkeep reads the job at most once a minute per tab (ticket 57).
+ * Only a "no job" answer is remembered: a job starts only when this browser's
+ * Session recovers or enrolls a device, and those discard device state, which
+ * resets the throttle.
+ */
+const ownedUpkeep = createUpkeepThrottle<"no-job">();
+
+/** `ownedProvisioningKind` for route upkeep: a recent "no job" answer is reused. */
+export async function ownedProvisioningUpkeep(signal?: AbortSignal): Promise<"recovery" | "enrollment" | null> {
+  if (!ownedUpkeep.due() && ownedUpkeep.status() === "no-job") return null;
+  ownedUpkeep.start();
+  const kind = await ownedProvisioningKind(signal);
+  if (kind === null) ownedUpkeep.remember("no-job");
+  return kind;
 }
 
 /** Each request handles one opaque owned key; a later visit safely resumes the cursor. */

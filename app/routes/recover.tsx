@@ -6,7 +6,7 @@ import type { AssertionStart, RegistrationStart } from "~/auth/contracts";
 import { cx } from "~/ui/cx";
 import { FolderIcon, KeyIcon } from "~/ui/icons";
 import { FocusLayout, PageIntro, SkeletonLines } from "~/ui/page-layouts";
-import { markSignedIn, markSignedOut } from "~/ui/session-presence";
+import { afterSignIn, afterSignOut } from "~/ui/auth-changes";
 import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/recover";
@@ -94,8 +94,8 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
   }
   const state = await enrollAndSignIn(request.signal);
   // A replacement passkey revokes every Session; only a completed sign-in has one.
-  if (state === "recovered") markSignedIn();
-  if (state === "passkey-added") markSignedOut();
+  if (state === "recovered") afterSignIn();
+  if (state === "passkey-added") afterSignOut();
   return { state } as const;
 }
 

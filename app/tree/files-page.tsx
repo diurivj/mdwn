@@ -37,7 +37,6 @@ import { buttonClass, fieldClass, labelClass, noticeClass, textButtonClass } fro
 
 import {
   createTreeChild,
-  loadDirectory,
   NameConflictError,
   NamespaceChangedError,
   reorderTreeChild,
@@ -54,12 +53,14 @@ import {
   type TreeKind,
 } from "../shared/tree/client";
 import { FileEditor } from "./file-editor";
+import { useTabMemoryRevalidation } from "./use-tab-memory-revalidation";
 import {
   type Crumb,
   expandedPreferenceKey,
   kindName,
   type FilesPageData,
   type FilesSnapshot,
+  loadVerifiedDirectory,
   nodePath,
   rootName,
   savedExpanded,
@@ -254,6 +255,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       );
   }, [initial, nodeId, kind, showExpanded]);
 
+  useTabMemoryRevalidation({ initial, snapshot, setSnapshot, status, kind, fileReady, lifetime });
+
   // Owner-side upkeep: opening any File ensures its one Private thread exists,
   // so a Collaborator never waits for an Owner to open the Comments inspector.
   useEffect(() => {
@@ -298,7 +301,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       const parentKey = parentId && snapshot.keys[parentId];
       if (!parentKey) throw new Error("private tree unavailable");
       const key = await openChildDirectory(snapshot.access, parentKey, entry);
-      const listing = await loadDirectory(snapshot.access, entry.nodeId, key, signal);
+      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, signal);
       if (signal.aborted) return;
       setSnapshot(
         (previous) =>
@@ -348,7 +351,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       ...(current.operation === "delete" && current.kind === "directory" ? [current.nodeId] : []),
     ]);
     const listings = { ...snapshot.listings };
-    for (const id of ids) listings[id] = await loadDirectory(snapshot.access, id, snapshot.keys[id]!, signal);
+    for (const id of ids) listings[id] = await loadVerifiedDirectory(snapshot.access, id, snapshot.keys[id]!, signal);
     signal.throwIfAborted();
     const next = { ...snapshot, listings };
     setSnapshot(next);
@@ -387,7 +390,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     try {
       const parentId = dialog.destinationId;
       const key = await openChildDirectory(snapshot.access, snapshot.keys[parentId]!, entry);
-      const listing = await loadDirectory(snapshot.access, entry.nodeId, key, signal);
+      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, signal);
       if (signal.aborted) return;
       setSnapshot(
         (previous) =>

@@ -1119,20 +1119,18 @@ describe("private tree", () => {
     )
       .bind(f.accountId, proof.proofId, f.session.id, proof.expiresAt)
       .run();
-    expect(
-      (
-        await SELF.fetch(url, {
-          method: "PATCH",
-          body,
-          headers: {
-            cookie: f.session.cookie,
-            origin: "https://mdwn.test",
-            "content-type": "application/json",
-            "X-Mdwn-Device-Proof": JSON.stringify(proof),
-          },
-        })
-      ).status,
-    ).toBe(403);
+    const spent = await SELF.fetch(url, {
+      method: "PATCH",
+      body,
+      headers: {
+        cookie: f.session.cookie,
+        origin: "https://mdwn.test",
+        "content-type": "application/json",
+        "X-Mdwn-Device-Proof": JSON.stringify(proof),
+      },
+    });
+    expect(spent.status).toBe(403);
+    expect(await spent.json()).toEqual({ error: "device_proof_spent" });
     expect(await (await request(f, path, "POST")).json()).toEqual(fileBefore);
     expect(await (await request(f, `/api/private/tree/directories/${f.rootId}`, "POST")).json()).toEqual(listingBefore);
     expect(
