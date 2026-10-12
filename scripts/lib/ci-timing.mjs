@@ -1,8 +1,11 @@
 /** Compute overlap from half-open execution intervals, including failed jobs.
- * @param {Array<{started_at: string | null, completed_at: string | null}>} jobs
+ * @param {Array<{started_at: string | null, completed_at: string | null, runner_id?: number}>} jobs
  */
 export function executionIntervals(jobs) {
   const intervals = jobs.flatMap((job) => {
+    // Canceled queued jobs receive creation-to-cancellation timestamps, but
+    // runner_id=0 proves they were never assigned and executed no work.
+    if (job.runner_id === 0) return [];
     const start = Date.parse(job.started_at ?? "");
     const end = Date.parse(job.completed_at ?? "");
     return Number.isFinite(start) && Number.isFinite(end) && end > start ? [{ start, end }] : [];

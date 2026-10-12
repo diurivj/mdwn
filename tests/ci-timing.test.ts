@@ -15,6 +15,17 @@ test("interval overlap distinguishes serialization, overlap, and an exact handof
   });
 });
 
+test("canceled unassigned jobs have no execution interval despite GitHub placeholder timestamps", () => {
+  const assigned = { runner_id: 21, started_at: "2026-10-12T15:49:04Z", completed_at: "2026-10-12T16:19:12Z" };
+  const queued = { runner_id: 0, started_at: "2026-10-12T15:49:02Z", completed_at: "2026-10-12T16:18:44Z" };
+  expect(executionIntervals([assigned, queued, queued, queued])).toEqual({
+    maximumOverlap: 1,
+    firstStart: Date.parse(assigned.started_at),
+    lastFinish: Date.parse(assigned.completed_at),
+  });
+  expect(executionIntervals([queued])).toEqual({ maximumOverlap: 0, firstStart: null, lastFinish: null });
+});
+
 test("retry-recovered green tests retain their timeout and retry evidence", () => {
   const summary = summarizePlaywright({
     suites: [
