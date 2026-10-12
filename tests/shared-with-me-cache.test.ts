@@ -67,6 +67,19 @@ describe("Shared with me tab memory", () => {
     expect(cache.peek("account-a")).toBeNull();
   });
 
+  it("stores nothing while private tab memory is suspended after the hidden-timeout clear", async () => {
+    let suspended = true;
+    const load = vi.fn(async () => summary("account-a", 2));
+    const cache = createSharedWithMeCache({ load, now: () => 0, lifetime: 60_000, suspended: () => suspended });
+    expect((await cache.read("account-a")).invitations).toBe(2);
+    cache.prime(summary("account-a", 4));
+    expect(cache.peek("account-a")).toBeNull();
+    suspended = false;
+    await cache.read("account-a");
+    expect(cache.peek("account-a")?.invitations).toBe(2);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it("accepts a primed summary from a page that already listed relationships", async () => {
     const { cache, load } = setup();
     cache.prime(summary("account-a", 3));

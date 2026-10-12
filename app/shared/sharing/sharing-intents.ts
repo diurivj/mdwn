@@ -1,3 +1,4 @@
+import { clearPrivateMemoryInAllTabs } from "~/shared/device/private-tab-memory";
 import { isV7 } from "~/shared/tree/wire";
 import { acceptShare, cancelShare, changeGrant, declineShare, leaveGrant, revokeGrant } from "./relationships-client";
 import { type SharingFailure, sharingFailure } from "./sharing-errors";
@@ -87,5 +88,8 @@ export async function runSharingIntent(form: FormData, signal: AbortSignal): Pro
   } finally {
     // Whatever happened, the library sidebar's remembered summary may be stale.
     sharedWithMe.invalidate();
+    // Leaving may have ended this Account's access to a Grant root that tab
+    // memory still holds verified listings and keys for (ticket 57).
+    if (intent === "leave") clearPrivateMemoryInAllTabs();
   }
 }

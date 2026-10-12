@@ -1,3 +1,4 @@
+import { privateTabMemorySuspended, registerPrivateTabMemory } from "~/shared/device/private-tab-memory";
 import { listRelationships, type ReceivedGrant } from "./relationships-client";
 
 /** What the library sidebar shows: received Grant roots and the pending invitation count. */
@@ -8,15 +9,19 @@ export type SharedWithMe = { accountId: string; received: ReceivedGrant[]; invit
  * routes remount on navigation; a short-lived in-memory summary keeps that
  * from sending relationship lists on every visit. Nothing is stored: a new
  * document starts empty, and an entry serves only the Account it was read for.
+ * While `suspended` (private tab memory's hidden-timeout clear, ticket 57)
+ * nothing is kept, so a hidden tab never refills it.
  */
 export function createSharedWithMeCache({
   load,
   now = Date.now,
   lifetime = 60_000,
+  suspended = () => false,
 }: {
   load: () => Promise<SharedWithMe>;
   now?: () => number;
   lifetime?: number;
+  suspended?: () => boolean;
 }) {
   let entry: { value: SharedWithMe; at: number } | null = null;
   let inflight: { accountId: string; promise: Promise<SharedWithMe> } | null = null;
@@ -35,7 +40,7 @@ export function createSharedWithMeCache({
       const promise = load()
         .then((value) => {
           if (value.accountId !== accountId) throw new Error("Shared with me changed Account");
-          if (started === generation) entry = { value, at: now() };
+          if (started === generation && !suspended()) entry = { value, at: now() };
           return value;
         })
         .finally(() => {
@@ -47,7 +52,7 @@ export function createSharedWithMeCache({
     prime(value: SharedWithMe) {
       generation += 1;
       inflight = null;
-      entry = { value, at: now() };
+      entry = suspended() ? null : { value, at: now() };
     },
     invalidate() {
       generation += 1;
@@ -66,5 +71,13 @@ async function loadSharedWithMe(): Promise<SharedWithMe> {
   };
 }
 
-/** The one tab-wide instance; sharing actions call `invalidate` or `prime`. */
-export const sharedWithMe = createSharedWithMeCache({ load: loadSharedWithMe });
+/**
+ * The one tab-wide instance; sharing actions call `invalidate` or `prime`.
+ * It is private tab memory: every clear (sign-in or sign-out in any tab, a
+ * private-access error, a hidden timeout) forgets it too.
+ */
+export const sharedWithMe = createSharedWithMeCache({
+  load: loadSharedWithMe,
+  suspended: privateTabMemorySuspended,
+});
+registerPrivateTabMemory(() => sharedWithMe.invalidate());
