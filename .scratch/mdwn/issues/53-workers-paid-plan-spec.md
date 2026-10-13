@@ -1,6 +1,6 @@
 # 53: Budgeted Workers Paid adoption specification
 
-Status: ready-for-agent
+Status: done
 Type: spec
 Blocked by: none
 
@@ -29,13 +29,15 @@ On 2026-10-12 the maintainer approved this decomposition and asked for the first
 | --- | --- | --- |
 | [61](61-autonomous-public-cleanup.md) | Scheduled maintenance finishes an already-authorized Unpublishing teardown | done |
 | [62](62-workers-paid-operating-contract.md) | Paid operating policy, intervention runbook, D1 Paid capacity and Time Travel, ADR supersession | done |
-| [63](63-worker-cpu-ceiling.md) | Explicit Worker CPU ceiling | ready-for-human (subscription and CPU evidence first) |
+| [63](63-worker-cpu-ceiling.md) | Explicit Worker CPU ceiling | done (2026-10-13) |
 | [64](64-import-admission-guard.md) | Scoped Import storage/admission guard | wontfix (2026-10-12) |
 | [65](65-larger-import-envelope.md) | Larger practical Import envelope | wontfix (2026-10-12) |
 
 The deferred opportunities in the research stay deferred. No child changes the account, a subscription, alerts or any remote resource.
 
 ## Comments
+
+- 2026-10-13: All children resolved. 61, 62 and 63 are done (63 merged via PR #70 and deployed); 64 and 65 are wontfix (2026-10-12). The Workers Paid adoption spec is complete: the operating policy and ADR supersession are documented, the CPU ceiling is live, and the larger-Import work is closed.
 
 - 2026-10-12: 61 and 62 merged into `main` via [PR #66](https://github.com/diurivj/mdwn/pull/66), merge commit `2c0e49a1087c5c89b4fe5c6e0fa9c9a421937341`; 66 merged via [PR #67](https://github.com/diurivj/mdwn/pull/67), merge commit `da10337332041cd8a56048c485f08025c79efe84`. Only 63 remains open.
 
