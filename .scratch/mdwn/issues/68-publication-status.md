@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -39,7 +39,7 @@ Out of scope: giving an existing link a copy without replacing it (a link row ne
 - [x] A link without an Owner link copy says it can't be shown and offers **Create new link**, whose new link then shows on later visits.
 - [x] Every page links the favicon set and manifest and carries the banner's link-preview tags with absolute URLs; `robots.txt` allows only `/` and the banner, and every response stays `noindex, nofollow, noarchive`.
 - [x] Worker, unit and Chromium/Firefox/WebKit coverage for the above; existing publication, comment and workspace checks still pass.
-- [ ] Merge gate: clean-head `npm run verify` evidence is recorded with the PR, and every current-head `CI` job passes before merge.
+- [x] Merge gate: clean-head `npm run verify` evidence is recorded with the PR, and every current-head `CI` job passes before merge.
 
 ## Comments
 
@@ -58,3 +58,5 @@ Out of scope: giving an existing link a copy without replacing it (a link row ne
     - Scope note: **Save changes** on the current link is kept beside **Save and create new link**, preserving the earlier in-place audience change.
     - Coverage note: "on another Owner device" holds by construction (every Encryption device holds the Vault root key); the browser test proves a reload with fresh page memory, not a second enrolled device.
   - **Separate RR8/stack gate: Pass.** Touchpoints: `root.tsx` `links` and static `Layout` preview tags, `home.tsx` `meta` (static, no loader), `publication.tsx` footer copy only (its `loader`/`clientLoader`/`HydrateFallback`/`meta` unchanged), and the `robots.txt` resource loader body (route map unchanged); none carries private data, and `site-head`/`robots` tests fetch them through `SELF.fetch`. Files data still comes from `clientLoader` (`loadFilesPage`) and the documented ticket-57 background revalidation; the header reads the browser-only lifecycle store with `useSyncExternalStore`, not route data. Publication mutations stay proof-guarded resource requests driven by the lifecycle (pending, error, refresh and abort shared in `run`), and the Worker re-verifies owner authority, bindings and bounds; D1 changes go through Drizzle and a reviewed additive migration. Installed: React Router 8.4.0, React 19.2, Wrangler 4.
+- 2026-10-13: Completed and merged into `main` via [PR #74](https://github.com/diurivj/mdwn/pull/74), merge commit `0bf9978f3ecbf1bf64d2971ba68aef4568169805`, after clean-head `npm run verify` at `02101b4` and all four `CI` jobs passed at that head (run 38450698882). Deploy run 38459288633 applied `0030_romantic_grandmaster.sql` to the preview and production D1s and released preview, then production, with both smoke tests passing.
+- 2026-10-13: Follow-up from the maintainer's screenshot review: the Owner's status line repeated the **Published** heading ("Published. Anyone with the complete link…"). It now starts at "Anyone with the complete link"; the browser tests that waited for "Published." wait for the **Published** heading instead.
