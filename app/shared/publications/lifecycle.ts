@@ -5,10 +5,15 @@ import type { RootAccess } from "~/shared/tree/client";
  * prepared-link candidates, authoritative-state ordering, panel work and
  * Unpublishing teardown. UI callers forward the person's decisions and render
  * `getState()`; they never coordinate candidates, read generations or
- * teardown steps. Complete Public links stay in browser memory only.
+ * teardown steps. Complete Public links stay in browser memory only: a
+ * prepared candidate, or the one the Owner's browser opened from its Owner
+ * link copy.
  */
 
 export type CommentAudience = "public" | "collaborators_only";
+
+/** How a File is published: what the publish form and the settings form choose. */
+export type PublicationSettings = { audience: CommentAudience; includeSelf: boolean };
 
 /** Browser-memory-only material, never a route submission or server value. */
 export type PreparedPublicLink = { publicationId: string; linkId: string; url: string };
@@ -21,6 +26,10 @@ export type PublicationState = {
     publicationId: string;
     state: "active" | "deleting";
     linkId?: string | null;
+    /** Owner only: the complete link this browser opened from the active
+     * link's Owner link copy, or null when the link has none or it does not
+     * open here. Browser memory only, like a prepared candidate. */
+    link?: string | null;
     createdAt: number;
     authors: { declarationId: string; ordinal: number; self: boolean; declared: boolean }[];
   };
@@ -60,6 +69,13 @@ export class PublicationError extends Error {
   }
 }
 
+/** A settings step that failed after its new link had already committed. */
+class AfterNewLink extends Error {
+  constructor(readonly step: unknown) {
+    super("after-new-link");
+  }
+}
+
 /** The same-File access/context later operations use. Revalidation updates it
  * without ending the lifecycle, so retained candidates survive. */
 export type PublicationContext = {
@@ -69,11 +85,7 @@ export type PublicationContext = {
   parentKey: Uint8Array | null;
 };
 
-export type PublishInput = {
-  includeSelf: boolean;
-  audience: CommentAudience;
-  onPrepared: (link: PreparedPublicLink) => void;
-};
+export type PublishInput = PublicationSettings & { onPrepared: (link: PreparedPublicLink) => void };
 
 export type RotateLinkInput = { onPrepared: (link: PreparedPublicLink) => void };
 
@@ -85,8 +97,8 @@ export type ChangeAudienceInput = {
   expectedEpochId: string | null;
   threadId: string | null;
   /** Resolves the complete link for a fresh authoritative active link: the
-   * retained candidate by identity, else the person's pasted link. Matching
-   * and fallback ordering stay inside the lifecycle. */
+   * retained candidate by identity, else the Owner link copy opened for that
+   * same link. Matching and fallback ordering stay inside the lifecycle. */
   linkFor: (linkId: string | null) => string | null;
 };
 
@@ -111,6 +123,8 @@ export type PublicationOperations = {
   continueTeardown(context: PublicationContext, signal: AbortSignal): Promise<TeardownProgress>;
   changeAudience(context: PublicationContext, input: ChangeAudienceInput, signal: AbortSignal): Promise<void>;
   addSelfAuthor(context: PublicationContext, signal: AbortSignal): Promise<void>;
+  /** Re-declare the actor's existing author selection to the current link. */
+  declareSelfAuthor(context: PublicationContext, signal: AbortSignal): Promise<void>;
   addAccountAuthor(context: PublicationContext, input: AddAccountAuthorInput, signal: AbortSignal): Promise<void>;
   removeAuthor(context: PublicationContext, input: RemoveAuthorInput, signal: AbortSignal): Promise<void>;
   requestPublication(context: PublicationContext, signal: AbortSignal): Promise<void>;
@@ -121,13 +135,18 @@ export type PublicationOperations = {
   ): Promise<void>;
 };
 
-export type PublicationFailure = { code: PublicationErrorCode; suspendedUntil: number | null };
+/** `newLinkCreated`: a settings change created its new link, then a later step failed. */
+export type PublicationFailure = { code: PublicationErrorCode; suspendedUntil: number | null; newLinkCreated: boolean };
 
 /** What the React adapter renders. Candidates, generations and teardown steps
  * stay inside the module. */
 export type PublicationLifecycleState = {
   panel: "loading" | "failed" | "ready";
   state: PublicationState | null;
+  /** The latest authoritative state this File page has read. Unlike `state`
+   * it survives closing the panel, so the page can keep showing whether the
+   * File is published. */
+  latest: PublicationState | null;
   busy: boolean;
   error: PublicationFailure | null;
   progress: TeardownProgress | null;
@@ -145,6 +164,7 @@ export type PublicationLifecycleState = {
 const initialView = (): PublicationLifecycleState => ({
   panel: "loading",
   state: null,
+  latest: null,
   busy: false,
   error: null,
   progress: null,
@@ -155,9 +175,10 @@ const initialView = (): PublicationLifecycleState => ({
 });
 
 function failure(error: unknown): PublicationFailure {
+  if (error instanceof AfterNewLink) return { ...failure(error.step), newLinkCreated: true };
   return error instanceof PublicationError
-    ? { code: error.code, suspendedUntil: error.suspendedUntil }
-    : { code: "unavailable", suspendedUntil: null };
+    ? { code: error.code, suspendedUntil: error.suspendedUntil, newLinkCreated: false }
+    : { code: "unavailable", suspendedUntil: null, newLinkCreated: false };
 }
 
 export class PublicationLifecycle {
@@ -210,18 +231,20 @@ export class PublicationLifecycle {
     this.panelActive = true;
     this.controller = new AbortController();
     // Resetting the panel view must not forget whether the current context can
-    // operate: capability readiness belongs to the File page, not the panel.
-    this.set({ ...initialView(), canOperate: this.contextCanOperate() });
+    // operate, or what the page last read: both belong to the File page, not
+    // the panel.
+    this.set({ ...initialView(), latest: this.view.latest, canOperate: this.contextCanOperate() });
     void this.readState();
   }
 
   /** Closing the panel stops scheduling and aborts its cancellable work while
-   * retained candidates survive for the File page. */
+   * retained candidates and the latest state survive for the File page. */
   detachPanel(): void {
     this.panelActive = false;
     this.endPanelWork();
-    // No mounted listener observes this reset; the next attach starts fresh.
-    this.set(initialView(), { notify: false });
+    // Page listeners read only `latest`, which this reset keeps; the next
+    // attach starts the panel fresh.
+    this.set({ ...initialView(), latest: this.view.latest }, { notify: false });
   }
 
   /** Another File, leaving the route or a full reload disposes the lifecycle;
@@ -258,15 +281,9 @@ export class PublicationLifecycle {
     return this.run(async () => {});
   }
 
-  publish(decision: { includeSelf: boolean; audience: CommentAudience }): Promise<boolean> {
+  publish(settings: PublicationSettings): Promise<boolean> {
     return this.run((context, signal) =>
-      this.operations.publish(context, { ...decision, onPrepared: (link) => this.retain(link) }, signal),
-    );
-  }
-
-  rotateLink(): Promise<boolean> {
-    return this.run((context, signal) =>
-      this.operations.rotateLink(context, { onPrepared: (link) => this.retain(link) }, signal),
+      this.operations.publish(context, { ...settings, onPrepared: (link) => this.retain(link) }, signal),
     );
   }
 
@@ -274,32 +291,52 @@ export class PublicationLifecycle {
     return this.run((context, signal) => this.operations.unpublish(context, signal));
   }
 
-  /** Person decisions for author, Comment audience and Publication-request
-   * mutations. Every one shares the same pending/error/refresh coordination as
-   * the lifecycle-owned requests, and their business rules stay in the
-   * operations seam. */
-  changeAudience(audience: CommentAudience, pastedLink: string | null): Promise<boolean> {
+  /**
+   * The Owner changes how the File is published. Only what differs from the
+   * panel's authoritative state is changed. With `newLink`, the current link
+   * is retired first (its replacement is retained like any prepared candidate)
+   * and the settings apply to the new link, so making Comments public never
+   * needs a link this browser cannot show. A failure after the new link
+   * committed says so: the person can finish with an in-place save instead
+   * of retiring another link.
+   */
+  changeSettings(next: PublicationSettings, options: { newLink: boolean }): Promise<boolean> {
     const state = this.view.state;
-    if (!state) return Promise.resolve(false);
-    return this.run((context, signal) =>
-      this.operations.changeAudience(
-        context,
-        {
-          audience,
-          expectedPublicationId: state.publication?.publicationId ?? null,
-          expectedEpochId: state.comments?.epochId ?? null,
-          threadId: state.comments?.threadId ?? null,
-          linkFor: (linkId) => this.retainedLink(linkId) ?? pastedLink,
-        },
-        signal,
-      ),
-    );
+    const publication = state?.publication;
+    if (!state || !publication || publication.state !== "active") return Promise.resolve(false);
+    const self = publication.authors.find((author) => author.self) ?? null;
+    return this.run(async (context, signal) => {
+      if (options.newLink)
+        await this.operations.rotateLink(context, { onPrepared: (link) => this.retain(link) }, signal);
+      try {
+        if (state.comments?.audience !== next.audience)
+          await this.operations.changeAudience(
+            context,
+            {
+              audience: next.audience,
+              expectedPublicationId: publication.publicationId,
+              expectedEpochId: state.comments?.epochId ?? null,
+              threadId: state.comments?.threadId ?? null,
+              linkFor: (linkId) => this.linkFor(linkId, state),
+            },
+            signal,
+          );
+        if (next.includeSelf && !self) await this.operations.addSelfAuthor(context, signal);
+        else if (!next.includeSelf && self)
+          await this.operations.removeAuthor(context, { declarationId: self.declarationId }, signal);
+        // A new link serves no declaration until its author re-declares to it;
+        // the Owner's own device can do that at once.
+        else if (self && options.newLink) await this.operations.declareSelfAuthor(context, signal);
+      } catch (error) {
+        throw options.newLink ? new AfterNewLink(error) : error;
+      }
+    });
   }
 
-  addSelfAuthor(): Promise<boolean> {
-    return this.run((context, signal) => this.operations.addSelfAuthor(context, signal));
-  }
-
+  /** Person decisions for Collaborator credits and Publication requests. Every
+   * one shares the same pending/error/refresh coordination as the
+   * lifecycle-owned requests, and their business rules stay in the operations
+   * seam. */
   addAccountAuthor(address: string): Promise<boolean> {
     const publicationId = this.view.state?.publication?.publicationId;
     if (!publicationId) return Promise.resolve(false);
@@ -359,6 +396,7 @@ export class PublicationLifecycle {
       this.set({
         panel: "ready",
         state,
+        latest: state,
         completeLink: this.completeLink(state),
         deletionComplete: state.publication === null && this.sealedPublicationId !== null,
         ...(deleting ? {} : { teardownFailed: false }),
@@ -373,13 +411,18 @@ export class PublicationLifecycle {
   /** The displayed complete link matches the authoritative active-link
    * identity; a failed or superseded candidate is never presented. */
   private completeLink(state: PublicationState): string | null {
-    return this.retainedLink(state.publication?.linkId);
+    return this.linkFor(state.publication?.linkId, state);
   }
 
-  /** The complete link retained for one authoritative active-link identity;
-   * only exact identity matches are usable. */
-  private retainedLink(linkId: string | null | undefined): string | null {
-    return linkId ? (this.candidates.get(linkId)?.url ?? null) : null;
+  /** The complete link for one authoritative active-link identity: a retained
+   * candidate, else the Owner link copy `state` opened for that same link.
+   * Only exact identity matches are usable. */
+  private linkFor(linkId: string | null | undefined, state: PublicationState): string | null {
+    if (!linkId) return null;
+    const retained = this.candidates.get(linkId)?.url;
+    if (retained) return retained;
+    const publication = state.publication;
+    return publication?.state === "active" && publication.linkId === linkId ? (publication.link ?? null) : null;
   }
 
   /** Retain every prepared candidate immediately; the request that follows may

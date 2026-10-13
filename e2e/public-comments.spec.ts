@@ -1,4 +1,5 @@
 import type { Request } from "@playwright/test";
+import { changeCommentAudience, publishToggle } from "./publish-panel";
 import { objectId, test, expect } from "./workspace-fixture";
 
 test.use({ initialSource: "# Public plan\n\nBody text." });
@@ -15,9 +16,9 @@ test("public readers decrypt public comments, signed-in visitors post, and the a
   workspace: _workspace,
 }) => {
   // The Owner publishes with the default public Comments audience.
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const publishPanel = page.getByRole("region", { name: "Publish", exact: true });
-  await expect(publishPanel.getByText("Comments audience")).toBeVisible();
+  await expect(publishPanel.getByRole("radio", { name: "Public", exact: true })).toBeChecked();
   await publishPanel.getByRole("button", { name: "Publish File" }).click();
   await expect(publishPanel.getByText(/^Published\./)).toBeVisible();
   const link = await publishPanel.getByLabel("Public link").inputValue();
@@ -56,9 +57,7 @@ test("public readers decrypt public comments, signed-in visitors post, and the a
 
     // Closing the audience stops anonymous delivery immediately: the reader
     // sees the settled notice and no thread ciphertext.
-    await publishPanel.getByRole("button", { name: "Make comments collaborators only" }).click();
-    // Wait for the refreshed panel state, not the action button's own label.
-    await expect(publishPanel.getByText("Audience: Collaborators only", { exact: false })).toBeVisible();
+    await changeCommentAudience(publishPanel, "Collaborators only");
     await reader.reload();
     await expect(
       section.getByText("Sign in to see or add comments if you have access to this file.", { exact: false }),
@@ -81,8 +80,7 @@ test("public readers decrypt public comments, signed-in visitors post, and the a
 
     // Reopening the audience starts a fresh public epoch; the previously public
     // Comment is not lost, and the Collaborators-only epoch still is not served.
-    await publishPanel.getByRole("button", { name: "Make comments public" }).click();
-    await expect(publishPanel.getByText("Audience: Public", { exact: false })).toBeVisible();
+    await changeCommentAudience(publishPanel, "Public");
     await reader.reload();
     await expect(section.getByText("Hello from the public page")).toBeVisible();
   } finally {
@@ -91,7 +89,7 @@ test("public readers decrypt public comments, signed-in visitors post, and the a
 });
 
 test("pages a long authenticated Public thread past the first bounded page", async ({ page, workspace }) => {
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
   await expect(panel.getByText(/^Published\./)).toBeVisible();

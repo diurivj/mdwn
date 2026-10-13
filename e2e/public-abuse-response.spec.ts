@@ -1,3 +1,4 @@
+import { publishToggle } from "./publish-panel";
 import { expect, objectId, test } from "./workspace-fixture";
 
 /**
@@ -7,7 +8,7 @@ import { expect, objectId, test } from "./workspace-fixture";
  * finish.
  */
 test("reports a comment by category and unpublishes while suspended", async ({ page, workspace }) => {
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const publishPanel = page.getByRole("region", { name: "Publish", exact: true });
   await publishPanel.getByRole("button", { name: "Publish File" }).click();
   await expect(publishPanel.getByText(/^Published\./)).toBeVisible();
@@ -81,7 +82,7 @@ test("reports a comment by category and unpublishes while suspended", async ({ p
 
   // Unpublish is never blocked; the seal counts the Comment and the Owner's
   // bounded teardown removes it and the report with it.
-  if (!(await publishPanel.isVisible())) await page.getByRole("button", { name: "Publish", exact: true }).click();
+  if (!(await publishPanel.isVisible())) await publishToggle(page).click();
   await publishPanel.getByRole("button", { name: "Unpublish…", exact: true }).click();
   await publishPanel.getByRole("button", { name: "Unpublish and permanently delete 1 Public Comment" }).click();
   // The Owner's browser drives the bounded teardown to completion and the panel

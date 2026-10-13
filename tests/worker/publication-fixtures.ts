@@ -9,6 +9,7 @@ import {
   createPublicationKeyPair,
   formatPublicationFragment,
   newPublicationIdentifier,
+  ownerLinkContext,
 } from "../../app/shared/publications/capability";
 import { publicPresentation, sealPublicRepresentation } from "../../app/shared/publications/content";
 import { encodeTreeBytes } from "../../app/shared/tree/wire";
@@ -44,7 +45,30 @@ export type Publication = {
   linkKey: Awaited<ReturnType<typeof createPublicationKeyPair>>;
   fragment: string;
   epoch: Epoch;
+  /** The Owner link copy sent with the link, sealed under `epoch.vaultRootKey`. */
+  ownerLink: string;
 };
+
+/**
+ * The Owner link copy (ticket 68) as the Owner's browser seals it: the link's
+ * private scalar under the Owner's Vault root key, bound to this exact
+ * Publication and path. `context` lets a test mis-bind it.
+ */
+export async function ownerLinkCopy(
+  ownerId: string,
+  link: { publicationId: string; linkId: string },
+  privateKey: Uint8Array,
+  vaultRootKey: Uint8Array,
+  context = ownerLinkContext(ownerId, link.publicationId, link.linkId),
+): Promise<string> {
+  return encodeTreeBytes(
+    await sealVaultRecoveryEnvelope(
+      vaultRootKey,
+      { scope: "owned", objectId: context.objectId, keyId: context.keyId, key: privateKey },
+      context,
+    ),
+  );
+}
 
 /** One fully sealed creation request, built but not yet sent. */
 export type PublicationCreation = Publication & { body: Record<string, unknown> };
@@ -65,11 +89,13 @@ export async function publicationCreation(
     { publicationId, linkId, publicKey: linkKey.publicKey, revision: 1 },
     publicPresentation("# Public body"),
   );
+  const ownerLink = await ownerLinkCopy(owner.accountId, { publicationId, linkId }, linkKey.privateKey, recovery);
   return {
     publicationId,
     linkId,
     linkKey,
     fragment: formatPublicationFragment(linkKey.privateKey),
+    ownerLink,
     epoch: {
       threadId: built.threadId,
       epochId: built.epochId,
@@ -94,6 +120,7 @@ export async function publicationCreation(
         recoveryEnvelope: encodeTreeBytes(built.recoveryEnvelope),
         linkWrapper: built.linkWrapper ? encodeTreeBytes(built.linkWrapper) : null,
       },
+      ownerLink,
     },
   };
 }
@@ -113,6 +140,7 @@ export async function publish(
     linkKey: creation.linkKey,
     fragment: creation.fragment,
     epoch: creation.epoch,
+    ownerLink: creation.ownerLink,
   };
 }
 
@@ -156,8 +184,9 @@ export async function firstEpoch(
 
 /**
  * The Owner's browser half of link rotation (ticket 25): a fresh path/key pair,
- * the re-encrypted current representation and every public epoch rewrapped to
- * the new capability. Built but not sent, so a caller can assert a denial.
+ * the re-encrypted current representation, every public epoch rewrapped to
+ * the new capability and the new link's Owner link copy. Built but not sent,
+ * so a caller can assert a denial.
  */
 export async function rotationPayload(
   owner: SharingAccount,
@@ -198,6 +227,12 @@ export async function rotationPayload(
     epochs: [
       { epochId: publication.epoch.epochId, capabilityId: publication.epoch.capabilityId, keyEpoch: 1, wrapper },
     ],
+    ownerLink: await ownerLinkCopy(
+      owner.accountId,
+      { publicationId: publication.publicationId, linkId },
+      linkKey.privateKey,
+      publication.epoch.vaultRootKey,
+    ),
   };
 }
 

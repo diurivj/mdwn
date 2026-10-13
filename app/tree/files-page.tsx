@@ -1,4 +1,13 @@
-import { type ComponentType, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentType,
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Link, useBlocker, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { ensurePrivateThread } from "~/shared/comments/comments-client";
 import { ExportControl } from "~/export/export-control";
@@ -124,6 +133,9 @@ const dialogLabels = {
   reorder: { label: "Reorder", heading: "Reorder", submit: "Retry reorder" },
 };
 
+/** The page's store subscription before its Publication lifecycle exists. */
+const noSubscription = () => () => {};
+
 /** RR supports one blocker: File drafts own it; other views observe the
  * same synchronous navigation-intent boundary without blocking the person.
  */
@@ -193,6 +205,27 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   useEffect(() => {
     if (publicationContext && publicationLifecycle) publicationLifecycle.updateContext(publicationContext);
   }, [publicationLifecycle, publicationContext]);
+  // Whether this File is published, for its header and tree entry: the latest
+  // state this page's lifecycle read (it outlives the panel), else what the
+  // File response tells an editor or a credited author.
+  const latestPublication = useSyncExternalStore(
+    publicationLifecycle?.subscribe ?? noSubscription,
+    () => publicationLifecycle?.getState().latest ?? null,
+    () => null,
+  );
+  const fileParentId = kind === "file" ? snapshot?.file?.parentId : null;
+  const filePublished =
+    kind === "file" &&
+    (latestPublication
+      ? latestPublication.publication?.state === "active"
+      : Boolean(snapshot?.file?.publication) ||
+        Boolean(
+          fileParentId &&
+            snapshot?.listings[fileParentId]?.entries.some((entry) => entry.nodeId === nodeId && entry.published),
+        ));
+  /** A listed File's published mark; this page's own File follows `filePublished`. */
+  const entryPublished = (entry: TreeEntry) =>
+    entry.kind === "file" && (kind === "file" && entry.nodeId === nodeId ? filePublished : entry.published === true);
   const onNavigationStart = useCallback(() => {
     lifetime.current?.abort();
     lifetime.current = new AbortController();
@@ -589,6 +622,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       const open = expanded.includes(entry.nodeId) || loading;
       const current = entry.nodeId === nodeId;
       const arriving = pending?.nodeId === entry.nodeId;
+      const published = entryPublished(entry);
       return (
         <div key={entry.nodeId}>
           <div
@@ -617,6 +651,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
               to={nodePath(snapshot.access, entry.nodeId, entry.kind)}
               onClick={() => setDrawer(false)}
               aria-current={current ? "page" : undefined}
+              aria-label={published ? `${entry.name}, published` : undefined}
               className="flex min-w-0 flex-1 items-center gap-2 py-1.5"
             >
               {entry.kind === "directory" ? (
@@ -625,8 +660,11 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                 <FileIcon className="text-muted" />
               )}
               <span className="truncate">{entry.name}</span>
-              {arriving && (
-                <span aria-hidden="true" className="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+              {(arriving || published) && (
+                <span aria-hidden="true" className="ml-auto flex shrink-0 items-center gap-1.5">
+                  {published && <GlobeIcon className="size-3.5 text-success" />}
+                  {arriving && <span className="size-1.5 animate-pulse rounded-full bg-accent" />}
+                </span>
               )}
             </Link>
           </div>
@@ -900,8 +938,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                   onClick={() => setPublishOpen((open) => !open)}
                   className={cx(buttonClass("secondary", "sm"), publishOpen && "border-ink/40 bg-ink/[0.04]")}
                 >
-                  <GlobeIcon />
-                  {owner ? "Publish" : "Request publication"}
+                  {filePublished ? (
+                    <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-success" />
+                  ) : (
+                    <GlobeIcon />
+                  )}
+                  {filePublished ? "Published" : owner ? "Publish" : "Request publication"}
                 </button>
               )}
             </div>
@@ -1289,7 +1331,7 @@ function FolderContents({
         <li key={entry.nodeId} className="animate-enter stagger" style={{ "--stagger": index } as CSSProperties}>
           <Link
             to={nodePath(access, entry.nodeId, entry.kind)}
-            aria-label={`${entry.name}, ${entry.kind === "directory" ? "folder" : "File"}`}
+            aria-label={`${entry.name}, ${entry.kind === "directory" ? "folder" : entry.published ? "File, published" : "File"}`}
             className={cx(
               "group flex min-w-0 items-center gap-3 px-2 py-3.5 transition-colors hover:bg-cream sm:gap-4 sm:px-4",
               arrivingId === entry.nodeId && "bg-cream",
@@ -1301,6 +1343,12 @@ function FolderContents({
             <span className="min-w-0 flex-1 truncate font-display text-xl font-light tracking-tight text-ink">
               {entry.name}
             </span>
+            {entry.published && (
+              <span className="eyebrow inline-flex shrink-0 items-center gap-1.5 text-success">
+                <GlobeIcon className="size-3.5" />
+                <span className="max-sm:sr-only">Published</span>
+              </span>
+            )}
             <ChevronRightIcon className="size-4 text-muted transition-colors group-hover:text-ink" />
           </Link>
         </li>

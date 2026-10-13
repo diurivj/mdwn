@@ -31,6 +31,7 @@ import {
   filePublicationColumns,
   filePublicationJoins,
   filePublicationView,
+  filePublished,
   publicationSave,
   publicationSaveCondition,
   publicationSaveStatements,
@@ -60,16 +61,20 @@ type EntryRow = {
   listing_signature: ArrayBuffer | null;
   listing_device_id: string | null;
   signer_public_key: ArrayBuffer | null;
+  published: number | null;
 };
 
-/** Read and authorize in the same ciphertext SELECT; never return private data from SSR. */
+/** Read and authorize in the same ciphertext SELECT; never return private data from SSR.
+ * Each File entry also says whether it is published: server-visible
+ * Publication metadata outside the signed listing, like `canCreate`. */
 async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: string): Promise<Response> {
   const rows = await createDb(env.DB).all<EntryRow>(sql`
     SELECT d.entries_revision, d.key_epoch, child_directory.key_epoch AS child_key_epoch,
       a.permission_rank >= 2 AS can_create, e.child_node_id AS node_id, n.kind, n.parent_node_id,
       e.name_ciphertext, e.order_ciphertext, e.key_envelope,
       d.listing_ciphertext, d.listing_digest, d.listing_signature, d.listing_device_id,
-      signer.assertion_public_key AS signer_public_key
+      signer.assertion_public_key AS signer_public_key,
+      n.kind = 'file' AND ${filePublished(sql`n.id`, sql`n.owner_id`)} AS published
     FROM directories d JOIN vault_nodes parent ON parent.id = d.node_id AND parent.owner_id = d.owner_id
     JOIN (${effectiveAccessQuery(auth, directoryId)}) a ON a.node_id = d.node_id AND a.owner_id = d.owner_id
     LEFT JOIN encryption_devices signer ON signer.id = d.listing_device_id
@@ -118,6 +123,7 @@ async function listDirectory(env: Env, auth: AuthorizedDevice, directoryId: stri
           nameCiphertext: encodeTreeBytes(new Uint8Array(row.name_ciphertext!)),
           orderCiphertext: encodeTreeBytes(new Uint8Array(row.order_ciphertext!)),
           keyEnvelope: encodeTreeBytes(new Uint8Array(row.key_envelope!)),
+          ...(row.published ? { published: true } : {}),
         })),
     },
     { headers },

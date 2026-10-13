@@ -197,7 +197,7 @@ A move out of a shared subtree must complete required rekeying within its bounde
 A Publication uses a capability separate from private File keys:
 
 - a never-reused, independently generated 256-bit random base64url Publication path identifier is sent to the service;
-- a versioned read-only decryption capability stays in the URL fragment and is never sent to the service;
+- a versioned read-only decryption capability stays in the URL fragment and is never sent to the service in readable form; the Owner's browser also sends it sealed under the Owner's Vault root key (the Owner link copy, ADR-0009), which only the Owner's devices can open, so they can show the complete link again;
 - the server stores a public encryption key so authorized File editors can update the encrypted Public representation without learning the fragment capability or gaining Publication-management authority;
 - rotation installs a fresh identifier and capability atomically and makes the prior identifier return the same ciphertext-free `404` as an unknown link.
 
@@ -571,7 +571,7 @@ Effective File access uses a bounded indexed recursive CTE over ancestor Directo
 #### Publications
 
 - `publications`: File, Owner, `active | deleting` state, active link/current Public-representation pointers while active, current Comment audience, and lifecycle timestamps.
-- `publication_links`: active opaque path ID and public encryption key; no fragment capability.
+- `publication_links`: active opaque path ID and public encryption key; no readable fragment capability, only the optional Owner link copy sealed under the Owner's Vault root key (ADR-0009).
 - `public_representations`: one decoded encrypted current presentation payload, revision/epoch, ciphertext size, and lifecycle data, with the same 524,288-byte BLOB bound as a private representation.
 - `publication_requests`: requester, File, and pending lifecycle; one pending request per Collaborator/File.
 - `publication_authors`: selected Account and encrypted attribution declaration for the Publication.
@@ -922,7 +922,7 @@ The MVP is conformant only when automated tests plus required manual/security ch
 - Passkeys cannot derive/decrypt content.
 - Shared/public/private envelope contexts reject cross-purpose, cross-object, stale-epoch, malformed, and downgrade attempts.
 - Nonce uniqueness strategy survives concurrent tabs, devices, retries, and interrupted jobs.
-- Public fragments never appear in requests, logs, errors, analytics, referrers, or server state.
+- Public fragments never appear in readable form in requests, logs, errors, analytics, referrers, or server state; the Owner link copy is their only stored form, and the service cannot open it.
 - Anonymous routes never return private or Collaborators-only ciphertext/envelopes.
 - Cross-browser vectors cover encryption/decryption, device approval, sharing, rotation, and Publication reading.
 - Chromium, Firefox, and WebKit prove the full normal-authentication-plus-phrase recovery path without exposing the phrase or plaintext keys to requests, service state, logs, or telemetry; recovery-code-only access cannot read content before replacement-Passkey enrollment, a fresh assertion, and Vault recovery.

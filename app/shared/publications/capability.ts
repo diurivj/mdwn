@@ -75,6 +75,27 @@ export function publicLinkUrl(origin: string, linkId: string, privateKey: Uint8A
   return `${new URL(origin).origin}/p/${linkId}#${formatPublicationFragment(privateKey)}`;
 }
 
+/** An Owner link copy is a ~200-byte AES-GCM envelope around the 32-byte scalar. */
+export const MAX_OWNER_LINK_BYTES = 1_024;
+
+/**
+ * The Owner link copy (ticket 68): the link's private scalar sealed under the
+ * Owner's own Vault root key, so any of the Owner's devices can show the
+ * complete link again. It is an ordinary Account-owned `vault-recovery`
+ * envelope bound to this exact path and Publication; the service checks this
+ * header and stores ciphertext it cannot open, and only the Owner receives it.
+ */
+export function ownerLinkContext(ownerId: string, publicationId: string, linkId: string) {
+  return {
+    purpose: "vault-recovery" as const,
+    vaultId: ownerId,
+    objectId: linkId,
+    keyId: publicationId,
+    keyEpoch: 1,
+    revision: 1,
+  };
+}
+
 /**
  * A fresh link key pair from WebCrypto's CSPRNG. The private scalar is exported
  * once for the fragment and the creating browser then drops the extractable

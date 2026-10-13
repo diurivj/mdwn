@@ -1,5 +1,6 @@
 import { test as appTest, expect } from "./fixtures";
 import { seedAccount } from "./support/seeded-account";
+import { publishToggle } from "./publish-panel";
 import { test as workspaceTest } from "./workspace-fixture";
 
 appTest("reconciles navigation after another tab signs in or signs out", async ({ browser, server, baseURL }) => {
@@ -127,7 +128,7 @@ workspaceTest(
   async ({ page, workspace }) => {
     expect(workspace.fileId).toBeTruthy();
     await page.setViewportSize({ width: 375, height: 812 });
-    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await publishToggle(page).click();
     const panel = page.getByRole("region", { name: "Publish", exact: true });
     await panel.getByRole("button", { name: "Publish File", exact: true }).click();
     await expect(panel.getByText("Published.", { exact: false })).toBeVisible();

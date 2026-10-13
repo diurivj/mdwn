@@ -1499,7 +1499,7 @@ export const publications = sqliteTable(
 );
 
 /** The active opaque path ID and the link's public encryption key. The read
- * capability stays in the URL fragment and has no column anywhere.
+ * capability stays in the URL fragment; no column holds it in readable form.
  */
 export const publicationLinks = sqliteTable(
   "publication_links",
@@ -1511,6 +1511,12 @@ export const publicationLinks = sqliteTable(
       .references(() => publications.id, { onDelete: "restrict" }),
     /** Raw SEC1 uncompressed P-256 point. */
     publicKey: blob("public_key").notNull(),
+    /** The Owner link copy (ticket 68): this link's read capability sealed under
+     * the Owner's own Vault root key, which the service never holds. NULL for a
+     * link created without one. Its length CHECK is in the reviewed 0030
+     * migration, because Drizzle can add a table CHECK only by rebuilding the
+     * table and its triggers. */
+    ownerLinkEnvelope: blob("owner_link_envelope"),
     createdAt: integer("created_at").notNull(),
   },
   (table) => [

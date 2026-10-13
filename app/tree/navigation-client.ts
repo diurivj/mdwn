@@ -32,6 +32,7 @@ import {
   type DirectoryListing,
   type RootAccess,
   type TreeKind,
+  withListingMetadata,
 } from "../shared/tree/client";
 
 export { kindName, rootName, sharedRootName, type Crumb };
@@ -443,9 +444,10 @@ function sameListing(known: VerifiedListing, fetched: FetchedDirectory): boolean
  * Background revalidation of what a Files page shows (ticket 57): fetch the
  * listings on its path and its shown expanded folders together, keep each
  * remembered listing whose revision, key epoch and head digest are unchanged
- * and that this browser's rollback checkpoint still accepts, and verify and
- * open any other exactly as a cold walk would, with keys re-derived down the
- * path from the verified parents. File content is never touched.
+ * and that this browser's rollback checkpoint still accepts (taking only the
+ * fetch's unsigned metadata, such as published marks), and verify and open
+ * any other exactly as a cold walk would, with keys re-derived down the path
+ * from the verified parents. File content is never touched.
  */
 export async function revalidateFilesPage(
   snapshot: FilesSnapshot,
@@ -491,10 +493,7 @@ export async function revalidateFilesPage(
         // The rollback checkpoint guards a remembered head too: one this
         // browser has moved past (another tab, a Key rotation) is a replay.
         rememberListing(access.vaultId, id, response.entriesRevision, known.digest);
-        opened.verified[id] = {
-          listing: { ...known.listing, canCreate: response.canCreate ?? true },
-          digest: known.digest,
-        };
+        opened.verified[id] = { listing: withListingMetadata(known.listing, response), digest: known.digest };
       } else opened.verified[id] = await verify(access, id, opened.keys[id]!, response);
       for (const entry of opened.verified[id].listing.entries) {
         if (entry.kind !== "directory" || !fetched.has(entry.nodeId) || opened.keys[entry.nodeId]) continue;

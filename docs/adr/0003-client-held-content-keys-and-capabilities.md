@@ -44,3 +44,9 @@ This protects private plaintext from the service, its operators, database/storag
 The browser must perform encryption, decryption, key provisioning, public republishing, and recovery. Server-side rendering and server-side full-text search over private Markdown are not available. Sharing and revocation require key epochs and authenticated manifests. Public-link fragments are bearer secrets and may leak through copying, browser history, screenshots, or a compromised client. Recovery must be tested as a cryptographic restore path rather than treated as ordinary Account authentication.
 
 Sources: [RFC 9180: Hybrid Public Key Encryption](https://www.rfc-editor.org/rfc/rfc9180), [RFC 5869: HKDF](https://www.rfc-editor.org/rfc/rfc5869), [Web Cryptography API](https://www.w3.org/TR/WebCryptoAPI/), and [NIST SP 800-38D: GCM and GMAC](https://csrc.nist.gov/pubs/sp/800/38/d/final).
+
+## Superseded in part (2026-10-13)
+
+That a Publication's fragment capability is "never sent in HTTP requests" is superseded for the Owner's own browser: when it creates or rotates a link it also sends the link's read capability sealed under the Owner's Vault root key, as the Owner link copy, so any Owner device can show the complete link again. See [ADR-0009](0009-owner-sealed-public-link-copy.md).
+
+Unchanged: the fragment never travels in a URL, header, log or referrer, the service never holds it in readable form, no Public reader, editor or Collaborator ever sends it to the service, and the opaque path ID, live presentation, rotation and revocation are as above.
