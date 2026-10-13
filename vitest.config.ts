@@ -9,6 +9,7 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     exclude: ["tests/worker/**/*.test.ts", "tests/proof/**/*.test.ts"],
     globals: false,
+    maxWorkers: process.env.CI ? 2 : undefined,
   },
   resolve: {
     tsconfigPaths: true,

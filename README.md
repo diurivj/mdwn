@@ -49,12 +49,16 @@ export rollback rehearsal are documented in [`docs/operations.md`](docs/operatio
 
 ## CI
 
-CI runs on the repository-scoped Mac mini runner. Keep the mini awake and the
-runner online; otherwise jobs queue until it reconnects. A single runner
-process handles the verification job and three browser jobs one at a time.
+CI runs on a bounded pool of repository-scoped, native ARM64 Mac mini runners
+labelled `mini-m4pro-ci`. Keep the mini awake and the configured services online;
+otherwise jobs queue. Each independent runner executes one verification or
+browser job; the host-wide active-listener budget controls aggregate capacity
+across repositories. See [pool operation and qualification](docs/ci-runner-pool.md).
 Deployment remains on GitHub-hosted Linux and still uses hosted-runner minutes.
 
-Use a dedicated runner account without personal or deployment credentials.
+Prefer a dedicated runner account without personal or deployment credentials.
+The maintainer chose to reuse the existing personal account for this host; this
+explicitly retains CI's access to that account's files and credentials.
 Self-hosted jobs execute repository code with that account's filesystem and
 network access; a separate account is not a sandbox. The workflow skips fork
 pull requests, but workflow edits can change that guard, so only trusted code

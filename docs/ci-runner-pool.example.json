@@ -1,0 +1,26 @@
+{
+  "owner": "diurivj",
+  "home": "/Users/diurivj",
+  "root": "/Users/diurivj/ci",
+  "path": "/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin",
+  "label": "mini-m4pro-ci",
+  "maxActiveSlots": 2,
+  "activeSlots": ["mdwn-01", "mdwn-02"],
+  "slots": [
+    {
+      "id": "mdwn-01",
+      "repository": "diurivj/mdwn",
+      "name": "Diegos-Mac-mini",
+      "directory": "/Users/diurivj/actions-runner",
+      "state": "/Users/diurivj/ci/state/mdwn-01",
+      "legacy": true
+    },
+    {
+      "id": "mdwn-02",
+      "repository": "diurivj/mdwn",
+      "name": "mini-m4pro-mdwn-02",
+      "directory": "/Users/diurivj/ci/runners/mdwn-02",
+      "state": "/Users/diurivj/ci/state/mdwn-02"
+    }
+  ]
+}

@@ -17,7 +17,7 @@ jobs:
     name: Typecheck, test, build, migration smoke, secrets
     # This persistent runner is for trusted, same-repository changes only.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, mini-m4pro-ci]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -28,6 +28,8 @@ jobs:
           node-version: 24
           # The persistent runner already keeps npm's cache locally.
           package-manager-cache: false
+      - name: Runner diagnostics and isolation check
+        run: node scripts/ci-runner-diagnostics.mjs
       - name: Install
         run: npm ci
       - name: Lint and format check
@@ -52,7 +54,7 @@ jobs:
   browser:
     name: Browser E2E (${{ matrix.browser }})
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, mini-m4pro-ci]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -67,6 +69,8 @@ jobs:
           node-version: 24
           # Avoid uploading the runner account's entire npm cache to GitHub.
           package-manager-cache: false
+      - name: Runner diagnostics and isolation check
+        run: node scripts/ci-runner-diagnostics.mjs
       - name: Install
         run: npm ci
       - name: Install ${{ matrix.browser }}
@@ -74,14 +78,22 @@ jobs:
         env:
           # Scope the Node/Playwright connection-timeout workaround to downloads.
           NODE_OPTIONS: --import="${{ github.workspace }}/scripts/playwright-download-network.mjs"
+      - name: WebKit service key-storage check
+        if: matrix.browser == 'webkit'
+        run: node scripts/probe-ci-webkit-storage.mjs
       - name: Browser tests (${{ matrix.browser }})
         run: npm run test:e2e -- --project=${{ matrix.browser }}
+      - name: Summarize browser retries
+        if: ${{ !cancelled() }}
+        run: node scripts/summarize-playwright.mjs
       - name: Upload ${{ matrix.browser }} diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v5
         with:
-          name: playwright-${{ matrix.browser }}-${{ github.run_id }}
+          name: playwright-${{ matrix.browser }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             playwright-report/
             test-results/
+            playwright-results.json
+            playwright-summary.json
           if-no-files-found: warn
