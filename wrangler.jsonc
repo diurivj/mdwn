@@ -38,6 +38,9 @@
       // Smart Placement may run fetch handlers near D1 (ticket 57); see
       // docs/operations.md#smart-placement. Set per environment, never locally.
       "placement": { "mode": "smart" },
+      // A runaway invocation cannot consume the Paid 30 s default; 500 ms is
+      // ~7x the observed p99.9. See docs/operations.md#worker-cpu-ceiling.
+      "limits": { "cpu_ms": 500 },
       "vars": {
         "APP_ENV": "preview",
         "SUPPORT_MONERO_ADDRESS": "",
@@ -63,6 +66,9 @@
     "production": {
       "name": "mdwn",
       "placement": { "mode": "smart" },
+      // A runaway invocation cannot consume the Paid 30 s default; 500 ms is
+      // ~7x the observed p99.9. See docs/operations.md#worker-cpu-ceiling.
+      "limits": { "cpu_ms": 500 },
       "routes": [{ "pattern": "mdwn.me", "custom_domain": true }],
       // Deployment readiness still probes the workers.dev URL.
       "workers_dev": true,
