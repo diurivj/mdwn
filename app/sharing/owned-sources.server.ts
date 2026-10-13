@@ -24,6 +24,12 @@ export function importedThreadEnvelope(
   return sql`i.thread_id = ${threadId} AND i.capability_id = ${capabilityId} AND i.capability_epoch = ${capabilityEpoch}`;
 }
 
+/** Correlated `import_comment_envelopes i`: the row belongs to the named File and its thread to the same Owner. */
+export function ownedImportedThreadEnvelope(ownerId: string | SQL, fileId: string | SQL): SQL {
+  return sql`i.file_id = ${fileId} AND EXISTS (SELECT 1 FROM comment_threads t
+    WHERE t.id = i.thread_id AND t.owner_id = ${ownerId})`;
+}
+
 export function recoverySource(ciphertext: ArrayBuffer) {
   return { kind: "recovery" as const, envelope: encodeTreeBytes(new Uint8Array(ciphertext)) };
 }

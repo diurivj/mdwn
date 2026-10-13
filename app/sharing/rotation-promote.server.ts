@@ -6,7 +6,9 @@ import type { AuthorizedDevice } from "~/device/proof.server";
 import { MAX_LISTING_BYTES, verifyListingSignature, type ListingHead } from "~/shared/tree/listing";
 import { verifyFileHead, type FileHead } from "~/shared/tree/file-head";
 import { decodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
+import { threadCapabilityContext } from "~/shared/comments/content";
 import { readRotationSource, rotationSourceSnapshot } from "./rotation-data.server";
+import { ownedImportedThreadEnvelope } from "./owned-sources.server";
 import { liveGrant } from "./grant-lifetime.server";
 import type { RotationDirectory, RotationItem, RotationJob, RotationSource } from "../shared/sharing/rotation-wire";
 
@@ -35,14 +37,16 @@ function rewrappedImportedThreads(value: unknown, auth: AuthorizedDevice) {
       threadId: thread.threadId as string,
       capabilityId: thread.capabilityId as string,
       capabilityEpoch: thread.capabilityEpoch as number,
-      ciphertext: treeEnvelope(thread.envelope, 16_384, {
-        purpose: "private-comment-thread",
-        vaultId: auth.accountId,
-        objectId: thread.threadId as string,
-        keyId: thread.capabilityId as string,
-        keyEpoch: thread.capabilityEpoch as number,
-        revision: 1,
-      }),
+      ciphertext: treeEnvelope(
+        thread.envelope,
+        16_384,
+        threadCapabilityContext(
+          auth.accountId,
+          thread.threadId as string,
+          thread.capabilityId as string,
+          thread.capabilityEpoch as number,
+        ),
+      ),
     };
   });
 }
@@ -92,21 +96,18 @@ export async function preparePromotion(
 ): Promise<{ eligible: SQL; statements(marker: SQL): SQL[] }> {
   const common = ["operation", "operationId", "objectId"];
   if (source.kind === "private_comment" || source.kind === "public_history") {
-    const imported = source.kind === "private_comment" && source.importEnvelope !== null;
-    if (!exact(input, [...common, imported ? "importEnvelope" : "recoveryEnvelope"]))
+    const fromImport = source.kind === "private_comment" && source.importEnvelope !== null;
+    if (!exact(input, [...common, fromImport ? "importEnvelope" : "recoveryEnvelope"]))
       throw new Error("invalid comment promotion");
     // An imported Historical thread has no vault-recovery row: its key is
     // wrapped under the File capability key, so its replacement is a fresh
     // import envelope and the File's current capability epoch is its wrapper.
-    const replacement = imported
-      ? treeEnvelope(input.importEnvelope, 16_384, {
-          purpose: "private-comment-thread",
-          vaultId: auth.accountId,
-          objectId: item.objectId,
-          keyId: item.capabilityId!,
-          keyEpoch: item.targetEpoch!,
-          revision: 1,
-        })
+    const replacement = fromImport
+      ? treeEnvelope(
+          input.importEnvelope,
+          16_384,
+          threadCapabilityContext(auth.accountId, item.objectId, item.capabilityId!, item.targetEpoch!),
+        )
       : treeEnvelope(input.recoveryEnvelope, 16_384, {
           purpose: "vault-recovery",
           vaultId: auth.accountId,
@@ -118,7 +119,7 @@ export async function preparePromotion(
     const capabilityStatements = (marker: SQL): SQL[] => [
       sql`UPDATE sharing_comment_capabilities SET capability_epoch = ${item.targetEpoch}
         WHERE object_id = ${item.objectId} AND owner_id = ${auth.accountId} AND ${marker}`,
-      ...(imported
+      ...(fromImport
         ? [
             sql`UPDATE import_comment_envelopes SET ciphertext = ${replacement}, capability_epoch = ${item.targetEpoch},
               key_epoch = (SELECT capability_epoch FROM files WHERE node_id = ${item.fileId})
@@ -191,7 +192,7 @@ export async function preparePromotion(
     ])
   )
     throw new Error("invalid promotion");
-  const imported = source.kind === "file" ? rewrappedImportedThreads(input.importedThreads, auth) : [];
+  const importedThreads = source.kind === "file" ? rewrappedImportedThreads(input.importedThreads, auth) : [];
   const parentId = source.parentId;
   let parent: RotationDirectory | null = null,
     parentHead: HeadBytes | null = null;
@@ -332,17 +333,19 @@ export async function preparePromotion(
   const content = decodeTreeBytes(source.ciphertext, 524_288);
   // Every imported Historical thread on the File must be re-wrapped in this
   // promotion: an omitted thread would stay sealed under the replaced key.
-  const importedCoverage = imported.length
-    ? sql` AND (SELECT count(*) FROM import_comment_envelopes i WHERE i.file_id = ${item.objectId}) = ${imported.length}
-      AND ${sql.join(
-        imported.map(
-          (thread) => sql`EXISTS (SELECT 1 FROM import_comment_envelopes i WHERE i.file_id = ${item.objectId}
-            AND i.thread_id = ${thread.threadId} AND i.capability_id = ${thread.capabilityId}
-            AND i.capability_epoch = ${thread.capabilityEpoch})`,
+  const importedRows = importedThreads.length
+    ? sql` AND ${sql.join(
+        importedThreads.map(
+          (thread) => sql`EXISTS (SELECT 1 FROM import_comment_envelopes i
+            WHERE i.thread_id = ${thread.threadId} AND i.capability_id = ${thread.capabilityId}
+              AND i.capability_epoch = ${thread.capabilityEpoch}
+              AND ${ownedImportedThreadEnvelope(auth.accountId, item.objectId)})`,
         ),
         sql` AND `,
       )}`
     : sql``;
+  const importedCoverage = sql` AND (SELECT count(*) FROM import_comment_envelopes i
+    WHERE ${ownedImportedThreadEnvelope(auth.accountId, item.objectId)}) = ${importedThreads.length}${importedRows}`;
   return {
     eligible: sql`${eligible}${importedCoverage}`,
     statements: (marker) => [
@@ -353,7 +356,7 @@ export async function preparePromotion(
       ciphertext, ciphertext_size, created_at, key_envelope, head_digest, head_signature, head_device_id)
       SELECT ${input.representationId}, ${item.objectId}, ${auth.accountId}, ${source.revision}, ${source.contentKeyId}, ${source.keyEpoch},
         ${content}, ${content.length}, ${Date.now()}, ${wrapper}, ${decodeTreeBytes(head.digest, 32)}, ${decodeTreeBytes(head.signature, 64)}, ${auth.deviceId} WHERE ${marker}`,
-      ...imported.map(
+      ...importedThreads.map(
         (
           thread,
         ) => sql`UPDATE import_comment_envelopes SET ciphertext = ${thread.ciphertext}, key_epoch = ${item.targetEpoch}

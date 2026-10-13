@@ -5,7 +5,7 @@ import { encodeTreeBytes } from "~/shared/tree/wire";
 import type { RotationEntries, RotationItem, RotationJob, RotationSource } from "../shared/sharing/rotation-wire";
 import { activeGrantCoverage, requiredGrantComments } from "./capability-coverage.server";
 import { hasExpiredGrants, liveGrant } from "./grant-lifetime.server";
-import { importedThreadEnvelope } from "./owned-sources.server";
+import { importedThreadEnvelope, ownedImportedThreadEnvelope } from "./owned-sources.server";
 
 export const ROTATION_PAGE = 20;
 const encoded = (value: ArrayBuffer | null) => (value ? encodeTreeBytes(new Uint8Array(value)) : null);
@@ -149,8 +149,7 @@ export async function readRotationSource(
       capability_epoch: number;
       ciphertext: ArrayBuffer;
     }>(sql`SELECT i.thread_id, i.capability_id, i.capability_epoch, i.ciphertext FROM import_comment_envelopes i
-      WHERE i.file_id = ${item.objectId} AND EXISTS (SELECT 1 FROM comment_threads t
-        WHERE t.id = i.thread_id AND t.owner_id = ${auth.accountId}) AND ${guard}`);
+      WHERE ${ownedImportedThreadEnvelope(auth.accountId, item.objectId)} AND ${guard}`);
     return {
       kind: "file",
       objectId: item.objectId,
@@ -194,8 +193,7 @@ export async function readRotationSource(
       ON k.account_id = c.owner_id AND k.object_id = c.object_id AND k.purpose = 'vault-recovery'
         AND k.recipient_id = 'vault-root' AND k.key_epoch = c.capability_epoch AND k.superseded_at IS NULL
     LEFT JOIN import_comment_envelopes i ON ${importedThreadEnvelope(sql`c.object_id`, sql`c.capability_id`, sql`c.capability_epoch`)}
-      AND i.file_id = c.file_id AND EXISTS (SELECT 1 FROM comment_threads t
-        WHERE t.id = c.thread_id AND t.owner_id = c.owner_id)
+      AND ${ownedImportedThreadEnvelope(sql`c.owner_id`, sql`c.file_id`)}
     WHERE c.object_id = ${item.objectId} AND c.owner_id = ${auth.accountId} AND c.file_id = ${item.fileId} AND ${guard}`);
   return row
     ? {

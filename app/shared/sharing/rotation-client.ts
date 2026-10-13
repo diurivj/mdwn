@@ -1,4 +1,5 @@
 import { openImportedThreadCapability } from "~/shared/comments/comments-client";
+import { threadCapabilityContext } from "~/shared/comments/content";
 import { publicAttributionKeyContext, publicCommentKeyContext } from "~/shared/comments/public-content";
 import { createSymmetricWriter, openSymmetric } from "~/shared/crypto/enc-v1";
 import { loadPrivateBrowser, type PrivateAccountContext } from "~/shared/device/private-browser";
@@ -366,14 +367,10 @@ async function promote(browser: RotationBrowser, next: RotationNext) {
     return {
       ...base,
       importEnvelope: encodeTreeBytes(
-        await (await createSymmetricWriter(await currentFileKey(browser, source.fileId))).seal(key, {
-          purpose: "private-comment-thread",
-          vaultId: browser.accountId,
-          objectId: item.objectId,
-          keyId: item.capabilityId,
-          keyEpoch: item.targetEpoch,
-          revision: 1,
-        }),
+        await (await createSymmetricWriter(await currentFileKey(browser, source.fileId))).seal(
+          key,
+          threadCapabilityContext(browser.accountId, item.objectId, item.capabilityId, item.targetEpoch),
+        ),
       ),
     };
   const recoveryEnvelope = encodeTreeBytes(
@@ -509,14 +506,10 @@ async function promote(browser: RotationBrowser, next: RotationNext) {
       capabilityId: thread.capabilityId,
       capabilityEpoch: thread.capabilityEpoch,
       envelope: encodeTreeBytes(
-        await (await createSymmetricWriter(key)).seal(threadKey, {
-          purpose: "private-comment-thread",
-          vaultId: browser.accountId,
-          objectId: thread.threadId,
-          keyId: thread.capabilityId,
-          keyEpoch: thread.capabilityEpoch,
-          revision: 1,
-        }),
+        await (await createSymmetricWriter(key)).seal(
+          threadKey,
+          threadCapabilityContext(browser.accountId, thread.threadId, thread.capabilityId, thread.capabilityEpoch),
+        ),
       ),
     });
   }

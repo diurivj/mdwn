@@ -11,6 +11,7 @@ import {
   currentRecoveryEnvelope,
   importedThreadEnvelope,
   importedThreadSource,
+  ownedImportedThreadEnvelope,
   recoverySource,
 } from "./owned-sources.server";
 import { expireGrantBatch, hasExpiredGrants, liveGrant } from "./grant-expiry.server";
@@ -52,8 +53,8 @@ async function nextProvisioning(env: Env, auth: AuthorizedDevice) {
     JOIN sharing_comment_capabilities c ON c.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
     LEFT JOIN key_envelopes k ON ${currentRecoveryEnvelope(sql`c.owner_id`, sql`c.object_id`, sql`c.capability_epoch`)}
     LEFT JOIN import_comment_envelopes i ON ${importedThreadEnvelope(sql`c.thread_id`, sql`c.capability_id`, sql`c.capability_epoch`)}
-      AND i.file_id = c.file_id AND EXISTS (SELECT 1 FROM comment_threads t
-        WHERE t.id = c.thread_id AND t.owner_id = c.owner_id)
+      AND ${ownedImportedThreadEnvelope(sql`c.owner_id`, sql`c.file_id`)}
+      AND i.key_epoch = (SELECT f.capability_epoch FROM files f WHERE f.node_id = c.file_id)
     WHERE n.grant_key_epoch = s.key_epoch AND ${liveGrant()}
       AND NOT (${currentCommentEnvelope(sql`d.id`, sql`c.object_id`, sql`c.capability_id`, sql`c.capability_epoch`)})
       AND (s.owner_id = ${auth.accountId} AND (k.ciphertext IS NOT NULL OR i.ciphertext IS NOT NULL) OR s.recipient_id = ${auth.accountId}

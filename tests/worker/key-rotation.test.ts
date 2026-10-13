@@ -15,7 +15,7 @@ import {
   treeChild,
 } from "./sharing-fixtures";
 import { createSymmetricWriter, openSymmetric } from "../../app/shared/crypto/enc-v1";
-import { commentKeyContext } from "../../app/shared/comments/content";
+import { commentKeyContext, threadCapabilityContext } from "../../app/shared/comments/content";
 import {
   createRecoveryMaterial,
   sealDeviceEnrollmentEnvelope,
@@ -740,6 +740,53 @@ it("revocation rotates an imported Historical thread and re-wraps it under the r
   expect(
     (await sharingRequest(removed, `/api/private/grants/${revoked.grantId}/comment-keys/${thread.objectId}`)).status,
   ).toBe(404);
+});
+
+it("a File promotion refuses to leave an imported thread sealed under the replaced key", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount();
+  const browser = await rotationBrowser(owner),
+    fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+  const active = await grant(owner, recipient, fileId);
+  const response = await sharingRequest(owner, `/api/private/grants/${active.grantId}`, "DELETE", {
+    expectedRevision: 1,
+  });
+  const { rotation } = (await response.json()) as { rotation: { jobId: string } };
+  // The source read saw no imported thread; one appears before the promotion.
+  let racedThreadId: string | null = null;
+  const racing: RotationBrowser = {
+    ...browser,
+    request: async (path, method = "POST", body) => {
+      if (
+        racedThreadId === null &&
+        method === "PATCH" &&
+        (body as { operation?: string } | undefined)?.operation === "promote"
+      ) {
+        const thread = await importedThread(owner, fileId);
+        const envelope = await (await createSymmetricWriter(owner.keys.get(fileId)!)).seal(
+          new Uint8Array(32).fill(41),
+          threadCapabilityContext(owner.accountId, thread.objectId, thread.capabilityId, 1),
+        );
+        await env.DB.prepare("UPDATE import_comment_envelopes SET ciphertext = ? WHERE thread_id = ?")
+          .bind(envelope, thread.objectId)
+          .run();
+        racedThreadId = thread.objectId;
+      }
+      return browser.request(path, method, body);
+    },
+  };
+  await expect(resumeRotation(rotation.jobId, racing)).rejects.toThrow("Secure access changed");
+  expect(racedThreadId).not.toBeNull();
+  const racedRow = () =>
+    env.DB.prepare("SELECT capability_epoch, key_epoch FROM import_comment_envelopes WHERE thread_id = ?")
+      .bind(racedThreadId)
+      .first();
+  expect(await racedRow()).toMatchObject({ capability_epoch: 1, key_epoch: 1 });
+  expect((await sharingRequest(owner, `/api/private/tree/files/${fileId}`, "PATCH", {})).status).toBe(409);
+  // The next pass reads the new thread, re-wraps it and completes.
+  expect(await resumeRotation(rotation.jobId, browser, { maxSteps: 100 })).toBe(true);
+  expect(await racedRow()).toMatchObject({ capability_epoch: 2, key_epoch: 2 });
+  expect((await sharingRequest(owner, `/api/private/tree/files/${fileId}`)).status).toBe(200);
 });
 
 it("missing current Private Comment key material leaves rotation sealed rather than silently abandoning current history", async () => {

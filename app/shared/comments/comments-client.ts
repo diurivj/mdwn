@@ -4,6 +4,7 @@ import {
   openCommentRecord,
   sealAttribution,
   sealCommentBody,
+  threadCapabilityContext,
 } from "~/shared/comments/content";
 import { openSymmetric } from "~/shared/crypto/enc-v1";
 import { readPseudonym } from "~/shared/account/profile-client";
@@ -129,14 +130,7 @@ export function openImportedThreadCapability(
   thread: { ownerId: string; threadId: string; capabilityId: string; capabilityEpoch: number },
 ) {
   return openSymmetric(decodeTreeBytes(ciphertext, MAX_COMMENT_KEY_ENVELOPE_BYTES), fileCapabilityKey, {
-    context: {
-      purpose: "private-comment-thread",
-      vaultId: thread.ownerId,
-      objectId: thread.threadId,
-      keyId: thread.capabilityId,
-      keyEpoch: thread.capabilityEpoch,
-      revision: 1,
-    },
+    context: threadCapabilityContext(thread.ownerId, thread.threadId, thread.capabilityId, thread.capabilityEpoch),
   });
 }
 
