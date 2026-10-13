@@ -274,6 +274,24 @@ as unpublished: Hard deletion keeps no record that a Publication existed.
   back/forward) triggers `useRevalidator`, because React Router otherwise skips
   loaders; a changed fragment hides the old document until the browser loader
   finishes, and cancellation prevents stale decryptions from winning.
+- The reader and the editor Preview share one renderer
+  (`app/tree/markdown-preview.tsx`) and its `.prose-markdown` typography, sized
+  relative to the container so the larger reader keeps the same hierarchy
+  ([ticket 67](../.scratch/mdwn/issues/67-mobile-public-reader.md)):
+  - A `#…` link never navigates, because the fragment is the read capability.
+    The renderer scrolls to and focuses its sanitized target in place (GFM
+    footnotes and their back-references). Other links open in a new tab with
+    `noopener noreferrer`.
+  - mdwn stores no images and the CSP admits only first-party ones, so a
+    Markdown image renders as an "Image not shown" note with its description.
+    A web address becomes an "Open image" link the reader may follow; the page
+    never requests it.
+  - Wide tables and code blocks scroll inside the text column, never the page,
+    and words in table cells are not split. While one overflows it is a
+    focusable region named "Scrollable table" or "Scrollable code", so the
+    keyboard can scroll it, with an edge shade on each side that hides content.
+  - `e2e/public-reader-mobile.spec.ts` checks this at phone widths in every
+    engine.
 - `GET /api/public/publications/:linkId` returns the Publication ID, the link's
   public key, the current Public representation, current-link author declarations
   and the eligible Public Comment epochs — never a File, Owner or Account ID,
