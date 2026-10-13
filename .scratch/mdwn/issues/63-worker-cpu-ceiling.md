@@ -4,7 +4,7 @@
 
 **Type:** configuration
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none — the maintainer confirmed the account's Workers Paid plan is active and supplied the CPU-time evidence on 2026-10-13 (see Comments).
 
@@ -19,7 +19,7 @@
 ## Acceptance criteria
 
 - [x] The evidence and chosen value are recorded. Preview and production configs set `limits.cpu_ms`, and a config test covers it.
-- [ ] Deploying to preview succeeds before production uses the limit.
+- [x] Deploying to preview succeeds before production uses the limit.
 
 ## Comments
 
@@ -28,3 +28,4 @@
   - Chosen value: **500 ms** in `wrangler.jsonc` for `preview` and `production`; the never-deployed local Worker has no limit. `tests/wrangler-config.test.ts` covers it per environment. Evidence, rationale and the rollback are recorded in `docs/operations.md#worker-cpu-ceiling`.
   - The deploy workflow runs preview (migrate, deploy, smoke-test) before production on merge, which is the acceptance criterion's preview-first order; the maintainer action is the merge, and the second criterion stays open until that run is observed.
   - Review fixes: the confirmation is reconciled with the statements that were conditional on an unconfirmed plan (`docs/operations.md` retention budget and Time Travel window, `docs/operations/d1-scripting.md`, ADR-0002/0005/0007), and the evidence wording no longer overstates the 10 ms bound or the runaway-cost example.
+- 2026-10-13: Completed and merged into `main` via [PR #70](https://github.com/diurivj/mdwn/pull/70), merge commit `cf6a232db4e86d62f8481bb6f3f6b348da2229f3`. The deploy workflow run `38343917106` completed successfully — preview migrations, deploy and smoke test, then production migrations, deploy and smoke test — so the 500 ms cap is live on both environments and the preview-first criterion is observed. Earlier pending notes are historical.
