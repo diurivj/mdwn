@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Link, redirect, useNavigate } from "react-router";
 
 import { hasActiveDeviceSession } from "~/device/proof.server";
@@ -11,7 +11,14 @@ import {
   pseudonymProblem,
   suggestPseudonym,
 } from "~/shared/account/pseudonym";
-import { commitSignup, confirmSignupRecovery, prepareSignup, type PreparedSignup } from "~/signup/bootstrap";
+import {
+  confirmSignupRecovery,
+  prepareSignup,
+  SignupCommitError,
+  signupCommit,
+  type PreparedSignup,
+} from "~/signup/bootstrap";
+import { PasskeyStep, type PasskeyProgress } from "~/signup/passkey-step";
 import { HoneypotField } from "~/shared/security/honeypot-field";
 import { HONEYPOT_FIELD_NAME } from "~/shared/security/honeypot";
 import { cx } from "~/ui/cx";
@@ -32,7 +39,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   return null;
 }
 
-type Stage = "ready" | "working" | "phrase" | "codes" | "failed";
+type Stage = "ready" | "working" | "phrase" | "codes" | "passkey" | "failed";
 
 export default function SignUp() {
   const [stage, setStage] = useState<Stage>("ready");
@@ -61,6 +68,18 @@ export default function SignUp() {
   }, []);
   const pseudonymIssue = hydrated ? pseudonymProblem(pseudonym) : null;
   const busy = useRef(false);
+  const commit = useRef<ReturnType<typeof signupCommit> | null>(null);
+  const [progress, setProgress] = useState<PasskeyProgress>("check");
+  const [failure, setFailure] = useState<SignupCommitError | null>(null);
+  // Each step replaces the one whose button was just pressed, often far down the page: start it at its heading.
+  useLayoutEffect(() => {
+    if (stage === "phrase" || stage === "codes" || stage === "passkey") window.scrollTo(0, 0);
+  }, [stage]);
+  // The library's code loads while recovery is being saved, so opening it after the commit
+  // waits only for its data. A failed load costs only that head start, never the signup in progress.
+  useEffect(() => {
+    if (stage === "phrase") void import("~/tree/library-preload").catch(() => undefined);
+  }, [stage]);
 
   async function createAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -102,33 +121,61 @@ export default function SignUp() {
     setStage("codes");
   }
 
-  async function confirmCodes() {
+  function confirmCodes() {
     if (!prepared || busy.current) return;
-    busy.current = true;
     try {
       // Do not start the one-use ceremony until recovery has been saved. If
       // the commit response is lost (even across a reload), the gate is clear
       // and both the phrase and codes have already been shown and confirmed.
       confirmSignupRecovery();
-      setPrepared(null);
-      setWords(["", "", ""]);
-      setStage("working");
-      const current = new AbortController();
-      controller.current = current;
-      await commitSignup(prepared, honeypot.current, current.signal);
-      afterSignIn();
-      // Signed in: the new library is home. Its recovery material has been shown for the last time.
-      if (mounted.current) navigate("/files", { replace: true });
     } catch {
-      // Storage must be writable; network failures may still follow a commit.
-      if (mounted.current) setStage("failed");
+      // Storage must be writable.
+      setStage("failed");
+      return;
+    }
+    // The commit keeps only what it sends; the phrase and codes leave memory with the page state.
+    commit.current = signupCommit(prepared, honeypot.current);
+    setPrepared(null);
+    setWords(["", "", ""]);
+    setProgress("check");
+    setStage("passkey");
+    void finishSignup();
+  }
+
+  /** Called from a click on retries, so a passkey prompt that can reopen at once stays in that click. */
+  async function finishSignup() {
+    const attempt = commit.current;
+    if (!attempt || busy.current) return;
+    busy.current = true;
+    setFailure(null);
+    const current = new AbortController();
+    controller.current = current;
+    try {
+      await attempt(current.signal, setProgress);
+    } catch (error) {
+      // An unclassified failure might have followed a commit, so it is never retried with this material.
+      if (mounted.current)
+        setFailure(error instanceof SignupCommitError ? error : new SignupCommitError("unconfirmed"));
+      return;
     } finally {
       controller.current = null;
       busy.current = false;
     }
+    afterSignIn();
+    if (!mounted.current) return;
+    setProgress("done");
+    // Signed in: the new library is home. Its recovery material has been shown for the last time.
+    navigate("/files", { replace: true });
   }
 
-  const step = stage === "phrase" ? 1 : stage === "codes" ? 2 : null;
+  /** New recovery material for a new Account ID: the saved phrase and codes no longer apply. */
+  function startOver() {
+    commit.current = null;
+    setFailure(null);
+    setStage("ready");
+  }
+
+  const step = stage === "phrase" ? 1 : stage === "codes" ? 2 : stage === "passkey" ? 3 : null;
   return (
     <FocusLayout width={step ? "wide" : "narrow"}>
       <PageIntro eyebrow={step ? `Step ${step} of 3` : "Create account"} title="Create your account">
@@ -200,7 +247,8 @@ export default function SignUp() {
             </ul>
             {stage === "failed" && (
               <p role="alert" className={cx(noticeClass("danger"), "mt-6")}>
-                We could not create your account. Try again, or sign in if your passkey was saved.
+                We could not create your account in this browser. Try again. If it keeps failing, check that this
+                browser allows sites to save data.
               </p>
             )}
             <HoneypotField />
@@ -314,6 +362,9 @@ export default function SignUp() {
             <p className="text-sm text-muted">Next, your browser creates your passkey.</p>
           </div>
         </section>
+      )}
+      {stage === "passkey" && (
+        <PasskeyStep progress={progress} failure={failure} onRetry={finishSignup} onStartOver={startOver} />
       )}
     </FocusLayout>
   );

@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 import {
   bindingMessage,
@@ -108,14 +110,76 @@ describe("signup wire protocol", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(solveProofOfWork(b64(32, 0), controller.signal)).rejects.toMatchObject({ name: "AbortError" });
-    const random = vi.spyOn(crypto, "getRandomValues").mockImplementation((array) => {
-      (array as Uint8Array).fill(0);
-      return array;
-    });
+    const random = startingAt(new Uint8Array(8));
     try {
       expect(await solveProofOfWork(b64(32, 0))).toBe("AAAAAAACFKE");
     } finally {
       random.mockRestore();
     }
   }, 30_000);
+
+  it("finds the first qualifying nonce across the nonce's word boundary and the 64-bit wrap", async () => {
+    // Independently found by scanning upward from each start with node:crypto SHA-256.
+    for (const [fill, start, first] of [
+      [3, [0, 0, 0, 1, 0xff, 0xff, 0xff, 0xf0], "AAAAAgAAFks"],
+      [5, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00], "AAAAAAABLnE"],
+    ] as const) {
+      const random = startingAt(Uint8Array.from(start));
+      try {
+        expect(await solveProofOfWork(b64(32, fill))).toBe(first);
+      } finally {
+        random.mockRestore();
+      }
+    }
+  });
+
+  it("agrees with node:crypto SHA-256 on random challenges and starting nonces", async () => {
+    for (let run = 0; run < 3; run++) {
+      const challenge = randomBytes(32);
+      const start = randomBytes(8);
+      const candidate = Buffer.concat([challenge, start]);
+      let nonce = candidate.readBigUInt64BE(32);
+      for (;;) {
+        const digest = createHash("sha256").update(candidate).digest();
+        if (digest[0] === 0 && digest[1] === 0 && (digest[2]! & 0xc0) === 0) break;
+        nonce = BigInt.asUintN(64, nonce + 1n);
+        candidate.writeBigUInt64BE(nonce, 32);
+      }
+      const random = startingAt(new Uint8Array(start));
+      try {
+        expect(await solveProofOfWork(encodeBytes(new Uint8Array(challenge)))).toBe(
+          encodeBytes(new Uint8Array(candidate.subarray(32))),
+        );
+      } finally {
+        random.mockRestore();
+      }
+    }
+  }, 30_000);
+
+  it("yields between slices and stops at the next slice once aborted mid-search", async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    // Each clock read moves a second on, so every slice runs one batch of 1,024 candidates.
+    // The abort on the fourth read, the end of the second slice, comes mid-search: the zero
+    // challenge's first answer from nonce 0 is 133 batches away.
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => {
+      if (++reads === 4) controller.abort();
+      return reads * 1_000;
+    });
+    const random = startingAt(new Uint8Array(8));
+    try {
+      await expect(solveProofOfWork(b64(32, 0), controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      clock.mockRestore();
+      random.mockRestore();
+    }
+  });
 });
+
+/** Makes the solver's random starting nonce `start`. */
+function startingAt(start: Uint8Array) {
+  return vi.spyOn(crypto, "getRandomValues").mockImplementation((array) => {
+    (array as Uint8Array).set(start);
+    return array;
+  });
+}

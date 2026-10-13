@@ -18,12 +18,12 @@ import {
   bindingMessage,
   decodeBytes,
   encodeBytes,
+  SIGNUP_CHALLENGE_MS,
   transcriptDigest,
   verifyProofOfWork,
   type SignupTranscript,
 } from "../shared/signup/protocol";
 
-const CHALLENGE_MS = 5 * 60_000;
 const encoder = new TextEncoder();
 const TRANSPORT_CONTEXT = (accountId: string, deviceId: string) => ({
   purpose: "device-enrollment" as const,
@@ -90,7 +90,7 @@ export async function beginSignupChallenge(request: Request, env: Env): Promise<
   const now = Date.now();
   await createDb(env.DB).run(sql`
     INSERT INTO registration_challenges (id, challenge, origin, expires_at, created_at)
-    VALUES (${id}, ${challenge}, ${originFor(request)}, ${now + CHALLENGE_MS}, ${now})
+    VALUES (${id}, ${challenge}, ${originFor(request)}, ${now + SIGNUP_CHALLENGE_MS}, ${now})
   `);
   return Response.json({ challengeId: id, challenge }, { headers: { "Cache-Control": "no-store" } });
 }
@@ -162,7 +162,7 @@ export async function beginSignupRegistration(
       INSERT INTO webauthn_challenges
         (id, challenge, purpose, account_id, session_id, origin, rp_id, expires_at, created_at, transport_challenge_hash)
       VALUES (${id}, ${challenge}, 'signup', NULL, NULL, ${originFor(request)}, ${rpId},
-        ${now + CHALLENGE_MS}, ${now}, ${challengeHash})
+        ${now + SIGNUP_CHALLENGE_MS}, ${now}, ${challengeHash})
     `);
     return Response.json(
       {

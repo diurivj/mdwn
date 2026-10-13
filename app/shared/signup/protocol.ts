@@ -23,6 +23,9 @@ const TRANSCRIPT_FIELDS = [
   "registryEpoch",
 ];
 
+/** Lifetime of a signup registration challenge, and of the WebAuthn challenge its options carry. */
+export const SIGNUP_CHALLENGE_MS = 5 * 60_000;
+
 export function encodeBytes(input: Uint8Array): string {
   const bytes = input;
   if (!(bytes instanceof Uint8Array) || bytes.length > MAX_BYTES) throw new Error("malformed base64url bytes");
@@ -163,6 +166,7 @@ export async function bindingMessage(transcript: SignupTranscript): Promise<Uint
   return join(BINDING_TAG, await transcriptHash(transcript));
 }
 
+/** 18 leading zero bits. */
 function validHash(bytes: Uint8Array): boolean {
   return bytes[0] === 0 && bytes[1] === 0 && (bytes[2]! & 0xc0) === 0;
 }
@@ -175,22 +179,154 @@ export async function verifyProofOfWork(challenge: string, nonce: string): Promi
   );
 }
 
-/** Random starting point, wrapping the full 64-bit nonce space, with cooperative yields. */
+// SHA-256 round constants and initial hash value (FIPS 180-4 §4.2.2, §5.3.3).
+const SHA256_K = Int32Array.from([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98,
+  0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8,
+  0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819,
+  0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+  0xc67178f2,
+]);
+const SHA256_IV = Int32Array.from([
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]);
+
+/** SHA-256 compression rounds `from` to `to` (exclusive) over one message schedule, updating `state` in place. */
+function sha256Rounds(state: Int32Array, w: Int32Array, from: number, to: number): void {
+  let a = state[0];
+  let b = state[1];
+  let c = state[2];
+  let d = state[3];
+  let e = state[4];
+  let f = state[5];
+  let g = state[6];
+  let h = state[7];
+  for (let t = from; t < to; t++) {
+    const t1 =
+      (h +
+        (((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7))) +
+        ((e & f) ^ (~e & g)) +
+        SHA256_K[t] +
+        w[t]) |
+      0;
+    const t2 =
+      ((((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10))) +
+        ((a & b) ^ (a & c) ^ (b & c))) |
+      0;
+    h = g;
+    g = f;
+    f = e;
+    e = (d + t1) | 0;
+    d = c;
+    c = b;
+    b = a;
+    a = (t1 + t2) | 0;
+  }
+  state[0] = a;
+  state[1] = b;
+  state[2] = c;
+  state[3] = d;
+  state[4] = e;
+  state[5] = f;
+  state[6] = g;
+  state[7] = h;
+}
+
+/**
+ * Tests nonces against one challenge synchronously. The 40-byte message fills
+ * a single padded SHA-256 block; rounds 0–7 read only the challenge and round 8
+ * only the nonce's high word, so each candidate runs rounds 9–63. Awaiting one
+ * WebCrypto digest per candidate was 45–95 times slower in Chromium, Firefox
+ * and WebKit (ticket 69).
+ */
+function proofOfWorkSearch(challenge: Uint8Array) {
+  const w = new Int32Array(64);
+  const words = new DataView(challenge.buffer, challenge.byteOffset, 32);
+  for (let i = 0; i < 8; i++) w[i] = words.getInt32(i * 4);
+  w[10] = 0x80000000 | 0; // the padding bit after 40 bytes
+  w[15] = 40 * 8; // the message length in bits
+  const afterChallenge = SHA256_IV.slice();
+  sha256Rounds(afterChallenge, w, 0, 8);
+  const afterHigh = new Int32Array(8);
+  const state = new Int32Array(8);
+  return {
+    setHigh(high: number): void {
+      w[8] = high;
+      afterHigh.set(afterChallenge);
+      sha256Rounds(afterHigh, w, 8, 9);
+    },
+    /** The digest's first word starts with the 18 zero bits `validHash` checks. */
+    matches(low: number): boolean {
+      w[9] = low;
+      for (let t = 16; t < 64; t++) {
+        const x = w[t - 15];
+        const y = w[t - 2];
+        w[t] =
+          ((((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10)) +
+            w[t - 7] +
+            (((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3)) +
+            w[t - 16]) |
+          0;
+      }
+      state.set(afterHigh);
+      sha256Rounds(state, w, 9, 64);
+      return (SHA256_IV[0] + state[0]) >>> 14 === 0;
+    },
+  };
+}
+
+/** Short enough for the page to keep painting and handling input while the search runs. */
+const SOLVE_SLICE_MS = 12;
+
+/** Unlike chained zero-delay timers, a channel message is not clamped to 4 ms between slices. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
+/**
+ * Random starting point, wrapping the full 64-bit nonce space, in short
+ * main-thread slices. The answer is checked with WebCrypto, as the Worker
+ * checks it, before it is returned.
+ */
 export async function solveProofOfWork(challenge: string, signal?: AbortSignal): Promise<string> {
-  const challengeBytes = bytesOf(challenge, 32);
-  const candidate = join(challengeBytes, crypto.getRandomValues(new Uint8Array(8)));
-  const view = new DataView(candidate.buffer);
-  let nonce = view.getBigUint64(32);
-  const start = nonce;
+  const search = proofOfWorkSearch(bytesOf(challenge, 32));
+  const start = new DataView(crypto.getRandomValues(new Uint8Array(8)).buffer);
+  const startHigh = start.getUint32(0);
+  const startLow = start.getUint32(4);
+  let high = startHigh;
+  let low = startLow;
+  search.setHigh(high);
   for (;;) {
     if (signal?.aborted) throw new DOMException("Proof of work aborted", "AbortError");
-    for (let i = 0; i < 256; i++) {
-      view.setBigUint64(32, nonce);
-      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(candidate)));
-      if (validHash(digest)) return encodeBytes(candidate.subarray(32));
-      nonce = BigInt.asUintN(64, nonce + 1n);
-      if (nonce === start) throw new Error("nonce space exhausted");
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const sliceEnd = performance.now() + SOLVE_SLICE_MS;
+    do {
+      for (let i = 0; i < 1024; i++) {
+        if (search.matches(low)) {
+          const nonce = new DataView(new ArrayBuffer(8));
+          nonce.setUint32(0, high);
+          nonce.setUint32(4, low);
+          const encoded = encodeBytes(new Uint8Array(nonce.buffer));
+          if (!(await verifyProofOfWork(challenge, encoded))) throw new Error("proof of work self-check failed");
+          return encoded;
+        }
+        low = (low + 1) >>> 0;
+        if (low === 0) {
+          high = (high + 1) >>> 0;
+          search.setHigh(high);
+        }
+        if (low === startLow && high === startHigh) throw new Error("nonce space exhausted");
+      }
+    } while (performance.now() < sliceEnd);
+    await nextTask();
   }
 }

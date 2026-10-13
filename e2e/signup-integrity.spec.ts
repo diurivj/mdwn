@@ -146,7 +146,12 @@ test("losing a persisted private key before passkey registration never activates
     });
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await completeRecoveryPresentation(page);
-    await expect(page.getByRole("alert")).toContainText("could not create your account", { timeout: 120_000 });
+    const notice = page.getByRole("alert");
+    await expect(notice).toContainText("could not create your account", { timeout: 120_000 });
+    // Material bound to lost keys cannot be retried: only a new start, and no passkey was made for it.
+    await expect(notice.getByRole("button", { name: "Start over", exact: true })).toBeFocused();
+    await expect(notice.getByRole("button", { name: /Try again|Create passkey/ })).toHaveCount(0);
+    expect(await context.credentials.get()).toHaveLength(0);
     expect(await env.DB.prepare("SELECT count(*) AS n FROM accounts").first()).toEqual({ n: 0 });
   } finally {
     await context.close();

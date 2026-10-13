@@ -224,8 +224,10 @@ store. `e2e/auth-sign-in.spec.ts` separately seeds Accounts with passkeys and
 signs in through the real routes and checks fetcher revalidation. The
 Account-security SSR shell is checked through `SELF.fetch` in the Workers suite. `e2e/signup.spec.ts`, `e2e/signup-integrity.spec.ts`,
 and `e2e/device-store.spec.ts` exercise real signup, device enrollment, local
-recovery confirmation before any signup request, and persisted key handles
-through the same Worker/browser/engine harness.
+recovery confirmation before any signup request, persisted key handles, and
+signup retries that keep the confirmed recovery material only until a passkey
+exists, through the same Worker/browser/engine harness. Signup's proof-of-work
+solver is checked against node:crypto SHA-256 in `tests/signup-protocol.test.ts`.
 
 Use real signup only when signup itself is under test, or for the single
 signup-to-Files golden path in `private-tree-flow.spec.ts`. Tests that need an
