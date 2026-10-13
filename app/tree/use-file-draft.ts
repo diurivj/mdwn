@@ -5,6 +5,7 @@ import { FILE_SOURCE_LIMIT, fileSourceBytes } from "~/shared/crypto/file-source"
 import { newOpaqueId } from "~/shared/opaque-id";
 import { loadDirectory, loadFile, rememberListing, type DirectoryListing } from "../shared/tree/client";
 import { rememberFile } from "../shared/tree/file-capability-client";
+import { whileChangingListings } from "../shared/tree/tab-tree-cache";
 import {
   prepareFileSave,
   withFileListing,
@@ -117,7 +118,12 @@ export function useFileDraft(
       );
       for (let attempt = 0; attempt < 3; attempt++) {
         if (!mounted.current) return false;
-        const result = await submit(prepared.payload);
+        // A legacy save re-signs its parent listing, whatever the answer (ticket 57).
+        const parent = "capability" in prepared.payload ? null : listing.current;
+        const payload = prepared.payload;
+        const result = parent
+          ? await whileChangingListings(snapshot.access.actorAccountId, [parent.directoryId], () => submit(payload))
+          : await submit(payload);
         if (!mounted.current) return false;
         if (result.state === "conflict") {
           conflictRef.current = true;

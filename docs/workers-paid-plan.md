@@ -1,6 +1,6 @@
 # Budgeted Workers Paid adoption
 
-Status: ready-for-agent — specification, not implemented.
+Status: in progress — decomposed into [61](../.scratch/mdwn/issues/61-autonomous-public-cleanup.md) (scheduled Unpublishing cleanup), [62](../.scratch/mdwn/issues/62-workers-paid-operating-contract.md) (operating policy and ADR supersession), [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md) (CPU ceiling), [64](../.scratch/mdwn/issues/64-import-admission-guard.md) (Import admission guard) and [65](../.scratch/mdwn/issues/65-larger-import-envelope.md) (larger Import envelope). No subscription, alert or production capacity has been confirmed by this work.
 
 This specification records the maintainer's decision to fund Workers Paid while keeping mdwn inexpensive and implementation work proportionate. It replaces the Free-only operating assumption, not the privacy model. The agreed order is budget safeguards, larger practical Imports, then autonomous Public-material cleanup. Each change must be independently useful; this is not one large implementation ticket.
 

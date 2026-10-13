@@ -28,3 +28,5 @@ During 56, a parallel session upgraded to 1.64 and measured the Firefox fix: a p
 - [ ] No Keychain prompt is pending on either Mac after the run.
 
 ## Comments
+
+- 2026-10-12: The maintainer kept this ticket out of the combined 53/57/58 pull request until **Always Allow** has been chosen for 1.64's WebKit Keychain prompt on both Macs. No Keychain prompt was pending on the development MacBook at that time (no `SecurityAgent` process), and `webkit-2370` is installed there. Nobody has confirmed the CI Mac mini runner account.

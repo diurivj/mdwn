@@ -314,6 +314,8 @@ test("flushes before navigation and warns only while pending or failed, with exp
     .click();
   await warning.getByRole("button", { name: "Discard draft and leave", exact: true }).click();
   await expect(page).toHaveURL(/\/files$/);
+  // A remembered library commits just after its URL; the editor's warning leaves with the editor.
+  await expect(source).toBeHidden();
   expect(await warns()).toBe(false);
 });
 

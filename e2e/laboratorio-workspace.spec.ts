@@ -1,5 +1,6 @@
 import { test, expect } from "./workspace-fixture";
 import { waitForSharedProvisioning } from "./support/navigation";
+import { forgetTabMemory } from "./support/tab-memory";
 
 test("opens the library from the header, keeps Account pages in the Account menu and fits a narrow screen", async ({
   page,
@@ -89,8 +90,9 @@ test("shows the destination's own frame while a navigation loads, with no progre
   await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
 
   // Inside the library, the clicked File's name and an editor skeleton replace the folder at once.
-  const ancestors = `**/api/private/tree/nodes/${workspace.fileId}/ancestors`;
-  const file = await hold(ancestors);
+  // Its content is fetched on every open, even when its path is remembered (ticket 57).
+  const content = `**/api/private/tree/files/${workspace.fileId}`;
+  const file = await hold(content);
   try {
     await page.getByRole("navigation", { name: "Files", exact: true }).getByRole("link", { name: "Draft.md" }).click();
     await expect.poll(file.reached).toBe(true);
@@ -100,7 +102,7 @@ test("shows the destination's own frame while a navigation loads, with no progre
     await expect(page.getByRole("progressbar")).toHaveCount(0);
   } finally {
     file.release();
-    await page.unroute(ancestors);
+    await page.unroute(content);
   }
   await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
   await expect(main).not.toHaveAttribute("aria-busy", "true");
@@ -111,6 +113,8 @@ test("shows the destination's own frame while a navigation loads, with no progre
   await expect(page.getByRole("heading", { name: "Public pseudonym", exact: true })).toBeVisible();
   // The destination placeholder also has this heading; wait for its decrypted content before leaving it.
   await expect(page.getByLabel("Current Public pseudonym")).toBeVisible();
+  // A library this tab remembers renders at once; this frame belongs to a library opened from the network.
+  await forgetTabMemory(page);
   const bootstrap = await hold("**/api/private/bootstrap");
   try {
     await page.getByRole("banner").getByRole("link", { name: "Open library", exact: true }).click();

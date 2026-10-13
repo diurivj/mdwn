@@ -142,7 +142,7 @@ An Owner-controlled public exposure of one file through a Public link. It is sep
 _Avoid_: Public share, published folder
 
 **Unpublishing**:
-An Owner-initiated irreversible teardown of a Publication. It seals all Public routes immediately, then hard-deletes its Public representation, Public Comment thread, Comments, capabilities, and attribution in bounded browser-driven batches; interruption never restores access.
+An Owner-initiated irreversible teardown of a Publication. It seals all Public routes immediately, then hard-deletes its Public representation, Public Comment thread, Comments, capabilities, and attribution in bounded batches driven by the Owner's browser or by scheduled maintenance; interruption never restores access.
 _Avoid_: Archive, hide, pause
 
 **Publication request**:

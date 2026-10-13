@@ -126,10 +126,18 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
           {shownMessage}
         </p>
       )}
+      {view.deletionComplete && (
+        <p role="status" className={noticeClass("success")}>
+          Public material deleted. The old Public link and its Public Comments are gone.
+        </p>
+      )}
       {publication?.state === "deleting" ? (
         <div className="space-y-3">
           <p role="status" className="font-medium">
             Deleting public material…
+          </p>
+          <p className="text-sm text-ink-soft">
+            Public access has ended. Deletion continues automatically, even after you close this page.
           </p>
           {state.isOwner && (
             <p className="text-sm text-ink-soft">

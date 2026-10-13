@@ -261,3 +261,105 @@ it("returns only the caller's opaque share address through a replayable, read-on
       .first(),
   ).toEqual(before);
 });
+
+it("lists the recipient's share identifier only on rows the caller owns, never the Owner's on recipient rows", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    stranger = await sharingAccount();
+  const pendingTarget = await treeChild(owner, owner.rootId, "directory");
+  const grantedTarget = await treeChild(owner, owner.rootId, "file");
+  const pending = await invite(owner, recipient, pendingTarget);
+  const active = await grant(owner, recipient, grantedTarget, "read_write");
+  const ownerShares = (await (await sharingRequest(owner, "/api/private/shares")).json()) as Record<string, unknown>;
+  expect(ownerShares).toEqual({
+    incoming: [],
+    outgoing: [
+      {
+        shareId: pending.shareId,
+        ownerId: owner.accountId,
+        recipientId: recipient.accountId,
+        recipientShareId: recipient.shareId,
+        targetId: pendingTarget,
+        targetKind: "directory",
+        permission: "read_only",
+      },
+    ],
+    nextCursor: null,
+  });
+  const ownerGrants = (await (await sharingRequest(owner, "/api/private/grants")).json()) as Record<string, unknown>;
+  expect(ownerGrants).toMatchObject({
+    received: [],
+    owned: [{ grantId: active.grantId, recipientShareId: recipient.shareId, targetId: grantedTarget }],
+  });
+  const recipientShares = await (await sharingRequest(recipient, "/api/private/shares")).text();
+  const recipientGrants = await (await sharingRequest(recipient, "/api/private/grants")).text();
+  for (const body of [recipientShares, recipientGrants]) {
+    expect(body).not.toContain(owner.shareId);
+    expect(body).not.toContain(recipient.shareId);
+    expect(body).not.toContain("recipientShareId");
+  }
+  expect(JSON.parse(recipientShares)).toMatchObject({ incoming: [{ shareId: pending.shareId }], outgoing: [] });
+  expect(JSON.parse(recipientGrants)).toMatchObject({ received: [{ grantId: active.grantId }], owned: [] });
+  for (const path of ["/api/private/shares", "/api/private/grants"]) {
+    const unrelated = await sharingRequest(stranger, path);
+    expect(unrelated.status).toBe(200);
+    expect(await unrelated.json()).toEqual(
+      path.endsWith("shares")
+        ? { incoming: [], outgoing: [], nextCursor: null }
+        : { received: [], owned: [], nextCursor: null },
+    );
+  }
+});
+
+it("an invitation beneath a write seal waits for the secure access update", async () => {
+  const owner = await sharingAccount(),
+    first = await sharingAccount(),
+    second = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const fileId = await treeChild(owner, directoryId, "file");
+  await convertFixtureFile(owner, fileId);
+  const active = await grant(owner, first, directoryId);
+  expect(
+    (await sharingRequest(owner, `/api/private/grants/${active.grantId}`, "DELETE", { expectedRevision: 1 })).status,
+  ).toBe(200);
+  for (const targetId of [directoryId, fileId]) {
+    const refused = await sharingRequest(owner, "/api/private/shares", "PUT", {
+      targetId,
+      recipient: { shareId: second.shareId },
+      permission: "read_only",
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "key_rotation_required" });
+  }
+  expect(
+    await env.DB.prepare("SELECT count(*) AS total FROM shares WHERE owner_id = ?").bind(owner.accountId).first(),
+  ).toEqual({
+    total: 0,
+  });
+  // Unsealed content elsewhere in the Owner's library is unaffected.
+  const elsewhere = await treeChild(owner, owner.rootId, "file");
+  await invite(owner, second, elsewhere);
+});
+
+it("re-inviting an Account with a pending Share or active Grant on the same target is already_shared", async () => {
+  const owner = await sharingAccount(),
+    pending = await sharingAccount(),
+    active = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file");
+  await invite(owner, pending, fileId);
+  await grant(owner, active, fileId);
+  for (const recipient of [pending, active]) {
+    const refused = await sharingRequest(owner, "/api/private/shares", "PUT", {
+      targetId: fileId,
+      recipient: { shareId: recipient.shareId },
+      permission: "read_write",
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "already_shared" });
+  }
+  expect(await env.DB.prepare("SELECT count(*) AS total FROM shares WHERE target_id = ?").bind(fileId).first()).toEqual(
+    {
+      total: 1,
+    },
+  );
+});

@@ -8,6 +8,7 @@ import {
   sql,
 } from "~/shared/db/client.server";
 import { getActiveSession, sessionCookieId, type ActiveSession } from "~/auth/session.server";
+import { DEVICE_PROOF_SPENT } from "../shared/device/proof-denials";
 import { sessionBindingDigest, verifyDeviceProof, type DeviceProof } from "../shared/device/proof";
 
 const COARSE_PROOF_MS = 86_400_000;
@@ -75,6 +76,22 @@ async function liveSessionDevice(
  * Session can still sign in: a fresh Passkey assertion is how a browser's
  * Session becomes bound.
  */
+/**
+ * After a failed or uncertain commit: `403 device_proof_spent` when this
+ * request's proof is expired or already used — an earlier use, or this very
+ * request, may have committed, so the browser must never retry it (ticket 57)
+ * — otherwise null, and the caller explains the failure itself.
+ */
+export async function spentProof(env: Env, auth: AuthorizedDevice): Promise<Response | null> {
+  const spent =
+    auth.expiresAt <= Date.now() ||
+    !!(await createDb(env.DB).get(sql`SELECT 1 FROM device_proof_uses
+    WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`));
+  return spent
+    ? Response.json({ error: DEVICE_PROOF_SPENT }, { status: 403, headers: { "Cache-Control": "no-store" } })
+    : null;
+}
+
 export async function hasActiveDeviceSession(request: Request, env: Env): Promise<boolean> {
   const live = await liveSessionDevice(request, env);
   return live?.session.purpose === "normal" && live.session.deviceId !== undefined && live.device !== null;

@@ -12,7 +12,7 @@ import { newOpaqueId } from "~/shared/opaque-id";
 import { isV7 } from "~/shared/tree/wire";
 import { shareHandleLookupToken } from "./address";
 import { liveGrant } from "./grant-lifetime.server";
-import { readGrantKeys, uploadGrantKeys } from "./grant-keys.server";
+import { readGrantKeys, shareSealed, uploadGrantKeys } from "./grant-keys.server";
 import { sharingWriteBlocked } from "./access.server";
 import { listCommentKeys, readCommentKey, uploadCommentKeys } from "./comment-keys.server";
 import { pendingGrantCoverage, pendingCommentCoverage, requiredGrantComments } from "./capability-coverage.server";
@@ -42,8 +42,11 @@ async function listRelationships(env: Env, auth: AuthorizedDevice, kind: "shares
     revision?: number;
     key_epoch?: number;
     expires_at?: number | null;
+    recipient_share_id: string | null;
   }>(sql`
-    SELECT * FROM ${table} WHERE (owner_id = ${auth.accountId} OR recipient_id = ${auth.accountId})
+    SELECT r.*, CASE WHEN r.owner_id = ${auth.accountId}
+        THEN (SELECT share_id FROM accounts WHERE id = r.recipient_id) END AS recipient_share_id
+    FROM ${table} r WHERE (owner_id = ${auth.accountId} OR recipient_id = ${auth.accountId})
       AND ${kind === "shares" ? sql`1` : liveGrant(sql`expires_at`)}
       AND id > ${cursor ?? ""} AND ${privateReadGuard(auth)} ORDER BY id LIMIT 101`);
   const relationships = rows.slice(0, 100).map((row) => ({
@@ -52,6 +55,10 @@ async function listRelationships(env: Env, auth: AuthorizedDevice, kind: "shares
       : { grantId: row.id, revision: row.revision, keyEpoch: row.key_epoch, expiresAt: row.expires_at }),
     ownerId: row.owner_id,
     recipientId: row.recipient_id,
+    // The Owner already addressed this Account; recipient rows gain nothing about the Owner.
+    ...(row.owner_id === auth.accountId && row.recipient_share_id !== null
+      ? { recipientShareId: row.recipient_share_id }
+      : {}),
     targetId: row.target_id,
     targetKind: row.target_kind,
     permission: row.permission,
@@ -107,9 +114,19 @@ async function createShare(env: Env, auth: AuthorizedDevice, value: unknown) {
   if (!target) return notFound();
   if (target.kind === "file" && (!target.capability_id || !target.capability_epoch))
     return failure("shared_content_provisioning_required", 409);
+  // Staging under a seal cannot complete until rotation replaces the capability.
+  const sealed = await shareSealed(env, "shares", input.targetId);
+  if (sealed) return sealed;
   const account = await db.get<{ id: string }>(sql`SELECT id FROM accounts
     WHERE ${address} AND id != ${auth.accountId} AND ${privateReadGuard(auth)}`);
   if (!account) return notFound();
+  // The Owner already relates to this Account on this item; the CAS below still guards races.
+  if (
+    await db.get(sql`SELECT 1 WHERE EXISTS (SELECT 1 FROM shares WHERE owner_id = ${auth.accountId}
+      AND recipient_id = ${account.id} AND target_id = ${input.targetId}) OR EXISTS (SELECT 1 FROM grants
+      WHERE owner_id = ${auth.accountId} AND recipient_id = ${account.id} AND target_id = ${input.targetId})`)
+  )
+    return failure("already_shared", 409);
   const shareId = newOpaqueId();
   const committed = await commitPrivateMutation(
     env,
@@ -120,6 +137,7 @@ async function createShare(env: Env, auth: AuthorizedDevice, value: unknown) {
     FROM vault_nodes n WHERE n.id = ${input.targetId} AND n.owner_id = ${auth.accountId}
       AND (n.kind = 'directory' OR EXISTS (SELECT 1 FROM files f WHERE f.node_id = n.id
         AND f.owner_id = n.owner_id AND f.capability_id IS NOT NULL AND f.capability_epoch IS NOT NULL))
+      AND NOT ${sharingWriteBlocked(sql`n.id`)}
       AND NOT EXISTS (SELECT 1 FROM grants WHERE owner_id = ${auth.accountId}
         AND recipient_id = ${account.id} AND target_id = n.id) AND ${guard}
     ON CONFLICT (owner_id, recipient_id, target_id) DO NOTHING`,

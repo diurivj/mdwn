@@ -51,8 +51,11 @@ async function install(page: Page, script: string, baseURL: string) {
   await page.addScriptTag({ url: new URL("/__test__/device-access.js", page.url()).href });
 }
 
+/** One private operation that starts after the device-state reuse window
+ * (ticket 57), so it reads the registry state this test supplies. */
 async function attempt(page: Page): Promise<{ state: string; status?: number }> {
   return page.evaluate(async () => {
+    window.deviceAccess.discardDeviceState();
     try {
       const response = await window.deviceAccess.privateRequest("/api/private/bootstrap?b=2&a=1", { method: "POST" });
       return { state: "ready", status: response.status };

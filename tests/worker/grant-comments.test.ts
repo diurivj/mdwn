@@ -5,10 +5,13 @@ import {
   openCommentKeyEnvelope,
   type CommentKeyContext,
 } from "../../app/shared/sharing/comment-keys";
+import { createGrantKeyEnvelope, type GrantKeyContext } from "../../app/shared/sharing/grant-keys";
 import { newPublicationIdentifier } from "../../app/shared/publications/capability";
+import { encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   addSharingDevice,
   deletePayload,
+  grant,
   invite,
   opaqueId,
   prepareGrantKeys,
@@ -327,5 +330,190 @@ it("atomically accepts only complete Private and retained Public-history device 
     expect(
       (await sharingRequest(owner, `/api/private/shares/${shareId}/comment-keys/${comment.objectId}`)).status,
     ).toBe(404);
+  }
+});
+
+it("share Comment targets give only the Owner its own current vault-recovery source", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    stranger = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const current = await privateThread(owner, await treeChild(owner, directoryId, "file"));
+  const stale = await privateThread(owner, await treeChild(owner, directoryId, "file"));
+  const missing = await privateThread(owner, await treeChild(owner, directoryId, "file"));
+  await env.DB.prepare("UPDATE sharing_comment_capabilities SET capability_epoch = 2 WHERE object_id = ?")
+    .bind(stale.objectId)
+    .run();
+  const recovery = (account: SharingAccount, objectId: string, keyEpoch: number, bytes: number) =>
+    env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
+      VALUES (?, 'vault-recovery', ?, 'vault-root', ?, ?)`)
+      .bind(account.accountId, objectId, new Uint8Array(48).fill(bytes), keyEpoch)
+      .run();
+  await recovery(owner, current.objectId, 1, 1);
+  // A superseded epoch, and another Account's row for the same object, are never a source.
+  await recovery(owner, stale.objectId, 1, 2);
+  await recovery(stranger, missing.objectId, 1, 3);
+  const { shareId } = await invite(owner, recipient, directoryId);
+  const target = (objectId: string) => `/api/private/shares/${shareId}/comment-keys/${objectId}`;
+
+  const response = await sharingRequest(owner, target(current.objectId));
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { source?: { kind: string; envelope: string } };
+  expect(body.source).toEqual({ kind: "recovery", envelope: encodeTreeBytes(new Uint8Array(48).fill(1)) });
+  for (const objectId of [stale.objectId, missing.objectId]) {
+    const other = await sharingRequest(owner, target(objectId));
+    expect(other.status).toBe(200);
+    expect(await other.json()).not.toHaveProperty("source");
+  }
+  for (const account of [recipient, stranger]) {
+    const denied = await sharingRequest(account, target(current.objectId));
+    expect(denied.status).toBe(404);
+    expect(await denied.text()).not.toContain(encodeTreeBytes(new Uint8Array(48).fill(1)));
+  }
+});
+
+/** An imported Historical thread: its key is wrapped under the File capability, with no recovery row. */
+async function importedThread(owner: SharingAccount, fileId: string, threadOwner = owner, threadFileId = fileId) {
+  const threadId = opaqueId(),
+    epochId = opaqueId(),
+    capabilityId = opaqueId(),
+    now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("PRAGMA defer_foreign_keys = ON"),
+    env.DB.prepare(`INSERT INTO comment_thread_epochs (id, thread_id, audience, key_epoch, ordinal, state, created_at)
+      VALUES (?, ?, NULL, 1, 1, 'active', ?)`).bind(epochId, threadId, now),
+    env.DB.prepare(`INSERT INTO comment_threads (id, owner_id, file_id, purpose, publication_id, current_epoch_id,
+      next_sequence, created_at) VALUES (?, ?, ?, 'private', NULL, ?, 1, ?)`).bind(
+      threadId,
+      threadOwner.accountId,
+      threadFileId,
+      epochId,
+      now,
+    ),
+    env.DB.prepare(`INSERT INTO sharing_comment_capabilities
+      (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
+      VALUES (?, ?, ?, ?, 'private-comment-thread', NULL, ?, 1)`).bind(
+      threadId,
+      owner.accountId,
+      fileId,
+      threadId,
+      capabilityId,
+    ),
+    env.DB.prepare(`INSERT INTO import_comment_envelopes
+      (thread_id, file_id, capability_id, capability_epoch, key_epoch, ciphertext) VALUES (?, ?, ?, 1, 1, ?)`).bind(
+      threadId,
+      threadFileId,
+      capabilityId,
+      new Uint8Array(40).fill(9),
+    ),
+  ]);
+  return { objectId: threadId, capabilityId };
+}
+
+it("share Comment targets give the Owner an imported thread's File-capability envelope when no recovery row exists", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    stranger = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const fileId = await treeChild(owner, directoryId, "file");
+  const thread = await importedThread(owner, fileId);
+  const { shareId } = await invite(owner, recipient, directoryId);
+  const path = `/api/private/shares/${shareId}/comment-keys/${thread.objectId}`;
+  const response = await sharingRequest(owner, path);
+  expect(response.status).toBe(200);
+  expect(((await response.json()) as { source?: unknown }).source).toEqual({
+    kind: "import",
+    envelope: encodeTreeBytes(new Uint8Array(40).fill(9)),
+  });
+  for (const account of [recipient, stranger]) {
+    const denied = await sharingRequest(account, path);
+    expect(denied.status).toBe(404);
+    expect(await denied.text()).not.toContain(encodeTreeBytes(new Uint8Array(40).fill(9)));
+  }
+  // A recovery row, when present, stays the preferred owned source.
+  await env.DB.prepare(`INSERT INTO key_envelopes (account_id, purpose, object_id, recipient_id, ciphertext, key_epoch)
+    VALUES (?, 'vault-recovery', ?, 'vault-root', ?, 1)`)
+    .bind(owner.accountId, thread.objectId, new Uint8Array(48).fill(4))
+    .run();
+  expect(((await (await sharingRequest(owner, path)).json()) as { source?: unknown }).source).toEqual({
+    kind: "recovery",
+    envelope: encodeTreeBytes(new Uint8Array(48).fill(4)),
+  });
+});
+
+it("share key and Comment-key targets and uploads report a write seal added after the invitation", async () => {
+  const owner = await sharingAccount(),
+    first = await sharingAccount(),
+    second = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const fileId = await treeChild(owner, directoryId, "file");
+  const active = await grant(owner, first, directoryId);
+  const thread = await privateThread(owner, fileId);
+  const { shareId } = await invite(owner, second, directoryId);
+  const delivered = await deliverComment(owner, second, shareId, thread.objectId);
+  const keys = `/api/private/shares/${shareId}/keys`;
+  const rootTargets = (await (await sharingRequest(owner, keys)).json()) as GrantKeyContext;
+  const rootPacket = {
+    capabilityId: rootTargets.capabilityId,
+    capabilityEpoch: rootTargets.capabilityEpoch,
+    ownerRegistryEpoch: rootTargets.ownerRegistryEpoch,
+    recipientRegistryEpoch: rootTargets.recipientRegistryEpoch,
+    envelopes: [
+      await createGrantKeyEnvelope(
+        owner.keys.get(directoryId)!,
+        second.transport.publicKey,
+        owner.assertion.privateKey,
+        {
+          ...rootTargets,
+          deviceId: second.deviceId,
+          signerDeviceId: owner.deviceId,
+        },
+      ),
+    ],
+  };
+  expect(
+    (await sharingRequest(owner, `/api/private/grants/${active.grantId}`, "DELETE", { expectedRevision: 1 })).status,
+  ).toBe(200);
+  for (const [path, method, body] of [
+    [keys, "POST", undefined],
+    [keys, "PUT", rootPacket],
+    [`/api/private/shares/${shareId}/comment-keys`, "POST", undefined],
+    [delivered.path, "POST", undefined],
+    [delivered.path, "PUT", delivered.packet],
+  ] as const) {
+    const refused = await sharingRequest(owner, path, method, body);
+    expect(refused.status, `${method} ${path}`).toBe(409);
+    expect(await refused.json()).toEqual({ error: "key_rotation_required" });
+  }
+});
+
+it("the import source is never served for a stale capability epoch or another Account's thread", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    other = await sharingAccount();
+  const directoryId = await treeChild(owner, owner.rootId, "directory");
+  const rotated = await importedThread(owner, await treeChild(owner, directoryId, "file"));
+  // The thread capability rotated: the registry is at epoch 2, the import row still at 1.
+  await env.DB.prepare("UPDATE sharing_comment_capabilities SET capability_epoch = 2 WHERE object_id = ?")
+    .bind(rotated.objectId)
+    .run();
+  // Registered under this Owner's File, but the thread and its import row belong to another Account.
+  const foreign = await importedThread(
+    owner,
+    await treeChild(owner, directoryId, "file"),
+    other,
+    await treeChild(other, other.rootId, "file"),
+  );
+  const { shareId } = await invite(owner, recipient, directoryId);
+  const listed = (await (await sharingRequest(owner, `/api/private/shares/${shareId}/comment-keys`)).json()) as {
+    capabilities: { objectId: string; threadId: string }[];
+  };
+  const targets = listed.capabilities.map((capability) => capability.objectId);
+  expect(targets).toEqual(expect.arrayContaining([rotated.objectId, foreign.objectId]));
+  for (const objectId of targets) {
+    const response = await sharingRequest(owner, `/api/private/shares/${shareId}/comment-keys/${objectId}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { capabilityEpoch: number; source?: unknown };
+    expect(body).not.toHaveProperty("source");
   }
 });

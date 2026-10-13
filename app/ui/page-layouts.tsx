@@ -61,6 +61,7 @@ export const ACCOUNT_NAV = [
   { to: "/account/devices", label: "Encryption devices" },
   { to: "/enroll-device/approve", label: "Approve a device" },
   { to: "/account/pseudonym", label: "Public pseudonym" },
+  { to: "/account/sharing", label: "Sharing" },
   { to: "/account/shared-access", label: "Shared access" },
   { to: "/account/key-rotations", label: "Secure access updates" },
 ];

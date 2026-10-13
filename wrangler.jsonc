@@ -35,6 +35,9 @@
   "env": {
     "preview": {
       "name": "mdwn-preview",
+      // Smart Placement may run fetch handlers near D1 (ticket 57); see
+      // docs/operations.md#smart-placement. Set per environment, never locally.
+      "placement": { "mode": "smart" },
       "vars": {
         "APP_ENV": "preview",
         "SUPPORT_MONERO_ADDRESS": "",
@@ -59,6 +62,7 @@
     },
     "production": {
       "name": "mdwn",
+      "placement": { "mode": "smart" },
       "routes": [{ "pattern": "mdwn.me", "custom_domain": true }],
       // Deployment readiness still probes the workers.dev URL.
       "workers_dev": true,

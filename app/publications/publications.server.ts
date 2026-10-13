@@ -2,13 +2,15 @@ import type { SQL } from "drizzle-orm";
 import { hasEmptyBody, readAuthJsonText, record } from "~/auth/request.server";
 import { inspectEnvelope, type EnvelopeContext } from "~/shared/crypto/enc-v1";
 import { HPKE_SUITE } from "~/shared/crypto/enc-v1/format";
-import { createDb, sql } from "~/shared/db/client.server";
+import { atomicSqlBatch, createDb, sql } from "~/shared/db/client.server";
 import {
   authorizePrivateRequest,
   commitPrivateBatch,
   commitPrivateMutation,
+  spentProof,
   type AuthorizedDevice,
 } from "~/device/proof.server";
+import { DEVICE_PROOF_REQUIRED } from "~/shared/device/proof-denials";
 import { newOpaqueId } from "~/shared/opaque-id";
 import {
   AbuseControlUnavailableError,
@@ -55,7 +57,7 @@ const headers = { "Cache-Control": "no-store" };
 const failure = (error: string, status: number) => Response.json({ error }, { status, headers });
 const notFound = () => failure("not_found", 404);
 const invalid = () => failure("invalid_publication_request", 400);
-const denied = () => failure("device_proof_required", 403);
+const denied = () => failure(DEVICE_PROOF_REQUIRED, 403);
 const publicationChanged = () => failure("publication_changed", 409);
 const rotationRequired = () => failure("key_rotation_required", 409);
 
@@ -132,14 +134,6 @@ async function validPublicKey(value: unknown): Promise<Uint8Array<ArrayBuffer>> 
   // Reject a malformed point now rather than accept a key no editor can encrypt to.
   await crypto.subtle.importKey("raw", publicKey, { name: "ECDH", namedCurve: "P-256" }, true, []);
   return publicKey;
-}
-
-async function proofSpent(env: Env, auth: AuthorizedDevice): Promise<boolean> {
-  return (
-    auth.expiresAt <= Date.now() ||
-    !!(await createDb(env.DB).get(sql`SELECT 1 FROM device_proof_uses
-    WHERE account_id = ${auth.accountId} AND proof_id = ${auth.proofId}`))
-  );
 }
 
 /** The Publish panel's view. Authors and requests are opaque metadata: the
@@ -412,7 +406,8 @@ async function createPublication(
       },
       { status: 201, headers },
     );
-  if (await proofSpent(env, auth)) return denied();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const latest = await db.get<{ current_revision: number; current_representation_id: string; published: number }>(sql`
     SELECT f.current_revision, f.current_representation_id,
       EXISTS (SELECT 1 FROM publications p WHERE ${filePublication(sql`f.node_id`)}) AS published
@@ -450,7 +445,8 @@ async function createRequest(env: Env, auth: AuthorizedDevice, fileId: string, v
       AND ${guard}`,
   );
   if (committed) return Response.json({ requestId, created: true }, { status: 201, headers });
-  if (await proofSpent(env, auth)) return denied();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const pending = await existing();
   if (pending) return Response.json({ requestId: pending.id, created: false }, { headers });
   if (
@@ -491,7 +487,7 @@ async function deleteRequest(
       AND (r.id IS NULL OR r.requester_id = ${auth.accountId}
         OR (f.owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")}))`);
   if (!row) return notFound();
-  if (row.id) return (await proofSpent(env, auth)) ? denied() : notFound();
+  if (row.id) return (await spentProof(env, auth)) ?? notFound();
   return Response.json({ deleted: true, alreadyDeleted: true }, { headers });
 }
 
@@ -612,7 +608,8 @@ async function addAuthor(env: Env, auth: AuthorizedDevice, fileId: string, value
     return publicationChanged();
   }
   if (committed) return Response.json({ declarationId: input.declarationId }, { status: 201, headers });
-  if (await proofSpent(env, auth)) return denied();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const authors = await db.get<{ total: number; present: number }>(sql`
     SELECT (SELECT count(*) FROM publication_authors WHERE publication_id = p.id) AS total,
       EXISTS (SELECT 1 FROM publication_authors WHERE publication_id = p.id AND author_id = ${candidate}) AS present
@@ -645,7 +642,7 @@ async function removeAuthor(
       AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
   );
   if (committed) return Response.json({ deleted: true }, { headers });
-  return (await proofSpent(env, auth)) ? denied() : Response.json({ deleted: true, alreadyDeleted: true }, { headers });
+  return (await spentProof(env, auth)) ?? Response.json({ deleted: true, alreadyDeleted: true }, { headers });
 }
 
 /** A selected author's own device (re)declares its pseudonym to the current link. */
@@ -712,7 +709,7 @@ async function declareAuthor(
       AND ${accessPredicate(auth, fileId, "read")} AND ${guard}`,
   );
   if (committed) return Response.json({ revision: input.revision }, { headers });
-  return (await proofSpent(env, auth)) ? denied() : publicationChanged();
+  return (await spentProof(env, auth)) ?? publicationChanged();
 }
 
 /**
@@ -831,7 +828,8 @@ type RotationState = {
 
 /** A failed rotation reports precisely whether the File or the Publication moved. */
 async function rotationFailure(env: Env, auth: AuthorizedDevice, fileId: string, input: Rotation): Promise<Response> {
-  if (await proofSpent(env, auth)) return denied();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const current = await createDb(env.DB).get<{
     id: string;
     state: string;
@@ -976,7 +974,8 @@ async function rotatePublication(
  * Unpublish (ticket 25): seal first, delete later. One transaction removes the
  * active link, flips the Publication irreversibly to `deleting`, and pins the
  * opaque Public Comment count. Every Public route denies access immediately;
- * only the Owner's browser then drives bounded deletion batches.
+ * the Owner's browser and scheduled maintenance (`continueSealedTeardown`)
+ * then drive the same bounded deletion batches.
  */
 async function unpublishPublication(
   env: Env,
@@ -1021,17 +1020,30 @@ async function unpublishPublication(
     WHERE p.file_id = ${fileId} AND p.state = 'deleting' AND p.owner_id = ${auth.accountId}
       AND ${accessPredicate(auth, fileId, "owner")}`);
   if (existing) return Response.json({ publicationId: existing.id, commentTotal: existing.comment_total }, { headers });
-  if (!committed && (await proofSpent(env, auth))) return denied();
+  if (!committed) {
+    const spent = await spentProof(env, auth);
+    if (spent) return spent;
+  }
   return notFound();
 }
 
 type TeardownState = { id: string; comment_total: number; comments_remaining: number };
 
+/** The one sealed Publication a teardown batch names, keyed by its own id,
+ * File and Owner so no statement can reach a later Publication of the File. */
+type SealedPublication = { id: string; fileId: string; ownerId: string };
+
+/** The `publications` row of `publication` while it is still sealed. */
+function sealedRow({ id, fileId, ownerId }: SealedPublication): SQL {
+  return sql`id = ${id} AND file_id = ${fileId} AND owner_id = ${ownerId} AND state = 'deleting'`;
+}
+
 /** Every non-Comment row teardown removes, including the Publication itself.
  * The shared Comment-dependent module removes the Publication's Public-thread
  * graph (see `teardownPublication`); this function owns what is not
  * Comment-dependent. */
-function teardownStatements(publicationId: string, fileId: string, ownerId: string, marker: SQL): SQL[] {
+function teardownStatements(publication: SealedPublication, marker: SQL): SQL[] {
+  const { id: publicationId, fileId, ownerId } = publication;
   return [
     ...deletedCommentDependents({ kind: "publication", ownerId, publicationId }, marker),
     sql`DELETE FROM public_representations WHERE publication_id = ${publicationId} AND ${marker}`,
@@ -1043,9 +1055,22 @@ function teardownStatements(publicationId: string, fileId: string, ownerId: stri
     sql`DELETE FROM publication_authors WHERE publication_id = ${publicationId} AND ${marker}`,
     sql`DELETE FROM publication_requests WHERE file_id = ${fileId} AND owner_id = ${ownerId} AND ${marker}`,
     sql`DELETE FROM publication_teardowns WHERE publication_id = ${publicationId} AND ${marker}`,
-    sql`DELETE FROM publications WHERE id = ${publicationId} AND file_id = ${fileId}
-      AND owner_id = ${ownerId} AND state = 'deleting' AND ${marker}`,
+    sql`DELETE FROM publications WHERE ${sealedRow(publication)} AND ${marker}`,
   ];
+}
+
+/**
+ * The single statement set of one teardown batch, shared by the Owner's
+ * browser and scheduled maintenance so the two cannot drift: while Public
+ * Comments remain, at most `TEARDOWN_COMMENT_BATCH` of them; once none remain,
+ * the final transaction. Callers differ only in the authority `marker` that
+ * gates every statement, and must defer foreign keys.
+ */
+function teardownBatch(publication: SealedPublication, commentsRemaining: number, marker: SQL): readonly SQL[] {
+  const { id, ownerId } = publication;
+  return commentsRemaining > 0
+    ? deletedCommentBatch({ kind: "publication", ownerId, publicationId: id }, TEARDOWN_COMMENT_BATCH, marker)
+    : teardownStatements(publication, marker);
 }
 
 /**
@@ -1082,6 +1107,7 @@ async function teardownPublication(
       ? publicationChanged()
       : Response.json({ done: true, commentTotal: 0, commentsRemaining: 0 }, { headers });
   }
+  const sealed: SealedPublication = { id: publication.id, fileId, ownerId: auth.accountId };
   const now = Date.now();
   let committed = false;
   try {
@@ -1090,16 +1116,8 @@ async function teardownPublication(
       auth,
       (guard) => sql`
       UPDATE publications SET updated_at = ${now}
-      WHERE id = ${publication.id} AND file_id = ${fileId} AND state = 'deleting'
-        AND owner_id = ${auth.accountId} AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
-      (marker) =>
-        publication.comments_remaining > 0
-          ? deletedCommentBatch(
-              { kind: "publication", ownerId: auth.accountId, publicationId: publication.id },
-              TEARDOWN_COMMENT_BATCH,
-              marker,
-            )
-          : teardownStatements(publication.id, fileId, auth.accountId, marker),
+      WHERE ${sealedRow(sealed)} AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
+      (marker) => teardownBatch(sealed, publication.comments_remaining, marker),
       { deferForeignKeys: true },
     );
   } catch {
@@ -1120,12 +1138,76 @@ async function teardownPublication(
       },
       { headers },
     );
-  if (await proofSpent(env, auth)) return denied();
+  const spent = await spentProof(env, auth);
+  if (spent) return spent;
   const stillSealed = await db.get(sql`SELECT 1 FROM publications p WHERE p.file_id = ${fileId}
     AND p.state = 'deleting' AND ${accessPredicate(auth, fileId, "owner")}`);
   return stillSealed
     ? publicationChanged()
     : Response.json({ done: true, commentTotal: publication.comment_total, commentsRemaining: 0 }, { headers });
+}
+
+/**
+ * Scheduled maintenance's share of Unpublishing (ticket 61): it finishes a
+ * teardown the Owner already authorized, so cleanup no longer depends on the
+ * Owner's browser returning. Only durable sealed state starts it — a
+ * `deleting` Publication with its `publication_teardowns` row, which only the
+ * Owner's proof-guarded seal transaction creates and triggers keep
+ * irreversible. It never simulates a Session, consumes a Device proof or opens
+ * a key, and it removes only what the browser path would.
+ *
+ * Bounds: one Publication per invocation and one `teardownBatch` for it — at
+ * most `TEARDOWN_COMMENT_BATCH` Comments, or the final transaction once none
+ * remain. A backlog drains over successive runs; there is no deadline. The D1
+ * statement budget is accounted for with every other duty in
+ * `app/retention/scheduled-maintenance.server.ts`.
+ *
+ * Fairness: the target is the least recently attempted sealed Publication
+ * (`updated_at`, which the seal sets and every attempt — scheduled or browser —
+ * advances). The attempt marker commits on its own before the batch, so a
+ * Publication whose batch keeps failing moves to the back of the queue instead
+ * of blocking every later teardown.
+ */
+export async function continueSealedTeardown(env: Env): Promise<void> {
+  const db = createDb(env.DB);
+  const target = await db.get<{
+    id: string;
+    file_id: string;
+    owner_id: string;
+    comments_remaining: number;
+  }>(sql`
+    SELECT p.id, p.file_id, p.owner_id, ${publicCommentCount(sql`p.id`)} AS comments_remaining
+    FROM publication_teardowns t JOIN publications p ON p.id = t.publication_id AND p.owner_id = t.owner_id
+    WHERE p.state = 'deleting' ORDER BY p.updated_at, p.id LIMIT 1`);
+  if (!target) return;
+  const publication: SealedPublication = { id: target.id, fileId: target.file_id, ownerId: target.owner_id };
+  // The attempt marker carries no authority: it only reorders the queue, and
+  // matches nothing once the Publication is gone.
+  await db.run(sql`UPDATE publications SET updated_at = ${Date.now()} WHERE ${sealedRow(publication)}`);
+  // Authority is the sealed predicate itself, re-evaluated by every statement.
+  // The browser path's authority is a consumable Device proof, which its anchor
+  // spends, so later statements cannot re-check it and a replayed proof ID
+  // would still match an earlier invocation's row; a fresh token is the only
+  // marker unique to the invocation that passed the guard. Here the authority
+  // is durable state that stays true until this transaction itself ends it,
+  // and one D1 batch is one serialized transaction
+  // (docs/operations/d1-scripting.md), so no other writer can change it
+  // between statements. A stale target — completed by the browser, removed
+  // with its File, or followed by a later Publication since the SELECT — fails
+  // the predicate in every statement and deletes nothing; a repeated or
+  // interleaved batch is simply idempotent. The predicate omits the teardown
+  // row because the final statement set deletes that row just before the
+  // Publication row; the two are created together by the seal and removed
+  // together only here or by File deletion, so `deleting` alone identifies the
+  // same sealed state. `publication_requests` is keyed by File: while this
+  // sealed row exists the partial unique index admits no later Publication of
+  // the File, so those requests can only be the ones the browser path would
+  // also remove.
+  const sealed = sql`EXISTS (SELECT 1 FROM publications WHERE ${sealedRow(publication)})`;
+  await atomicSqlBatch(env.DB, [
+    sql`PRAGMA defer_foreign_keys = ON`,
+    ...teardownBatch(publication, target.comments_remaining, sealed),
+  ]);
 }
 
 /** Resource-only, proof-guarded Publication API. Reads are bodyless POSTs. */

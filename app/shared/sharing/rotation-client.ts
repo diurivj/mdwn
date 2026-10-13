@@ -2,6 +2,7 @@ import { publicAttributionKeyContext, publicCommentKeyContext } from "~/shared/c
 import { createSymmetricWriter, openSymmetric } from "~/shared/crypto/enc-v1";
 import { loadPrivateBrowser, type PrivateAccountContext } from "~/shared/device/private-browser";
 import { privateRequest } from "~/shared/device/private-client";
+import { clearPrivateMemoryInAllTabs } from "~/shared/device/private-tab-memory";
 import { newOpaqueId } from "~/shared/opaque-id";
 import {
   createListingHead,
@@ -592,13 +593,19 @@ export async function resumeRotation(jobId: string, browser: RotationBrowser, op
 /** Production adapter: device handles and Vault keys are loaded only in the browser. */
 export async function resumeKeyRotation(jobId: string, options: Options = {}) {
   const browser = await loadPrivateBrowser(options.signal);
-  return resumeRotation(
-    jobId,
-    {
-      ...browser,
-      request: (path, method = "POST", body) =>
-        privateRequest(path, { method, signal: options.signal, ...(body ? { body: JSON.stringify(body) } : {}) }),
-    },
-    options,
-  );
+  try {
+    return await resumeRotation(
+      jobId,
+      {
+        ...browser,
+        request: (path, method = "POST", body) =>
+          privateRequest(path, { method, signal: options.signal, ...(body ? { body: JSON.stringify(body) } : {}) }),
+      },
+      options,
+    );
+  } finally {
+    // A pass may have promoted new Directory keys and listings: nothing this
+    // tab or another remembers about the tree is current any more (ticket 57).
+    clearPrivateMemoryInAllTabs();
+  }
 }

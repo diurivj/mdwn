@@ -9,6 +9,8 @@ import { PublishPanel } from "~/publications/publish-panel";
 import { PublicationLifecycle, type PublicationContext } from "~/shared/publications/lifecycle";
 import { isSignupRecoveryConfirmationPending, RecoveryConfirmationPendingError } from "~/shared/signup/recovery-gate";
 import { SharedProvisioning } from "~/sharing/shared-provisioning";
+import { ShareDialog } from "~/sharing/share-dialog";
+import { SharedWithMeSection } from "~/sharing/shared-with-me";
 import { cx } from "~/ui/cx";
 import {
   ArrowDownIcon,
@@ -35,7 +37,6 @@ import { buttonClass, fieldClass, labelClass, noticeClass, textButtonClass } fro
 
 import {
   createTreeChild,
-  loadDirectory,
   NameConflictError,
   NamespaceChangedError,
   reorderTreeChild,
@@ -51,12 +52,16 @@ import {
   type TreeEntry,
   type TreeKind,
 } from "../shared/tree/client";
+import { keyOpenedFrom } from "~/shared/tree/path-rules";
 import { FileEditor } from "./file-editor";
+import { useTabMemoryRevalidation } from "./use-tab-memory-revalidation";
 import {
   type Crumb,
   expandedPreferenceKey,
+  kindName,
   type FilesPageData,
   type FilesSnapshot,
+  loadVerifiedDirectory,
   nodePath,
   rootName,
   savedExpanded,
@@ -147,6 +152,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const [view, setView] = useState<"edit" | "preview" | "comments">("edit");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   // Folders shown open while their listing loads after an expand click.
   const [opening, setOpening] = useState<ReadonlySet<string>>(() => new Set());
   // One lifecycle per File page. It retains every prepared candidate for this
@@ -194,6 +200,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     submission.current = false;
     setSubmitting(false);
     setDialog(null);
+    setShareOpen(false);
   }, []);
   const route = useRef(`${kind}/${nodeId}`);
   const ensuredThread = useRef<string | null>(null);
@@ -232,6 +239,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     if (route.current !== `${kind}/${nodeId}`) {
       setDialog(null);
       setPublishOpen(false);
+      setShareOpen(false);
       setStructuralReady(false);
       setView("edit");
       route.current = `${kind}/${nodeId}`;
@@ -247,6 +255,8 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
         ),
       );
   }, [initial, nodeId, kind, showExpanded]);
+
+  useTabMemoryRevalidation({ initial, snapshot, setSnapshot, status, kind, fileReady, lifetime });
 
   // Owner-side upkeep: opening any File ensures its one Private thread exists,
   // so a Collaborator never waits for an Owner to open the Comments inspector.
@@ -292,7 +302,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       const parentKey = parentId && snapshot.keys[parentId];
       if (!parentKey) throw new Error("private tree unavailable");
       const key = await openChildDirectory(snapshot.access, parentKey, entry);
-      const listing = await loadDirectory(snapshot.access, entry.nodeId, key, signal);
+      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, entry.keyEpoch ?? 1, signal);
       if (signal.aborted) return;
       setSnapshot(
         (previous) =>
@@ -342,7 +352,14 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
       ...(current.operation === "delete" && current.kind === "directory" ? [current.nodeId] : []),
     ]);
     const listings = { ...snapshot.listings };
-    for (const id of ids) listings[id] = await loadDirectory(snapshot.access, id, snapshot.keys[id]!, signal);
+    for (const id of ids)
+      listings[id] = await loadVerifiedDirectory(
+        snapshot.access,
+        id,
+        snapshot.keys[id]!,
+        keyOpenedFrom(snapshot.listings, id)?.epoch ?? null,
+        signal,
+      );
     signal.throwIfAborted();
     const next = { ...snapshot, listings };
     setSnapshot(next);
@@ -381,7 +398,7 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
     try {
       const parentId = dialog.destinationId;
       const key = await openChildDirectory(snapshot.access, snapshot.keys[parentId]!, entry);
-      const listing = await loadDirectory(snapshot.access, entry.nodeId, key, signal);
+      const listing = await loadVerifiedDirectory(snapshot.access, entry.nodeId, key, entry.keyEpoch ?? 1, signal);
       if (signal.aborted) return;
       setSnapshot(
         (previous) =>
@@ -696,6 +713,10 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
   const siblings = snapshot.listings[snapshot.crumbs.at(-2)?.id ?? ""]?.entries ?? [];
   const position = siblings.findIndex((entry) => entry.nodeId === nodeId);
   const folderEntries = kind === "directory" ? (snapshot.listings[nodeId]?.entries ?? []) : [];
+  // Owners share their own Files and folders; the Library root and content
+  // shared with you (Collaborators cannot reshare) offer no Share action.
+  const canShare = owner && nodeId !== snapshot.access.rootId && (kind === "directory" || !!snapshot.file);
+  const shareParentId = kind === "file" ? snapshot.file?.parentId : null;
   return (
     <main
       aria-busy={showPending || undefined}
@@ -745,10 +766,12 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             <p className="px-2 text-sm text-muted">Nothing here yet. Create your first File.</p>
           )}
         </div>
+        <SharedWithMeSection accountId={snapshot.access.actorAccountId} currentId={nodeId} />
         <div className="border-t border-line px-3 py-4 text-sm lg:px-4">
           <SharedProvisioning link={false} className="px-2 [&:not(:empty)]:mb-3" />
           <ul>
             {[
+              { to: "/account/sharing", label: "Sharing", icon: ShareIcon },
               { to: "/account/shared-access", label: "Shared access", icon: ShareIcon },
               ...(owner
                 ? [
@@ -857,6 +880,18 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
                     New folder
                   </button>
                 </>
+              )}
+              {canShare && (
+                <button
+                  type="button"
+                  aria-haspopup="dialog"
+                  disabled={busy || recoveryPending || (kind === "file" && !fileReady)}
+                  onClick={() => setShareOpen(true)}
+                  className={buttonClass("secondary", "sm")}
+                >
+                  <ShareIcon />
+                  Share
+                </button>
               )}
               {kind === "file" && snapshot.file && (
                 <button
@@ -1005,6 +1040,27 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
           </div>
         </div>
       </section>
+      {shareOpen && canShare && (
+        <ShareDialog
+          target={{
+            access: snapshot.access,
+            nodeId,
+            kind,
+            file: snapshot.file,
+            parent:
+              shareParentId && snapshot.listings[shareParentId] && snapshot.keys[shareParentId]
+                ? { listing: snapshot.listings[shareParentId], key: snapshot.keys[shareParentId] }
+                : null,
+            ancestors: snapshot.crumbs.slice(0, -1),
+          }}
+          onClose={() => setShareOpen(false)}
+          onConverted={() => {
+            // Only while this File is still the page: a stale pre-conversion
+            // snapshot must not outlive the dialog, but another route is not ours.
+            if (route.current === `${kind}/${nodeId}`) void revalidator.revalidate();
+          }}
+        />
+      )}
       {dialog && (
         <div
           role="dialog"
@@ -1019,11 +1075,9 @@ export function FilesPage({ nodeId, kind, initial }: { nodeId: string; kind: Tre
             }}
             className="modal-panel max-w-md"
           >
-            <p className="eyebrow text-accent">{dialog.kind === "file" ? "File" : "Folder"}</p>
+            <p className="eyebrow text-accent">{kindName(dialog.kind, "start")}</p>
             <h2 className="mt-2 font-display text-3xl font-light leading-tight tracking-tight">
-              {dialog.operation === "create"
-                ? `New ${dialog.kind === "file" ? "File" : "folder"}`
-                : dialogLabels[dialog.operation].heading}
+              {dialog.operation === "create" ? `New ${kindName(dialog.kind)}` : dialogLabels[dialog.operation].heading}
             </h2>
             {!["delete", "reorder"].includes(dialog.operation) && (
               <label className={cx(labelClass, "mt-5")}>
@@ -1263,7 +1317,7 @@ function PendingNode({ kind, name }: { kind: TreeKind; name: string | null }) {
   return (
     <div className="animate-fade">
       <p role="status" className="sr-only">
-        Opening {name ?? (kind === "file" ? "File" : "folder")}…
+        Opening {name ?? kindName(kind)}…
       </p>
       <div aria-hidden="true">
         <div className="mt-5">

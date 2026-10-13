@@ -2,7 +2,7 @@ import { authGet, authPost } from "~/auth/client";
 import { confirmFreshPasskey } from "~/auth/fresh-client";
 import { createSymmetricWriter, digestEnvelope } from "~/shared/crypto/enc-v1";
 import { openDeviceEnrollmentEnvelope, sealDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
-import { privateRequest } from "~/shared/device/private-client";
+import { discardDeviceState, privateRequest } from "~/shared/device/private-client";
 import {
   activateEnrollmentCandidate,
   createEnrollmentCandidate,
@@ -74,6 +74,7 @@ export async function loadEnrollmentPage(signal: AbortSignal): Promise<{
     );
     if (pending && pending.transcript.accountId === state.accountId && state.candidateActive) {
       await activateEnrollmentCandidate(state.accountId, pending.transcript.deviceId, state.registryEpoch);
+      discardDeviceState();
       sessionStorage.removeItem(PENDING_KEY);
       return { state: state.deviceId === pending.transcript.deviceId ? "ready" : "sign-in-again" };
     }
@@ -241,6 +242,8 @@ export async function pollCandidate(pending: PendingCandidate, signal: AbortSign
     "failed",
   );
   if (!committed.ok || !Number.isSafeInteger(committed.registryEpoch)) throw new Error("Enrollment failed");
+  // The registry changed; private requests must read the new state.
+  discardDeviceState();
   await activateEnrollmentCandidate(expected.accountId, expected.deviceId, committed.registryEpoch);
   sessionStorage.removeItem(PENDING_KEY);
   return "committed";
