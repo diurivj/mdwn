@@ -75,6 +75,11 @@ export default function SignUp() {
   useLayoutEffect(() => {
     if (stage === "phrase" || stage === "codes" || stage === "passkey") window.scrollTo(0, 0);
   }, [stage]);
+  // The library's code loads while recovery is being saved, so opening it after the commit
+  // waits only for its data. A failed load costs only that head start, never the signup in progress.
+  useEffect(() => {
+    if (stage === "phrase") void import("~/tree/library-preload").catch(() => undefined);
+  }, [stage]);
 
   async function createAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -24,6 +24,8 @@
   - Before a passkey exists, a retry uses the same local material: a fresh rate-limited start, or, after a dismissed prompt, the same registration while its WebAuthn challenge is fresh (3 minutes of the service's 5).
   - Once a passkey exists, the material is never reused: if the Account was committed, another passkey for the same Account ID would replace the registered one in the person's passkey manager.
 - **Step 3 UI** (`app/signup/passkey-step.tsx`, `app/routes/sign-up.tsx`): **Step 3 of 3 · Create your passkey** with progress rows (recovery saved, signup check, passkey, account), a status line per step, and a notice per failure with the right action (**Try again**, **Create passkey**, **Sign in** / **Start over**, or none). Focus moves to that action. Each step starts scrolled to its heading.
+- **Library preload:** when the phrase step appears, a dynamic import of `app/tree/library-preload.ts` (the Files page and its loader) fetches the library's code, so opening the library after the commit waits mostly for its data. It sends no signup request. React Router's `PrefetchPageLinks` was measured and rejected: its `loadRouteModule` reloads the page when a route module fails to load, which would discard a signup in progress; a failed import here only loses the head start.
+- The registration and WebAuthn challenge lifetime is one shared constant (`SIGNUP_CHALLENGE_MS`), so the browser's reuse window cannot outlive the Worker's challenge.
 - Docs: `docs/buildable-spec.md` §5.2 (retry rule and bootstrap UI states) and `docs/testing.md`.
 
 Out of scope: fetching the challenge or solving it before recovery is confirmed (the documented "no signup request before confirmation" guarantee stays), the proof-of-work difficulty or protocol, rate-limit policy, and the Files page load after signup.
@@ -40,3 +42,8 @@ Out of scope: fetching the challenge or solving it before recovery is confirmed 
 ## Comments
 
 - 2026-10-13: Published from the maintainer's `/goal`: make signup faster, and after the words and recovery codes are confirmed, explain what is happening and why it takes long instead of showing the same page with the button disabled; improve the timings.
+- 2026-10-13: Implemented on `issue/69-faster-signup`. Measurements, Apple M5 Pro, headless Playwright 1.63:
+  - **Solver, hashes per second** (WebCrypto per candidate → new): Chromium 60 k → 5.6 M, Firefox 99 k → 4.4 M, WebKit 55 k → 4.3 M. Expected solve: 4.4 s / 2.7 s / 4.8 s → 47 / 59 / 60 ms; sliced solves averaged 35–77 ms (p90 83–182 ms). With Chromium's CPU throttled 8×, the old solver still took ~5.3 s (its cost is WebCrypto round trips, not CPU) and the new one ~0.4–0.5 s (p90 ~0.9 s).
+  - **Confirm click → Library visible**, real signup against the built Worker, three runs per engine: before 0.18–20.5 s (the proof of work alone 0.06–20.3 s); after 0.14–0.27 s.
+  - **Slow network** (150 ms latency, 1.6 Mbit/s, CPU 4×, Chromium, 5 s spent on the codes step): commit response → Library visible went from ~1.9 s to ~0.73 s with the library preload (~0.55 s with `PrefetchPageLinks`); confirm click → Library visible 1.35–1.48 s.
+  - Kept: no signup request before recovery is confirmed. Fetching and solving the challenge during the codes step would save one more round trip and the solve, but would contact the signup endpoints (and their rate-limit counters) for people who leave at that step.
