@@ -13,6 +13,7 @@ export default [
   route("account/pseudonym", "routes/account-pseudonym.tsx"),
   route("account/devices", "routes/account-devices.tsx"),
   route("account/key-rotations", "routes/account-key-rotations.tsx"),
+  route("account/sharing", "routes/account-sharing.tsx"),
   route("account/shared-access", "routes/account-shared-access.tsx"),
   route("account/device-access", "routes/device-access.tsx"),
   route("files", "routes/files.tsx"),

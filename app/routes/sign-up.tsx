@@ -17,7 +17,7 @@ import { HONEYPOT_FIELD_NAME } from "~/shared/security/honeypot";
 import { cx } from "~/ui/cx";
 import { CheckIcon, KeyIcon, LockIcon, RefreshIcon, ShieldIcon } from "~/ui/icons";
 import { FocusLayout, PageIntro } from "~/ui/page-layouts";
-import { markSignedIn } from "~/ui/session-presence";
+import { afterSignIn } from "~/ui/auth-changes";
 import { buttonClass, fieldClass, labelClass, linkClass, noticeClass } from "~/ui/styles";
 
 import type { Route } from "./+types/sign-up";
@@ -116,7 +116,7 @@ export default function SignUp() {
       const current = new AbortController();
       controller.current = current;
       await commitSignup(prepared, honeypot.current, current.signal);
-      markSignedIn();
+      afterSignIn();
       // Signed in: the new library is home. Its recovery material has been shown for the last time.
       if (mounted.current) navigate("/files", { replace: true });
     } catch {

@@ -4,6 +4,7 @@ import type { AuthorizedDevice } from "~/device/proof.server";
 import { requiredGrantComments } from "~/sharing/capability-coverage.server";
 import { liveGrant } from "~/sharing/grant-lifetime.server";
 import { encodeTreeBytes } from "~/shared/tree/wire";
+import { currentRecoveryEnvelope, importedThreadEnvelope } from "~/sharing/owned-sources.server";
 
 /**
  * The one read path for a Comment capability envelope, shared by Private
@@ -48,19 +49,16 @@ export async function readCommentEnvelope(
   // Each envelope read re-derives live access in the same statement, so a
   // revocation between the thread read and this SELECT cannot serve ciphertext.
   if (ownerId === auth.accountId) {
-    const row = await db.get<{ ciphertext: ArrayBuffer }>(sql`SELECT ciphertext FROM key_envelopes
-      WHERE account_id = ${ownerId} AND purpose = 'vault-recovery' AND object_id = ${objectId}
-        AND recipient_id = 'vault-root' AND key_epoch = ${capabilityEpoch} AND superseded_at IS NULL
-        AND ${authority}`);
+    const row = await db.get<{ ciphertext: ArrayBuffer }>(sql`SELECT k.ciphertext FROM key_envelopes k
+      WHERE ${currentRecoveryEnvelope(ownerId, objectId, capabilityEpoch)} AND ${authority}`);
     if (row) return { mode: "owned", keyEpoch: capabilityEpoch, ciphertext: row.ciphertext };
   }
   // A fresh Historical thread is wrapped under the imported File capability
   // key; it follows current File-read access and needs no recovery or Grant
   // envelope. Staged threads only exist after their Import commit.
   const imported = await db.get<{ ciphertext: ArrayBuffer; key_epoch: number }>(sql`
-    SELECT ciphertext, key_epoch FROM import_comment_envelopes
-    WHERE thread_id = ${objectId} AND capability_id = ${capabilityId} AND capability_epoch = ${capabilityEpoch}
-      AND ${authority} LIMIT 1`);
+    SELECT i.ciphertext, i.key_epoch FROM import_comment_envelopes i
+    WHERE ${importedThreadEnvelope(objectId, capabilityId, capabilityEpoch)} AND ${authority} LIMIT 1`);
   if (imported) return { mode: "import", keyEpoch: imported.key_epoch, ciphertext: imported.ciphertext };
   if (ownerId === auth.accountId) return null;
   const row = await db.get<{
@@ -183,8 +181,8 @@ export async function readCommentEnvelopes(
       JOIN sharing_comment_capabilities c ON c.object_id = k.object_id AND c.thread_id = ${threadId}
         AND c.purpose = 'public-comment-audience-epoch' AND c.capability_epoch = k.key_epoch
         AND c.publication_id = ${publicationId}
-      WHERE k.account_id = ${ownerId} AND k.purpose = 'vault-recovery' AND k.recipient_id = 'vault-root'
-        AND k.superseded_at IS NULL AND k.object_id IN (${objectIds}) AND ${authority}`);
+      WHERE ${currentRecoveryEnvelope(ownerId, sql`k.object_id`, sql`c.capability_epoch`)}
+        AND k.object_id IN (${objectIds}) AND ${authority}`);
     for (const row of rows)
       envelopes.set(row.object_id, { mode: "owned", keyEpoch: row.key_epoch, ciphertext: row.ciphertext });
     return envelopes;

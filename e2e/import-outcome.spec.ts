@@ -272,11 +272,17 @@ test("a disposed unconfirmed attempt cannot refresh or replace a newer view", as
     });
     await page.getByTestId("import-confirm").click();
     await held.evaluate((gate) => gate.reached);
+    // Arriving reads the root listing once: a cold walk, or a remembered
+    // library's background revalidation (ticket 57). Only later reads count.
+    const arrived = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === `/api/private/tree/directories/${workspace.rootId}`,
+    );
     await page
       .getByRole("navigation", { name: "Breadcrumbs" })
       .getByRole("link", { name: "Library", exact: true })
       .press("Enter");
     await expect(page).toHaveURL(/\/files$/);
+    await arrived;
     await waitForSharedProvisioning(page);
     page.on("request", (request) => {
       if (new URL(request.url()).pathname === `/api/private/tree/directories/${workspace.rootId}`) targetRefreshes += 1;

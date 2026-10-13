@@ -194,7 +194,11 @@ read path serves its envelope as a distinct `import` mode. The body, the
 displayed pseudonym, and the historical display timestamps are all encrypted
 `mdwn/enc-v1` records; timestamps are sealed under each Comment's own content
 key, so a thread-capability rotation rewraps the wrapper and leaves them
-readable, and no user-authored timestamp is ever plaintext at rest. Comments
+readable, and no user-authored timestamp is ever plaintext at rest. A File
+capability replacement first re-wraps the import envelope under the replacement
+File key; the thread's own rotation item then installs a fresh import envelope
+under the current File key instead of a `vault-recovery` row, so an imported
+thread revokes and re-delivers like any other Private thread. Comments
 are numbered server-side in sidecar order. All historical comments belong to
 the importing Account, so one thread attribution keeps the sidecar's displayed
 pseudonym for the history; a sidecar whose comments carry different pseudonyms
@@ -312,14 +316,14 @@ an acknowledgment remains unconfirmed.
 
 ## Release gate: disposable remote proof
 
-Ticket 26 requires a disposable remote Workers Free + D1 proof before release
+Ticket 26 requires a disposable remote Workers + D1 proof before release
 whenever encryption-persistence schema changes and for release candidates. It
 must cover exact-boundary acceptance and one-unit-over rejection (128 KiB
 manifest, 512 KiB chunk, 20 MiB aggregate, 40 chunks, 50 records per chunk,
 every canonical ciphertext cap, 1,000 Historical Comments), retries and
 mismatches, expiry/failure/stale-authority, no-visible-partial-tree, and that
-every worst-case upload and commit fits the 50-statement D1 Free invocation
-limit. Ticket 33 extends the same run to its release-gate criteria: a maximum
+every worst-case upload and commit fits the D1 Free
+[per-invocation query limit](operations/d1-scripting.md#per-invocation-queries). Ticket 33 extends the same run to its release-gate criteria: a maximum
 262,144-byte-source File create and save, one-byte-over rejection of the
 canonical 512 KiB bound, a staged Import Replace that stays invisible until
 the marker, an active-Publication paired update, stale-conflict preservation,
@@ -345,8 +349,13 @@ expiry, stale revision and Owner, no-visible-partial-tree reads, direct
 deployed-`CHECK` one-over rows, and (ticket 33) a maximum-source create/save,
 staged Replace invisibility, paired active-Publication saves, stale-conflict
 preservation, and a missing-sequence rejection. Because D1 Free hard-fails an
-invocation above 50 queries and Workers Free reports `exceededCpu` for
+invocation above its query limit and Workers Free reports `exceededCpu` for
 over-budget invocations, a clean pass on a Free account is the budget evidence.
+On a Workers Paid account (a higher
+[query limit](operations/d1-scripting.md#per-invocation-queries) and a larger
+CPU default) a pass no longer demonstrates that fit, so it remains the recorded
+2026-10-05/06 evidence for the current bounds until
+[ticket 65](../.scratch/mdwn/issues/65-larger-import-envelope.md) replaces them.
 
 Executed 2026-10-05 on a Workers Free account: the first run exposed two
 `exceededCpu` 503s on the largest invocations, so staging was made more
@@ -357,7 +366,8 @@ subsequent full runs passed 10/10 with zero failed invocations across 91
 observed requests, including the worst-case upload and commit, then deleted
 the disposable Worker and D1. Re-run it after any change to the staging
 schema, bounds, or commit path; if it fails, reduce the bounded plan or make
-the commit more efficient — never require a paid plan.
+the commit more efficient; do not rely on Workers Paid headroom without the
+evidence ticket 65 requires.
 
 Executed 2026-10-06 for ticket 33 at `15cf4df`: the extended 14-test release
 gate passed on a disposable Workers Free + D1 deployment in 150.6 s and

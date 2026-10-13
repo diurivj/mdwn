@@ -34,6 +34,21 @@ one command. `scripts/lib/d1-export-restore.mjs` does exactly that.
   Travel, and 100,000 rows written / 5,000,000 rows read per day **shared
   across the account** (production Cron writes count). Error `7500` is the
   daily row-write limit; it clears at midnight UTC.
+- **Workers Paid** (from Cloudflare's D1 documentation, checked 2026-10-11; not
+  exercised by these scripts): 10 GB per database, 30-day Time Travel, and
+  monthly row allowances that bill overage instead of failing. Per-statement
+  and per-row limits are unchanged. See
+  [operations.md](../operations.md#paid-d1-capacity-and-time-travel).
+
+### Per-invocation queries
+
+D1 allows **50 queries per Worker invocation on Workers Free** and **1,000 on
+Workers Paid** ([D1 limits](https://developers.cloudflare.com/d1/platform/limits/),
+checked 2026-10-11). The documentation does not say whether each statement of a
+`batch()` counts as a query, so treat **every statement as counting** until
+that is verified. Budget a request or scheduled invocation by its statements,
+not its D1 calls, and use the Free figure until the account's plan is
+confirmed.
 
 ## Local persistence
 

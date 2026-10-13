@@ -132,6 +132,10 @@ export type PublicationLifecycleState = {
   error: PublicationFailure | null;
   progress: TeardownProgress | null;
   teardownFailed: boolean;
+  /** True once this File page saw a sealed Publication and then an
+   * authoritative read without it: the final transaction has committed,
+   * whether this page or scheduled maintenance drove it. */
+  deletionComplete: boolean;
   completeLink: string | null;
   /** True once the current context can run capability-bearing operations (its
    * parent key is available). */
@@ -145,6 +149,7 @@ const initialView = (): PublicationLifecycleState => ({
   error: null,
   progress: null,
   teardownFailed: false,
+  deletionComplete: false,
   completeLink: null,
   canOperate: false,
 });
@@ -167,6 +172,9 @@ export class PublicationLifecycle {
   private readGeneration = 0;
   private teardownEpoch: number | null = null;
   private teardownRestart = false;
+  /** The sealed Publication this File page last saw, kept across panel
+   * reopenings so completion by scheduled maintenance is still recognised. */
+  private sealedPublicationId: string | null = null;
   private controller: AbortController | null = null;
   private disposed = false;
 
@@ -343,10 +351,16 @@ export class PublicationLifecycle {
       const state = await this.operations.loadState(context, controller.signal);
       if (!this.isActive(epoch, controller) || generation !== this.readGeneration) return;
       const deleting = state.isOwner && state.publication?.state === "deleting";
+      // Only the final teardown transaction removes the sealed row; a later
+      // Publication of the File is a different, live one.
+      if (state.publication) {
+        this.sealedPublicationId = state.publication.state === "deleting" ? state.publication.publicationId : null;
+      }
       this.set({
         panel: "ready",
         state,
         completeLink: this.completeLink(state),
+        deletionComplete: state.publication === null && this.sealedPublicationId !== null,
         ...(deleting ? {} : { teardownFailed: false }),
       });
       if (deleting) this.maybeStartTeardown(options.resumeTeardown);

@@ -1,18 +1,22 @@
-import { openSymmetric } from "~/shared/crypto/enc-v1";
-import { openDeviceEnrollmentEnvelope } from "~/shared/crypto/vault";
-import { PrivateAccessError, privateRequest } from "~/shared/device/private-client";
+import { openImportedThreadCapability } from "~/shared/comments/comments-client";
+import { privateRequest } from "~/shared/device/private-client";
 import { getDevice } from "~/shared/device/store";
-import { loadAncestors, loadDirectory, loadFile, openChildDirectory, openRoot } from "~/shared/tree/client";
 import { decodeTreeBytes } from "~/shared/tree/wire";
 import { createGrantKeyEnvelope, openGrantKeyEnvelope, type GrantKeyContext } from "./grant-keys";
 import { createCommentKeyEnvelope, openCommentKeyEnvelope, type CommentKeyContext } from "./comment-keys";
+import { openOwnedCommentKey, ownedFileCapabilityKey, ownedKey } from "./owned-capabilities";
+import { uploadSaved } from "./saved-upload";
 
 type Context = GrantKeyContext | CommentKeyContext;
 type SourceEnvelope = Omit<Parameters<typeof openGrantKeyEnvelope>[0], "recipient">;
 type Item = {
   context: Context;
   device: { deviceId: string; transportPublicKey: string };
-  source: { kind: "owned" } | { kind: "recovery"; envelope: string } | { kind: "grant"; envelope: SourceEnvelope };
+  source:
+    | { kind: "owned" }
+    | { kind: "recovery"; envelope: string }
+    | { kind: "import"; envelope: string }
+    | { kind: "grant"; envelope: SourceEnvelope };
 };
 type Next = { item: Item | null; pending: boolean; expirationPending?: boolean };
 
@@ -22,40 +26,6 @@ export async function readNextProvisioning(signal?: AbortSignal): Promise<Next> 
   return response.json() as Promise<Next>;
 }
 
-async function ownedKey(context: GrantKeyContext, signal?: AbortSignal) {
-  const access = await openRoot(signal);
-  if (access.actorAccountId !== context.ownerId) throw new Error("Owner device required");
-  const path = await loadAncestors(context.targetId, signal);
-  if (path[0] !== access.rootId) throw new Error("Invalid owned scope");
-  let key = access.rootKey,
-    keyEpoch = access.capability!.epoch;
-  for (let index = 0; index < path.length - 1; index++) {
-    const listing = await loadDirectory(access, path[index]!, key, signal);
-    const entry = listing.entries.find((entry) => entry.nodeId === path[index + 1]);
-    if (!entry) throw new Error("Changed owned scope");
-    if (entry.kind === "file") {
-      if (index !== path.length - 2 || context.targetKind !== "file") throw new Error("Invalid owned scope");
-      const file = await loadFile(access, context.targetId, key, signal);
-      if (
-        file.capability?.id !== context.capabilityId ||
-        file.capability.epoch !== context.capabilityEpoch ||
-        !file.capabilityKey
-      )
-        throw new Error("Changed File capability");
-      return file.capabilityKey;
-    }
-    key = await openChildDirectory(access, key, entry);
-    keyEpoch = entry.keyEpoch ?? 1;
-  }
-  if (
-    context.targetKind !== "directory" ||
-    context.capabilityId !== context.targetId ||
-    keyEpoch !== context.capabilityEpoch
-  )
-    throw new Error("Changed Directory capability");
-  return key;
-}
-
 /** Each pass handles at most twenty envelopes by default. Server coverage, not
  * local progress or saved nonce state, determines the next item after a crash. */
 export async function resumeGrantProvisioning(options: { signal?: AbortSignal; maxSteps?: number } = {}) {
@@ -63,6 +33,16 @@ export async function resumeGrantProvisioning(options: { signal?: AbortSignal; m
     maxSteps = options.maxSteps ?? 20;
   if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 100) throw new Error("Invalid provisioning bound");
   let pending = false;
+  // A File carrying several imported threads is walked to once per pass.
+  const fileKeys = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+  const fileKey = (ownerId: string, fileId: string) => {
+    let value = fileKeys.get(fileId);
+    if (!value) {
+      value = ownedFileCapabilityKey(ownerId, fileId, signal);
+      fileKeys.set(fileId, value);
+    }
+    return value;
+  };
   for (let processed = 0; processed < maxSteps; processed++) {
     signal?.throwIfAborted();
     const next = await readNextProvisioning(signal);
@@ -110,32 +90,13 @@ export async function resumeGrantProvisioning(options: { signal?: AbortSignal; m
             })
           : await openGrantKeyEnvelope({ ...envelope, recipient: device.transportKeyPair });
     } else if (source.kind === "recovery" && "purpose" in context && state.accountId === context.ownerId) {
-      const response = await privateRequest("/api/private/bootstrap", { method: "POST", signal });
-      if (!response.ok) throw new Error("Owned source unavailable");
-      const boot = (await response.json()) as { enrollmentEnvelope: string };
-      const root = await openDeviceEnrollmentEnvelope(
-        decodeTreeBytes(boot.enrollmentEnvelope),
-        device.transportKeyPair,
-        {
-          purpose: "device-enrollment",
-          vaultId: state.accountId,
-          objectId: device.deviceId,
-          keyId: device.deviceId,
-          keyEpoch: 1,
-          revision: 1,
-          recipientId: device.deviceId,
-        },
+      key = await openOwnedCommentKey(context, source.envelope, device, signal);
+    } else if (source.kind === "import" && "purpose" in context && state.accountId === context.ownerId) {
+      key = await openImportedThreadCapability(
+        source.envelope,
+        await fileKey(context.ownerId, context.fileId),
+        context,
       );
-      key = await openSymmetric(decodeTreeBytes(source.envelope), root, {
-        context: {
-          purpose: "vault-recovery",
-          vaultId: context.ownerId,
-          objectId: context.objectId,
-          keyId: context.capabilityId,
-          keyEpoch: context.capabilityEpoch,
-          revision: 1,
-        },
-      });
     } else if (source.kind === "owned" && !("purpose" in context)) key = await ownedKey(context, signal);
     else throw new Error("Invalid provisioning source");
     const publicKey = await crypto.subtle.importKey(
@@ -162,15 +123,7 @@ export async function resumeGrantProvisioning(options: { signal?: AbortSignal; m
       envelopes: [envelope],
     });
     const path = `/api/private/grants/${context.relationshipId}/${"purpose" in context ? `comment-keys/${context.objectId}` : "keys"}`;
-    let response: Response;
-    try {
-      response = await privateRequest(path, { method: "PUT", body, signal });
-    } catch (error) {
-      if (signal?.aborted || !(error instanceof PrivateAccessError && error.state === "unavailable")) throw error;
-      // An uncertain response retries saved ciphertext bytes with a fresh proof,
-      // never re-seals or restores an HPKE context/nonce counter.
-      response = await privateRequest(path, { method: "PUT", body, signal });
-    }
+    const response = await uploadSaved(path, body, signal);
     if (!response.ok) throw new Error("Shared access changed. Refresh and resume.");
   }
   return { complete: false, pending, processed: maxSteps };

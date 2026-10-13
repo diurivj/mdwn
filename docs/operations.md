@@ -2,12 +2,178 @@
 
 Ticket [31](../.scratch/mdwn/issues/31-retention-and-operations.md); [ADR-0002](adr/0002-cloudflare-workers-and-d1.md).
 
+## Workers Paid operating policy
+
+Ticket [62](../.scratch/mdwn/issues/62-workers-paid-operating-contract.md);
+[Budgeted Workers Paid adoption](workers-paid-plan.md) §1–2 and §5; pricing
+facts from the [Workers Paid research](../.scratch/mdwn/research/workers-paid-budget.md),
+checked 2026-10-11 against the Cloudflare pages cited below. Prices are USD
+before tax.
+
+Workers Paid is mdwn's **intended** operating baseline (maintainer decision,
+2026-10-12). This document does not record an active subscription, configured
+alerts or measured production capacity: none has been confirmed. Until the
+checklist's first step confirms the plan, operate within Workers Free limits —
+including D1's [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries)
+— and keep every current product bound. Paying changes neither the Import, rate or source limits nor the
+privacy model.
+
+**Budget.** Target about **$5 per month**: the Workers Paid subscription with
+usage inside the included allowances. **$10 per month** is the intended
+maximum and the intervention boundary, not an enforced limit.
+
+**Neither alerts nor application limits cap the invoice.** Workers Paid is
+metered, and Cloudflare documents no account-wide hard spending cutoff for this
+pay-as-you-go setup: Paid requests are uncapped, and budget alerts explicitly
+do not pause or cap usage ([Workers limits][workers-limits],
+[budget alerts][alerts]). Billing data is daily, not a real-time circuit
+breaker. A CPU limit, rate limit or application rejection reduces what one
+invocation or one Account can consume; it caps neither the number of
+invocations nor accumulated storage or rows written, and an early rejection
+can still be a billed request. Never describe an estimate, alert or
+application limit as a spending cap. If an absolute billing guarantee is ever
+required, stop capacity expansion and surface the mismatch instead.
+
+### What the invoice contains
+
+Keep these apart; the operating estimate covers only the first two.
+
+| Part | What it is |
+| --- | --- |
+| Fixed fees | Workers Paid is **$5/month per account** — not per Worker or database. Other subscriptions (a zone plan, a separately started product) are further fixed fees. The Billable Usage view excludes fixed fees ([Billable Usage][billable-usage]). |
+| Usage overages | Charges for each meter beyond its included monthly allowance (below). |
+| Taxes | Applied by jurisdiction on top of both ([sales tax][tax]). Every figure here is before tax, so "$5" cannot promise $5 charged. |
+| Domain costs | Registration and renewal are billed separately from Workers ([how billing works][billing]). |
+
+| Meter | Included with Workers Paid | Overage |
+| --- | --- | --- |
+| Worker requests | 10M/month | $0.30/M |
+| Worker CPU | 30M CPU-ms/month | $0.02/M CPU-ms |
+| D1 rows read | 25B/month | $0.001/M |
+| D1 rows written | 50M/month | $1.00/M |
+| D1 stored data | 5 GB | $0.75/GB-month |
+
+Sources: [Workers pricing][workers-pricing], [D1 pricing][d1-pricing]. Static
+assets served without Worker execution are free; SSR, API and
+`run_worker_first` requests are billable even when they return an asset
+([Static Assets billing][assets]). D1 bills scanned and changed rows, not
+queries: deletes, index maintenance, retention scans, restore imports and
+rehearsals all count.
+
+### Account-wide allowances
+
+Included allowances belong to the **account**, shared by every Worker,
+database and project on it: production and preview, both environments' Cron
+(96 invocations a day each, 2,880 per 30 days), Import staging, restore
+rehearsals, Import proofs, and any non-mdwn project. D1 storage is summed across
+all databases. Attribute mdwn's share separately from account totals; never
+compare an mdwn-only estimate against the account invoice or count one
+allowance twice.
+
+### Early warnings
+
+Use the provider's own billing notifications; mdwn adds no billing poller or
+dashboard. Starting points are **$1 and $3 of usage overage**. Because the
+Billable Usage view and its alerts measure overage and exclude the $5
+subscription, those correspond to roughly $6 and $8 before tax only when Workers
+Paid is the account's sole subscription; adjust them for actual taxes and other
+subscriptions rather than treating $6/$8 as invoice totals. A $5 overage alert
+already means about $10 before tax. Alerts notify; they do not stop service
+([budget alerts][alerts], [Billable Usage][billable-usage]). Creating them is an
+operator change that needs explicit authorization; this document does not
+claim they exist.
+
+### Operator checklist
+
+1. **Confirm the account's actual plan and usage model**: Free or Workers
+   Paid, and current Standard pricing or a legacy model. A decision to pay is
+   not evidence of a subscription. Record only the date and the result in the
+   ticket, never account identifiers or billing details.
+2. List other subscriptions and projects on the account that share
+   allowances or add fixed fees.
+3. Read current Billable Usage, Worker requests and CPU
+   ([Workers metrics][workers-metrics]) and D1 rows read, rows written and
+   storage ([D1 metrics][d1-metrics]) for production and preview. Aggregate
+   metrics suffice; do not enable blanket request logs.
+4. With authorization, create the $1 and $3 overage alerts.
+5. Note the applicable tax treatment and domain renewal dates as separate
+   line items.
+6. Recheck each billing cycle, and before any capacity change (tickets
+   [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md)–[65](../.scratch/mdwn/issues/65-larger-import-envelope.md)).
+
+### Intervention runbook
+
+When an overage alert fires, or the month's total approaches $10:
+
+1. **Inspect the affected meter.** Find which meter (requests, CPU, rows
+   written, rows read, storage) and which Worker, database or project drives
+   it, using Billable Usage and aggregate metrics. Diagnose with aggregate SQL
+   counts; never enable blanket logs or persist identifiers or ciphertext.
+2. **Stop discretionary work**: Import proofs, restore rehearsals, preview
+   load, benchmarks and other optional remote runs.
+3. **Restrict growth-producing operations** as appropriate — for example a
+   reviewed change that tightens an existing rate limit or pauses new Imports
+   or signups.
+4. **Keep data-exit and security operations available** while the platform
+   is: export, Hard deletion, Unpublishing and its scheduled teardown, Session
+   revocation, sign-out and recovery.
+5. Record the meter, cause and action in aggregate terms.
+
+There is no automatic spending controller; every step is an operator decision.
+
+### Paid D1 capacity and Time Travel
+
+What Workers Paid changes for D1:
+
+- **10 GB per database.**
+- **5 GB of storage included and shared** across the account's databases,
+  then billed; 1 TB default account storage limit.
+- A higher [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries).
+- **30 days of Time Travel.**
+- Monthly row allowances that bill overage, where Free exhausts a daily quota
+  and fails until 00:00 UTC.
+
+Sources: [D1 limits][d1-limits], [D1 pricing][d1-pricing],
+[Time Travel][time-travel]. The Free limits, and the per-statement, per-row and
+query-duration limits that do not change, are recorded in the
+[D1 scripting reference](operations/d1-scripting.md#limits).
+
+Time Travel is always on and has no extra charge. It is **operational
+recovery** for a bad migration or manual repair (see
+[Migration rollback rehearsal](#migration-rollback-rehearsal)): not
+user-visible File history, not a restore feature, and a restore rolls back
+every intervening write. Live deletion — Hard deletion, Unpublishing teardown,
+retention — does not immediately erase provider history: deleted rows stay
+restorable by the operator for the plan's Time Travel window. No new backup
+system is added, and the plan change alone does not require a new restore
+rehearsal.
+
+[workers-pricing]: https://developers.cloudflare.com/workers/platform/pricing/
+[workers-limits]: https://developers.cloudflare.com/workers/platform/limits/
+[assets]: https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/
+[d1-pricing]: https://developers.cloudflare.com/d1/platform/pricing/
+[d1-limits]: https://developers.cloudflare.com/d1/platform/limits/
+[time-travel]: https://developers.cloudflare.com/d1/reference/time-travel/
+[alerts]: https://developers.cloudflare.com/billing/manage/budget-alerts/
+[billable-usage]: https://developers.cloudflare.com/billing/manage/billable-usage/
+[billing]: https://developers.cloudflare.com/billing/understand/how-billing-works/
+[tax]: https://developers.cloudflare.com/billing/understand/sales-tax/
+[workers-metrics]: https://developers.cloudflare.com/workers/observability/metrics-and-analytics/
+[d1-metrics]: https://developers.cloudflare.com/d1/observability/metrics-analytics/
+
 ## Scheduled retention
 
 `wrangler.jsonc` schedules the same Worker handler every 15 minutes in local,
-preview, and production. `workers/app.ts` awaits every maintenance operation;
-a failure propagates to the Cron outcome rather than being swallowed. Blanket
-request logs/traces remain disabled under the privacy policy.
+preview, and production. `workers/app.ts` calls
+`app/retention/scheduled-maintenance.server.ts`, which runs each duty in order
+— security retention first, then sealed Unpublishing teardown — and isolates
+them: a duty that throws is reported, and the remaining duties still run. After
+all duties the invocation fails if any duty failed, so the Cron outcome still
+shows it. Reports are content-free: one fixed `console.error` line per failed
+duty (`Scheduled maintenance duty failed: <duty>`) and a thrown
+`Scheduled maintenance failed: <duties>`, never the underlying error, SQL,
+identifiers, ciphertext or counts. Blanket request logs/traces remain disabled
+under the privacy policy.
 
 The handler removes:
 
@@ -25,10 +191,16 @@ The handler removes:
 - Bounded expired-Grant envelope/provisioning dependents, **not** the Grant's
   write seal or a cryptographic job. Browser-authorized rotation still owns that
   lifecycle (`app/sharing/grant-expiry.server.ts`).
+- One batch of an Unpublishing the Owner already sealed: the least recently
+  attempted pending teardown's next bounded batch (at most 200 Public Comments, or the final
+  transaction once none remain). Only a `deleting` Publication with its
+  teardown row qualifies; no Session, Device proof or key is used. See
+  [Publications](publications.md#scheduled-completion).
 
 No retention statement deletes current Files, representations, envelopes,
-Recovery capsules, registry/devices, passkeys, active Grants, Publications,
-Comments, or Import commit markers. `import_commits` is durable visibility
+Recovery capsules, registry/devices, passkeys, active Grants, active
+Publications, Private Comments, or Import commit markers; Public Comments and
+other Public material are removed only for a Publication the Owner sealed. `import_commits` is durable visibility
 metadata, not staging authority. Migration 0027 removes its FK to the ephemeral
 Import session, reinstalls the immutable-marker trigger after the rebuild, and
 checks its originating session/account/target with an INSERT trigger instead.
@@ -45,11 +217,31 @@ Security-event writes reserve one 15-minute Cron interval before the 30-day
 retention maximum, including the event's Network-bucket headroom. Provider Time
 Travel/backups are outside application-level deletion.
 
+### Scheduled bounds and D1 budget
+
+The account's Workers Paid subscription is not yet confirmed, so every duty
+together must fit the Free
+[per-invocation query limit](operations/d1-scripting.md#per-invocation-queries),
+counting every batched statement. The per-duty statement table and its
+worst-case total live beside the duty list in
+`app/retention/scheduled-maintenance.server.ts`; raising a bound or adding a
+duty must keep that total within the limit. The statement-budget test in
+`tests/worker/scheduled-teardown.test.ts` counts a real worst-case invocation
+(a pending final teardown transaction plus an expired Grant drain).
+
+Teardown throughput is one batch per run (at most 200 Public Comments, or one
+final transaction): a backlog eventually drains, but no deletion deadline is
+promised. Each run first records an attempt on its target, which commits even
+if the batch then fails, and the next run picks the least recently attempted
+sealed Publication. A Publication whose batch keeps failing stays sealed and
+retryable without holding up the others.
+
 ### Verify maintenance
 
 ```sh
 npx --no-install vitest run --config vitest.workers.config.ts \
-  tests/worker/retention.test.ts tests/worker/abuse-controls.test.ts
+  tests/worker/retention.test.ts tests/worker/abuse-controls.test.ts \
+  tests/worker/scheduled-teardown.test.ts
 ```
 
 These are real workerd/D1 scheduled-event tests: expired/live mixtures,
@@ -63,6 +255,35 @@ events**, check that the Cron outcome succeeds every 15 minutes. Cron Events
 needs no request-body logging. A failed/missed run invalidates the timing
 headroom; repair it immediately and check backlog counts using aggregate SQL,
 never enable blanket logs or persist ciphertext/identifiers in diagnostics.
+
+## Smart Placement
+
+The preview and production Workers set `placement: { "mode": "smart" }` in
+their `env` blocks of `wrangler.jsonc` (ticket 57); the never-deployed local
+Worker does not, so `npm run build` and the browser harness are unchanged.
+`tests/wrangler-config.test.ts` asserts this through Wrangler's own config
+resolution.
+
+- **What it does.** Cloudflare may run the Worker's fetch handler in a
+  location close to its back end, here D1 (`mdwn-db-production` is in WNAM),
+  instead of the colo that received the request. Every private page makes
+  several sequential D1 reads, so fewer cross-region round trips matter more
+  than edge proximity. It affects fetch handlers only: the 15-minute
+  `scheduled` retention handler is unchanged. On low traffic Cloudflare may not
+  have enough requests to decide and reports `INSUFFICIENT_INVOCATIONS`; the
+  Worker then keeps running at the receiving colo, which is today's behavior.
+- **Verify after a deploy.** Responses from a placed Worker carry a
+  `cf-placement` header (`local-<colo>` or `remote-<colo>`), for example
+  `curl -sI https://mdwn.me/api/auth/session | grep -i cf-placement`. The
+  Worker's Settings page in the dashboard shows the placement status
+  (`SUCCESS`, `INSUFFICIENT_INVOCATIONS`, or an error). Compare the TTFB of a
+  small API response before and after.
+- **Roll back.** Remove the `placement` block from both environments, merge,
+  and let the `deploy` workflow redeploy. Nothing else depends on it.
+
+D1 read replication stays disabled (ticket 57's decision 4): a lagging replica
+could still serve a read after a revocation or device removal, so it needs its
+own design for consistent authorization first.
 
 ## Foreign keys and query plans
 
@@ -224,9 +445,11 @@ disposal or provider backup erasure.
 
 ## Migration rollback rehearsal
 
-Time Travel is the primary rollback mechanism. **Workers Free retains seven
-days, not 30** (30 is Paid); capture an exact bookmark and a protected pre-change
-export before a risky migration/manual repair. An export can block queries;
+Time Travel is the primary rollback mechanism. It retains **30 days on Workers
+Paid but only seven on Workers Free**; until the account's plan is confirmed
+(see the [operator checklist](#operator-checklist)), assume seven. Capture an
+exact bookmark and a protected pre-change export before a risky
+migration/manual repair. An export can block queries;
 choose a maintenance window. Never print its presigned download URL or include
 an export containing real data in a PR, repository, or public artifact.
 
@@ -341,9 +564,11 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
    local temp state with `trash <dir>`, or deleting and recreating the
    disposable remote database, then restoring into the fresh target.
 
-   Validated limits (Workers Free): 100 KB per statement, 2 MB per row/BLOB,
-   500 MB per database, 5 GB import file, 30 s per query, and 7 days of Time
-   Travel. The tool uses no paid feature. Digest verification pages 20 rows at
+   Validated limits (Workers Free, 2026-10-06): 100 KB per statement, 2 MB per
+   row/BLOB, 500 MB per database, 5 GB import file, 30 s per query, and 7 days
+   of Time Travel. Workers Paid raises only the database size and Time Travel
+   window ([Paid D1 capacity](#paid-d1-capacity-and-time-travel)). The tool
+   uses no paid feature. Digest verification pages 20 rows at
    a time, so verification cost scales with data size. `$PREPARED` and
    `$MANIFEST` contain restored data or its digests: keep them local, never
    commit, upload, or print them, and trash them when finished.
@@ -355,9 +580,10 @@ Rehearse on a newly created disposable remote D1 with **only synthetic data**:
    npm run db:restore:rehearsal -- [--keep] [--evidence /tmp/rehearsal-evidence.md]
    ```
 
-   The rehearsal consumes the account's D1 Free daily row-write quota (shared
-   with production Cron writes); a quota error aborts it before any restore and
-   the disposable databases are still deleted. Run at most one full remote
+   The rehearsal consumes the account's D1 rows written, shared with
+   production Cron writes: on Free, the daily quota, where a quota error aborts
+   it before any restore and the disposable databases are still deleted; on
+   Paid, the shared monthly allowance and then billed overage. Run at most one full remote
    rehearsal per day, check current usage in the Cloudflare dashboard first,
    and prefer the local round trip (`npm run db:restore:local`) while iterating
    on the tooling itself.

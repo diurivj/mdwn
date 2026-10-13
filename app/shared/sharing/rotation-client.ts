@@ -1,7 +1,10 @@
+import { openImportedThreadCapability } from "~/shared/comments/comments-client";
+import { threadCapabilityContext } from "~/shared/comments/content";
 import { publicAttributionKeyContext, publicCommentKeyContext } from "~/shared/comments/public-content";
 import { createSymmetricWriter, openSymmetric } from "~/shared/crypto/enc-v1";
 import { loadPrivateBrowser, type PrivateAccountContext } from "~/shared/device/private-browser";
 import { privateRequest } from "~/shared/device/private-client";
+import { clearPrivateMemoryInAllTabs } from "~/shared/device/private-tab-memory";
 import { newOpaqueId } from "~/shared/opaque-id";
 import {
   createListingHead,
@@ -130,6 +133,20 @@ async function resolveDirectory(browser: RotationBrowser, nodeId: string) {
   return { key, listing: await directory(browser, nodeId, key) };
 }
 
+/** The installed File capability key, reopened from the signed hierarchy. */
+async function currentFileKey(browser: RotationBrowser, fileId: string): Promise<Uint8Array<ArrayBuffer>> {
+  const file = await json<{
+    parentId: string;
+    capability: { id: string; epoch: number } | null;
+    keyEnvelope: string;
+  }>(browser, `/api/private/tree/files/${fileId}`);
+  if (!file.capability) throw new Error("Invalid File capability");
+  const parent = await resolveDirectory(browser, file.parentId);
+  return openSymmetric(decodeTreeBytes(file.keyEnvelope), parent.key, {
+    context: cryptoContext(browser.accountId, "file-capability", fileId, file.capability.id, file.capability.epoch),
+  });
+}
+
 async function sourceKey(browser: RotationBrowser, source: RotationSource): Promise<Uint8Array<ArrayBuffer>> {
   if (source.kind === "directory") return (await resolveDirectory(browser, source.objectId)).key;
   if (source.kind === "file") {
@@ -152,6 +169,15 @@ async function sourceKey(browser: RotationBrowser, source: RotationSource): Prom
         })
       : parent.key;
   }
+  // An imported Historical thread's key is wrapped under its File capability
+  // key, so the same verified walk opens it; owned threads use vault recovery.
+  if (source.kind === "private_comment" && source.importEnvelope)
+    return openImportedThreadCapability(source.importEnvelope, await currentFileKey(browser, source.fileId), {
+      ownerId: browser.accountId,
+      threadId: source.objectId,
+      capabilityId: source.capabilityId,
+      capabilityEpoch: source.capabilityEpoch,
+    });
   if (!source.recoveryEnvelope)
     throw new Error("Current Comment key is not available on this device. The update remains sealed.");
   return openSymmetric(decodeTreeBytes(source.recoveryEnvelope, 16_384), browser.vaultRootKey, {
@@ -334,6 +360,19 @@ async function promote(browser: RotationBrowser, next: RotationNext) {
   const { job, item, source } = next;
   if (!item || !source || !item.targetEpoch || !item.capabilityId) throw new Error("Invalid promotion");
   const key = await replacementKey(browser, job, item);
+  const base = { operation: "promote" as const, operationId: newOpaqueId(), objectId: item.objectId };
+  // An imported Historical thread's replacement is a fresh import envelope
+  // under its File capability key, never a fabricated vault-recovery row.
+  if (source.kind === "private_comment" && source.importEnvelope)
+    return {
+      ...base,
+      importEnvelope: encodeTreeBytes(
+        await (await createSymmetricWriter(await currentFileKey(browser, source.fileId))).seal(
+          key,
+          threadCapabilityContext(browser.accountId, item.objectId, item.capabilityId, item.targetEpoch),
+        ),
+      ),
+    };
   const recoveryEnvelope = encodeTreeBytes(
     await (await createSymmetricWriter(browser.vaultRootKey)).seal(key, {
       purpose: "vault-recovery",
@@ -344,7 +383,7 @@ async function promote(browser: RotationBrowser, next: RotationNext) {
       revision: 1,
     }),
   );
-  const common = { operation: "promote", operationId: newOpaqueId(), objectId: item.objectId, recoveryEnvelope };
+  const common = { ...base, recoveryEnvelope };
   if (source.kind === "private_comment" || source.kind === "public_history") return common;
   let parent = null,
     keyEnvelope = recoveryEnvelope;
@@ -452,12 +491,35 @@ async function promote(browser: RotationBrowser, next: RotationNext) {
   if (contentKey.length !== 32) throw new Error("Invalid content key");
   const representationKeyEnvelope = encodeTreeBytes(await (await createSymmetricWriter(key)).seal(contentKey, context));
   const representationId = newOpaqueId();
+  // Imported Historical threads follow this File's replacement key before the
+  // installed capability changes, so they stay readable until they rotate.
+  const importedThreads = [];
+  for (const thread of source.importedThreads) {
+    const threadKey = await openImportedThreadCapability(thread.envelope, oldKey, {
+      ownerId: browser.accountId,
+      threadId: thread.threadId,
+      capabilityId: thread.capabilityId,
+      capabilityEpoch: thread.capabilityEpoch,
+    });
+    importedThreads.push({
+      threadId: thread.threadId,
+      capabilityId: thread.capabilityId,
+      capabilityEpoch: thread.capabilityEpoch,
+      envelope: encodeTreeBytes(
+        await (await createSymmetricWriter(key)).seal(
+          threadKey,
+          threadCapabilityContext(browser.accountId, thread.threadId, thread.capabilityId, thread.capabilityEpoch),
+        ),
+      ),
+    });
+  }
   return {
     ...common,
     parent,
     keyEnvelope,
     representationId,
     representationKeyEnvelope,
+    importedThreads,
     fileHead: await createFileHead(browser.assertionKey, {
       vaultId: browser.accountId,
       fileId: item.objectId,
@@ -508,22 +570,7 @@ async function deliver(browser: RotationBrowser, next: RotationNext) {
     );
     key = await sourceKey(browser, source);
   } else if (targets.targetKind === "directory") key = (await resolveDirectory(browser, targets.targetId)).key;
-  else {
-    const file = await json<{ parentId: string; capability: { id: string; epoch: number }; keyEnvelope: string }>(
-      browser,
-      `/api/private/tree/files/${targets.targetId}`,
-    );
-    const parent = await resolveDirectory(browser, file.parentId);
-    key = await openSymmetric(decodeTreeBytes(file.keyEnvelope), parent.key, {
-      context: cryptoContext(
-        browser.accountId,
-        "file-capability",
-        targets.targetId,
-        file.capability.id,
-        file.capability.epoch,
-      ),
-    });
-  }
+  else key = await currentFileKey(browser, targets.targetId);
   const envelopes = [];
   for (const device of targets.devices) {
     const publicKey = await crypto.subtle.importKey(
@@ -592,13 +639,19 @@ export async function resumeRotation(jobId: string, browser: RotationBrowser, op
 /** Production adapter: device handles and Vault keys are loaded only in the browser. */
 export async function resumeKeyRotation(jobId: string, options: Options = {}) {
   const browser = await loadPrivateBrowser(options.signal);
-  return resumeRotation(
-    jobId,
-    {
-      ...browser,
-      request: (path, method = "POST", body) =>
-        privateRequest(path, { method, signal: options.signal, ...(body ? { body: JSON.stringify(body) } : {}) }),
-    },
-    options,
-  );
+  try {
+    return await resumeRotation(
+      jobId,
+      {
+        ...browser,
+        request: (path, method = "POST", body) =>
+          privateRequest(path, { method, signal: options.signal, ...(body ? { body: JSON.stringify(body) } : {}) }),
+      },
+      options,
+    );
+  } finally {
+    // A pass may have promoted new Directory keys and listings: nothing this
+    // tab or another remembers about the tree is current any more (ticket 57).
+    clearPrivateMemoryInAllTabs();
+  }
 }

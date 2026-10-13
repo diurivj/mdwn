@@ -1201,7 +1201,8 @@ describe("Publication requests", () => {
     expect((await sharingRequest(actor, path, "POST", {}, "create-request-replay")).status).toBe(201);
     const replay = await sharingRequest(actor, path, "POST", {}, "create-request-replay");
     expect(replay.status).toBe(403);
-    expect(await replay.json()).toEqual({ error: "device_proof_required" });
+    // A denial after a possible commit is distinct, so the browser never retries it (ticket 57).
+    expect(await replay.json()).toEqual({ error: "device_proof_spent" });
     expect(await count("publication_requests", "file_id = ?", fileId)).toBe(1);
   });
 

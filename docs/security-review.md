@@ -45,7 +45,7 @@ the browser. The review should attack the claims that matter most:
    `docs/operations.md`.
 6. **Import/export.** Visible-atomic staged Import, bounds/`CHECK` enforcement,
    the fragment-free public link model, browser-only export, and the disposable
-   remote Worker Free/D1 proof. Review [ADR-0006](adr/0006-visible-atomic-staged-imports.md),
+   remote Workers/D1 proof. Review [ADR-0006](adr/0006-visible-atomic-staged-imports.md),
    `docs/import.md`, `docs/export.md`.
 7. **Delivery.** CSP and security headers, secret handling, D1 foreign-key and
    query-plan posture, migration rollback, and build/deploy separation. Review
@@ -60,7 +60,7 @@ commit:
 ```sh
 npm ci
 npm run verify                                   # CI-equivalent checks + all three browsers
-node scripts/import-proof.mjs                    # disposable Free Workers + D1 release gate
+node scripts/import-proof.mjs                    # disposable Workers + D1 release gate
 npm run db:operations -- --output /tmp/plans.md  # FK + reviewed EXPLAIN QUERY PLAN
 ```
 
@@ -76,8 +76,10 @@ report.
   notice in the MVP (spec §1.1).
 - Hard deletion leaves no app-visible copy but cannot recall already-downloaded
   data or promise provider-backup erasure timing.
-- Workers Free + D1 Free capacity fails closed; there is no automatic paid
-  spend.
+- Capacity is bounded by application limits. Under the intended Workers Paid
+  baseline, usage beyond the included allowances is metered and no alert or
+  application limit caps the invoice (see the
+  [Workers Paid operating policy](operations.md#workers-paid-operating-policy)).
 - The donation page is anonymous and static; it embeds no third-party script.
 - D1 Time Travel is the primary recovery posture; production-sized export
   restoration is still open ([ticket 38](../.scratch/mdwn/issues/38-d1-export-database-restoration.md)).

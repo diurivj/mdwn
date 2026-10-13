@@ -1,6 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PrivateAccessError, privateExchange, privateRequest } from "../app/shared/device/private-client";
+import {
+  deviceStateGeneration,
+  deviceStateScope,
+  discardDeviceState,
+  loseAccess,
+  PrivateAccessError,
+  PrivatePolicyError,
+  privateExchange,
+  privateRequest,
+  PUBLIC_PARTICIPATION_SUSPENDED,
+} from "../app/shared/device/private-client";
+import { clearPrivateTabMemory, registerPrivateTabMemory } from "../app/shared/device/private-tab-memory";
+import { DEVICE_PROOF_REQUIRED, DEVICE_PROOF_SPENT } from "../app/shared/device/proof-denials";
 import { verifyDeviceProof, type DeviceProof } from "../app/shared/device/proof";
 import * as deviceStore from "../app/shared/device/store";
 import type { StoredDevice } from "../app/shared/device/store";
@@ -8,6 +20,7 @@ import type { StoredDevice } from "../app/shared/device/store";
 const ORIGIN = "https://mdwn.test";
 const STATE_PATH = "/api/device/state";
 const NOW = 1_800_000_000_000;
+const REUSE_MS = 10_000;
 const registryState = {
   accountId: "account-1",
   deviceId: "device-1",
@@ -75,7 +88,7 @@ async function verifiedProof(
   expect(encoded).not.toBeNull();
   const proof = JSON.parse(encoded!) as DeviceProof;
   const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", device.assertionKeyPair.publicKey));
-  expect(await verifyDeviceProof(proof, publicKey, { ...expected, now: NOW })).toBe(true);
+  expect(await verifyDeviceProof(proof, publicKey, { ...expected, now: Date.now() })).toBe(true);
   return proof;
 }
 
@@ -84,6 +97,8 @@ let device: StoredDevice;
 let devices: Map<string, StoredDevice>;
 
 beforeEach(async () => {
+  // Reusable device state is module memory; each test starts without it.
+  discardDeviceState();
   device = await makeDevice();
   devices = new Map([[device.accountId, device]]);
   // IndexedDB is the storage boundary; proof construction/signing remain real.
@@ -98,6 +113,11 @@ beforeEach(async () => {
   vi.stubGlobal("location", new URL(ORIGIN));
   vi.spyOn(Date, "now").mockReturnValue(NOW);
 });
+
+/** Move the clock past the reuse window, so the next operation reads state again. */
+function afterReuseWindow() {
+  vi.mocked(Date.now).mockReturnValue(Date.now() + REUSE_MS);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -198,7 +218,7 @@ describe("privateRequest registry-read concurrency", () => {
     });
   });
 
-  it("refreshes after the registry read settles even while an earlier private response is pending", async () => {
+  it("refreshes after the reuse window even while an earlier private response is pending", async () => {
     const controller = new AbortController();
     const firstRead = network.queue(STATE_PATH);
     const firstResource = network.queue("/api/private/first");
@@ -208,6 +228,7 @@ describe("privateRequest registry-read concurrency", () => {
     const firstInit = await firstResource.started;
 
     const freshState = { ...registryState, registryEpoch: 2, sessionBinding: "session-2" };
+    afterReuseWindow();
     const secondRead = network.queue(STATE_PATH);
     const secondResource = network.queue("/api/private/second");
     const second = privateRequest("/api/private/second", { method: "GET", signal: controller.signal });
@@ -234,6 +255,7 @@ describe("privateRequest registry-read concurrency", () => {
     firstResource.response.resolve(new Response("before sign-out"));
     await privateRequest("/api/private/files", { method: "GET" });
 
+    afterReuseWindow();
     const signedOutRead = network.queue(STATE_PATH);
     const signedOut = privateRequest("/api/private/files", { method: "GET" });
     const denied = expect(signedOut).rejects.toMatchObject(new PrivateAccessError("signed-out"));
@@ -255,6 +277,7 @@ describe("privateRequest registry-read concurrency", () => {
     await verifiedProof(init, device, { ...signedInState, method: "GET", url: `${ORIGIN}/api/private/files` });
   });
 
+  // A private-response 401 is defensive (private routes answer a lost Session with a 403); see the reuse tests.
   it.each([
     { status: 401, state: "signed-out" as const },
     { status: 403, state: "denied" as const },
@@ -522,5 +545,421 @@ describe("privateExchange proof-bound identity", () => {
       method: "GET",
       url: `${ORIGIN}/api/private/other`,
     });
+  });
+});
+
+/** The verification-time proof denial, the only 403 body ever retried. */
+const PROOF_REQUIRED = JSON.stringify({ error: "device_proof_required" });
+
+/** A private response carrying the Worker's next device state. */
+function withState(state: unknown, init: ResponseInit & { body?: string } = {}) {
+  const { body = "ok", ...rest } = init;
+  return new Response(body, {
+    ...rest,
+    headers: { "X-Mdwn-Device-State": typeof state === "string" ? state : JSON.stringify(state) },
+  });
+}
+
+/** Settle one private request whose state is read first; returns its proof's request init. */
+async function settleWithRead(path: string, state: object, response: Response = new Response("ok")) {
+  const read = network.queue(STATE_PATH);
+  const resource = network.queue(path);
+  read.response.resolve(Response.json(state));
+  resource.response.resolve(response);
+  await privateRequest(path, { method: "GET" });
+  return resource.started;
+}
+
+/** Settle one private request expected to need no state read. */
+async function settleReused(
+  path: string,
+  response: Response = new Response("ok"),
+  options = { method: "GET" as const },
+) {
+  const resource = network.queue(path);
+  resource.response.resolve(response);
+  const result = await privateRequest(path, options);
+  return { init: await resource.started, result };
+}
+
+describe("privateRequest device-state reuse (ticket 57)", () => {
+  it("signs sequential operations inside the reuse window with one state read", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    vi.mocked(Date.now).mockReturnValue(NOW + REUSE_MS - 1);
+    const { init } = await settleReused("/api/private/second");
+    expect(network.fetchImpl).toHaveBeenCalledTimes(3);
+    expect(network.fetchImpl.mock.calls.filter(([url]) => String(url).includes(STATE_PATH))).toHaveLength(1);
+    await verifiedProof(init, device, { ...registryState, method: "GET", url: `${ORIGIN}/api/private/second` });
+  });
+
+  it("reads state again for an operation that starts after the window", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    afterReuseWindow();
+    const fresh = { ...registryState, sessionBinding: "later-session" };
+    const init = await settleWithRead("/api/private/second", fresh);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    await verifiedProof(init, device, { ...fresh, method: "GET", url: `${ORIGIN}/api/private/second` });
+  });
+
+  it("adopts a valid response header as fresh state for the next operation", async () => {
+    const next = { ...registryState, registryEpoch: 2, sessionBinding: "next-session" };
+    await settleWithRead("/api/private/first", registryState);
+    // Inside the read's window, the response returns newer state and restarts the window.
+    vi.mocked(Date.now).mockReturnValue(NOW + REUSE_MS - 1_000);
+    await settleReused("/api/private/second", withState(next));
+    vi.mocked(Date.now).mockReturnValue(NOW + REUSE_MS + 5_000);
+    const { init } = await settleReused("/api/private/third");
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    expect(deviceStore.updateRegistryEpoch).toHaveBeenCalledWith(device.accountId, 2);
+    await verifiedProof(init, device, { ...next, method: "GET", url: `${ORIGIN}/api/private/third` });
+  });
+
+  it.each([
+    { name: "malformed JSON", header: "{not json" },
+    { name: "an empty Session binding", header: { ...registryState, sessionBinding: "" } },
+    { name: "a missing registry epoch", header: { ...registryState, registryEpoch: null } },
+  ])("ignores a header with $name", async ({ header }) => {
+    await settleWithRead("/api/private/first", registryState, withState(header));
+    const { init } = await settleReused("/api/private/second");
+    expect(network.fetchImpl).toHaveBeenCalledTimes(3);
+    await verifiedProof(init, device, { ...registryState, method: "GET", url: `${ORIGIN}/api/private/second` });
+  });
+
+  it("never signs with another Account's header and reads state again", async () => {
+    const other = { ...registryState, accountId: "account-2", sessionBinding: "other-session" };
+    await settleWithRead("/api/private/first", registryState, withState(other));
+    const fresh = { ...registryState, sessionBinding: "re-read-session" };
+    const init = await settleWithRead("/api/private/second", fresh);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    await verifiedProof(init, device, { ...fresh, method: "GET", url: `${ORIGIN}/api/private/second` });
+  });
+
+  it("retries a stale-state proof denial once with the denial's state and a new proof", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const current = { ...registryState, registryEpoch: 2, sessionBinding: "current-session" };
+    const path = "/api/private/files";
+    const body = '{"ciphertext":"same bytes"}';
+    const denied = network.queue(path);
+    const retried = network.queue(path);
+    denied.response.resolve(withState(current, { status: 403, body: '{"error":"device_proof_required"}' }));
+    retried.response.resolve(withState(current, { body: "committed" }));
+    const response = await privateRequest(path, { method: "POST", body });
+    expect(await response.text()).toBe("committed");
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    const [first, second] = await Promise.all([denied.started, retried.started]);
+    expect(second.body).toBe(body);
+    const stale = await verifiedProof(first, device, {
+      ...registryState,
+      method: "POST",
+      url: `${ORIGIN}${path}`,
+      body,
+    });
+    const fresh = await verifiedProof(second, device, { ...current, method: "POST", url: `${ORIGIN}${path}`, body });
+    expect(fresh.proofId).not.toBe(stale.proofId);
+  });
+
+  it("retries a reused-state denial without a header after a fresh read that differs", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/files";
+    const denied = network.queue(path);
+    const read = network.queue(STATE_PATH);
+    const retried = network.queue(path);
+    const current = { ...registryState, sessionBinding: "rebound-session" };
+    denied.response.resolve(Response.json({ error: "device_proof_required" }, { status: 403 }));
+    read.response.resolve(Response.json(current));
+    retried.response.resolve(new Response("allowed"));
+    expect(await (await privateRequest(path, { method: "GET" })).text()).toBe("allowed");
+    expect(network.fetchImpl).toHaveBeenCalledTimes(5);
+    await verifiedProof(await retried.started, device, { ...current, method: "GET", url: `${ORIGIN}${path}` });
+  });
+
+  it.each([
+    { name: "the denial's header", header: true },
+    { name: "a fresh read", header: false },
+  ])("does not retry a denial when $name shows the signing state is current", async ({ header }) => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/publications";
+    const denied = network.queue(path);
+    const read = header ? null : network.queue(STATE_PATH);
+    const body = JSON.stringify({ error: "device_proof_required" });
+    denied.response.resolve(
+      header ? withState(registryState, { status: 403, body }) : new Response(body, { status: 403 }),
+    );
+    read?.response.resolve(Response.json(registryState));
+    await expect(privateRequest(path, { method: "POST", body: "{}" })).rejects.toMatchObject(
+      new PrivateAccessError("denied"),
+    );
+    expect(network.fetchImpl).toHaveBeenCalledTimes(header ? 3 : 4);
+    // A final verification-time denial is a private-access error: tab memory,
+    // reusable state included, is cleared, so the next operation reads state.
+    await settleWithRead("/api/private/after", registryState);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(header ? 5 : 6);
+  });
+
+  it("treats a second denial as final", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/files";
+    const denied = network.queue(path);
+    const again = network.queue(path);
+    const second = { ...registryState, registryEpoch: 2 };
+    const third = { ...registryState, registryEpoch: 3 };
+    denied.response.resolve(withState(second, { status: 403, body: PROOF_REQUIRED }));
+    again.response.resolve(withState(third, { status: 403, body: PROOF_REQUIRED }));
+    await expect(privateRequest(path, { method: "GET" })).rejects.toMatchObject(new PrivateAccessError("denied"));
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("never retries a named policy denial", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/comments";
+    const denied = network.queue(path);
+    denied.response.resolve(
+      withState(
+        { ...registryState, registryEpoch: 2 },
+        { status: 403, body: JSON.stringify({ error: PUBLIC_PARTICIPATION_SUSPENDED, suspendedUntil: NOW + 1 }) },
+      ),
+    );
+    const rejected = await privateRequest(path, { method: "POST", body: "{}" }).catch((error: unknown) => error);
+    expect(rejected).toBeInstanceOf(PrivatePolicyError);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  // Defensive: no private route answers 401 today (a lost Session is a 403
+  // proof denial, then a 401 from the state read, tested below), but a 401
+  // from any private response still signs out and discards reusable state.
+  it("discards reusable state on a private-response 401", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const signedOut = network.queue("/api/private/second");
+    signedOut.response.resolve(new Response(null, { status: 401 }));
+    await expect(privateRequest("/api/private/second", { method: "GET" })).rejects.toMatchObject(
+      new PrivateAccessError("signed-out"),
+    );
+    await settleWithRead("/api/private/third", { ...registryState, sessionBinding: "new-session" });
+    expect(network.fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it("signs out after another tab's sign-out: a headerless proof denial, then a 401 state read", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/files";
+    const denied = network.queue(path);
+    const read = network.queue(STATE_PATH);
+    // A private route without a live Session answers a plain proof denial, with no state header.
+    denied.response.resolve(new Response(PROOF_REQUIRED, { status: 403 }));
+    read.response.resolve(Response.json({ error: "authentication_failed" }, { status: 401 }));
+    await expect(privateRequest(path, { method: "GET" })).rejects.toMatchObject(new PrivateAccessError("signed-out"));
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    // Reusable state was discarded: the next operation reads state first.
+    const init = await settleWithRead("/api/private/after", { ...registryState, sessionBinding: "signed-in-again" });
+    expect(network.fetchImpl).toHaveBeenCalledTimes(6);
+    await verifiedProof(init, device, {
+      ...registryState,
+      sessionBinding: "signed-in-again",
+      method: "GET",
+      url: `${ORIGIN}/api/private/after`,
+    });
+  });
+
+  it.each([
+    { error: "device_proof_required", retried: true },
+    { error: "device_proof_spent", retried: false },
+    { error: "access denied", retried: false },
+  ])("retries a 403 with a differing state header only for $error", async ({ error, retried }) => {
+    await settleWithRead("/api/private/first", registryState);
+    const path = "/api/private/publications/files/f/unpublish";
+    const current = { ...registryState, registryEpoch: 2, sessionBinding: "current-session" };
+    const denied = network.queue(path);
+    const retry = network.queue(path);
+    denied.response.resolve(withState(current, { status: 403, body: JSON.stringify({ error }) }));
+    retry.response.resolve(withState(current, { body: "retried" }));
+    const result = privateRequest(path, { method: "POST", body: "{}" });
+    if (retried) expect(await (await result).text()).toBe("retried");
+    else await expect(result).rejects.toMatchObject(new PrivateAccessError("denied"));
+    expect(network.fetchImpl).toHaveBeenCalledTimes(retried ? 4 : 3);
+    // The header is still the Session's current state, adopted either way.
+    const { init } = await settleReused("/api/private/after");
+    await verifiedProof(init, device, { ...current, method: "GET", url: `${ORIGIN}/api/private/after` });
+  });
+
+  it("discards reusable state on demand, for sign-in, sign-out and recovery", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    discardDeviceState();
+    const fresh = { ...registryState, sessionBinding: "signed-in-again" };
+    const init = await settleWithRead("/api/private/second", fresh);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    await verifiedProof(init, device, { ...fresh, method: "GET", url: `${ORIGIN}/api/private/second` });
+  });
+
+  it("refreshes reused state older than the local device's registry epoch instead of failing stale", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    devices.set(device.accountId, { ...devices.get(device.accountId)!, registryEpoch: 2 });
+    const fresh = { ...registryState, registryEpoch: 2 };
+    const init = await settleWithRead("/api/private/second", fresh);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+    await verifiedProof(init, device, { ...fresh, method: "GET", url: `${ORIGIN}/api/private/second` });
+  });
+
+  it("keeps the stale error for freshly read state older than the local device", async () => {
+    devices.set(device.accountId, { ...device, registryEpoch: 2 });
+    const read = network.queue(STATE_PATH);
+    read.response.resolve(Response.json(registryState));
+    await expect(privateRequest("/api/private/files", { method: "GET" })).rejects.toMatchObject(
+      new PrivateAccessError("stale"),
+    );
+    expect(network.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("never revives state from a read that settles after a discard", async () => {
+    const read = network.queue(STATE_PATH);
+    const resource = network.queue("/api/private/first");
+    const first = privateRequest("/api/private/first", { method: "GET" });
+    await read.started;
+    discardDeviceState();
+    read.response.resolve(Response.json(registryState));
+    resource.response.resolve(new Response("ok"));
+    await first;
+    await settleWithRead("/api/private/second", registryState);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("private tab memory and device state (ticket 57)", () => {
+  it("clears every registered holder when device state is discarded", async () => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await settleWithRead("/api/private/first", registryState);
+      expect(deviceStateScope()).toEqual({ accountId: "account-1", deviceId: "device-1" });
+      discardDeviceState();
+      expect(holder).toHaveBeenCalledOnce();
+      expect(deviceStateScope()).toBeNull();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("discards reusable device state when tab memory is cleared", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const before = deviceStateGeneration();
+    clearPrivateTabMemory();
+    expect(deviceStateGeneration()).toBe(before + 1);
+    await settleWithRead("/api/private/second", registryState);
+    expect(network.fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    { name: "registry epoch", next: { ...registryState, registryEpoch: 2 } },
+    { name: "Session", next: { ...registryState, sessionBinding: "another-session" } },
+  ])("clears tab memory when the adopted $name changes, then signs with the new state", async ({ next }) => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await settleWithRead("/api/private/first", registryState);
+      await settleReused("/api/private/second", withState(registryState));
+      expect(holder).not.toHaveBeenCalled();
+      await settleReused("/api/private/third", withState(next));
+      expect(holder).toHaveBeenCalledOnce();
+      const { init } = await settleReused("/api/private/fourth");
+      expect(network.fetchImpl).toHaveBeenCalledTimes(5);
+      await verifiedProof(init, device, { ...next, method: "GET", url: `${ORIGIN}/api/private/fourth` });
+    } finally {
+      unregister();
+    }
+  });
+});
+
+describe("private-access errors clear private tab memory (ticket 57)", () => {
+  async function cleared(run: () => Promise<unknown>) {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await run().catch((error: unknown) => error);
+      return holder.mock.calls.length > 0;
+    } finally {
+      unregister();
+    }
+  }
+
+  it("clears on unprovisioned: a Session whose state names no device", async () => {
+    const read = network.queue(STATE_PATH);
+    read.response.resolve(Response.json({ ...registryState, deviceId: null }));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it("clears on stale: freshly read state older than this device", async () => {
+    devices.set(device.accountId, { ...device, registryEpoch: 2 });
+    const read = network.queue(STATE_PATH);
+    read.response.resolve(Response.json(registryState));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it("clears on device-lost when the local registry epoch cannot be refreshed", async () => {
+    vi.mocked(deviceStore.updateRegistryEpoch).mockRejectedValueOnce(new Error("blocked"));
+    const read = network.queue(STATE_PATH);
+    read.response.resolve(Response.json({ ...registryState, registryEpoch: 2 }));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it("clears on a final device_proof_required denial confirmed by the current state", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const denied = network.queue("/api/private/files");
+    denied.response.resolve(withState(registryState, { status: 403, body: PROOF_REQUIRED }));
+    expect(await cleared(() => privateRequest("/api/private/files", { method: "GET" }))).toBe(true);
+  });
+
+  it.each([
+    { name: "a spent proof", body: JSON.stringify({ error: "device_proof_spent" }) },
+    {
+      name: "a Public-participation suspension",
+      body: JSON.stringify({ error: PUBLIC_PARTICIPATION_SUSPENDED, suspendedUntil: NOW + 1 }),
+    },
+  ])("keeps tab memory on $name", async ({ body }) => {
+    await settleWithRead("/api/private/first", registryState);
+    const denied = network.queue("/api/private/publications/files/f/publish");
+    denied.response.resolve(withState(registryState, { status: 403, body }));
+    expect(
+      await cleared(() => privateRequest("/api/private/publications/files/f/publish", { method: "POST", body: "{}" })),
+    ).toBe(false);
+  });
+
+  it("keeps tab memory on a temporary network failure", async () => {
+    await settleWithRead("/api/private/first", registryState);
+    const lost = network.queue("/api/private/files");
+    const request = cleared(() => privateRequest("/api/private/files", { method: "GET" }));
+    await lost.started;
+    lost.response.reject(new TypeError("network"));
+    expect(await request).toBe(false);
+  });
+});
+
+describe("one rule for losing private access (ticket 57, review round 2)", () => {
+  it("clears on a same-Account response header that names no device, as a state read does", async () => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      await settleWithRead("/api/private/first", registryState);
+      await settleReused("/api/private/second", withState({ ...registryState, deviceId: null }));
+      expect(holder).toHaveBeenCalledOnce();
+      // Reusable state went with it: the next operation reads state first.
+      await settleWithRead("/api/private/third", registryState);
+      expect(network.fetchImpl).toHaveBeenCalledTimes(5);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("exports the one helper that clears and throws a private-access error", () => {
+    const holder = vi.fn();
+    const unregister = registerPrivateTabMemory(holder);
+    try {
+      expect(() => loseAccess("device-lost")).toThrow(PrivateAccessError);
+      expect(holder).toHaveBeenCalledOnce();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("names the proof denials it decides on with the shared codes", () => {
+    expect(DEVICE_PROOF_REQUIRED).toBe("device_proof_required");
+    expect(DEVICE_PROOF_SPENT).toBe("device_proof_spent");
   });
 });

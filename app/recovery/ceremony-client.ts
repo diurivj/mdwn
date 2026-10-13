@@ -26,6 +26,7 @@ import {
   type RecoveryIntent,
 } from "./protocol";
 import { ownedProvisioningNeeded } from "~/shared/device/owned-provision-client";
+import { discardDeviceState } from "~/shared/device/private-client";
 
 type Start = {
   enrollmentId: string;
@@ -51,6 +52,7 @@ export async function loadVaultRecovery(signal: AbortSignal): Promise<Loaded> {
       );
       if (state.candidateActive && Number.isSafeInteger(state.registryEpoch)) {
         await activateRecoveryCandidate(accountId, pending.deviceId, state.registryEpoch);
+        discardDeviceState();
         break;
       }
     }
@@ -218,6 +220,8 @@ export async function runVaultRecovery(request: Request) {
     );
     if (committed.ok !== true || !Number.isSafeInteger(committed.registryEpoch)) throw new Error("Recovery failed");
     committedPhrase = next.phrase;
+    // Recovery revoked every other device and Session; reused state is gone.
+    discardDeviceState();
     try {
       await activateRecoveryCandidate(start.accountId, candidate.deviceId, committed.registryEpoch);
     } catch {

@@ -13,6 +13,7 @@ import {
 } from "./client";
 import type { FileDocument } from "./file-client";
 import { createFileHead } from "./file-head";
+import { whileChangingListings } from "./tab-tree-cache";
 import { decodeTreeBytes, encodeTreeBytes } from "./wire";
 
 export type FileCapability = { id: string; epoch: number };
@@ -108,11 +109,14 @@ export async function convertFileCapability(
 ) {
   if (isSignupRecoveryConfirmationPending()) throw new RecoveryConfirmationPendingError();
   const payload = await prepareFileCapabilityConversion(access, fileId, document, parentKey, listing);
-  const response = await privateRequest(`/api/private/tree/files/${fileId}/capability`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-    signal,
-  });
+  // Conversion re-signs the parent listing, whether or not the answer arrives (ticket 57).
+  const response = await whileChangingListings(access.actorAccountId, [listing.directoryId], () =>
+    privateRequest(`/api/private/tree/files/${fileId}/capability`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      signal,
+    }),
+  );
   if (response.status === 409) {
     const body = (await response.json()) as { error?: string };
     if (body.error === "namespace_changed") throw new NamespaceChangedError();

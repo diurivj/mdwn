@@ -1,6 +1,8 @@
 import { newPublicationIdentifier } from "../../app/shared/publications/capability";
 import { applyD1Migrations, env, SELF } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
+import { createSymmetricWriter, openSymmetric } from "../../app/shared/crypto/enc-v1";
+import { decodeTreeBytes, encodeTreeBytes } from "../../app/shared/tree/wire";
 import {
   createCommentKeyEnvelope,
   openCommentKeyEnvelope,
@@ -15,6 +17,7 @@ import { sessionBindingDigest, signDeviceProof } from "../../app/shared/device/p
 import {
   addSharingDevice,
   grant,
+  importedThread,
   opaqueId,
   prepareGrantKeys,
   sharingAccount,
@@ -177,6 +180,112 @@ it("a current Comment holder fulfills retained private and public history withou
       Array(32).fill(81),
     );
   }
+});
+
+it("the Owner's device fulfills an imported Historical thread from its File-capability envelope and no one else sees that source", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount(),
+    stranger = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+  const { grantId } = await grant(owner, recipient, fileId);
+  const thread = await importedThread(owner, fileId);
+  // A real envelope: the thread key sealed under the File capability key.
+  const threadKey = new Uint8Array(32).fill(21);
+  const threadEnvelope = await (await createSymmetricWriter(owner.keys.get(fileId)!)).seal(threadKey, {
+    purpose: "private-comment-thread",
+    vaultId: owner.accountId,
+    objectId: thread.objectId,
+    keyId: thread.capabilityId,
+    keyEpoch: 1,
+    revision: 1,
+  });
+  const sealed = encodeTreeBytes(threadEnvelope);
+  await env.DB.prepare("UPDATE import_comment_envelopes SET ciphertext = ? WHERE thread_id = ?")
+    .bind(threadEnvelope, thread.objectId)
+    .run();
+  const path = "/api/private/grant-provisioning/next";
+  // The recipient's own pending request never reveals the Owner's source.
+  const denied = await sharingRequest(recipient, path);
+  expect(denied.status).toBe(200);
+  const deniedBody = await denied.text();
+  expect(deniedBody).not.toContain(sealed);
+  expect(JSON.parse(deniedBody)).toEqual({ item: null, pending: true });
+  const next = (await (await sharingRequest(owner, path)).json()) as {
+    item: {
+      context: CommentKeyContext;
+      device: { deviceId: string; transportPublicKey: string };
+      source: { kind: string; envelope: string };
+    };
+  };
+  expect(next.item.source).toEqual({ kind: "import", envelope: sealed });
+  const delivered = await openSymmetric(decodeTreeBytes(next.item.source.envelope), owner.keys.get(fileId)!, {
+    context: {
+      purpose: "private-comment-thread",
+      vaultId: owner.accountId,
+      objectId: thread.objectId,
+      keyId: thread.capabilityId,
+      keyEpoch: 1,
+      revision: 1,
+    },
+  });
+  expect(Array.from(delivered)).toEqual(Array.from(threadKey));
+  const { context, device } = next.item;
+  const envelope = await createCommentKeyEnvelope(
+    delivered,
+    await crypto.subtle.importKey(
+      "raw",
+      decodeTreeBytes(device.transportPublicKey, 65),
+      { name: "ECDH", namedCurve: "P-256" },
+      true,
+      [],
+    ),
+    owner.assertion.privateKey,
+    { ...context, deviceId: device.deviceId, signerDeviceId: owner.deviceId },
+  );
+  expect(
+    (
+      await sharingRequest(owner, `/api/private/grants/${grantId}/comment-keys/${thread.objectId}`, "PUT", {
+        capabilityId: context.capabilityId,
+        capabilityEpoch: context.capabilityEpoch,
+        ownerRegistryEpoch: context.ownerRegistryEpoch,
+        recipientRegistryEpoch: context.recipientRegistryEpoch,
+        envelopes: [envelope],
+      })
+    ).status,
+  ).toBe(200);
+  expect(await (await sharingRequest(owner, `/api/private/grants/${grantId}/needs`)).json()).toEqual({
+    needs: [],
+    nextCursor: null,
+  });
+  const granted = (await (
+    await sharingRequest(recipient, `/api/private/grants/${grantId}/comment-keys/${thread.objectId}`)
+  ).json()) as Parameters<typeof openCommentKeyEnvelope>[0];
+  expect(Array.from(await openCommentKeyEnvelope({ ...granted, recipient: recipient.transport }))).toEqual(
+    Array.from(threadKey),
+  );
+  expect(await (await sharingRequest(stranger, path)).json()).toEqual({ item: null, pending: false });
+});
+
+it("an imported thread with neither a File-capability envelope nor a recovery row is never offered a fabricated source", async () => {
+  const owner = await sharingAccount(),
+    recipient = await sharingAccount();
+  const fileId = await treeChild(owner, owner.rootId, "file", owner.accountId, true);
+  const { grantId } = await grant(owner, recipient, fileId);
+  const objectId = opaqueId(),
+    capabilityId = opaqueId();
+  await env.DB.prepare(`INSERT INTO sharing_comment_capabilities
+    (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
+    VALUES (?, ?, ?, ?, 'private-comment-thread', NULL, ?, 1)`)
+    .bind(objectId, owner.accountId, fileId, objectId, capabilityId)
+    .run();
+  // The Owner owes this work but has no source; nothing is fabricated.
+  expect(await (await sharingRequest(owner, "/api/private/grant-provisioning/next")).json()).toEqual({
+    item: null,
+    pending: false,
+  });
+  expect(await (await sharingRequest(owner, `/api/private/grants/${grantId}/needs`)).json()).toMatchObject({
+    needs: [{ deviceId: recipient.deviceId }],
+  });
 });
 
 it("a device missing the current capability and an unrelated Account cannot provision, even with valid envelope bytes", async () => {

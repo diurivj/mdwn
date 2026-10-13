@@ -34,7 +34,7 @@ npm run dev          # local Workers runtime + D1 simulation + Tailwind
 | `npm run db:smoke` | fresh-D1 schema and foreign-key smoke test |
 | `npm run db:operations [-- --remote preview\|production]` | read-only remote FK/query-plan verification, or disposable local verification |
 | `npm run check:secrets` | assert no secret leaked into `build/client` |
-| `node scripts/import-proof.mjs` | disposable Workers Free + D1 release-gate proof (requires `wrangler login`) |
+| `node scripts/import-proof.mjs` | disposable Workers + D1 release-gate proof (requires `wrangler login`) |
 | `npm run deploy:preview` / `:production` | build + deploy that environment |
 
 Secrets: local values in gitignored `.dev.vars` (see `.dev.vars.example`);

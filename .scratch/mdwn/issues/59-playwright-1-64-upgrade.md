@@ -4,7 +4,7 @@
 
 **Type:** test infrastructure
 
-**Status:** needs-triage
+**Status:** wontfix
 
 **Blocked by:** a person approving the new WebKit's Keychain prompt on every Mac that runs the suite.
 
@@ -28,3 +28,6 @@ During 56, a parallel session upgraded to 1.64 and measured the Firefox fix: a p
 - [ ] No Keychain prompt is pending on either Mac after the run.
 
 ## Comments
+
+- 2026-10-12: The maintainer kept this ticket out of the combined 53/57/58 pull request until **Always Allow** has been chosen for 1.64's WebKit Keychain prompt on both Macs. No Keychain prompt was pending on the development MacBook at that time (no `SecurityAgent` process), and `webkit-2370` is installed there. Nobody has confirmed the CI Mac mini runner account.
+- 2026-10-12: Closed as **wontfix** by the maintainer: the per-Mac Keychain approval is not worth the benefit. Playwright stays on 1.63.0 and the Firefox COOP preference from ticket 56 stays; `docs/testing.md` records the decision. Reopen only if a future upgrade needs no machine-local Keychain approval.

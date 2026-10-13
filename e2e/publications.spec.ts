@@ -1,5 +1,6 @@
-import type { Request } from "@playwright/test";
-import { objectId, test, expect } from "./workspace-fixture";
+import type { Page, Request } from "@playwright/test";
+import type { TestHarness } from "wrangler";
+import { objectId, test, expect, type Workspace } from "./workspace-fixture";
 
 test.use({
   initialSource: "---\ntitle: Diet plan\ndate: 2026-01-02\nprivate: never public\n---\n# Week one\n\nEat **well**.",
@@ -470,5 +471,130 @@ test("unpublishes with a counted confirmation, shows bounded progress, and publi
     await expect(comments.getByText("No comments yet.")).toBeVisible();
   } finally {
     await readerContext.close();
+  }
+});
+
+/** Publishes the workspace File from the panel, adds `total` opaque Public
+ * Comment rows, and reopens the panel so it carries the current count. */
+async function publishWithComments(page: Page, workspace: Workspace, total: number) {
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const link = await panel.getByLabel("Public link").inputValue();
+  const thread = await workspace.db
+    .prepare(
+      "SELECT id AS threadId, current_epoch_id AS epochId FROM comment_threads WHERE file_id = ? AND purpose = 'public'",
+    )
+    .bind(workspace.fileId)
+    .first<{ threadId: string; epochId: string }>();
+  expect(thread).not.toBeNull();
+  for (let sequence = 1; sequence <= total; sequence++) {
+    await workspace.db
+      .prepare(`INSERT INTO comments (id, thread_id, epoch_id, author_id, sequence, revision,
+        body_ciphertext, body_size, content_key_envelope, content_key_epoch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, X'01', 1, X'01', 1, 1, 1)`)
+      .bind(objectId(), thread!.threadId, thread!.epochId, workspace.accountId, sequence)
+      .run();
+  }
+  const toggle = page.getByRole("button", { name: "Publish", exact: true });
+  await toggle.click();
+  await expect(panel).toHaveCount(0);
+  await toggle.click();
+  await expect(panel.getByRole("button", { name: "Unpublish…" })).toBeVisible();
+  return { panel, toggle, link, threadId: thread!.threadId };
+}
+
+/** Runs the Worker's scheduled maintenance until the File has no sealed Publication. */
+async function runScheduledUntilDeleted(server: TestHarness, workspace: Workspace) {
+  const sealed = async () =>
+    (
+      await workspace.db
+        .prepare("SELECT count(*) AS n FROM publications WHERE file_id = ? AND state = 'deleting'")
+        .bind(workspace.fileId)
+        .first<{ n: number }>()
+    )?.n ?? 0;
+  expect(await sealed()).toBe(1);
+  const worker = server.getWorker();
+  for (let run = 0; run < 10 && (await sealed()) > 0; run++) {
+    const result = await worker.scheduled({ cron: "*/15 * * * *", scheduledTime: new Date() });
+    expect(result.outcome).toBe("ok");
+  }
+  expect(await sealed()).toBe(0);
+}
+
+test("finishes Unpublishing through scheduled maintenance after the page stops deleting", async ({
+  page,
+  server,
+  workspace,
+}) => {
+  const { panel, toggle, threadId } = await publishWithComments(page, workspace, 250);
+  // The page never manages to drive a teardown batch.
+  const teardownPath = `**/api/private/publications/files/${workspace.fileId}/teardown`;
+  await page.route(teardownPath, (route) => route.abort());
+
+  await panel.getByRole("button", { name: "Unpublish…" }).click();
+  await panel.getByRole("button", { name: "Unpublish and permanently delete 250 Public Comments" }).click();
+  await expect(panel.getByText("Deleting public material…")).toBeVisible();
+  await expect(
+    panel.getByText("Public access has ended. Deletion continues automatically, even after you close this page."),
+  ).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Continue deleting" })).toBeVisible();
+  await expect(panel.getByText("Public material deleted.", { exact: false })).toHaveCount(0);
+
+  // Scheduled maintenance, not the browser, finishes the sealed teardown.
+  await runScheduledUntilDeleted(server, workspace);
+  expect(
+    await workspace.db
+      .prepare("SELECT count(*) AS n FROM comments WHERE thread_id = ?")
+      .bind(threadId)
+      .first<{ n: number }>(),
+  ).toEqual({ n: 0 });
+
+  // This page saw the seal, so it can confirm the completed deletion.
+  await page.unroute(teardownPath);
+  await toggle.click();
+  await expect(panel).toHaveCount(0);
+  await toggle.click();
+  await expect(
+    panel.getByText("Public material deleted. The old Public link and its Public Comments are gone."),
+  ).toBeVisible();
+  await expect(panel.getByText("Deleting public material…")).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Publish File" })).toBeVisible();
+});
+
+test("an Owner who leaves after Unpublishing returns to an unpublished File once maintenance finishes", async ({
+  browser,
+  page,
+  server,
+  workspace,
+}) => {
+  const { panel, link } = await publishWithComments(page, workspace, 250);
+  await page.route(`**/api/private/publications/files/${workspace.fileId}/teardown`, (route) => route.abort());
+  await panel.getByRole("button", { name: "Unpublish…" }).click();
+  await panel.getByRole("button", { name: "Unpublish and permanently delete 250 Public Comments" }).click();
+  await expect(panel.getByText("Deleting public material…")).toBeVisible();
+
+  // Leave the File entirely; no page drives teardown from here on.
+  await page.goto("/");
+  await page.unrouteAll();
+  await runScheduledUntilDeleted(server, workspace);
+
+  await page.goto(`/f/${workspace.fileId}`);
+  await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Publish File" })).toBeVisible();
+  await expect(panel.getByText("Deleting public material…")).toHaveCount(0);
+  // Hard deletion keeps no record, so a returning page has nothing to confirm.
+  await expect(panel.getByText("Public material deleted.", { exact: false })).toHaveCount(0);
+
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const reader = await context.newPage();
+    const removed = await reader.goto(link);
+    expect(removed?.status()).toBe(404);
+    await expect(reader.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+  } finally {
+    await context.close();
   }
 });

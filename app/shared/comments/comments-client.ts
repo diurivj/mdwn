@@ -4,6 +4,7 @@ import {
   openCommentRecord,
   sealAttribution,
   sealCommentBody,
+  threadCapabilityContext,
 } from "~/shared/comments/content";
 import { openSymmetric } from "~/shared/crypto/enc-v1";
 import { readPseudonym } from "~/shared/account/profile-client";
@@ -119,6 +120,20 @@ type ThreadResponse = {
   nextCursor?: number | null;
 };
 
+/**
+ * An imported Historical thread's capability is wrapped under its File's
+ * capability key. The Comments view and share preparation both open it here.
+ */
+export function openImportedThreadCapability(
+  ciphertext: string,
+  fileCapabilityKey: Uint8Array,
+  thread: { ownerId: string; threadId: string; capabilityId: string; capabilityEpoch: number },
+) {
+  return openSymmetric(decodeTreeBytes(ciphertext, MAX_COMMENT_KEY_ENVELOPE_BYTES), fileCapabilityKey, {
+    context: threadCapabilityContext(thread.ownerId, thread.threadId, thread.capabilityId, thread.capabilityEpoch),
+  });
+}
+
 async function openThreadCapability(access: RootAccess, thread: ThreadMeta, fileCapabilityKey?: Uint8Array | null) {
   if (thread.envelope.mode === "owned") {
     return openVaultRecoveryEnvelope(
@@ -136,20 +151,7 @@ async function openThreadCapability(access: RootAccess, thread: ThreadMeta, file
   }
   if (thread.envelope.mode === "import") {
     if (!fileCapabilityKey) throw new Error("private content key unavailable");
-    return openSymmetric(
-      decodeTreeBytes(thread.envelope.ciphertext, MAX_COMMENT_KEY_ENVELOPE_BYTES),
-      fileCapabilityKey,
-      {
-        context: {
-          purpose: "private-comment-thread",
-          vaultId: thread.ownerId,
-          objectId: thread.threadId,
-          keyId: thread.capabilityId,
-          keyEpoch: thread.capabilityEpoch,
-          revision: 1,
-        },
-      },
-    );
+    return openImportedThreadCapability(thread.envelope.ciphertext, fileCapabilityKey, thread);
   }
   const device = await getDevice(access.actorAccountId);
   if (!device) throw new Error("private tree unavailable");

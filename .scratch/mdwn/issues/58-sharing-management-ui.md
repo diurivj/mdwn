@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 **Blocked by:** none.
 
@@ -16,20 +16,78 @@
 - Owner devices stage per-device HPKE Grant envelopes before acceptance; new and replacement recipient devices are provisioned automatically (`grant-provisioning/next`) or from **Shared access**.
 - The workspace opens a received Grant root, enforces read-only versus read/write, shows Collaborators' Comments with their Public pseudonyms, and lets Collaborators request a Publication from the Owner.
 
-## Decisions needed before building
+## Decisions (2026-10-12)
 
-- **Addressing:** where an Account sees and copies its own opaque share identifier, and whether share handles (exact, case-insensitive, 3–32 characters) get an editor now.
-- **Invitation flow:** a Share dialog on a File or folder (target, recipient identifier/handle, read-only or read/write, optional expiry), and how the Owner's browser stages Grant envelopes for every current recipient device before acceptance can succeed (acceptance requires complete current coverage).
-- **Inbox:** where pending incoming Shares appear (Account menu badge, library sidebar, Shared access page) and the accept/decline confirmation.
-- **Shared with me:** how received Grant roots appear in the library sidebar, instead of requiring a direct link.
-- **Management:** outgoing Shares (cancel) and active Grants (permission, expiry, revoke, leave), including copy that explains write seals and key rotation after revocation.
+The maintainer chose the full flow, addressed by share identifier only.
 
-## Acceptance criteria (draft)
+- **Addressing:** an Account sees and copies its own opaque share identifier on a new **Sharing** page (Account menu). Editing share handles is deferred, because no endpoint assigns handles; inviting by handle stays API-only.
+- **Invitation flow:** a **Share** dialog on an owned File or folder takes the recipient's share identifier and read-only or read/write. It is not offered for the Library root or for content shared with you, because Collaborators cannot reshare. The Owner's browser first converts a legacy File capability when needed, then invites, then prepares (stages) the Grant envelope and every required Comment-capability envelope for each current recipient device. Preparation is resumable and safe to repeat (**Prepare secure access**). Expiry is set on an active Grant, because pending Shares have no expiry on the server.
+- **Inbox:** pending incoming Shares appear on the Sharing page and as a count in the library sidebar's **Shared with me** section. Accepting or declining asks for confirmation. Accepting before preparation finishes explains that the Owner's browser is still preparing secure access.
+- **Shared with me:** received Grant roots are listed in the library sidebar as **Shared File** or **Shared folder** with their permission. Names stay encrypted from recipients, as the protocol requires.
+- **Management:** outgoing Shares (cancel, prepare secure access) and owned Grants (permission, expiry, revoke) appear on the Sharing page and in that target's Share dialog. Received Grants can be left. The copy explains that revoking or changing permission ends access immediately and that new edits wait for a secure access update (key rotation).
+- **Protocol addition:** on rows the caller owns (outgoing Shares and owned Grants), relationship lists add the recipient's opaque share identifier, so an Owner can tell Collaborators apart. The Owner already supplied that identifier when inviting. Incoming and received rows gain nothing about the Owner.
+- **Staging sources:** if share preparation needs the Owner's Comment-capability keys and the share comment-key endpoint does not provide a source, the endpoint returns the Owner's own `vault-recovery` envelope to the Owner, as `grant-provisioning/next` already does.
 
-- [ ] An Owner can invite an existing Account by share identifier or handle from the workspace, and see and cancel the pending Share.
-- [ ] A recipient sees pending Shares, can accept or decline, and then finds the shared root in the library without a direct link.
-- [ ] Owners can change permission or expiry and revoke; Collaborators can leave; the UI explains the resulting secure access update.
-- [ ] No share identifier, handle lookup or Grant list ever enters server-rendered HTML; every action stays proof-guarded.
-- [ ] Browser coverage drives the whole flow through the UI in Chromium, Firefox and WebKit.
+## Acceptance criteria
+
+- [x] An Owner can invite an existing Account by share identifier from the workspace, sees the pending Share, and can cancel it or prepare secure access again.
+- [x] Preparation covers every current recipient device and every required Comment capability, is resumable, and survives a lost response without re-sealing envelopes or weakening signatures.
+- [x] A recipient sees pending Shares, can accept or decline, and then finds the shared root in the library sidebar without a direct link.
+- [x] Owners can change permission or expiry and revoke; Collaborators can leave; the UI explains the resulting secure access update.
+- [x] Owner rows show the recipient's share identifier; no Owner identity is added to recipient rows.
+- [x] No share identifier, handle lookup or Grant list ever enters server-rendered HTML; every action stays proof-guarded.
+- [x] Browser coverage drives the whole flow through the UI in Chromium, Firefox and WebKit, and Workers tests cover the list addition and any staging-source change.
 
 ## Comments
+
+- 2026-10-12: Maintainer decisions recorded (full flow, share identifier only). This ticket is delivered together with 53's first slices and 57 in one pull request.
+- 2026-10-12: Part 1 landed on `issue/58-sharing-management-ui`; **part 2 remains** (the workspace Share dialog, invitation by share identifier from an owned File or folder, legacy File conversion, and resumable **Prepare secure access** staging of Grant and Comment-capability envelopes, plus the staging-source change). Landed: `listRelationships` adds `recipientShareId` on Owner rows only (`app/sharing/sharing.server.ts`); typed, strictly validated relationship client with bounded, advancing pagination (`app/shared/sharing/relationships-client.ts`); explicit Sharing intents (`app/shared/sharing/sharing-intents.ts`); the browser-only **Sharing** page at `/account/sharing` (`app/routes/account-sharing.tsx`, rows in `app/sharing/sharing-management.tsx`, with an `OutgoingShareItem` slot for part 2's Prepare secure access action and a fixed `/account/sharing` form action a dialog can reuse); **Sharing** in the Account menu, Account navigation and Files tree footer; the library sidebar's **Shared with me** section with an "N invitations" link (`app/sharing/shared-with-me.tsx`) over a 60-second, Account-keyed tab-memory summary (`app/shared/sharing/shared-with-me-cache.ts`); `docs/sharing.md` updated. Unticked criteria need part 2: invitation from the workspace, preparation, SSR/proof coverage of the new dialog, and browser coverage without the API invitation helper. Tests: `npx vitest run --config vitest.workers.config.ts tests/worker/sharing.test.ts` 10 passed (new: Owner-row identifier, recipient rows without it, unrelated Account unchanged); `tests/worker/sharing-shell.test.ts` 1 passed (no identifiers, relationship or Account ids in SSR HTML for either side); Node `tests/relationships-client.test.ts` 8 passed, `tests/shared-with-me-cache.test.ts` 6 passed, `tests/sharing-intents.test.ts` 1 passed; `npm run lint` clean; `npm run typecheck` clean; `npm test` Node 47 files / 432 tests passed, Workers 53 files / 388 tests passed; `e2e/sharing-management.spec.ts` 5 passed in each of Chromium, Firefox and WebKit (accept from the sidebar invitation link and open from Shared with me with no extra list request, accept-before-preparation copy then decline, Owner cancel, permission change / expiry set and clear / revoke with recipient losing access, recipient leave); existing `e2e/shared-file.spec.ts` + `e2e/grant-provisioning.spec.ts` 7 passed in each of Chromium, Firefox and WebKit; `key-rotation`, `laboratorio-navigation`, `laboratorio-workspace`, `accessibility`, `provisioning-navigation`, `private-tree-shell` passed in Chromium (27 tests with the two sharing specs).
+- 2026-10-12: Part 2 landed on `issue/58-sharing-management-ui`. Server: the share Comment-key target (`POST /api/private/shares/:id/comment-keys/:objectId`) adds `source: { kind: "recovery", envelope }` with the Owner's own current-epoch, unsuperseded `vault-recovery` row, only for the Owner's device (`app/sharing/comment-keys.server.ts`); `PUT /api/private/shares` answers `409 key_rotation_required` while a write seal covers the target, and its insert CAS also requires no seal (`app/sharing/sharing.server.ts`). Browser: `ownedKey` and Owner recovery Comment-key opening moved unchanged to `app/shared/sharing/owned-capabilities.ts`, used by `resumeGrantProvisioning` and the new `app/shared/sharing/share-staging-client.ts` (`prepareShare`: one snapshot per pass, all targets read before any upload, advancing cursors with 20 pages per listing, 2,000-request bound, 20-envelope packets, one same-bytes retry with a fresh proof on an uncertain response, one restart on `409 sharing_changed`, missing recovery sources reported and never fabricated); `inviteShare` and `KeyRotationRequiredError` in the relationships client; the workspace **Share** dialog (`app/sharing/share-dialog.tsx`, wired in `app/tree/files-page.tsx`) with legacy File conversion, invitation, visible preparation progress, error copy, and this target's rows reusing the Sharing page loader/intents without revalidating Files; **Prepare secure access** on pending outgoing Shares plus a background pass over the 5 newest pending Shares per Sharing page visit (`app/sharing/prepare-secure-access.tsx`); `SharingOutcomeNotice` moved to `app/sharing/sharing-management.tsx` for reuse. Docs: `docs/sharing.md`, `docs/shared-provisioning.md`. Evidence caveats: multi-device paging is exercised by the Node packet test and the shared paged code, while browser tests use one recipient device; interrupted-pass resumption relies on server upserts (re-running is tested, an interruption mid-pass is not). Tests: `npx vitest run --config vitest.workers.config.ts tests/worker/grant-comments.test.ts` 9 passed (new: Owner-only recovery source; recipient and third Account 404; stale epoch, missing row and another Account's row give no source); `tests/worker/sharing.test.ts` 11 passed (new: invitation under a write seal on the folder and a descendant File is `409 key_rotation_required`, unsealed content still invitable); Node `tests/share-staging-client.test.ts` 7 passed (packets, snapshot pinning, same-bytes single retry, no retry after abort or definite failure, one restart then `changed`, request bound); `npm run lint` clean; `npm run typecheck` clean; `npm test` Node 48 files / 439 tests passed, Workers 53 files / 390 tests passed; `e2e/sharing-invite.spec.ts` 4 passed in each of Chromium, Firefox and WebKit (legacy File shared read-only through the dialog with conversion, a lost-but-committed upload retried with identical bytes and a new proof, prepare again, recipient reads its identifier and accepts from Sharing, opens from Shared with me, Owner revokes from the dialog without reloading Files, recipient loses access, no identifier in `/f/:id` or `/account/sharing` HTML; read/write folder share whose File has a real Private thread and Comment, recipient edits the File and reads the Comment; unknown and own identifier messages; cancel from the dialog); `e2e/sharing-management.spec.ts` 5, `e2e/shared-file.spec.ts` + `e2e/grant-provisioning.spec.ts` 7 passed in each of Chromium, Firefox and WebKit.
+- 2026-10-12: Review round 1 fixes landed on `issue/58-sharing-management-ui`.
+  - **A. Imported threads.** The share Comment-key target gives the Owner an imported Historical thread's `import_comment_envelopes` row as `source: { kind: "import" }` when no recovery row exists (`app/sharing/owned-sources.server.ts`). The browser opens it under the Owner's File capability, found by the same verified walk (`ownedFileCapabilityKey` in `owned-capabilities.ts`), with the Comments client's own `openImportedThreadCapability`. `requiredGrantComments()` and `grant-provisioning/next` are unchanged. Documented as a protocol addition awaiting maintainer sign-off.
+  - **B. Misreported failures.** Share key and Comment-key targets and uploads pre-check write seals and answer `409 key_rotation_required`. `PUT /api/private/shares` answers `409 already_shared`, and the dialog also catches it from its own rows. The page cap is the typed `SharingPageLimitError`, reported as too large.
+  - **C–E. Copy and dialog.** Leave and expiry copy now explain the secure access update. The dialog names a shared parent folder and its access instead of "Only you…". It no longer reads `/account/key-rotations`.
+  - **F. Shared behavior.** One retry module (`saved-upload.ts`) for provisioning and preparation. One owned-source helper for both servers. The sidebar cache uses `listRelationships`. One permission label wording (Read-only / Read/write). One `kindName` helper. One error mapper (`sharing-errors.ts`).
+  - **G. Correctness.** The Files page revalidates once a conversion commits, or may have committed, but only while it is still that File's route. Automatic preparation resets `active` on cleanup. The `Request` alias is gone. Rows take a `stay` prop instead of the `StayForm` wrapper.
+  - **Tests.**
+    - Workers `tests/worker/grant-comments.test.ts` 11 passed (new: Owner-only import source, with recovery preferred; seal pre-checks on all five Share key endpoints). `tests/worker/sharing.test.ts` 12 passed (new: `already_shared` for pending and active).
+    - Node `tests/share-staging-client.test.ts` 8 passed (new: newest-5 selection). `tests/relationships-client.test.ts` 8 passed (typed page limit).
+    - `npm run lint` clean; `npm run typecheck` clean; `npm test` Node 48 files / 440 tests, Workers 53 files / 393 tests, all passed.
+    - Browser, with `sharing-invite` now 6 tests, `sharing-management` 5 and `shared-file` + `grant-provisioning` 7: 18 passed in each of Chromium, Firefox and WebKit. New coverage: no Share action on the Library root or on content shared with you; `already_shared` message; imported Historical Comments prepared and read by the Collaborator; two enrolled recipient devices both prepared by the Share dialog, with background provisioning blocked, and the File opened on both. The two-device test runs in well under a minute per engine.
+- 2026-10-12: Review round 2 fixes landed on `issue/58-sharing-management-ui`.
+  - **Changes.**
+    - The throwing response mapper is renamed `throwSharingFailure`.
+    - `currentRecoveryEnvelope` and the new `importedThreadEnvelope` are the single SQL fragments for the Owner recovery and imported-thread rules, used by both `owned-sources.server.ts` and the Comments read (`app/comments/envelopes.server.ts`), with the same authority SQL in the same statement.
+    - Owned walks and bootstraps report every private request to the pass budget, and the File capability for imported threads is memoized per File per pass.
+    - The Sharing page loader reports the relationship page cap as too large (`sharingLoadState`). The dead notice branch is removed.
+    - A browser race reaches the server's `409 already_shared`.
+    - Workers tests bind the import source to the current capability epoch and the Owner's own thread.
+  - **Red phase.** `tests/owned-capabilities.test.ts` failed with 0 of 5 requests counted and no stop at the budget. `memoizedByKey` and `sharingLoadState` failed as missing. The new import-source Workers test passed on the existing code; removing the epoch binding, or the thread-owner join, made it fail each time.
+  - **Tests.**
+    - `npm run lint` clean; `npm run typecheck` clean; `npm run build` passed.
+    - `npm test`: Node 50 files / 445 tests and Workers 53 files / 394 tests passed, including every `tests/worker/*comment*` file unchanged.
+    - `e2e/sharing-invite.spec.ts` (7) + `sharing-management.spec.ts` (5) + `shared-file.spec.ts` + `grant-provisioning.spec.ts` (7): 19 passed in each of Chromium, Firefox and WebKit, with `--workers=2` and no concurrent Playwright run.
+- 2026-10-12 (orchestrator): Integrated on `issue/53-57-58-remaining-tickets` with tickets 57, 61 and 62, and awaiting PR/merge. `CODING_STANDARDS.md` was read before each review.
+  - **Round 1.** Diff: `git diff eaf18e4...dbe2afb` (SHA256 `92e8d0d83fa8bd23510a113f06a3ce78eb5f0c3de32a96f79c288ff68b01c6f0`).
+    - Standards: no blocking findings; recommended "share behavior" fixes.
+    - Spec, blocking: imported Historical Comment threads could never be prepared.
+    - Spec, other:
+      - some failures were misreported: a seal after the invitation, and re-inviting the same Account;
+      - the Leave and expiry copy did not explain the secure access update;
+      - the "Only you can open" copy ignored shared parent folders;
+      - multi-device coverage was missing.
+    - Separate RR8/stack gate: **Pass**.
+    - Fixed in `0bf34fe`..`aa2b44e`.
+  - **Round 2.** Diff: `git diff dbe2afb...aa2b44e` (SHA256 `43256ae7c2e3e25673d32c7a831675f16bfe771cec60f0772e42837907dc02d7`).
+    - Standards: no blocking findings.
+    - Spec: **Pass**, apart from a browser path to the server's `already_shared`.
+    - Separate RR8/stack gate: **Pass**. Fetcher forms carry `defaultShouldRevalidate={false}` where a dialog sits over Files, and `file.tsx` honours it. Share staging stays browser-orchestrated for WebCrypto.
+    - Advisory fixes in `aa2b44e..5177eed` (SHA256 `5d4263afce7be51e7d0d6e54e5aab12cd2e825b901c902fd0c952d94c2a2f7d7`), verified by the orchestrator. That includes the shared Owner-source SQL fragments used by the Comments read; the authority fragments never reference the newly aliased tables.
+  - Integration (`eef85e2`, test-first):
+    - the Shared with me summary is private tab memory: it is cleared with it, and keeps nothing while a hidden tab stays expired;
+    - leaving a Grant clears private tab memory in every tab.
+  - Clean-head `npm run verify` passed at `e38eb71`. It covered lint, typecheck, namespace drift, 555 Node and 414 Workers tests, the build, the fresh-D1 smoke, export/restore, the bundle-secret check, and 545 browser tests across Chromium, Firefox and WebKit. The 1 existing WebKit skip remained; there were no failures and no retries. Whole-branch diff: `git diff 75e882c...e38eb71` (SHA256 `9d5ca20709f5cdf72e4bcf34ec54141e9e0977182f7a0d0589720ebc5df4fd91`).
+  - Open for the maintainer:
+    - sign-off on the Owner-only `import` source for imported Historical threads;
+    - sign-off on refusing invitations under a write seal (`409 key_rotation_required`);
+    - follow-up [66](66-imported-thread-grant-provisioning.md) for existing-Grant provisioning of imported threads.
