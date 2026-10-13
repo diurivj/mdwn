@@ -5,8 +5,8 @@ import type {
   PublicationErrorCode,
   PublicationFailure,
   PublicationLifecycle,
-  PublicationSettings,
   PublicationState,
+  SettingsChange,
 } from "~/shared/publications/lifecycle";
 import { publicParticipationSuspensionNotice } from "~/shared/security/public-participation";
 import { cx } from "~/ui/cx";
@@ -45,9 +45,9 @@ const audiences: Record<CommentAudience, { label: string; description: string }>
 };
 
 /** The settings the authoritative state shows, as the settings form starts them. */
-function currentSettings(state: PublicationState): PublicationSettings {
+function currentSettings(state: PublicationState): SettingsChange {
   return {
-    audience: state.comments?.audience ?? "public",
+    audience: state.comments?.audience ?? null,
     includeSelf: state.publication?.authors.some((author) => author.self) ?? false,
   };
 }
@@ -56,7 +56,7 @@ function describeError(error: PublicationFailure): string {
   const message =
     error.code === "suspended" ? publicParticipationSuspensionNotice(error.suspendedUntil) : messages[error.code];
   return error.newLinkCreated
-    ? `The new link is ready, but your other settings weren’t saved. ${message} Use Save changes to apply them to this link.`
+    ? `The new link is ready, but not every setting was saved. ${message} Save changes applies the rest to this link.`
     : message;
 }
 
@@ -73,8 +73,8 @@ const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
  */
 export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationLifecycle; fileReady: boolean }) {
   const view = useSyncExternalStore(lifecycle.subscribe, lifecycle.getState, lifecycle.getState);
-  const [settings, setSettings] = useState<PublicationSettings>({ audience: "public", includeSelf: false });
-  const [editing, setEditing] = useState<PublicationSettings | null>(null);
+  const [settings, setSettings] = useState<SettingsChange>({ audience: "public", includeSelf: false });
+  const [editing, setEditing] = useState<SettingsChange | null>(null);
   const [address, setAddress] = useState("");
   const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -86,7 +86,7 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
     return () => lifecycle.detachPanel();
   }, [lifecycle]);
 
-  async function saveSettings(next: PublicationSettings, newLink: boolean) {
+  async function saveSettings(next: SettingsChange, newLink: boolean) {
     if (await lifecycle.changeSettings(next, { newLink })) setEditing(null);
   }
 
@@ -422,7 +422,7 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
                 type="button"
                 disabled={working || !fileReady || !view.canOperate}
                 className={buttonClass("primary")}
-                onClick={() => void lifecycle.publish(settings)}
+                onClick={() => void lifecycle.publish({ ...settings, audience: settings.audience ?? "public" })}
               >
                 <GlobeIcon />
                 {working ? "Publishing…" : "Publish File"}
@@ -486,8 +486,8 @@ function SettingsFields({
   onChange,
   disabled,
 }: {
-  value: PublicationSettings;
-  onChange: (next: PublicationSettings) => void;
+  value: SettingsChange;
+  onChange: (next: SettingsChange) => void;
   disabled: boolean;
 }) {
   const id = useId();
@@ -560,7 +560,7 @@ function SettingsActions({
   onCancel,
   cancelDisabled,
 }: {
-  draft: PublicationSettings;
+  draft: SettingsChange;
   state: PublicationState;
   linkShown: boolean;
   disabled: boolean;

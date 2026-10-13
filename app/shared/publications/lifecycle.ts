@@ -12,8 +12,13 @@ import type { RootAccess } from "~/shared/tree/client";
 
 export type CommentAudience = "public" | "collaborators_only";
 
-/** How a File is published: what the publish form and the settings form choose. */
+/** How a File is published: what the publish form chooses. */
 export type PublicationSettings = { audience: CommentAudience; includeSelf: boolean };
+
+/** What the settings form chooses for a published File. A Publication from
+ * before Public Comment threads existed has none: `audience: null` keeps it
+ * without one, and choosing an audience sets one up. */
+export type SettingsChange = Omit<PublicationSettings, "audience"> & { audience: CommentAudience | null };
 
 /** Browser-memory-only material, never a route submission or server value. */
 export type PreparedPublicLink = { publicationId: string; linkId: string; url: string };
@@ -300,7 +305,7 @@ export class PublicationLifecycle {
    * committed says so: the person can finish with an in-place save instead
    * of retiring another link.
    */
-  changeSettings(next: PublicationSettings, options: { newLink: boolean }): Promise<boolean> {
+  changeSettings(next: SettingsChange, options: { newLink: boolean }): Promise<boolean> {
     const state = this.view.state;
     const publication = state?.publication;
     if (!state || !publication || publication.state !== "active") return Promise.resolve(false);
@@ -309,7 +314,7 @@ export class PublicationLifecycle {
       if (options.newLink)
         await this.operations.rotateLink(context, { onPrepared: (link) => this.retain(link) }, signal);
       try {
-        if (state.comments?.audience !== next.audience)
+        if (next.audience && next.audience !== state.comments?.audience)
           await this.operations.changeAudience(
             context,
             {

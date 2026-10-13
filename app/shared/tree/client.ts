@@ -294,7 +294,7 @@ export type FetchedDirectory = {
 };
 
 /** An entry with or without the Worker's published mark. */
-function marked(entry: TreeEntry, published: boolean): TreeEntry {
+function withPublishedMark(entry: TreeEntry, published: boolean): TreeEntry {
   if ((entry.published === true) === published) return entry;
   const { published: _mark, ...unmarked } = entry;
   return published && entry.kind === "file" ? { ...unmarked, published: true } : unmarked;
@@ -310,7 +310,7 @@ export function withListingMetadata(listing: DirectoryListing, fetched: FetchedD
   return {
     ...listing,
     canCreate: fetched.canCreate ?? true,
-    entries: listing.entries.map((entry) => marked(entry, published.has(entry.nodeId))),
+    entries: listing.entries.map((entry) => withPublishedMark(entry, published.has(entry.nodeId))),
   };
 }
 
@@ -366,7 +366,7 @@ export async function openDirectory(
       }
       const { published, ...sealed } = entry;
       return {
-        entry: marked({ ...sealed, name, order }, published === true),
+        entry: withPublishedMark({ ...sealed, name, order }, published === true),
         comparison: encodeTreeBytes(segment.comparisonKey),
       };
     }),

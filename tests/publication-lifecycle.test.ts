@@ -435,6 +435,28 @@ describe("PublicationLifecycle", () => {
     expect(lifecycle.getState().error).toEqual({ code: "limited", suspendedUntil: null, newLinkCreated: false });
   });
 
+  it("sets up no Public thread for a Publication without one unless an audience is chosen", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const nextState = stateQueue([activeState("link-1"), activeState("link-2"), activeState("link-2")]);
+    fake.handlers.loadState = async () => nextState();
+    fake.handlers.rotateLink = async (input) => {
+      input.onPrepared(linkFor("link-2", "two"));
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState().state?.comments).toBeNull();
+    expect(await lifecycle.changeSettings({ audience: null, includeSelf: false }, { newLink: true })).toBe(true);
+    expect(fake.calls).toEqual(["loadState", "rotateLink", "loadState"]);
+
+    expect(
+      await lifecycle.changeSettings({ audience: "collaborators_only", includeSelf: false }, { newLink: false }),
+    ).toBe(true);
+    expect(fake.audienceInputs.at(-1)).toMatchObject({ audience: "collaborators_only", threadId: null });
+  });
+
   it("keeps the latest authoritative state for the File page while the panel is closed", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);

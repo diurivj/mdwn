@@ -1,7 +1,9 @@
 import { applyD1Migrations, env, SELF, type D1Migration } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { filePublished } from "../../app/publications/publications.server";
 import { createSymmetricWriter } from "../../app/shared/crypto/enc-v1";
+import { createDb, sql } from "../../app/shared/db/client.server";
 import { generateVaultRootKey, openVaultRecoveryEnvelope } from "../../app/shared/crypto/vault";
 import {
   formatPublicationFragment,
@@ -260,14 +262,13 @@ describe("published marks in Directory listings", () => {
   });
 
   it("finds each entry's Publication through its point index", async () => {
-    // The listing's per-entry mark, as `filePublished` renders it.
+    // The production per-entry mark, compiled as the listing query uses it.
     const plan = (
-      await env.DB.prepare(`EXPLAIN QUERY PLAN SELECT n.id, n.kind = 'file' AND EXISTS (SELECT 1 FROM publications p
-        WHERE p.file_id = n.id AND p.state IN ('active', 'deleting') AND p.state = 'active' AND p.owner_id = n.owner_id)
-        FROM vault_nodes n WHERE n.parent_node_id = ?`)
-        .bind("x")
-        .all<{ detail: string }>()
-    ).results
+      await createDb(env.DB).all<{ detail: string }>(
+        sql`EXPLAIN QUERY PLAN SELECT n.id, ${filePublished(sql`n.id`, sql`n.owner_id`)}
+          FROM vault_nodes n WHERE n.parent_node_id = ${"x"}`,
+      )
+    )
       .map((row) => row.detail)
       .join("\n");
     expect(plan).toMatch(/SEARCH p USING (?:COVERING )?INDEX publications_(?:file|current)_idx \(file_id=\?/);
