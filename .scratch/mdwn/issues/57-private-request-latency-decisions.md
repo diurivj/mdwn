@@ -4,7 +4,7 @@
 
 **Type:** feature (was decision)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -124,3 +124,4 @@ The maintainer approved items 1, 2, 3, 5 and 6 and the Smart Placement part of i
     - after deploy, turn off Web Analytics automatic setup for `mdwn.me` and confirm Smart Placement.
 
     D1 read replication stays deferred, as decided.
+- 2026-10-12: Completed and merged into `main` via [PR #66](https://github.com/diurivj/mdwn/pull/66), merge commit `2c0e49a1087c5c89b4fe5c6e0fa9c9a421937341`. Earlier pending PR/merge and verification notes are historical.
