@@ -10,13 +10,14 @@ facts from the [Workers Paid research](../.scratch/mdwn/research/workers-paid-bu
 checked 2026-10-11 against the Cloudflare pages cited below. Prices are USD
 before tax.
 
-Workers Paid is mdwn's **intended** operating baseline (maintainer decision,
-2026-10-12). This document does not record an active subscription, configured
-alerts or measured production capacity: none has been confirmed. Until the
-checklist's first step confirms the plan, operate within Workers Free limits —
-including D1's [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries)
-— and keep every current product bound. Paying changes neither the Import, rate or source limits nor the
-privacy model.
+Workers Paid is mdwn's **operating baseline** (maintainer decision, 2026-10-12;
+the account's Workers Paid plan was confirmed active on 2026-10-13). The
+[Worker CPU ceiling](#worker-cpu-ceiling) below requires it: Free rejects
+`limits.cpu_ms`. This document does not record configured billing alerts. Keep
+every current product bound: paying changes neither the Import, rate or source
+limits nor the privacy model. The
+[D1 scripting reference](operations/d1-scripting.md#per-invocation-queries)
+records the per-invocation query facts for each plan.
 
 **Budget.** Target about **$5 per month**: the Workers Paid subscription with
 usage inside the included allowances. **$10 per month** is the intended
@@ -98,8 +99,7 @@ claim they exist.
 4. With authorization, create the $1 and $3 overage alerts.
 5. Note the applicable tax treatment and domain renewal dates as separate
    line items.
-6. Recheck each billing cycle, and before any capacity change (tickets
-   [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md)–[65](../.scratch/mdwn/issues/65-larger-import-envelope.md)).
+6. Recheck each billing cycle, and before any capacity change.
 
 ### Intervention runbook
 
@@ -120,6 +120,36 @@ When an overage alert fires, or the month's total approaches $10:
 5. Record the meter, cause and action in aggregate terms.
 
 There is no automatic spending controller; every step is an operator decision.
+
+### Worker CPU ceiling
+
+Ticket [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md). Both deployed
+Workers set `limits.cpu_ms` in `wrangler.jsonc`; the never-deployed local
+Worker does not. Limits are enforced only on Cloudflare's network and only on
+the Standard usage model ([Wrangler configuration][wrangler-config]), so local
+`wrangler dev` ignores the value and a Free account rejects the deploy.
+
+**Chosen value: 500 ms.** Evidence recorded 2026-10-13 from the production
+`mdwn` Worker over the preceding 30 days: CPU time per execution p50 6.24 ms,
+p90 24.73 ms, p99 58.68 ms, p99.9 71.75 ms across 38.34K invocations with no
+errors, plus a live `wrangler tail` sample of the 15-minute scheduled handler at
+9 ms CPU. The known heaviest route is the largest Import upload/commit, which
+fits inside Workers Free's 10 ms CPU allowance (the 2026-10-05 proof in
+[import](import.md)); the 50–70 ms tail is consistent with full-document SSR
+rather than an API route.
+
+500 ms is about 7x the observed p99.9 and 50x the heaviest known route, while
+bounding one runaway invocation to 0.5 CPU-seconds — 60x below the Paid 30 s
+default. That keeps a runaway incident at cents instead of tens of dollars:
+100,000 runaway invocations cost about $0.40 over the included 30M CPU-ms,
+against about $59 at the default. It is deliberately generous for the first
+weeks of real traffic.
+
+**Rollback.** If Cloudflare reports `exceededCpu` (an invocation killed before
+completion), raise the value in `wrangler.jsonc` — 1000 ms is the next step —
+or delete the `limits` line, then merge and redeploy. Re-read the percentiles
+after a few weeks of real traffic and tighten only against observed evidence;
+the intent is a bound above the worst case, not the smallest possible number.
 
 ### Paid D1 capacity and Time Travel
 
@@ -159,6 +189,7 @@ rehearsal.
 [billing]: https://developers.cloudflare.com/billing/understand/how-billing-works/
 [tax]: https://developers.cloudflare.com/billing/understand/sales-tax/
 [workers-metrics]: https://developers.cloudflare.com/workers/observability/metrics-and-analytics/
+[wrangler-config]: https://developers.cloudflare.com/workers/wrangler/configuration/#limits
 [d1-metrics]: https://developers.cloudflare.com/d1/observability/metrics-analytics/
 
 ## Scheduled retention
