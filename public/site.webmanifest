@@ -1,0 +1,12 @@
+{
+  "name": "mdwn",
+  "short_name": "mdwn",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#eeece6",
+  "theme_color": "#eeece6",
+  "icons": [
+    { "src": "/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

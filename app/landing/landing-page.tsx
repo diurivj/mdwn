@@ -78,7 +78,7 @@ const QUESTIONS = [
   {
     question: "Who can read a published page?",
     answer:
-      "Anyone with its complete link. The part after # is the key, and browsers never send it to us. Rotating the link retires the old one; unpublishing deletes the public copy and its public comments.",
+      "Anyone with its complete link. The part after # is the key: browsers never send it to us, and the copy that lets your own devices show you the link again is encrypted with your keys, so we can’t read it. Rotating the link retires the old one; unpublishing deletes the public copy and its public comments.",
   },
   {
     question: "How is mdwn paid for?",
@@ -299,7 +299,7 @@ function Publishing() {
               },
               {
                 title: "Share the complete link",
-                text: "Everything after # is the key. Browsers never send it, so we never have it.",
+                text: "Everything after # is the key. Browsers never send it, and the copy we keep for you is encrypted with your keys, so we can’t read it.",
               },
               {
                 title: "Rotate or unpublish anytime",

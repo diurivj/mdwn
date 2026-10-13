@@ -12,6 +12,7 @@ import "./app.css";
 import { type Chrome, useChrome } from "./ui/chrome";
 import { ArrowRightIcon } from "./ui/icons";
 import { usePendingPage } from "./ui/pending-page";
+import { sharePreviewTags } from "./ui/share-preview";
 import { SiteFooter } from "./ui/site-footer";
 import { SiteHeader } from "./ui/site-header";
 import { buttonClass } from "./ui/styles";
@@ -27,6 +28,11 @@ export const links: Route.LinksFunction = () => [
   // The two faces every page shows above the fold, requested before the stylesheet asks.
   { rel: "preload", href: interLatin, as: "font", type: "font/woff2", crossOrigin: "anonymous" },
   { rel: "preload", href: courierLatin, as: "font", type: "font/woff2", crossOrigin: "anonymous" },
+  // Static files in public/: the SVG where supported, the ICO elsewhere.
+  { rel: "icon", href: "/favicon.ico", sizes: "16x16 32x32 48x48" },
+  { rel: "icon", href: "/favicon.svg", type: "image/svg+xml", sizes: "any" },
+  { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
+  { rel: "manifest", href: "/site.webmanifest" },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -36,6 +42,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#eeece6" />
+        {/* In the Layout rather than a route's `meta`, which replaces its parents', so every page keeps them. */}
+        {sharePreviewTags.map((tag) =>
+          "property" in tag ? (
+            <meta key={tag.property} property={tag.property} content={tag.content} />
+          ) : (
+            <meta key={tag.name} name={tag.name} content={tag.content} />
+          ),
+        )}
         <Meta />
         <Links />
       </head>

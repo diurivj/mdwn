@@ -5,6 +5,7 @@
  */
 
 import type { Browser, Locator, Page } from "@playwright/test";
+import { publishToggle } from "./publish-panel";
 import { test, expect, type Workspace } from "./workspace-fixture";
 
 const SOURCE = [
@@ -45,7 +46,7 @@ test.use({ initialSource: SOURCE });
 
 async function publish(page: Page, workspace: Workspace) {
   await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
   await expect(panel.getByText("Published.", { exact: false })).toBeVisible();

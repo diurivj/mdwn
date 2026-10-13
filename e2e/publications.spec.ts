@@ -1,5 +1,6 @@
 import type { Page, Request } from "@playwright/test";
 import type { TestHarness } from "wrangler";
+import { changeCommentAudience, publishedSummary, publishToggle } from "./publish-panel";
 import { objectId, test, expect, type Workspace } from "./workspace-fixture";
 
 test.use({
@@ -22,7 +23,7 @@ test("the Owner publishes a File that an anonymous reader decrypts locally, live
 }) => {
   const ownerRequests: Request[] = [];
   page.on("request", (request) => ownerRequests.push(request));
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByLabel("Show my Public pseudonym as an author").check();
   await panel.getByRole("button", { name: "Publish File" }).click();
@@ -155,7 +156,7 @@ for (const collapse of [true, false]) {
         await held;
         await route.abort("failed");
       });
-      const toggle = page.getByRole("button", { name: "Publish", exact: true });
+      const toggle = publishToggle(page);
       await toggle.click();
       const panel = page.getByRole("region", { name: "Publish", exact: true });
       await panel.getByRole("button", { name: "Publish File" }).click();
@@ -224,7 +225,7 @@ test("reconciles every prepared capability when an earlier request wins a reopen
       await route.fulfill({ response });
     }
   });
-  const toggle = page.getByRole("button", { name: "Publish", exact: true });
+  const toggle = publishToggle(page);
   await toggle.click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
@@ -256,7 +257,7 @@ test("saves a within-limit source whose decoded YAML title exceeds the source li
   workspace,
 }) => {
   await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
   await expect(panel.getByText(/^Published\./)).toBeVisible();
@@ -298,7 +299,7 @@ for (const scenario of [
     test.use({ initialSource: scenario.source });
     test("publishes only the parsed title and Markdown body", async ({ browser, page, workspace }) => {
       await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
-      await page.getByRole("button", { name: "Publish", exact: true }).click();
+      await publishToggle(page).click();
       const panel = page.getByRole("region", { name: "Publish", exact: true });
       await panel.getByRole("button", { name: "Publish File" }).click();
       await expect(panel.getByText("Published.", { exact: false })).toBeVisible();
@@ -322,7 +323,7 @@ for (const scenario of [
 
 test("rotates the Public link, retires the old path, and keeps the Comments", async ({ browser, page, workspace }) => {
   await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
   await expect(panel.getByText(/^Published\./)).toBeVisible();
@@ -347,10 +348,8 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
 
   // Close and reopen the audience so a second, retained public epoch exists:
   // rotation must rewrap every public epoch, not only the current one.
-  await panel.getByRole("button", { name: "Make comments collaborators only" }).click();
-  await expect(panel.getByText("Audience: Collaborators only", { exact: false })).toBeVisible();
-  await panel.getByRole("button", { name: "Make comments public" }).click();
-  await expect(panel.getByText("Audience: Public", { exact: false })).toBeVisible();
+  await changeCommentAudience(panel, "Collaborators only");
+  await changeCommentAudience(panel, "Public");
   const secondTab = await page.context().newPage();
   await secondTab.goto(first);
   const secondComments = secondTab.getByRole("region", { name: "Public comments", exact: true });
@@ -366,7 +365,12 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
   await expect(secondComments.getByLabel("Add a public comment")).toHaveValue("");
   await secondTab.close();
 
-  await panel.getByRole("button", { name: "Rotate link" }).click();
+  // Unchanged settings on a new link: the settings form's link replacement.
+  await panel.getByRole("button", { name: "Change settings", exact: true }).click();
+  const form = panel.getByRole("form", { name: "Change settings", exact: true });
+  await expect(form.getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
+  await form.getByRole("button", { name: "Create new link", exact: true }).click();
+  await expect(form).toHaveCount(0);
   await expect.poll(() => panel.getByLabel("Public link").inputValue()).not.toBe(first);
   const rotated = await panel.getByLabel("Public link").inputValue();
   expect(new URL(rotated).pathname).toMatch(/^\/p\/[A-Za-z0-9_-]{43}$/);
@@ -391,12 +395,107 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
   }
 });
 
+test("shows the File as published and its complete link on any later visit", async ({ page, workspace }) => {
+  await expect(page).toHaveURL(new RegExp(`/f/${workspace.fileId}$`));
+  const files = page.getByRole("navigation", { name: "Files", exact: true });
+  await expect(files.getByRole("link", { name: "Draft.md", exact: true })).toBeVisible();
+  await publishToggle(page).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await expect(panel.getByRole("heading", { name: "Publish", exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const link = await panel.getByLabel("Public link").inputValue();
+  await expect(page.getByRole("button", { name: "Published", exact: true })).toBeVisible();
+  await expect(files.getByRole("link", { name: "Draft.md, published", exact: true })).toBeVisible();
+  const summary = publishedSummary(panel);
+  await expect(summary.getByText("Public.", { exact: true })).toBeVisible();
+  await expect(summary.getByText("None.", { exact: true })).toBeVisible();
+
+  // A fresh page holds no prepared link: the Owner link copy shows it again.
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Published", exact: true })).toBeVisible();
+  await publishToggle(page).click();
+  await expect(panel.getByLabel("Public link")).toHaveValue(link);
+  await expect(panel.getByText("This link can’t be shown here")).toHaveCount(0);
+
+  // The library marks it too.
+  await page
+    .getByRole("complementary", { name: "Files tree", exact: true })
+    .getByRole("link", { name: "Library", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/files$/);
+  await expect(
+    page.getByRole("list", { name: "Folder contents" }).getByRole("link", { name: "Draft.md, File, published" }),
+  ).toBeVisible();
+});
+
+test("replaces a link this device can't show with a new one carrying changed settings", async ({
+  browser,
+  page,
+  workspace,
+}) => {
+  await publishToggle(page).click();
+  const panel = page.getByRole("region", { name: "Publish", exact: true });
+  await panel.getByRole("button", { name: "Publish File" }).click();
+  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  const first = await panel.getByLabel("Public link").inputValue();
+  // A link published before the Owner link copy existed has none, and a link
+  // row never changes in place: this browser reads the state without it.
+  const state = `**/api/private/publications/files/${workspace.fileId}`;
+  await page.route(state, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const response = await route.fetch();
+    const body = (await response.json()) as { publication: { ownerLink?: string | null } | null };
+    if (body.publication) body.publication.ownerLink = null;
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.reload();
+  await publishToggle(page).click();
+  await expect(panel.getByText("This link can’t be shown here")).toBeVisible();
+  await expect(panel.getByLabel("Public link")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Change settings", exact: true }).click();
+  const form = panel.getByRole("form", { name: "Change settings", exact: true });
+  await form.getByRole("radio", { name: "Collaborators only", exact: true }).check();
+  await form.getByLabel("Show my Public pseudonym as an author").check();
+  await form.getByRole("button", { name: "Save and create new link", exact: true }).click();
+  await expect(form).toHaveCount(0);
+  const next = await panel.getByLabel("Public link").inputValue();
+  expect(new URL(next).pathname).not.toBe(new URL(first).pathname);
+  const summary = publishedSummary(panel);
+  await expect(summary.getByText("Collaborators only.", { exact: true })).toBeVisible();
+  await expect(summary.getByText("Your Public pseudonym", { exact: true })).toBeVisible();
+
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const reader = await context.newPage();
+    expect((await reader.goto(first))?.status()).toBe(404);
+    await reader.goto(next);
+    const article = reader.getByRole("article", { name: "Published File" });
+    await expect(article.getByRole("heading", { name: "Diet plan", level: 1 })).toBeVisible();
+    await expect(article.getByText("By Member Test")).toBeVisible();
+    await expect(
+      reader
+        .getByRole("region", { name: "Public comments", exact: true })
+        .getByText("Sign in to see or add comments if you have access to this file.", { exact: false }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
+
+  // The new link carries an Owner link copy, so later visits show it.
+  await page.unroute(state);
+  await page.reload();
+  await publishToggle(page).click();
+  await expect(panel.getByLabel("Public link")).toHaveValue(next);
+});
+
 test("unpublishes with a counted confirmation, shows bounded progress, and publishes fresh", async ({
   browser,
   page,
   workspace,
 }) => {
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
   await expect(panel.getByText(/^Published\./)).toBeVisible();
@@ -418,7 +517,7 @@ test("unpublishes with a counted confirmation, shows bounded progress, and publi
       .run();
   }
   // Reopen the panel so its state carries the current opaque count.
-  const toggle = page.getByRole("button", { name: "Publish", exact: true });
+  const toggle = publishToggle(page);
   await toggle.click();
   await expect(panel).toHaveCount(0);
   await toggle.click();
@@ -477,7 +576,7 @@ test("unpublishes with a counted confirmation, shows bounded progress, and publi
 /** Publishes the workspace File from the panel, adds `total` opaque Public
  * Comment rows, and reopens the panel so it carries the current count. */
 async function publishWithComments(page: Page, workspace: Workspace, total: number) {
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
   await expect(panel.getByText(/^Published\./)).toBeVisible();
@@ -497,7 +596,7 @@ async function publishWithComments(page: Page, workspace: Workspace, total: numb
       .bind(objectId(), thread!.threadId, thread!.epochId, workspace.accountId, sequence)
       .run();
   }
-  const toggle = page.getByRole("button", { name: "Publish", exact: true });
+  const toggle = publishToggle(page);
   await toggle.click();
   await expect(panel).toHaveCount(0);
   await toggle.click();
@@ -582,7 +681,7 @@ test("an Owner who leaves after Unpublishing returns to an unpublished File once
 
   await page.goto(`/f/${workspace.fileId}`);
   await expect(page.getByRole("heading", { name: "Draft.md", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await publishToggle(page).click();
   await expect(panel.getByRole("button", { name: "Publish File" })).toBeVisible();
   await expect(panel.getByText("Deleting public material…")).toHaveCount(0);
   // Hard deletion keeps no record, so a returning page has nothing to confirm.

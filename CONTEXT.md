@@ -157,6 +157,10 @@ _Avoid_: Account permission, share
 A deliberately issued, anonymous, read-only capability to view the current contents of one published file. Ordinary edits appear through the same link while it remains valid; it has no public version history and is separate from an account-to-account share.
 _Avoid_: Share link, public share
 
+**Owner link copy**:
+The active Public link's read capability sealed under the Owner's Vault root key, so any of the Owner's Encryption devices can show the complete link again. The service stores it but cannot open it, and only the Owner receives it. It is replaced with the link on rotation and removed with it; a link created without one never gains one later.
+_Avoid_: Saved link, stored fragment, link backup
+
 **Comment**:
 A short, authored annotation in one Comment thread for a File. It is not Markdown content and has no line or selection anchor in the MVP.
 _Avoid_: Inline annotation, review thread

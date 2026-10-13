@@ -35,8 +35,13 @@ import {
   permits,
   sharingWriteBlocked,
 } from "~/sharing/access.server";
-import { decodeTreeBytes, encodeTreeBytes, isV7 } from "~/shared/tree/wire";
-import { decodePublicationPublicKey, isPublicationIdentifier } from "../shared/publications/capability";
+import { decodeTreeBytes, encodeTreeBytes, isV7, treeEnvelope } from "~/shared/tree/wire";
+import {
+  decodePublicationPublicKey,
+  isPublicationIdentifier,
+  MAX_OWNER_LINK_BYTES,
+  ownerLinkContext,
+} from "../shared/publications/capability";
 import {
   authorDeclarationContext,
   MAX_AUTHOR_DECLARATION_BYTES,
@@ -50,7 +55,10 @@ import {
  * requests, pseudonymous author declarations, the paired File-save seam and the
  * anonymous Public route. The service handles only opaque identifiers, the
  * link's public key and HPKE ciphertext. No request, row or response carries
- * the URL fragment, and no anonymous response carries private material.
+ * the URL fragment, and no anonymous response carries private material. The
+ * Owner link copy (ticket 68) is the one exception that carries the link's
+ * capability at all: it is sealed under the Owner's Vault root key, so the
+ * service cannot open it, and only the Owner ever receives it back.
  */
 
 const headers = { "Cache-Control": "no-store" };
@@ -72,6 +80,24 @@ const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
 const positive = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && Number.isSafeInteger(value + 1);
 
+/** Create and rotate bodies may also carry the Owner link copy. A tab loaded
+ * before it existed omits it; that link then simply has no copy, like one
+ * created before ticket 68. */
+const exactWithOwnerLink = (value: Record<string, unknown>, keys: readonly string[]) =>
+  exact(value, keys) || exact(value, [...keys, "ownerLink"]);
+
+/** The submitted Owner link copy, structurally bound to this Owner, Publication
+ * and path; null when omitted. Throws on anything else. */
+function ownerLinkInput(
+  value: unknown,
+  ownerId: string,
+  publicationId: string,
+  linkId: string,
+): Uint8Array<ArrayBuffer> | null {
+  if (value === undefined) return null;
+  return treeEnvelope(value, MAX_OWNER_LINK_BYTES, ownerLinkContext(ownerId, publicationId, linkId));
+}
+
 /** Bounds for link rotation and teardown batches. A rewrapped epoch link
  * envelope is a few hundred bytes; 4 KiB each keeps a maximal 100-epoch
  * rotation inside the authenticated-JSON body cap alongside the 512 KiB
@@ -92,6 +118,7 @@ type PublicationState = {
   created_at: number;
   link_id: string | null;
   public_key: ArrayBuffer | null;
+  owner_link: ArrayBuffer | null;
   comment_count: number;
   teardown_total: number | null;
 };
@@ -100,7 +127,7 @@ type PublicationState = {
 async function publicationState(env: Env, auth: AuthorizedDevice, fileId: string): Promise<PublicationState | null> {
   return (
     (await createDb(env.DB).get<PublicationState>(sql`
-    SELECT p.id, p.state, p.created_at, l.id AS link_id, l.public_key,
+    SELECT p.id, p.state, p.created_at, l.id AS link_id, l.public_key, l.owner_link_envelope AS owner_link,
       ${publicCommentCount(sql`p.id`)} AS comment_count,
       (SELECT td.comment_total FROM publication_teardowns td WHERE td.publication_id = p.id) AS teardown_total
     FROM publications p LEFT JOIN publication_links l ON l.id = p.current_link_id AND l.publication_id = p.id
@@ -137,7 +164,8 @@ async function validPublicKey(value: unknown): Promise<Uint8Array<ArrayBuffer>> 
 }
 
 /** The Publish panel's view. Authors and requests are opaque metadata: the
- * Owner sees all of them, a Collaborator only its own. */
+ * Owner sees all of them, a Collaborator only its own. Only the Owner receives
+ * the active link's identity and its Owner link copy. */
 async function readPublication(env: Env, auth: AuthorizedDevice, fileId: string): Promise<Response> {
   const access = await effectiveAccess(env, auth, fileId);
   if (!access || !permits(access, "read_file")) return notFound();
@@ -173,7 +201,12 @@ async function readPublication(env: Env, auth: AuthorizedDevice, fileId: string)
         ? {
             publicationId: publication.id,
             state: publication.state,
-            ...(owner ? { linkId: publication.link_id } : {}),
+            ...(owner
+              ? {
+                  linkId: publication.link_id,
+                  ownerLink: publication.owner_link ? encodeTreeBytes(new Uint8Array(publication.owner_link)) : null,
+                }
+              : {}),
             createdAt: publication.created_at,
             authors: authors.map((author) => ({
               declarationId: author.id,
@@ -213,6 +246,7 @@ type Creation = {
   ciphertext: Uint8Array<ArrayBuffer>;
   author: { declarationId: string; ciphertext: Uint8Array<ArrayBuffer> } | null;
   comments: EpochInput;
+  ownerLink: Uint8Array<ArrayBuffer> | null;
 };
 
 async function creationInput(value: unknown, ownerId: string): Promise<Creation | null> {
@@ -221,7 +255,7 @@ async function creationInput(value: unknown, ownerId: string): Promise<Creation 
   if (
     !input ||
     !representation ||
-    !exact(input, [
+    !exactWithOwnerLink(input, [
       "publicationId",
       "linkId",
       "publicKey",
@@ -280,6 +314,7 @@ async function creationInput(value: unknown, ownerId: string): Promise<Creation 
           }
         : null,
       comments,
+      ownerLink: ownerLinkInput(input.ownerLink, ownerId, input.publicationId, input.linkId),
     };
   } catch {
     return null;
@@ -310,8 +345,9 @@ async function publicationMutationLimits(request: Request, env: Env, auth: Autho
 /**
  * The Owner creates (or, equivalently, approves a request for) the Publication
  * of the exact current File representation it encrypted. One transaction
- * installs the Publication, its link, the first Public representation and the
- * optional Owner author declaration, and removes every pending request.
+ * installs the Publication, its link with the Owner link copy, the first
+ * Public representation and the optional Owner author declaration, and removes
+ * every pending request.
  */
 async function createPublication(
   request: Request,
@@ -361,8 +397,8 @@ async function createPublication(
         AND NOT EXISTS (SELECT 1 FROM publications p WHERE ${filePublication(sql`f.node_id`)})
         AND ${accessPredicate(auth, fileId, "owner")} AND ${guard}`,
       (marker) => [
-        sql`INSERT INTO publication_links (id, publication_id, public_key, created_at)
-        SELECT ${input.linkId}, ${input.publicationId}, ${input.publicKey}, ${now} WHERE ${marker}`,
+        sql`INSERT INTO publication_links (id, publication_id, public_key, owner_link_envelope, created_at)
+        SELECT ${input.linkId}, ${input.publicationId}, ${input.publicKey}, ${input.ownerLink}, ${now} WHERE ${marker}`,
         sql`INSERT INTO public_representations (id, publication_id, link_id, revision, file_revision, ciphertext, ciphertext_size, created_at)
         SELECT ${representationId}, ${input.publicationId}, ${input.linkId}, 1, ${input.expectedRevision},
           ${input.ciphertext}, ${input.ciphertext.byteLength}, ${now} WHERE ${marker}`,
@@ -717,8 +753,9 @@ async function declareAuthor(
  * identifier and capability, re-encrypts the current Public representation to
  * the new public key, rewraps every public Comment epoch to the new
  * Publication capability, and one transaction replaces the active link in
- * place. The logical Publication, Public Comments and history survive; the
- * retired identifier immediately stops routing and is never reused.
+ * place, together with its Owner link copy. The logical Publication, Public
+ * Comments and history survive; the retired identifier immediately stops
+ * routing and is never reused.
  */
 type RotationEpoch = { epochId: string; capabilityId: string; keyEpoch: number; wrapper: Uint8Array<ArrayBuffer> };
 type Rotation = {
@@ -731,15 +768,16 @@ type Rotation = {
   expectedRepresentationId: string;
   ciphertext: Uint8Array<ArrayBuffer>;
   epochs: RotationEpoch[];
+  ownerLink: Uint8Array<ArrayBuffer> | null;
 };
 
-async function rotationInput(value: unknown): Promise<Rotation | null> {
+async function rotationInput(value: unknown, ownerId: string): Promise<Rotation | null> {
   const input = record(value),
     representation = record(input?.representation);
   if (
     !input ||
     !representation ||
-    !exact(input, [
+    !exactWithOwnerLink(input, [
       "publicationId",
       "linkId",
       "publicKey",
@@ -811,6 +849,7 @@ async function rotationInput(value: unknown): Promise<Rotation | null> {
         publicRepresentationContext({ ...binding, revision: input.expectedPresentationRevision }),
       ),
       epochs,
+      ownerLink: ownerLinkInput(input.ownerLink, ownerId, input.publicationId, input.linkId),
     };
   } catch {
     return null;
@@ -859,7 +898,7 @@ async function rotatePublication(
   fileId: string,
   value: unknown,
 ): Promise<Response> {
-  const input = await rotationInput(value);
+  const input = await rotationInput(value, auth.accountId);
   if (!input) return invalid();
   const db = createDb(env.DB);
   const state = await db.get<RotationState>(sql`
@@ -942,7 +981,9 @@ async function rotatePublication(
       (marker) => [
         // Replace the active link identity in place: the retired path is gone and
         // the same logical Publication keeps its thread, Comments and history.
-        sql`UPDATE publication_links SET id = ${input.linkId}, public_key = ${input.publicKey}, created_at = ${now}
+        // The retired link's Owner copy goes with it.
+        sql`UPDATE publication_links SET id = ${input.linkId}, public_key = ${input.publicKey},
+          owner_link_envelope = ${input.ownerLink}, created_at = ${now}
         WHERE id = ${input.expectedLinkId} AND publication_id = ${state.id} AND ${marker}`,
         ...input.epochs.map(
           (epoch) => sql`UPDATE public_comment_epoch_links SET link_id = ${input.linkId},
@@ -1475,6 +1516,13 @@ export function deletedFilePublications(ownerId: string, ids: SQL, committed: SQ
     sql`DELETE FROM publication_links WHERE publication_id IN (${owned}) AND ${committed}`,
     sql`DELETE FROM publications WHERE file_id IN (${ids}) AND owner_id = ${ownerId} AND ${committed}`,
   ];
+}
+
+/** Whether the File `node`, owned by `owner`, has an active Publication: the
+ * Directory listing's per-entry "published" mark (ticket 68). */
+export function filePublished(node: SQL, owner: SQL): SQL {
+  return sql`EXISTS (SELECT 1 FROM publications p WHERE ${filePublication(node)} AND p.state = 'active'
+    AND p.owner_id = ${owner})`;
 }
 
 /** Columns and joins that let the File read/save preflight see its active

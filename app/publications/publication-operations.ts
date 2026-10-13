@@ -5,6 +5,7 @@ import {
   addSelfAuthor,
   changeCommentAudience,
   continuePublicationTeardown,
+  declarePublicationAuthor,
   loadPublicationState,
   publishFile,
   removeAuthor,
@@ -29,7 +30,7 @@ function parentKey(context: PublicationContext): Uint8Array {
  */
 export function createPublicationOperations(): PublicationOperations {
   return {
-    loadState: (context, signal) => loadPublicationState(context.fileId, signal),
+    loadState: (context, signal) => loadPublicationState(context.access, context.fileId, signal),
 
     async publish(context, input, signal) {
       await publishFile({
@@ -84,6 +85,12 @@ export function createPublicationOperations(): PublicationOperations {
       const file = await loadFile(context.access, context.fileId, parentKey(context), signal);
       if (!file.publication) throw new PublicationError("changed");
       await addSelfAuthor(context.access, context.fileId, file.publication, signal);
+    },
+
+    async declareSelfAuthor(context, signal) {
+      const file = await loadFile(context.access, context.fileId, parentKey(context), signal);
+      if (!file.publication) throw new PublicationError("changed");
+      await declarePublicationAuthor(context.access, context.fileId, file.publication, signal);
     },
 
     async addAccountAuthor(context, input, signal) {

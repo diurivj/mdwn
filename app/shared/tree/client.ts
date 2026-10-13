@@ -53,7 +53,9 @@ export class DirectoryTooLargeError extends Error {
 }
 
 export type TreeKind = "directory" | "file";
-export type TreeEntry = SealedEntry & { name: string; order: string };
+/** `published` is the Worker's unsigned mark for a File with an active
+ * Publication (ticket 68): display-only metadata outside the signed listing. */
+export type TreeEntry = SealedEntry & { name: string; order: string; published?: true };
 export type DirectoryListing = {
   directoryId: string;
   keyEpoch?: number;
@@ -286,10 +288,31 @@ export type FetchedDirectory = {
   directoryId: string;
   keyEpoch?: number;
   entriesRevision: number;
-  entries: SealedEntry[];
+  entries: (SealedEntry & { published?: boolean })[];
   canCreate?: boolean;
   listingHead: (Omit<StoredListingHead, "signerPublicKey"> & { signerPublicKey: string }) | null;
 };
+
+/** An entry with or without the Worker's published mark. */
+function withPublishedMark(entry: TreeEntry, published: boolean): TreeEntry {
+  if ((entry.published === true) === published) return entry;
+  const { published: _mark, ...unmarked } = entry;
+  return published && entry.kind === "file" ? { ...unmarked, published: true } : unmarked;
+}
+
+/**
+ * A remembered, already verified listing carrying the Worker's current
+ * unsigned metadata from a fetch of the same head: whether the actor may
+ * create children, and which Files are published.
+ */
+export function withListingMetadata(listing: DirectoryListing, fetched: FetchedDirectory): DirectoryListing {
+  const published = new Set(fetched.entries.filter((entry) => entry.published === true).map((entry) => entry.nodeId));
+  return {
+    ...listing,
+    canCreate: fetched.canCreate ?? true,
+    entries: listing.entries.map((entry) => withPublishedMark(entry, published.has(entry.nodeId))),
+  };
+}
 
 /** The network half of `loadDirectory`, which needs no key: callers may fetch a whole path at once. */
 export function fetchDirectory(directoryId: string, signal?: AbortSignal): Promise<FetchedDirectory> {
@@ -341,7 +364,11 @@ export async function openDirectory(
       if (segment.display !== name || order.length > 256 || !order) {
         throw new Error("invalid directory listing");
       }
-      return { entry: { ...entry, name, order }, comparison: encodeTreeBytes(segment.comparisonKey) };
+      const { published, ...sealed } = entry;
+      return {
+        entry: withPublishedMark({ ...sealed, name, order }, published === true),
+        comparison: encodeTreeBytes(segment.comparisonKey),
+      };
     }),
   );
   // No two siblings may share a comparison key. Each name is canonicalized once:

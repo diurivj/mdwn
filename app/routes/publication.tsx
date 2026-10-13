@@ -62,8 +62,8 @@ function ReaderShell({ children }: { children: React.ReactNode }) {
       </header>
       {children}
       <footer className="mt-auto border-t border-line py-6 text-xs leading-relaxed text-muted">
-        Read-only. This page is decrypted in your browser with the key after # in its link; mdwn never receives that
-        key.
+        Read-only. This page is decrypted in your browser with the key after # in its link; mdwn never receives that key
+        in readable form.
       </footer>
     </div>
   );

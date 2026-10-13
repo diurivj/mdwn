@@ -19,8 +19,9 @@ https://<origin>/p/<path ID>#v1.<private scalar>
   registry that would outlive hard deletion.
 - The **read capability** is the P-256 private scalar of the link's HPKE key
   pair, versioned as `v1.` and kept entirely after `#`. Browsers never send a
-  fragment; mdwn never stores, logs, echoes or requests it. The service stores
-  only the 65-byte public key (`publication_links.public_key`).
+  fragment; mdwn never logs, echoes or requests it, and never stores it in
+  readable form. The service stores the 65-byte public key
+  (`publication_links.public_key`) and, beside it, the Owner link copy below.
 - The logical **Publication ID** is another independent 256-bit value. It
   survives link rotation and is bound in envelopes, rate limits and Security
   events, but it is never routable.
@@ -31,18 +32,52 @@ https://<origin>/p/<path ID>#v1.<private scalar>
   with one (HPKE binds `pkR` into the KEM context). RFC 9180 `DeriveKeyPair` was
   not used: WebKit rejects the scalar-only PKCS#8 import it relies on.
 
-The complete link exists only in the creating page's memory. Before sending
-the creation mutation, the browser retains it above the dismissible Publish
-panel, keyed by its logical Publication ID. All prepared candidates remain in
-memory so a retry cannot discard an earlier attempt that subsequently commits.
-A collapsed panel or lost response cannot discard the key of a committed
-Publication; reopening reconciles the
-current Publication before showing that link with **Copy link**. Failed or
-superseded attempts are never shown as the active link. Leaving the creating
-page discards this memory, so copy the link before leaving; mdwn cannot recover
-it. Anyone holding the complete link can read the current Public representation
-until the link stops being active, and copies already downloaded cannot be
-recalled.
+Before sending the creation mutation, the browser retains the complete link
+above the dismissible Publish panel, keyed by its logical Publication ID. All
+prepared candidates remain in memory so a retry cannot discard an earlier
+attempt that subsequently commits. A collapsed panel or lost response cannot
+discard the key of a committed Publication; reopening reconciles the current
+Publication before showing that link with **Copy link**. Failed or superseded
+attempts are never shown as the active link. Anyone holding the complete link
+can read the current Public representation until the link stops being active,
+and copies already downloaded cannot be recalled.
+
+### Owner link copy (ticket 68)
+
+So the Owner can see the complete link on any later visit and any of their
+devices ([ADR-0009](adr/0009-owner-sealed-public-link-copy.md)), the browser
+that creates or rotates a link also sends `ownerLink`: the 32-byte scalar sealed
+by `sealVaultRecoveryEnvelope` under the Owner's Vault root key, an enc-v1
+`vault-recovery` envelope with context:
+
+| Field | Value |
+| --- | --- |
+| `vaultId` | Owner Account ID |
+| `objectId` | path ID of the link |
+| `keyId` | logical Publication ID |
+| `keyEpoch`, `revision` | 1 |
+
+The Worker cannot open it. It checks the header binding exactly (purpose,
+Vault, path, Publication, epoch, revision, symmetric suite, no recipient or
+Publication field) and the 1,024-byte bound, refuses any mismatch with `400`
+before the transaction, and stores the bytes in
+`publication_links.owner_link_envelope` (`NULL` or a 1–1,024-byte BLOB). Only
+the Owner's panel read returns it, as `publication.ownerLink`; editors, credited
+authors, Collaborators and the anonymous routes never receive it, and the File
+response does not carry it. The Owner's browser opens it with the expected
+context for the authoritative active link and holds the result in memory only,
+like a prepared candidate: the panel shows it, and making Comments public seals
+the new epoch's link wrapper from it. A retained candidate for the same link
+identity takes precedence; a copy that names another link or fails to open is
+never shown.
+
+The copy belongs to its link row. Rotation replaces it with the new link's copy
+in the same in-place update, Unpublishing deletes it with the link in the seal
+transaction, and File or Directory hard deletion removes it with the link. A
+request without `ownerLink` (a page from before ticket 68) creates or rotates a
+link without one. Because a link row never changes in place, such a link can
+never gain a copy: the panel says it cannot show that link and offers **Create
+new link**.
 
 ## Public representation
 
@@ -123,15 +158,15 @@ proof. Reads are bodyless POSTs; responses are `no-store`.
 
 | Request | Operation |
 | --- | --- |
-| `POST /api/private/publications/files/:fileId` | Publish-panel state: role, Publication state, authors (Owner: all; others: own), requests (Owner: all; others: own) |
-| `PUT /api/private/publications/files/:fileId` | Owner creates the Publication for the exact current File representation; removes every pending request |
+| `POST /api/private/publications/files/:fileId` | Publish-panel state: role, Publication state, authors (Owner: all; others: own), requests (Owner: all; others: own); the Owner alone also gets the active link ID and its Owner link copy |
+| `PUT /api/private/publications/files/:fileId` | Owner creates the Publication for the exact current File representation, with the link's Owner link copy; removes every pending request |
 | `POST /api/private/publications/files/:fileId/requests` | A Collaborator with File access creates its one pending request |
 | `DELETE /api/private/publications/files/:fileId/requests/:requestId` | The requester cancels or the Owner denies |
 | `PUT /api/private/publications/files/:fileId/authors` | Owner selects itself (with its declaration) or an Account by exact share handle or share identifier |
 | `DELETE /api/private/publications/files/:fileId/authors/:declarationId` | Owner removes an author |
 | `PUT /api/private/publications/files/:fileId/authors/:declarationId/declaration` | The selected author's own device declares its pseudonym to the current link |
 
-| `PUT /api/private/publications/files/:fileId/link` | Owner rotates to a new path and key; carries the re-encrypted representation and every rewrapped public epoch |
+| `PUT /api/private/publications/files/:fileId/link` | Owner rotates to a new path and key; carries the re-encrypted representation, every rewrapped public epoch and the new link's Owner link copy |
 | `POST /api/private/publications/files/:fileId/unpublish` | Owner seals the Publication irreversibly and pins the Public Comment count |
 | `POST /api/private/publications/files/:fileId/teardown` | Owner drives one idempotent bounded deletion batch; returns `done` and progress |
 
@@ -195,7 +230,39 @@ open. Rotation consumes the `publication.mutate` limit, is refused while a
 Public-participation suspension is active, and waits out an active
 key-rotation write seal (`409 key_rotation_required`). The new complete link is
 retained in page memory by the same rule as creation, so a lost response never
-loses the replacement capability.
+loses the replacement capability, and the new link's Owner link copy replaces
+the old one in the same update.
+
+## Publish panel
+
+The File header's Publish toggle reads **Published**, with a status dot, while
+the File has an active Publication, and the Files tree and folder contents mark
+each published File (their link names end in ", published"). The header follows
+the latest authoritative state this File page read, which survives closing the
+panel, else the File response; the marks come from Directory listings, whose
+File entries carry an unsigned `published: true` beside the signed members, like
+`canCreate`. It is display metadata only: verification and signing ignore it,
+and a remembered listing whose head is unchanged takes the current marks from
+each revalidation. It reveals nothing a reader of the File cannot already learn
+from its panel read.
+
+For the Owner, a published File's panel shows the complete link (or, for a link
+without an Owner link copy, that it cannot be shown here, with **Create new
+link**) and **How it's published**: the Comment audience with what it means,
+the authors and the publication date. **Change settings** opens the same two
+choices as publishing — Comments **Public** or **Collaborators only**, and
+**Show my Public pseudonym as an author** — and applies them either with
+**Save changes**, on the current link, or with **Save and create new link**
+(**Create new link** when nothing changed). Only what differs from the
+authoritative state changes. A new link is created first, by the same rotation
+as above, and the settings then apply to it, so making Comments public never
+needs a link this browser cannot show; when the Owner stays an author, the
+Owner's own device re-declares to the new link at once. If a later step fails
+after the new link committed, the panel says so and keeps the form, so an
+in-place save can finish without retiring another link. Making Comments public
+in place needs the complete link, so it is offered only while the panel can
+show it. Credited collaborators are listed and added by share handle or share
+identifier in their own section; credits keep the current link.
 
 ## Unpublishing
 
@@ -310,7 +377,10 @@ as unpublished: Hard deletion keeps no record that a Publication existed.
 
 `publications` has a partial unique index on `file_id` for `active` and
 `deleting` rows, a state/pointer `CHECK`, and reciprocal deferred FKs from its
-current link and Public representation pointers. Triggers make a Publication
+current link and Public representation pointers. `publication_links` holds the
+optional Owner link copy under the column `CHECK` of migration `0030` (added
+there by `ALTER TABLE`, because a Drizzle table `CHECK` would rebuild the table
+and drop its triggers). Triggers make a Publication
 start `active` on a converted File, keep its identity immutable, make the
 `deleting` seal irreversible, and forbid rewriting links, Public representations,
 requests or author identities in place — the one exception is the in-place
@@ -347,6 +417,17 @@ link, in Node, workerd, Chromium, Firefox and WebKit.
 D1: Owner-only creation, requests, attribution, paired-save atomicity and
 rollback, indistinguishable `404`s, anonymous responses, storage constraints,
 hard deletion, fragment absence from every table and the reviewed query plans.
+`tests/worker/owner-link-copy.test.ts` proves the Owner link copy is stored
+exactly as sent, opens only under the Owner's Vault root key, reaches the Owner
+alone, is refused when mis-bound (another path, Publication, Vault, epoch or
+purpose, a Public envelope, oversized, not bytes), is absent for a request
+without one, is replaced on rotation (never by the retired link's copy) and
+removed by Unpublishing and File deletion, and that Directory listings mark
+exactly the actively published Files through the point index.
+`tests/publication-lifecycle.test.ts` covers the panel module: the copy shown
+only for the authoritative active link, settings changes that touch only what
+differs, a new link created before the settings apply to it, a failure after
+the new link committed, and the latest state kept while the panel is closed.
 `tests/worker/publication-lifecycle.test.ts` proves in-place rotation (the old
 path is byte-identical to unknown, the new fragment opens the same presentation
 and Comments, every public epoch is rewrapped, Collaborators-only epochs and
@@ -375,7 +456,10 @@ bounded progress and fresh later Publication are asserted, an unpublish whose
 page never drives teardown, which scheduled maintenance completes while the
 panel shows pending and then completed deletion, and an Owner who leaves right
 after confirming and later returns to an unpublished File whose old link is
-`404`.
+`404`. It also covers the **Published** header and tree and folder marks, the
+complete link shown again after a reload, and a link this browser cannot show
+replaced by a new one with changed settings (Collaborators-only Comments and
+the Owner as author) whose own copy then shows it.
 
 See [enc-v1](enc-v1.md), [serving and security](serving-and-security.md),
 [sharing](sharing.md), [public pseudonym update](pseudonym-update.md) and [tree structure](tree-structure.md).

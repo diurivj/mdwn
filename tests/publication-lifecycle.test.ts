@@ -34,10 +34,19 @@ const baseState = (overrides: Partial<PublicationState> = {}): PublicationState 
   ...overrides,
 });
 
-const activeState = (linkId: string): PublicationState =>
+const activeState = (
+  linkId: string,
+  overrides: Partial<NonNullable<PublicationState["publication"]>> = {},
+  state: Partial<PublicationState> = {},
+): PublicationState =>
   baseState({
-    publication: { publicationId: "pub-1", state: "active", linkId, createdAt: 1, authors: [] },
+    publication: { publicationId: "pub-1", state: "active", linkId, createdAt: 1, authors: [], ...overrides },
+    ...state,
   });
+
+const publicComments = { threadId: "thread-1", epochId: "epoch-1", audience: "public" as const };
+const closedComments = { threadId: "thread-1", epochId: "epoch-1", audience: "collaborators_only" as const };
+const selfAuthor = { declarationId: "declaration-self", ordinal: 1, self: true, declared: true };
 
 const deletingState = (): PublicationState =>
   baseState({
@@ -80,6 +89,7 @@ function fakeOperations() {
   const contexts: PublicationContext[] = [];
   const signals: AbortSignal[] = [];
   const audienceInputs: ChangeAudienceInput[] = [];
+  const authorRemovals: RemoveAuthorInput[] = [];
   const record = (method: string, context: PublicationContext, signal: AbortSignal) => {
     calls.push(method);
     contexts.push(context);
@@ -99,6 +109,7 @@ function fakeOperations() {
     }),
     changeAudience: async (_input: ChangeAudienceInput, _signal: AbortSignal): Promise<void> => {},
     addSelfAuthor: async (_signal: AbortSignal): Promise<void> => {},
+    declareSelfAuthor: async (_signal: AbortSignal): Promise<void> => {},
     addAccountAuthor: async (_input: AddAccountAuthorInput, _signal: AbortSignal): Promise<void> => {},
     removeAuthor: async (_input: RemoveAuthorInput, _signal: AbortSignal): Promise<void> => {},
     requestPublication: async (_signal: AbortSignal): Promise<void> => {},
@@ -134,12 +145,17 @@ function fakeOperations() {
       record("addSelfAuthor", context, signal);
       return handlers.addSelfAuthor(signal);
     },
+    declareSelfAuthor: (context, signal) => {
+      record("declareSelfAuthor", context, signal);
+      return handlers.declareSelfAuthor(signal);
+    },
     addAccountAuthor: (context, input, signal) => {
       record("addAccountAuthor", context, signal);
       return handlers.addAccountAuthor(input, signal);
     },
     removeAuthor: (context, input, signal) => {
       record("removeAuthor", context, signal);
+      authorRemovals.push(input);
       return handlers.removeAuthor(input, signal);
     },
     requestPublication: (context, signal) => {
@@ -151,7 +167,7 @@ function fakeOperations() {
       return handlers.removePublicationRequest(input, signal);
     },
   };
-  return { operations, handlers, calls, contexts, signals, audienceInputs };
+  return { operations, handlers, calls, contexts, signals, audienceInputs, authorRemovals };
 }
 
 function stateQueue(values: PublicationState[]): () => PublicationState {
@@ -264,7 +280,9 @@ describe("PublicationLifecycle", () => {
     await tick();
     await lifecycle.publish({ includeSelf: false, audience: "public" });
 
-    expect(await lifecycle.changeAudience("collaborators_only", "https://mdwn.test/p/stale#v1.pasted")).toBe(true);
+    expect(
+      await lifecycle.changeSettings({ audience: "collaborators_only", includeSelf: false }, { newLink: false }),
+    ).toBe(true);
     const seen = fake.audienceInputs.at(-1)!;
     expect(seen).toMatchObject({
       audience: "collaborators_only",
@@ -273,8 +291,8 @@ describe("PublicationLifecycle", () => {
       threadId: null,
     });
     expect(seen.linkFor("link-1")).toBe(link.url);
-    expect(seen.linkFor("link-2")).toBe("https://mdwn.test/p/stale#v1.pasted");
-    expect(seen.linkFor(null)).toBe("https://mdwn.test/p/stale#v1.pasted");
+    expect(seen.linkFor("link-2")).toBeNull();
+    expect(seen.linkFor(null)).toBeNull();
     expect(fake.calls).toEqual(["loadState", "publish", "loadState", "changeAudience", "loadState"]);
   });
 
@@ -288,15 +306,13 @@ describe("PublicationLifecycle", () => {
       activeState("link-1"),
       activeState("link-1"),
       activeState("link-1"),
-      activeState("link-1"),
     ]);
     fake.handlers.loadState = async () => nextState();
 
     lifecycle.updateContext(context());
     lifecycle.attachPanel();
     await tick();
-    expect(await lifecycle.changeAudience("public", null)).toBe(true);
-    expect(await lifecycle.addSelfAuthor()).toBe(true);
+    expect(await lifecycle.changeSettings({ audience: "public", includeSelf: true }, { newLink: false })).toBe(true);
     expect(await lifecycle.addAccountAuthor("Member")).toBe(true);
     expect(await lifecycle.removeAuthor("declaration-1")).toBe(true);
     expect(await lifecycle.removePublicationRequest("request-1")).toBe(true);
@@ -305,7 +321,6 @@ describe("PublicationLifecycle", () => {
     expect(fake.calls).toEqual([
       "loadState",
       "changeAudience",
-      "loadState",
       "addSelfAuthor",
       "loadState",
       "addAccountAuthor",
@@ -317,6 +332,149 @@ describe("PublicationLifecycle", () => {
       "requestPublication",
       "loadState",
     ]);
+  });
+
+  it("shows the Owner link copy only for the authoritative active link", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const stored = linkFor("link-1", "stored").url;
+    const nextState = stateQueue([activeState("link-1", { link: stored }), activeState("link-2", { link: null })]);
+    fake.handlers.loadState = async () => nextState();
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState().completeLink).toBe(stored);
+
+    // A replaced link with no copy shows nothing, never the old link's copy.
+    expect(await lifecycle.refresh()).toBe(true);
+    expect(lifecycle.getState().completeLink).toBeNull();
+  });
+
+  it("makes Comments public in place with the Owner link copy, changing only what differs", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const stored = linkFor("link-1", "stored").url;
+    const closed = activeState("link-1", { link: stored, authors: [selfAuthor] }, { comments: closedComments });
+    const nextState = stateQueue([closed, closed, closed]);
+    fake.handlers.loadState = async () => nextState();
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(await lifecycle.changeSettings({ audience: "public", includeSelf: true }, { newLink: false })).toBe(true);
+    const seen = fake.audienceInputs.at(-1)!;
+    expect(seen).toMatchObject({ audience: "public", expectedEpochId: "epoch-1", threadId: "thread-1" });
+    expect(seen.linkFor("link-1")).toBe(stored);
+    expect(seen.linkFor("link-2")).toBeNull();
+    expect(fake.calls).toEqual(["loadState", "changeAudience", "loadState"]);
+
+    expect(
+      await lifecycle.changeSettings({ audience: "collaborators_only", includeSelf: false }, { newLink: false }),
+    ).toBe(true);
+    expect(fake.authorRemovals).toEqual([{ declarationId: "declaration-self" }]);
+    expect(fake.calls.slice(3)).toEqual(["removeAuthor", "loadState"]);
+  });
+
+  it("creates the new link first and applies the settings to it", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const rotated = linkFor("link-2", "two");
+    const nextState = stateQueue([
+      activeState("link-1", { link: null, authors: [selfAuthor] }, { comments: closedComments }),
+      activeState("link-2", { link: null, authors: [selfAuthor] }, { comments: publicComments }),
+    ]);
+    fake.handlers.loadState = async () => nextState();
+    fake.handlers.rotateLink = async (input) => {
+      input.onPrepared(rotated);
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState().completeLink).toBeNull();
+    expect(await lifecycle.changeSettings({ audience: "public", includeSelf: true }, { newLink: true })).toBe(true);
+    // The public epoch is sealed with the new link's capability, and the
+    // Owner's own declaration is renewed for the new link.
+    expect(fake.audienceInputs.at(-1)!.linkFor("link-2")).toBe(rotated.url);
+    expect(fake.calls).toEqual(["loadState", "rotateLink", "changeAudience", "declareSelfAuthor", "loadState"]);
+    expect(lifecycle.getState()).toMatchObject({ completeLink: rotated.url, error: null });
+  });
+
+  it("says when a settings step failed after its new link committed", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const rotated = linkFor("link-2", "two");
+    const nextState = stateQueue([
+      activeState("link-1", {}, { comments: publicComments }),
+      activeState("link-2", {}, { comments: publicComments }),
+      activeState("link-2", {}, { comments: publicComments }),
+    ]);
+    fake.handlers.loadState = async () => nextState();
+    fake.handlers.rotateLink = async (input) => {
+      input.onPrepared(rotated);
+    };
+    fake.handlers.addSelfAuthor = async () => {
+      throw new PublicationError("pseudonym-pending");
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(await lifecycle.changeSettings({ audience: "public", includeSelf: true }, { newLink: true })).toBe(false);
+    expect(lifecycle.getState()).toMatchObject({
+      completeLink: rotated.url,
+      error: { code: "pseudonym-pending", newLinkCreated: true },
+    });
+
+    // A rotation that fails is not a partial change.
+    fake.handlers.rotateLink = async () => {
+      throw new PublicationError("limited");
+    };
+    expect(await lifecycle.changeSettings({ audience: "public", includeSelf: false }, { newLink: true })).toBe(false);
+    expect(lifecycle.getState().error).toEqual({ code: "limited", suspendedUntil: null, newLinkCreated: false });
+  });
+
+  it("sets up no Public thread for a Publication without one unless an audience is chosen", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const nextState = stateQueue([activeState("link-1"), activeState("link-2"), activeState("link-2")]);
+    fake.handlers.loadState = async () => nextState();
+    fake.handlers.rotateLink = async (input) => {
+      input.onPrepared(linkFor("link-2", "two"));
+    };
+
+    lifecycle.updateContext(context());
+    lifecycle.attachPanel();
+    await tick();
+    expect(lifecycle.getState().state?.comments).toBeNull();
+    expect(await lifecycle.changeSettings({ audience: null, includeSelf: false }, { newLink: true })).toBe(true);
+    expect(fake.calls).toEqual(["loadState", "rotateLink", "loadState"]);
+
+    expect(
+      await lifecycle.changeSettings({ audience: "collaborators_only", includeSelf: false }, { newLink: false }),
+    ).toBe(true);
+    expect(fake.audienceInputs.at(-1)).toMatchObject({ audience: "collaborators_only", threadId: null });
+  });
+
+  it("keeps the latest authoritative state for the File page while the panel is closed", async () => {
+    const fake = fakeOperations();
+    const lifecycle = new PublicationLifecycle(fake.operations);
+    const published = activeState("link-1");
+    const nextState = stateQueue([published, baseState()]);
+    fake.handlers.loadState = async () => nextState();
+
+    lifecycle.updateContext(context());
+    expect(lifecycle.getState().latest).toBeNull();
+    lifecycle.attachPanel();
+    await tick();
+    lifecycle.detachPanel();
+    expect(lifecycle.getState()).toMatchObject({ panel: "loading", state: null, latest: published });
+
+    lifecycle.attachPanel();
+    expect(lifecycle.getState()).toMatchObject({ state: null, latest: published });
+    await tick();
+    expect(lifecycle.getState().latest).toEqual(baseState());
   });
 
   it("ignores an older active-state read that arrives after Unpublishing", async () => {
@@ -526,7 +684,11 @@ describe("PublicationLifecycle", () => {
   it("retains candidates across same-File revalidation and uses the current context", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([baseState(), activeState("link-1"), activeState("link-2")]);
+    const nextState = stateQueue([
+      baseState(),
+      activeState("link-1", {}, { comments: publicComments }),
+      activeState("link-2", {}, { comments: publicComments }),
+    ]);
     fake.handlers.loadState = async () => nextState();
     const first = linkFor("link-1", "one");
     const rotated = linkFor("link-2", "two");
@@ -548,7 +710,7 @@ describe("PublicationLifecycle", () => {
     lifecycle.updateContext(refreshed);
     expect(lifecycle.getState()).toMatchObject({ panel: "ready", completeLink: first.url });
 
-    expect(await lifecycle.rotateLink()).toBe(true);
+    expect(await lifecycle.changeSettings({ audience: "public", includeSelf: false }, { newLink: true })).toBe(true);
     expect(fake.contexts.at(-1)).toBe(refreshed);
     expect(lifecycle.getState().completeLink).toBe(rotated.url);
   });
@@ -567,12 +729,12 @@ describe("PublicationLifecycle", () => {
     lifecycle.updateContext(context());
     lifecycle.attachPanel();
     await tick();
-    expect(await lifecycle.rotateLink()).toBe(false);
+    expect(await lifecycle.changeSettings({ audience: "public", includeSelf: false }, { newLink: true })).toBe(false);
     expect(busyDuringRequest).toBe(true);
     expect(fake.calls).toEqual(["loadState", "rotateLink", "loadState"]);
     expect(lifecycle.getState()).toMatchObject({
       busy: false,
-      error: { code: "rotation-required", suspendedUntil: null },
+      error: { code: "rotation-required", suspendedUntil: null, newLinkCreated: false },
     });
   });
 
@@ -604,20 +766,22 @@ describe("PublicationLifecycle", () => {
   it("ignores a second module decision while one is still pending", async () => {
     const fake = fakeOperations();
     const lifecycle = new PublicationLifecycle(fake.operations);
-    const nextState = stateQueue([baseState(), activeState("link-1")]);
+    const live = activeState("link-1", {}, { comments: publicComments });
+    const nextState = stateQueue([live, activeState("link-2", {}, { comments: publicComments })]);
     fake.handlers.loadState = async () => nextState();
     const held = deferred<void>();
     fake.handlers.rotateLink = async (input) => {
-      input.onPrepared(linkFor("link-1", "one"));
+      input.onPrepared(linkFor("link-2", "two"));
       await held.promise;
     };
+    const settings = { audience: "public", includeSelf: false } as const;
 
     lifecycle.updateContext(context());
     lifecycle.attachPanel();
     await tick();
-    const first = lifecycle.rotateLink();
+    const first = lifecycle.changeSettings(settings, { newLink: true });
     await tick();
-    expect(await lifecycle.rotateLink()).toBe(false);
+    expect(await lifecycle.changeSettings(settings, { newLink: true })).toBe(false);
     held.resolve();
     expect(await first).toBe(true);
     expect(fake.calls.filter((call) => call === "rotateLink")).toHaveLength(1);
@@ -636,7 +800,11 @@ describe("PublicationLifecycle", () => {
     lifecycle.attachPanel();
     await tick();
     expect(await lifecycle.publish({ includeSelf: false, audience: "public" })).toBe(false);
-    expect(lifecycle.getState().error).toEqual({ code: "suspended", suspendedUntil: 1_800_000_000_000 });
+    expect(lifecycle.getState().error).toEqual({
+      code: "suspended",
+      suspendedUntil: 1_800_000_000_000,
+      newLinkCreated: false,
+    });
   });
 
   it("waits for the page's first context before reading authoritative state", async () => {

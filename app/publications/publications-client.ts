@@ -1,7 +1,7 @@
 import { readPseudonym } from "~/shared/account/profile-client";
 import { loadFilePublicEpochs } from "~/comments/public-client";
 import { sealCommentEpochLink } from "~/shared/comments/public-content";
-import { sealVaultRecoveryEnvelope } from "~/shared/crypto/vault";
+import { openVaultRecoveryEnvelope, sealVaultRecoveryEnvelope } from "~/shared/crypto/vault";
 import { FILE_SOURCE_LIMIT } from "~/shared/crypto/file-source";
 import { privateRequest, isPublicParticipationSuspended } from "~/shared/device/private-client";
 import { newOpaqueId } from "~/shared/opaque-id";
@@ -14,14 +14,55 @@ import {
 } from "~/shared/publications/lifecycle";
 import { loadDirectory, loadFile, type FilePublication, type RootAccess } from "~/shared/tree/client";
 import { convertFileCapability } from "~/shared/tree/file-capability-client";
-import { encodeTreeBytes } from "~/shared/tree/wire";
+import { decodeTreeBytes, encodeTreeBytes } from "~/shared/tree/wire";
 import {
   createPublicationKeyPair,
+  MAX_OWNER_LINK_BYTES,
   newPublicationIdentifier,
+  ownerLinkContext,
   parsePublicationFragment,
   publicLinkUrl,
 } from "../shared/publications/capability";
 import { publicPresentation, sealAuthorDeclaration, sealPublicRepresentation } from "../shared/publications/content";
+
+/**
+ * The Owner link copy (ticket 68): the new link's private scalar sealed under
+ * the Owner's own Vault root key. Only a browser holding that key — one of the
+ * Owner's devices, or one restored with the Vault recovery phrase — can open it.
+ */
+async function sealOwnerLink(
+  access: RootAccess,
+  link: { publicationId: string; linkId: string },
+  privateKey: Uint8Array,
+): Promise<string> {
+  return encodeTreeBytes(
+    await sealVaultRecoveryEnvelope(
+      access.actorVaultRootKey,
+      { scope: "owned", objectId: link.linkId, keyId: link.publicationId, key: privateKey },
+      ownerLinkContext(access.actorAccountId, link.publicationId, link.linkId),
+    ),
+  );
+}
+
+/** The complete link from an Owner link copy, or null when it does not open
+ * here for exactly this Publication and path. The service chose neither key
+ * nor binding, so a substituted or replayed copy simply fails to open. */
+async function openOwnerLink(
+  access: RootAccess,
+  link: { publicationId: string; linkId: string },
+  envelope: string,
+): Promise<string | null> {
+  try {
+    const privateKey = await openVaultRecoveryEnvelope(
+      decodeTreeBytes(envelope, MAX_OWNER_LINK_BYTES),
+      access.actorVaultRootKey,
+      ownerLinkContext(access.actorAccountId, link.publicationId, link.linkId),
+    );
+    return publicLinkUrl(location.origin, link.linkId, privateKey);
+  } catch {
+    return null;
+  }
+}
 
 /** One fresh audience epoch: an Owner recovery envelope and, for a public
  * epoch, the symmetric wrapper to the Publication capability (fragment only). */
@@ -117,15 +158,38 @@ async function publicationRequest(
   throw new PublicationError("unavailable");
 }
 
-export async function loadPublicationState(fileId: string, signal?: AbortSignal): Promise<PublicationState> {
-  return (await publicationRequest(fileId, "POST", undefined, signal)).json() as Promise<PublicationState>;
+type PublicationStateWire = Omit<PublicationState, "publication"> & {
+  publication:
+    | null
+    | (Omit<NonNullable<PublicationState["publication"]>, "link"> & {
+        /** Owner only: the active link's Owner link copy, when it has one. */
+        ownerLink?: string | null;
+      });
+};
+
+/** The panel state, with the Owner's link copy opened into its complete link
+ * in this browser. The ciphertext goes no further than this function. */
+export async function loadPublicationState(
+  access: RootAccess,
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<PublicationState> {
+  const state = (await (await publicationRequest(fileId, "POST", undefined, signal)).json()) as PublicationStateWire;
+  if (!state.publication) return { ...state, publication: null };
+  const { ownerLink, ...publication } = state.publication;
+  const link =
+    ownerLink && publication.linkId
+      ? await openOwnerLink(access, { publicationId: publication.publicationId, linkId: publication.linkId }, ownerLink)
+      : null;
+  return { ...state, publication: { ...publication, link } };
 }
 
 /**
  * The Owner's browser publishes the latest saved representation. It creates the
- * link key pair and identifiers locally, sends only the public key, path and
- * ciphertext, and retains/returns the complete link only in browser memory.
- * The `#` key never leaves the browser.
+ * link key pair and identifiers locally, sends only the public key, path,
+ * ciphertext and the Owner link copy sealed to its own Vault root key, and
+ * retains/returns the complete link only in browser memory. The `#` key never
+ * leaves the browser readable.
  */
 export async function publishFile(options: {
   access: RootAccess;
@@ -176,6 +240,7 @@ export async function publishFile(options: {
     privateKey: keys.privateKey,
     threadId,
   });
+  const ownerLink = await sealOwnerLink(access, { publicationId, linkId }, keys.privateKey);
   signal?.throwIfAborted();
   const link = { publicationId, linkId, url: publicLinkUrl(location.origin, linkId, keys.privateKey) };
   // Preserve the capability above the dismissible panel BEFORE the Worker can
@@ -193,6 +258,7 @@ export async function publishFile(options: {
       representation: { ciphertext: encodeTreeBytes(ciphertext) },
       author,
       comments,
+      ownerLink,
     },
     signal,
   );
@@ -201,8 +267,9 @@ export async function publishFile(options: {
 
 /**
  * The Owner changes the Public Comment audience (or sets up a legacy
- * Publication's thread). A public epoch needs the complete link's fragment;
- * a Collaborators-only epoch needs no fragment at all.
+ * Publication's thread). A public epoch needs the complete link's fragment,
+ * which this browser holds as a prepared candidate or opens from the Owner
+ * link copy; a Collaborators-only epoch needs no fragment at all.
  */
 export async function changeCommentAudience(
   access: RootAccess,
@@ -362,10 +429,11 @@ export async function declarePublicationAuthor(
 /**
  * The Owner's browser replaces the active link: it re-encrypts the current
  * saved representation to a fresh key and rewraps every public Comment epoch,
- * then the Worker swaps the path in one transaction. The retired link stops
- * working; the logical Publication, Comments and history survive. The new
- * complete link is retained above the dismissible panel before the request so
- * a lost response never loses the replacement capability.
+ * then the Worker swaps the path, and the Owner link copy with it, in one
+ * transaction. The retired link stops working; the logical Publication,
+ * Comments and history survive. The new complete link is retained above the
+ * dismissible panel before the request so a lost response never loses the
+ * replacement capability.
  */
 export async function rotatePublicationLink(options: {
   access: RootAccess;
@@ -403,6 +471,7 @@ export async function rotatePublicationLink(options: {
       ),
     });
   }
+  const ownerLink = await sealOwnerLink(access, { publicationId: publication.publicationId, linkId }, keys.privateKey);
   signal?.throwIfAborted();
   const link = {
     publicationId: publication.publicationId,
@@ -423,6 +492,7 @@ export async function rotatePublicationLink(options: {
       expectedRepresentationId: document.representationId,
       representation: { ciphertext: encodeTreeBytes(ciphertext) },
       epochs,
+      ownerLink,
     },
     signal,
   );
