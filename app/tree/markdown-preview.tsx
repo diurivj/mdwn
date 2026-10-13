@@ -1,4 +1,4 @@
-import { type ComponentProps, type MouseEvent, useEffect, useRef, useState } from "react";
+import { type ComponentProps, createContext, type MouseEvent, useContext, useEffect, useRef, useState } from "react";
 import Markdown, { type Components, type ExtraProps } from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -27,6 +27,15 @@ function decodeFragment(fragment: string) {
   }
 }
 
+/** GFM writes footnote ids percent-encoded, so try the fragment as written before decoding it, as HTML does. */
+function inPageTarget(document: Document, fragment: string) {
+  for (const candidate of [fragment, decodeFragment(fragment)]) {
+    const target = document.getElementById(SANITIZED_ID_PREFIX + candidate);
+    if (target) return target;
+  }
+  return null;
+}
+
 /**
  * Moves to a link's in-page target without touching the URL fragment: on a
  * Public page the fragment is the read capability, so following `#…` in place
@@ -35,8 +44,8 @@ function decodeFragment(fragment: string) {
  */
 function followInPageLink(event: MouseEvent<HTMLAnchorElement>) {
   event.preventDefault();
-  const id = SANITIZED_ID_PREFIX + decodeFragment(event.currentTarget.getAttribute("href")!.slice(1));
-  const target = event.currentTarget.ownerDocument.getElementById(id);
+  const link = event.currentTarget;
+  const target = inPageTarget(link.ownerDocument, link.getAttribute("href")!.slice(1));
   if (!target) return;
   if (!target.matches("a[href], [tabindex]")) target.tabIndex = -1;
   target.focus({ preventScroll: true });
@@ -44,14 +53,14 @@ function followInPageLink(event: MouseEvent<HTMLAnchorElement>) {
   target.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
 }
 
-type Overflow = "none" | "left" | "right" | "both";
+type HiddenSides = "none" | "left" | "right" | "both";
 
 /** Which sides of a horizontal scroll box hide content (scroll positions can be fractional). */
-function hiddenSides(node: HTMLElement): Overflow {
-  const max = node.scrollWidth - node.clientWidth;
-  if (max <= 1) return "none";
+function hiddenSides(node: HTMLElement): HiddenSides {
+  const maxScrollLeft = node.scrollWidth - node.clientWidth;
+  if (maxScrollLeft <= 1) return "none";
   const left = node.scrollLeft > 1;
-  const right = node.scrollLeft < max - 1;
+  const right = node.scrollLeft < maxScrollLeft - 1;
   return left && right ? "both" : left ? "left" : "right";
 }
 
@@ -63,16 +72,16 @@ function hiddenSides(node: HTMLElement): Overflow {
  */
 function useOverflowRegion<T extends HTMLElement>(label: string) {
   const ref = useRef<T>(null);
-  const [overflow, setOverflow] = useState<Overflow>("none");
+  const [hidden, setHidden] = useState<HiddenSides>("none");
   // Content changes with every edit in the Preview, so measure after each render.
   useEffect(() => {
-    if (ref.current) setOverflow(hiddenSides(ref.current));
+    if (ref.current) setHidden(hiddenSides(ref.current));
   });
   // The box's width follows the viewport and the workspace panes; scrolling moves the hidden sides.
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
-    const update = () => setOverflow(hiddenSides(node));
+    const update = () => setHidden(hiddenSides(node));
     const observer = new ResizeObserver(update);
     observer.observe(node);
     node.addEventListener("scroll", update, { passive: true });
@@ -81,9 +90,9 @@ function useOverflowRegion<T extends HTMLElement>(label: string) {
       node.removeEventListener("scroll", update);
     };
   }, []);
-  return overflow === "none"
+  return hidden === "none"
     ? { ref }
-    : { ref, role: "region", "aria-label": label, tabIndex: 0, "data-overflow": overflow };
+    : { ref, role: "region", "aria-label": label, tabIndex: 0, "data-overflow": hidden };
 }
 
 function ScrollingTable({ node: _, ...props }: ComponentProps<"table"> & ExtraProps) {
@@ -100,29 +109,50 @@ function ScrollingCode({ node: _, ...props }: ComponentProps<"pre"> & ExtraProps
   return <pre {...props} className="markdown-scroll" {...region} />;
 }
 
+/** Links that leave the document open apart from it and send no referrer. */
+const OUTSIDE_LINK = { target: "_blank", rel: "noopener noreferrer" } as const;
+
+/** True inside a Markdown link, where an image's own link would nest one link in another. */
+const InsideLink = createContext(false);
+
+function MarkdownLink({ node: _, href, ...props }: ComponentProps<"a"> & ExtraProps) {
+  return (
+    <InsideLink value={true}>
+      {href?.startsWith("#") ? (
+        <a {...props} href={href} onClick={followInPageLink} />
+      ) : (
+        <a {...props} href={href} {...OUTSIDE_LINK} />
+      )}
+    </InsideLink>
+  );
+}
+
 const WEB_URL = /^https?:\/\//i;
 
-const components: Components = {
-  a: ({ node: _, href, ...props }) =>
-    href?.startsWith("#") ? (
-      <a {...props} href={href} onClick={followInPageLink} />
-    ) : (
-      <a {...props} href={href} target="_blank" rel="noopener noreferrer" />
-    ),
-  // mdwn stores no images and its CSP admits only first-party ones, so an
-  // embedded image could never load. Say so and keep its description; a web
-  // address becomes a link the reader may choose to open.
-  img: ({ src, alt }) => (
+/**
+ * mdwn stores no images and its CSP admits only first-party ones, so an
+ * embedded image could never load. Say so and keep its description; a web
+ * address becomes a link the reader may choose to open, unless the image is
+ * already a link.
+ */
+function MarkdownImage({ src, alt }: ComponentProps<"img"> & ExtraProps) {
+  const insideLink = useContext(InsideLink);
+  return (
     <span className="markdown-image">
       <span className="markdown-image-label">Image not shown</span>
       {alt && <span>{alt}</span>}
-      {typeof src === "string" && WEB_URL.test(src) && (
-        <a href={src} target="_blank" rel="noopener noreferrer">
+      {!insideLink && typeof src === "string" && WEB_URL.test(src) && (
+        <a href={src} {...OUTSIDE_LINK}>
           Open image
         </a>
       )}
     </span>
-  ),
+  );
+}
+
+const components: Components = {
+  a: MarkdownLink,
+  img: MarkdownImage,
   pre: ScrollingCode,
   table: ScrollingTable,
 };

@@ -284,8 +284,8 @@ as unpublished: Hard deletion keeps no record that a Publication existed.
     `noopener noreferrer`.
   - mdwn stores no images and the CSP admits only first-party ones, so a
     Markdown image renders as an "Image not shown" note with its description.
-    A web address becomes an "Open image" link the reader may follow; the page
-    never requests it.
+    A web address becomes an "Open image" link the reader may follow, unless
+    the image is already a link; the page never requests it.
   - Wide tables and code blocks scroll inside the text column, never the page,
     and words in table cells are not split. While one overflows it is a
     focusable region named "Scrollable table" or "Scrollable code", so the

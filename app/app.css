@@ -257,9 +257,11 @@
   }
 }
 
-/* Typography only: Markdown is sanitized before it reaches the DOM. Sizes are
+/*
+ * Typography only: Markdown is sanitized before it reaches the DOM. Sizes are
  * relative to the container's body size, so the larger Public reader keeps the
- * same hierarchy as the Preview. */
+ * same hierarchy as the Preview.
+ */
 @layer components {
   .prose-markdown {
     color: var(--color-ink-soft);
@@ -291,22 +293,20 @@
   }
 
   .prose-markdown h1 {
-    font-size: 2.25em;
+    font-size: 1.9em;
     line-height: 1.08;
+
+    @media (width >= 40rem) {
+      font-size: 2.25em;
+    }
   }
 
   .prose-markdown h2 {
-    font-size: 1.7em;
+    font-size: 1.5em;
     line-height: 1.15;
-  }
 
-  @media (width < 40rem) {
-    .prose-markdown h1 {
-      font-size: 1.9em;
-    }
-
-    .prose-markdown h2 {
-      font-size: 1.5em;
+    @media (width >= 40rem) {
+      font-size: 1.7em;
     }
   }
 
@@ -434,9 +434,11 @@
     box-decoration-break: clone;
   }
 
-  /* Wide tables and code scroll inside the text column, never the page. A soft
+  /*
+   * Wide tables and code scroll inside the text column, never the page. A soft
    * inner shade marks each edge that hides content (`data-overflow`, set while
-   * scrolling); it sits under the text and stays put as the content moves. */
+   * scrolling); it sits under the text and stays put as the content moves.
+   */
   .prose-markdown .markdown-scroll {
     --edge-left: inset 1rem 0 1rem -1rem color-mix(in srgb, var(--color-ink) 18%, transparent);
     --edge-right: inset -1rem 0 1rem -1rem color-mix(in srgb, var(--color-ink) 18%, transparent);
