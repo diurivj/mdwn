@@ -257,7 +257,11 @@
   }
 }
 
-/* Typography only: Markdown is sanitized before it reaches the DOM. */
+/*
+ * Typography only: Markdown is sanitized before it reaches the DOM. Sizes are
+ * relative to the container's body size, so the larger Public reader keeps the
+ * same hierarchy as the Preview.
+ */
 @layer components {
   .prose-markdown {
     color: var(--color-ink-soft);
@@ -280,7 +284,7 @@
   }
 
   .prose-markdown :where(h1, h2) {
-    margin: 1.6em 0 0.5em;
+    margin: 1.5em 0 0.5em;
     font-family: var(--font-display);
     font-weight: 300;
     color: var(--color-ink);
@@ -289,38 +293,72 @@
   }
 
   .prose-markdown h1 {
-    font-size: 2.5rem;
-    line-height: 1.05;
+    font-size: 1.9em;
+    line-height: 1.08;
+
+    @media (width >= 40rem) {
+      font-size: 2.25em;
+    }
   }
 
   .prose-markdown h2 {
-    font-size: 1.85rem;
+    font-size: 1.5em;
     line-height: 1.15;
+
+    @media (width >= 40rem) {
+      font-size: 1.7em;
+    }
   }
 
   .prose-markdown :where(h3, h4, h5, h6) {
-    margin: 1.6em 0 0.4em;
+    margin: 1.75em 0 0.5em;
     font-weight: 500;
     line-height: 1.35;
     color: var(--color-ink);
+    text-wrap: balance;
   }
 
   .prose-markdown h3 {
-    font-size: 1.15rem;
+    font-size: 1.3em;
+    letter-spacing: -0.015em;
   }
 
-  .prose-markdown :where(h4, h5, h6) {
-    font-size: 1rem;
+  .prose-markdown h4 {
+    font-size: 1.1em;
   }
 
-  .prose-markdown :where(p, ul, ol, pre, table, blockquote) {
+  /* Below h4, Laboratorio's label voice keeps the levels distinct from body text. */
+  .prose-markdown :where(h5, h6) {
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    font-weight: 400;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .prose-markdown h6 {
+    color: var(--color-muted);
+  }
+
+  .prose-markdown :where(p, ul, ol, blockquote, .markdown-scroll) {
     margin: 0 0 1.1em;
+  }
+
+  .prose-markdown :where(p, li, blockquote) {
+    text-wrap: pretty;
   }
 
   .prose-markdown a {
     color: var(--color-ink);
     text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, var(--color-ink) 45%, transparent);
     text-underline-offset: 0.2em;
+    transition: text-decoration-color 150ms ease-out;
+  }
+
+  .prose-markdown a:hover {
+    text-decoration-color: currentColor;
   }
 
   .prose-markdown strong {
@@ -349,24 +387,36 @@
     padding-left: 0.2em;
   }
 
+  .prose-markdown li::marker {
+    color: var(--color-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
   .prose-markdown li > :where(ul, ol) {
     margin: 0.3em 0;
   }
 
-  .prose-markdown li:has(> input[type="checkbox"]) {
-    margin-left: -1.4em;
+  /* A task's checkbox sits where a bullet would, so wrapped text keeps its indent. */
+  .prose-markdown .task-list-item {
+    position: relative;
     list-style: none;
   }
 
-  .prose-markdown li > input[type="checkbox"] {
-    margin-right: 0.5em;
+  .prose-markdown .task-list-item > input[type="checkbox"],
+  .prose-markdown .task-list-item > p:first-child > input[type="checkbox"] {
+    position: absolute;
+    top: calc(0.5lh - 0.45em);
+    left: -1.25em;
+    margin: 0;
+    width: 0.9em;
+    height: 0.9em;
   }
 
   .prose-markdown blockquote {
     border-left: 1px solid var(--color-ink);
-    padding: 0.1em 0 0.1em 1.25em;
-    font-size: 1.1rem;
-    line-height: 1.6;
+    padding: 0.1em 0 0.1em 1.1em;
+    font-size: 1.05em;
+    line-height: 1.65;
     color: var(--color-ink);
   }
 
@@ -376,21 +426,53 @@
 
   .prose-markdown :not(pre) > code {
     background-color: var(--color-sand);
-    padding: 0.12em 0.4em;
+    padding: 0.12em 0.35em;
     font-family: var(--font-mono);
     font-size: 0.9em;
     color: var(--color-ink);
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  /*
+   * Wide tables and code scroll inside the text column, never the page. A soft
+   * inner shade marks each edge that hides content (`data-overflow`, set while
+   * scrolling); it sits under the text and stays put as the content moves.
+   */
+  .prose-markdown .markdown-scroll {
+    --edge-left: inset 1rem 0 1rem -1rem color-mix(in srgb, var(--color-ink) 18%, transparent);
+    --edge-right: inset -1rem 0 1rem -1rem color-mix(in srgb, var(--color-ink) 18%, transparent);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .prose-markdown .markdown-scroll[data-overflow="left"] {
+    box-shadow: var(--edge-left);
+  }
+
+  .prose-markdown .markdown-scroll[data-overflow="right"] {
+    box-shadow: var(--edge-right);
+  }
+
+  .prose-markdown .markdown-scroll[data-overflow="both"] {
+    box-shadow: var(--edge-left), var(--edge-right);
   }
 
   .prose-markdown pre {
-    overflow-x: auto;
     border: 1px solid var(--color-line);
     background-color: var(--color-cream);
-    padding: 1rem 1.25rem;
+    padding: 0.875rem 1rem;
     font-family: var(--font-mono);
-    font-size: 0.9rem;
-    line-height: 1.65;
+    font-size: 0.875rem;
+    line-height: 1.6;
     color: var(--color-ink);
+    tab-size: 2;
+
+    @media (width >= 40rem) {
+      padding: 1rem 1.25rem;
+      font-size: 0.9rem;
+      line-height: 1.65;
+    }
   }
 
   .prose-markdown hr {
@@ -400,18 +482,26 @@
   }
 
   .prose-markdown table {
-    display: block;
-    max-width: 100%;
-    overflow-x: auto;
     border-collapse: collapse;
-    font-size: 0.925rem;
+    font-size: 0.9em;
+    line-height: 1.55;
   }
 
   .prose-markdown :where(th, td) {
     border-bottom: 1px solid var(--color-line);
-    padding: 0.55em 0.9em 0.55em 0;
+    padding: 0.6em 1em 0.6em 0;
     text-align: left;
     vertical-align: top;
+    /* Columns grow to whole words; the table scrolls instead of splitting them. */
+    overflow-wrap: normal;
+  }
+
+  .prose-markdown :where(th, td):last-child {
+    padding-right: 0;
+  }
+
+  .prose-markdown td {
+    font-variant-numeric: tabular-nums;
   }
 
   .prose-markdown th {
@@ -420,8 +510,54 @@
     color: var(--color-ink);
   }
 
-  .prose-markdown img {
-    max-width: 100%;
+  .prose-markdown .markdown-image {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2em;
+    margin: 0.4em 0;
+    border: 1px solid var(--color-line);
+    background-color: var(--color-cream);
+    padding: 0.75em 1em;
+    font-size: 0.875em;
+    line-height: 1.5;
+    color: var(--color-ink);
+  }
+
+  .prose-markdown .markdown-image-label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  /* Superscripts keep their line's spacing; the reference is a comfortable target. */
+  .prose-markdown sup {
+    line-height: 0;
+  }
+
+  .prose-markdown [data-footnote-ref] {
+    padding: 0 0.1em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prose-markdown [data-footnotes] {
+    margin-top: 2.5em;
+    border-top: 1px solid var(--color-line);
+    padding-top: 1.25em;
+    font-size: 0.875em;
+    line-height: 1.6;
+  }
+
+  .prose-markdown [data-footnotes] li > p {
+    margin-bottom: 0.4em;
+  }
+
+  .prose-markdown [data-footnote-backref] {
+    padding: 0 0.25em;
+    text-decoration: none;
+    font-variant-emoji: text;
   }
 }
 

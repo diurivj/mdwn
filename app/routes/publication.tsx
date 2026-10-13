@@ -131,13 +131,13 @@ export default function PublicationRoute({ loaderData, params }: Route.Component
       <main className="flex-1 pb-16 pt-6 sm:pt-10">
         <article aria-label="Published File" className="animate-fade">
           {page.title && (
-            <h1 className="font-display text-[2.75rem] font-light leading-[1.05] tracking-tight text-balance [overflow-wrap:anywhere] sm:text-6xl">
+            <h1 className="font-display text-[clamp(2.25rem,9vw,2.75rem)] font-light leading-[1.05] tracking-tight text-balance [overflow-wrap:anywhere] sm:text-6xl">
               {page.title}
             </h1>
           )}
           {page.authors.length > 0 && <p className="mt-4 text-sm text-muted">By {page.authors.join(", ")}</p>}
           <div
-            className={`prose-markdown prose-reader [overflow-wrap:anywhere] ${page.title || page.authors.length ? "mt-10 border-t border-line pt-10" : ""}`}
+            className={`prose-markdown prose-reader ${page.title || page.authors.length ? "mt-8 border-t border-line pt-8 sm:mt-10 sm:pt-10" : ""}`}
           >
             <MarkdownPreview source={page.markdown} />
           </div>
