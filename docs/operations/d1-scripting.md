@@ -47,8 +47,9 @@ Workers Paid** ([D1 limits](https://developers.cloudflare.com/d1/platform/limits
 checked 2026-10-11). The documentation does not say whether each statement of a
 `batch()` counts as a query, so treat **every statement as counting** until
 that is verified. Budget a request or scheduled invocation by its statements,
-not its D1 calls, and use the Free figure until the account's plan is
-confirmed.
+not its D1 calls. The account's Workers Paid plan is confirmed active
+(2026-10-13), so budget against the Paid figure; an unconfirmed account must
+use the Free figure.
 
 ## Local persistence
 

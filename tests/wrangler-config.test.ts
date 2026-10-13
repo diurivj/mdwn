@@ -16,3 +16,13 @@ describe("Worker placement (ticket 57)", () => {
     expect(resolved().placement).toBeUndefined();
   });
 });
+
+describe("Worker CPU ceiling (ticket 63)", () => {
+  it.each(["preview", "production"] as const)("caps the %s Worker at 500 ms of CPU per invocation", (env) => {
+    expect(resolved(env).limits).toEqual({ cpu_ms: 500 });
+  });
+
+  it("leaves the never-deployed local Worker without a CPU limit", () => {
+    expect(resolved().limits).toBeUndefined();
+  });
+});

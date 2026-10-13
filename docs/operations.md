@@ -10,13 +10,14 @@ facts from the [Workers Paid research](../.scratch/mdwn/research/workers-paid-bu
 checked 2026-10-11 against the Cloudflare pages cited below. Prices are USD
 before tax.
 
-Workers Paid is mdwn's **intended** operating baseline (maintainer decision,
-2026-10-12). This document does not record an active subscription, configured
-alerts or measured production capacity: none has been confirmed. Until the
-checklist's first step confirms the plan, operate within Workers Free limits —
-including D1's [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries)
-— and keep every current product bound. Paying changes neither the Import, rate or source limits nor the
-privacy model.
+Workers Paid is mdwn's **operating baseline** (maintainer decision, 2026-10-12;
+the account's Workers Paid plan was confirmed active on 2026-10-13). The
+[Worker CPU ceiling](#worker-cpu-ceiling) below requires it: Free rejects
+`limits.cpu_ms`. This document does not record configured billing alerts. Keep
+every current product bound: paying changes neither the Import, rate or source
+limits nor the privacy model. The
+[D1 scripting reference](operations/d1-scripting.md#per-invocation-queries)
+records the per-invocation query facts for each plan.
 
 **Budget.** Target about **$5 per month**: the Workers Paid subscription with
 usage inside the included allowances. **$10 per month** is the intended
@@ -98,8 +99,7 @@ claim they exist.
 4. With authorization, create the $1 and $3 overage alerts.
 5. Note the applicable tax treatment and domain renewal dates as separate
    line items.
-6. Recheck each billing cycle, and before any capacity change (tickets
-   [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md)–[65](../.scratch/mdwn/issues/65-larger-import-envelope.md)).
+6. Recheck each billing cycle, and before any capacity change.
 
 ### Intervention runbook
 
@@ -120,6 +120,40 @@ When an overage alert fires, or the month's total approaches $10:
 5. Record the meter, cause and action in aggregate terms.
 
 There is no automatic spending controller; every step is an operator decision.
+
+### Worker CPU ceiling
+
+Ticket [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md). Both deployed
+Workers set `limits.cpu_ms` in `wrangler.jsonc`; the never-deployed local
+Worker does not. Limits are enforced only on Cloudflare's network and only on
+the Standard usage model ([Wrangler configuration][wrangler-config]): local
+`wrangler dev` ignores the value, and a Free account cannot configure one.
+
+**Chosen value: 500 ms.** Evidence recorded 2026-10-13 from the production
+`mdwn` Worker over the preceding 30 days: CPU time per execution p50 6.24 ms,
+p90 24.73 ms, p99 58.68 ms, p99.9 71.75 ms across 38.34K invocations with no
+errors. One live `wrangler tail` sample of the 15-minute scheduled handler
+measured 9 ms CPU; the aggregate p99.9 already bounds every route class, so that
+single sample is context rather than the basis. The largest Import
+upload/commit still fits inside Workers Free's 10 ms CPU allowance (the
+2026-10-05 proof in [import](import.md)), so its measured cost is below that
+bound; the 50–70 ms tail is consistent with full-document SSR rather than an
+API route. The dashboard reports CPU percentiles per Worker, not per route,
+and this project keeps Workers Logs disabled (no blanket invocation logs), so
+the aggregate p99.9 is the evidence for every route class.
+
+500 ms is about 7x the observed p99.9, while bounding one runaway invocation to
+0.5 CPU-seconds — 60x below the Paid 30 s default. For a fixed 100,000 runaway
+invocations that is about $0.40 over the included 30M CPU-ms against about $59
+at the default. The limit bounds each invocation, not the number of them, so a
+sustained attack still needs the [intervention runbook](#intervention-runbook).
+It is deliberately generous for the first weeks of real traffic.
+
+**Rollback.** If Cloudflare reports `exceededCpu` (an invocation killed before
+completion), raise the value in `wrangler.jsonc` — 1000 ms is the next step —
+or delete the `limits` line, then merge and redeploy. Re-read the percentiles
+after a few weeks of real traffic and tighten only against observed evidence;
+the intent is a bound above the worst case, not the smallest possible number.
 
 ### Paid D1 capacity and Time Travel
 
@@ -159,6 +193,7 @@ rehearsal.
 [billing]: https://developers.cloudflare.com/billing/understand/how-billing-works/
 [tax]: https://developers.cloudflare.com/billing/understand/sales-tax/
 [workers-metrics]: https://developers.cloudflare.com/workers/observability/metrics-and-analytics/
+[wrangler-config]: https://developers.cloudflare.com/workers/wrangler/configuration/#limits
 [d1-metrics]: https://developers.cloudflare.com/d1/observability/metrics-analytics/
 
 ## Scheduled retention
@@ -219,8 +254,8 @@ Travel/backups are outside application-level deletion.
 
 ### Scheduled bounds and D1 budget
 
-The account's Workers Paid subscription is not yet confirmed, so every duty
-together must fit the Free
+The account's Workers Paid plan is confirmed active (2026-10-13), so every duty
+together is budgeted against the Paid
 [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries),
 counting every batched statement. The per-duty statement table and its
 worst-case total live beside the duty list in
@@ -446,8 +481,8 @@ disposal or provider backup erasure.
 ## Migration rollback rehearsal
 
 Time Travel is the primary rollback mechanism. It retains **30 days on Workers
-Paid but only seven on Workers Free**; until the account's plan is confirmed
-(see the [operator checklist](#operator-checklist)), assume seven. Capture an
+Paid but only seven on Workers Free**; the account's plan is confirmed Workers
+Paid (2026-10-13), so 30 days apply. Capture an
 exact bookmark and a protected pre-change export before a risky
 migration/manual repair. An export can block queries;
 choose a maintenance window. Never print its presigned download URL or include
