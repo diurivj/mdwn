@@ -446,7 +446,8 @@ test("a refused commit never retries the material its passkey was made for", asy
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await completeRecoveryPresentation(page);
     const notice = page.getByRole("alert");
-    await expect(notice).toContainText("your account wasn’t created. Come back in about 8 hours to start over");
+    await expect(notice).toContainText("Too many accounts have been created recently, so yours wasn’t created");
+    await expect(notice).toContainText("Come back in about 8 hours to start over");
     await expect(notice.getByRole("button")).toHaveCount(0);
     expect(requests).toEqual(["challenge", "options", "verify"]);
     expect(await count(env, "accounts")).toBe(0);

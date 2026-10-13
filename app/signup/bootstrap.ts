@@ -121,17 +121,18 @@ export type SignupStep = "check" | "passkey" | "save";
  * Why a commit attempt stopped, which decides what the person can do next.
  * After `request`, `limited` (a rate-limited start) or `passkey`, no passkey or
  * Account exists, so the same recovery material can try again. After `device`
- * this browser has lost the new device keys, and after `full` (a rate-limited
- * commit) a passkey exists for an Account that was not created: signup starts
- * over. After `unconfirmed` a passkey exists but the commit's outcome is
- * unknown: the person signs in, or starts over.
+ * this browser has lost the new device keys, and after `refused` (a commit over
+ * the global or per-network daily cap on new Accounts) a passkey exists for an
+ * Account that was not created: signup starts over. After `unconfirmed` a
+ * passkey exists but the commit's outcome is unknown: the person signs in, or
+ * starts over.
  */
-export type SignupFailure = "request" | "limited" | "passkey" | "device" | "full" | "unconfirmed";
+export type SignupFailure = "request" | "limited" | "passkey" | "device" | "refused" | "unconfirmed";
 
 export class SignupCommitError extends Error {
   constructor(
     readonly failure: SignupFailure,
-    /** The Retry-After, in seconds, of a `limited` or `full` refusal, when the service sent one. */
+    /** The Retry-After, in seconds, of a `limited` start or a `refused` commit, when the service sent one. */
     readonly retryAfterSeconds: number | null = null,
   ) {
     super(`signup ${failure}`);
@@ -198,7 +199,7 @@ export function signupCommit({ transcriptBase, material }: PreparedSignup, honey
       spent = true;
       // The service refuses a rate-limited commit without creating the Account.
       if (error instanceof SignupCommitError && error.failure === "limited") {
-        throw new SignupCommitError("full", error.retryAfterSeconds);
+        throw new SignupCommitError("refused", error.retryAfterSeconds);
       }
       throw new SignupCommitError("unconfirmed");
     }

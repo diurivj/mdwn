@@ -126,7 +126,7 @@ function FailureNotice({
   return (
     <div role="alert" className={cx(noticeClass(tone), "mt-6")}>
       <p>{failureMessage(failure)}</p>
-      {failure.failure !== "full" && (
+      {failure.failure !== "refused" && (
         <div ref={actions} className="mt-4 flex flex-wrap gap-3">
           {retry ? (
             <button type="button" onClick={onRetry} className={buttonClass("primary", "sm")}>
@@ -166,8 +166,9 @@ function failureMessage({ failure, retryAfterSeconds }: SignupCommitError): stri
       return "Your passkey wasn’t created. The prompt may have been closed or timed out. The recovery phrase and codes you saved still apply.";
     case "device":
       return "We could not create your account: this browser no longer has the keys it made for it. Start over to get a new recovery phrase and codes. The ones you saved won’t work.";
-    case "full":
-      return `mdwn’s limit for new accounts has been reached, so your account wasn’t created. Come back ${inAbout(retryAfterSeconds)} to start over with a new recovery phrase and codes.`;
+    case "refused":
+      // The cap may be global or this network's; the copy names neither.
+      return `Too many accounts have been created recently, so yours wasn’t created and the passkey you just made won’t work. Come back ${inAbout(retryAfterSeconds)} to start over with a new recovery phrase and codes.`;
     case "unconfirmed":
       return "We could not confirm that your account was created. If it was, sign in with the passkey you just made. If signing in doesn’t work, start over with a new recovery phrase and codes.";
   }
