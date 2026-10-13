@@ -126,24 +126,28 @@ There is no automatic spending controller; every step is an operator decision.
 Ticket [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md). Both deployed
 Workers set `limits.cpu_ms` in `wrangler.jsonc`; the never-deployed local
 Worker does not. Limits are enforced only on Cloudflare's network and only on
-the Standard usage model ([Wrangler configuration][wrangler-config]), so local
-`wrangler dev` ignores the value and a Free account rejects the deploy.
+the Standard usage model ([Wrangler configuration][wrangler-config]): local
+`wrangler dev` ignores the value, and a Free account cannot configure one.
 
 **Chosen value: 500 ms.** Evidence recorded 2026-10-13 from the production
 `mdwn` Worker over the preceding 30 days: CPU time per execution p50 6.24 ms,
 p90 24.73 ms, p99 58.68 ms, p99.9 71.75 ms across 38.34K invocations with no
-errors, plus a live `wrangler tail` sample of the 15-minute scheduled handler at
-9 ms CPU. The known heaviest route is the largest Import upload/commit, which
-fits inside Workers Free's 10 ms CPU allowance (the 2026-10-05 proof in
-[import](import.md)); the 50–70 ms tail is consistent with full-document SSR
-rather than an API route.
+errors. One live `wrangler tail` sample of the 15-minute scheduled handler
+measured 9 ms CPU; the aggregate p99.9 already bounds every route class, so that
+single sample is context rather than the basis. The largest Import
+upload/commit still fits inside Workers Free's 10 ms CPU allowance (the
+2026-10-05 proof in [import](import.md)), so its measured cost is below that
+bound; the 50–70 ms tail is consistent with full-document SSR rather than an
+API route. The dashboard reports CPU percentiles per Worker, not per route,
+and this project keeps Workers Logs disabled (no blanket invocation logs), so
+the aggregate p99.9 is the evidence for every route class.
 
-500 ms is about 7x the observed p99.9 and 50x the heaviest known route, while
-bounding one runaway invocation to 0.5 CPU-seconds — 60x below the Paid 30 s
-default. That keeps a runaway incident at cents instead of tens of dollars:
-100,000 runaway invocations cost about $0.40 over the included 30M CPU-ms,
-against about $59 at the default. It is deliberately generous for the first
-weeks of real traffic.
+500 ms is about 7x the observed p99.9, while bounding one runaway invocation to
+0.5 CPU-seconds — 60x below the Paid 30 s default. For a fixed 100,000 runaway
+invocations that is about $0.40 over the included 30M CPU-ms against about $59
+at the default. The limit bounds each invocation, not the number of them, so a
+sustained attack still needs the [intervention runbook](#intervention-runbook).
+It is deliberately generous for the first weeks of real traffic.
 
 **Rollback.** If Cloudflare reports `exceededCpu` (an invocation killed before
 completion), raise the value in `wrangler.jsonc` — 1000 ms is the next step —
@@ -250,8 +254,8 @@ Travel/backups are outside application-level deletion.
 
 ### Scheduled bounds and D1 budget
 
-The account's Workers Paid subscription is not yet confirmed, so every duty
-together must fit the Free
+The account's Workers Paid plan is confirmed active (2026-10-13), so every duty
+together is budgeted against the Paid
 [per-invocation query limit](operations/d1-scripting.md#per-invocation-queries),
 counting every batched statement. The per-duty statement table and its
 worst-case total live beside the duty list in
@@ -477,8 +481,8 @@ disposal or provider backup erasure.
 ## Migration rollback rehearsal
 
 Time Travel is the primary rollback mechanism. It retains **30 days on Workers
-Paid but only seven on Workers Free**; until the account's plan is confirmed
-(see the [operator checklist](#operator-checklist)), assume seven. Capture an
+Paid but only seven on Workers Free**; the account's plan is confirmed Workers
+Paid (2026-10-13), so 30 days apply. Capture an
 exact bookmark and a protected pre-change export before a risky
 migration/manual repair. An export can block queries;
 choose a maintenance window. Never print its presigned download URL or include
