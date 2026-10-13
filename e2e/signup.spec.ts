@@ -309,7 +309,12 @@ test("a lost signup commit response signs in with the persisted device without a
       },
     });
     await committedResponse;
-    await expect(page.getByRole("alert")).toContainText("sign in if your passkey was saved");
+    // The outcome is unknown and a passkey exists: never a retry with this material, only sign-in or a new start.
+    const notice = page.getByRole("alert");
+    await expect(notice).toContainText("We could not confirm that your account was created");
+    await expect(notice.getByRole("link", { name: "Sign in", exact: true })).toBeFocused();
+    await expect(notice.getByRole("button", { name: "Start over", exact: true })).toBeVisible();
+    await expect(notice.getByRole("button", { name: /Try again|Create passkey/ })).toHaveCount(0);
     // Lost response headers must not leave a browser Session before the reload.
     expect((await context.cookies()).some((cookie) => cookie.name === "__Host-mdwn_session")).toBe(false);
     expect(await page.evaluate(() => localStorage.getItem("mdwn:signup:recovery-confirmation-pending"))).toBeNull();
@@ -334,6 +339,118 @@ test("a lost signup commit response signs in with the persisted device without a
     expect(await count(env, "accounts")).toBe(1);
     expect((await privateRead(page)).status).toBe(403);
     expect((await privateRead(page, await signedProof(page, accountId))).status).toBe(200);
+  } finally {
+    await context.close();
+  }
+});
+
+/** Records which signup resource each request names, in order. */
+function signupRequests(page: Page): string[] {
+  const paths: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith("/api/signup/")) paths.push(path.slice("/api/signup/".length));
+  });
+  return paths;
+}
+
+/** Fulfills the first request to `path` with `response`; later ones reach the Worker. */
+async function failOnce(page: Page, path: string, response: { status: number; headers?: Record<string, string> }) {
+  let failed = false;
+  await page.route(`**${path}`, async (route) => {
+    if (failed) return route.fallback();
+    failed = true;
+    await route.fulfill({ ...response, json: { error: "request_failed" } });
+  });
+}
+
+test("rate-limited, failed and dismissed attempts retry with the recovery material already saved", async ({
+  browser,
+  server,
+  baseURL,
+}) => {
+  const env = await db(server);
+  const { context, page } = await signupContext(browser, baseURL!);
+  try {
+    const requests = signupRequests(page);
+    await failOnce(page, "/api/signup/challenge", { status: 429, headers: { "Retry-After": "540" } });
+    // The second start fails after its proof of work, before any passkey prompt.
+    await failOnce(page, "/api/signup/options", { status: 503 });
+    const verify = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === "/api/signup/verify" && request.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create account", exact: true }).click();
+    let identifier = "";
+    await completeRecoveryPresentation(page, {
+      beforeConfirm: async () => {
+        identifier = await page
+          .getByText(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+          .innerText();
+        // The person then dismisses the first passkey prompt.
+        await page.evaluate(() => {
+          const create = navigator.credentials.create.bind(navigator.credentials);
+          let dismissed = false;
+          navigator.credentials.create = (options) => {
+            if (dismissed) return create(options);
+            dismissed = true;
+            return Promise.reject(
+              new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"),
+            );
+          };
+        });
+      },
+    });
+    await expect(page.getByText("Step 3 of 3", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Create your passkey" })).toBeVisible();
+    const notice = page.getByRole("alert");
+    await expect(notice).toContainText("Too many signups have started recently. Try again in about 9 minutes");
+    await expect(notice).toContainText("recovery phrase and codes you saved still apply");
+    await expect(notice.getByRole("button", { name: "Try again", exact: true })).toBeFocused();
+    expect(requests).toEqual(["challenge"]);
+
+    // Each retry is a fresh rate-limited start for the same Account material.
+    await notice.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(notice).toContainText("Signup stopped before your passkey was created");
+    await expect(notice).toContainText("recovery phrase and codes you saved still apply");
+    expect(requests).toEqual(["challenge", "challenge", "options"]);
+
+    await notice.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(notice).toContainText("Your passkey wasn’t created");
+    await expect(notice.getByRole("button", { name: "Create passkey", exact: true })).toBeFocused();
+    const progress = page.locator("section ol li");
+    await expect(progress.filter({ hasText: "Signup check" })).toContainText("(done)");
+    await expect(progress.filter({ hasText: "Passkey" })).not.toContainText("(done)");
+    expect(requests).toEqual(["challenge", "challenge", "options", "challenge", "options"]);
+    expect(await count(env, "accounts")).toBe(0);
+
+    // The prompt reopens with the same registration: no further start.
+    await notice.getByRole("button", { name: "Create passkey", exact: true }).click();
+    const payload = (await verify).postDataJSON() as VerifyPayload;
+    await expect(page).toHaveURL(/\/files$/);
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+    expect(requests).toEqual(["challenge", "challenge", "options", "challenge", "options", "verify"]);
+    expect(payload.transcript.accountId).toBe(identifier);
+    await expectSignupShape(env.DB, payload.transcript);
+    expect(await context.credentials.get()).toHaveLength(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a refused commit never retries the material its passkey was made for", async ({ browser, server, baseURL }) => {
+  const env = await db(server);
+  const { context, page } = await signupContext(browser, baseURL!);
+  try {
+    const requests = signupRequests(page);
+    await failOnce(page, "/api/signup/verify", { status: 429, headers: { "Retry-After": "30000" } });
+    await page.getByRole("button", { name: "Create account", exact: true }).click();
+    await completeRecoveryPresentation(page);
+    const notice = page.getByRole("alert");
+    await expect(notice).toContainText("your account wasn’t created. Come back in about 8 hours to start over");
+    await expect(notice.getByRole("button")).toHaveCount(0);
+    expect(requests).toEqual(["challenge", "options", "verify"]);
+    expect(await count(env, "accounts")).toBe(0);
+    expect(await context.credentials.get()).toHaveLength(1);
   } finally {
     await context.close();
   }

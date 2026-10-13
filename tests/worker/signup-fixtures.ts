@@ -88,7 +88,7 @@ async function registration(options: PublicKeyCredentialCreationOptionsJSON): Pr
   };
 }
 
-/** Mirrors prepareSignup/commitSignup using production crypto, without browser storage or UI. */
+/** Mirrors prepareSignup/signupCommit using production crypto, without browser storage or UI. */
 export async function validSignupSubmission() {
   const accountId = newOpaqueId();
   const rootDirectoryId = newOpaqueId();
