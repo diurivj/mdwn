@@ -4,7 +4,7 @@
 
 **Type:** bug
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none. Ticket 58's share-preparation `import` source should land first, so this path can reuse it.
 
@@ -47,3 +47,4 @@ Option 1 for provisioning, plus the rotation work the ticket's second acceptance
   - Docs: `docs/sharing.md`, `docs/shared-provisioning.md`, `docs/key-rotation.md`, `docs/import.md`, `docs/acceptance.md`.
   - Review: Standards round found one hard finding (the owner-scope guard duplicated three times) plus named smells; Spec round found the CAS was skipped when the client reported no imported threads (fixed, with the race test), the wrapping-epoch pin missing (added), and the triage/sign-off record missing (this section). Fixes in `e3c7bb9`. Separate RR8/stack gate: **Pass** (no route, loader, SSR, binding or migration changes).
   - Clean-head `npm run verify` passed at `e3c7bb934fb087dcebf2e9cb0f1fa80c70dd86af`: lint, typecheck, namespace drift, 555 Node and 418 Workers tests, the build, the fresh-D1 smoke, export/restore, the bundle-secret check, and the browser suite across Chromium, Firefox and WebKit.
+- 2026-10-12: Completed and merged into `main` via [PR #67](https://github.com/diurivj/mdwn/pull/67), merge commit `da10337332041cd8a56048c485f08025c79efe84`. Earlier pending review and verification notes are historical.

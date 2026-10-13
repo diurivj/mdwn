@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -52,3 +52,4 @@
   - Fixed in `4be2e61` and verified by the orchestrator.
   - Integration: the merge kept the scheduled maintenance entry point beside ticket 57's Worker fetch changes, and all nine Publication spent-proof sites answer `device_proof_spent`.
   - Clean-head `npm run verify` passed at `e38eb71`. It covered lint, typecheck, namespace drift, 555 Node and 414 Workers tests, the build, the fresh-D1 smoke, export/restore, the bundle-secret check, and 545 browser tests across Chromium, Firefox and WebKit. The 1 existing WebKit skip remained; there were no failures and no retries. Whole-branch diff: `git diff 75e882c...e38eb71` (SHA256 `9d5ca20709f5cdf72e4bcf34ec54141e9e0977182f7a0d0589720ebc5df4fd91`).
+- 2026-10-12: Completed and merged into `main` via [PR #66](https://github.com/diurivj/mdwn/pull/66), merge commit `2c0e49a1087c5c89b4fe5c6e0fa9c9a421937341`. Earlier pending PR/merge and verification notes are historical.

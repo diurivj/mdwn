@@ -27,8 +27,8 @@ On 2026-10-12 the maintainer approved this decomposition and asked for the first
 
 | Ticket | Slice | Status |
 | --- | --- | --- |
-| [61](61-autonomous-public-cleanup.md) | Scheduled maintenance finishes an already-authorized Unpublishing teardown | ready-for-agent |
-| [62](62-workers-paid-operating-contract.md) | Paid operating policy, intervention runbook, D1 Paid capacity and Time Travel, ADR supersession | ready-for-agent |
+| [61](61-autonomous-public-cleanup.md) | Scheduled maintenance finishes an already-authorized Unpublishing teardown | done |
+| [62](62-workers-paid-operating-contract.md) | Paid operating policy, intervention runbook, D1 Paid capacity and Time Travel, ADR supersession | done |
 | [63](63-worker-cpu-ceiling.md) | Explicit Worker CPU ceiling | ready-for-human (subscription and CPU evidence first) |
 | [64](64-import-admission-guard.md) | Scoped Import storage/admission guard | wontfix (2026-10-12) |
 | [65](65-larger-import-envelope.md) | Larger practical Import envelope | wontfix (2026-10-12) |
@@ -36,6 +36,8 @@ On 2026-10-12 the maintainer approved this decomposition and asked for the first
 The deferred opportunities in the research stay deferred. No child changes the account, a subscription, alerts or any remote resource.
 
 ## Comments
+
+- 2026-10-12: 61 and 62 merged into `main` via [PR #66](https://github.com/diurivj/mdwn/pull/66), merge commit `2c0e49a1087c5c89b4fe5c6e0fa9c9a421937341`; 66 merged via [PR #67](https://github.com/diurivj/mdwn/pull/67), merge commit `da10337332041cd8a56048c485f08025c79efe84`. Only 63 remains open.
 
 - 2026-10-12: The maintainer decided the current 100-node Import envelope is fine and closed 64 and 65 as **wontfix**; the 500–1,000-node target is not pursued. The remaining open child is [63](63-worker-cpu-ceiling.md) (`ready-for-human`, subscription and CPU evidence first). The Paid operating policy ([62](62-workers-paid-operating-contract.md)) and scheduled cleanup ([61](61-autonomous-public-cleanup.md)) stand. `docs/workers-paid-plan.md` §3 is dropped.
 

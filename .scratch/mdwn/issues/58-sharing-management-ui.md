@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -91,3 +91,4 @@ The maintainer chose the full flow, addressed by share identifier only.
     - sign-off on the Owner-only `import` source for imported Historical threads;
     - sign-off on refusing invitations under a write seal (`409 key_rotation_required`);
     - follow-up [66](66-imported-thread-grant-provisioning.md) for existing-Grant provisioning of imported threads.
+- 2026-10-12: Completed and merged into `main` via [PR #66](https://github.com/diurivj/mdwn/pull/66), merge commit `2c0e49a1087c5c89b4fe5c6e0fa9c9a421937341`. Earlier pending PR/merge and verification notes are historical.
