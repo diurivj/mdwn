@@ -1,6 +1,6 @@
 # Budgeted Workers Paid adoption
 
-Status: in progress — decomposed into [61](../.scratch/mdwn/issues/61-autonomous-public-cleanup.md) (scheduled Unpublishing cleanup), [62](../.scratch/mdwn/issues/62-workers-paid-operating-contract.md) (operating policy and ADR supersession), [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md) (CPU ceiling), [64](../.scratch/mdwn/issues/64-import-admission-guard.md) (Import admission guard) and [65](../.scratch/mdwn/issues/65-larger-import-envelope.md) (larger Import envelope). No subscription, alert or production capacity has been confirmed by this work.
+Status: in progress — [61](../.scratch/mdwn/issues/61-autonomous-public-cleanup.md) (scheduled Unpublishing cleanup) and [62](../.scratch/mdwn/issues/62-workers-paid-operating-contract.md) (operating policy and ADR supersession) are done; [63](../.scratch/mdwn/issues/63-worker-cpu-ceiling.md) (CPU ceiling) remains open. [64](../.scratch/mdwn/issues/64-import-admission-guard.md) and [65](../.scratch/mdwn/issues/65-larger-import-envelope.md) are **wontfix** (2026-10-12): the current Import envelope stands. No subscription, alert or production capacity has been confirmed by this work.
 
 This specification records the maintainer's decision to fund Workers Paid while keeping mdwn inexpensive and implementation work proportionate. It replaces the Free-only operating assumption, not the privacy model. The agreed order is budget safeguards, larger practical Imports, then autonomous Public-material cleanup. Each change must be independently useful; this is not one large implementation ticket.
 
@@ -78,6 +78,8 @@ Use existing test suites and operational tools. Add regression coverage for chan
 - Record the Paid D1 capacity and 30-day Time Travel window, including that only the shared included storage allowance is covered by the base price. Time Travel is operational recovery, not user-visible File history or immediate erasure from provider backups. Do not add a new backup system or repeat a full restore rehearsal solely because the plan changed.
 
 ### 3. Larger practical Imports
+
+**Decision 2026-10-12:** not pursued. The maintainer decided the current 100-node, 8 MiB compressed, 16 MiB expanded and 20 MiB encrypted-staging envelope is fine, and larger collections continue to be imported in several selections. Tickets [64](../.scratch/mdwn/issues/64-import-admission-guard.md) and [65](../.scratch/mdwn/issues/65-larger-import-envelope.md) are closed as wontfix; the bullets below remain the requirements if it is ever reopened.
 
 - Preserve the existing browser preflight, review, encryption, bounded chunk upload, and visible-atomic commit design. Do not replace staging with a giant transaction simply because Paid permits more queries.
 - Select a coherent node/expanded-byte/staging envelope from evidence. The current 100-node, 8 MiB compressed, 16 MiB expanded, and 20 MiB encrypted-staging limits remain authoritative until their replacements are verified and documented. The 500–1,000-node range is a candidate for measurement, not an instruction to maximize every dimension.

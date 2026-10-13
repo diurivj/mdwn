@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** needs-triage
+**Status:** wontfix
 
 **Blocked by:** none technically. Do it only when the maintainer decides to pursue [65](65-larger-import-envelope.md).
 
@@ -24,3 +24,4 @@
 ## Comments
 
 - 2026-10-12: Published as a child of 53. It waits for the maintainer to decide to pursue larger Imports.
+- 2026-10-12: Closed as **wontfix** with [65](65-larger-import-envelope.md): the maintainer decided the current 100-node Import envelope is fine, so the guard for a raised bound is not needed. Reopen only if a larger Import envelope is pursued again.

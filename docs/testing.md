@@ -189,9 +189,10 @@ browser stops applying COOP, while the Worker still sends the header (asserted
 by `tests/headers.test.ts`) and Chromium and WebKit still enforce it. No e2e
 test depends on COOP enforcement. Playwright 1.64.0 fixes the defect
 ([fix and regression](https://github.com/microsoft/playwright/pull/42788); 0 of
-200 in the same repro). Upgrade and drop the preference (ticket 59) once the
-WebKit prompt below has been approved on every Mac that runs the suite,
-including the CI runner account.
+200 in the same repro), but the upgrade requires approving the new WebKit's
+machine-local Keychain prompt on every Mac that runs the suite. Ticket 59 was
+closed as **wontfix** (2026-10-12): the approval is not worth the benefit, so
+1.63.0 and the preference stay.
 
 On macOS, a newly installed WebKit asks for access to the **Playwright WebCrypto
 Master Key** Keychain item the first time it stores a browser key handle in
