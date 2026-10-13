@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Blocked by:** none.
 
@@ -36,7 +36,7 @@ Out of scope: dark mode, user-selected themes or custom styling (buildable spec 
 - [x] A Markdown image renders as text with its description and requests nothing from the image's host.
 - [x] Wrapped task-list text aligns with its first line, not under the checkbox.
 - [x] Browser regression coverage for the above; existing publication, preview and accessibility checks still pass.
-- [ ] Merge gate: clean-head `npm run verify` evidence is recorded with the PR, and every current-head `CI` job passes before merge.
+- [x] Merge gate: clean-head `npm run verify` evidence is recorded with the PR, and every current-head `CI` job passes before merge.
 
 ## Comments
 
@@ -57,3 +57,4 @@ Out of scope: dark mode, user-selected themes or custom styling (buildable spec 
   - **Coverage gaps closed:** the image test listens for any request to the image host; the table region is reached with Tab; a short code block and a short table add no tab stop; a Preview edit grows a table past the pane and back.
   - **Scope:** the extra refinements the Spec reviewer flagged (link underline, list markers, `text-wrap`, tabular figures, blockquote size, article spacing) are kept as part of the readability goal and now listed in Scope.
   - **Separate RR8/stack gate: Not applicable — no RR8/stack touchpoints.** `publication.tsx` changes only two `className` strings: the `loader`, `clientLoader` and `hydrate` declarations, `HydrateFallback`, `meta` and `handle` are unchanged. The renderer's effects measure the DOM with ResizeObserver and scroll events, which are browser APIs, not route data. No resource routes, `app/routes.ts`, Worker bindings, D1, `app/shared` modules or SSR payloads changed. The reader shell is still SSR-only with no plaintext (the existing `publications.spec.ts` HTML assertion passes).
+- 2026-10-13: Completed and merged into `main` via [PR #72](https://github.com/diurivj/mdwn/pull/72), merge commit `a304795975a35b2256a9148003dbe504fdd88300`, after clean-head `npm run verify` at `4d442c0` and all four `CI` jobs passed at that head. Deploy run 38434332980 migrated and released preview, then production, with both smoke tests passing; production `/assets/root-*.css` serves the new `.prose-markdown` rules.
