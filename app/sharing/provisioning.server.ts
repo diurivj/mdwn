@@ -7,7 +7,13 @@ import { activeRootCoverage, requiredGrantComments } from "./capability-coverage
 import { currentCommentEnvelope, rootDeliveryAuthority } from "./delivery-authority.server";
 import { deliveryContext, readCommentKey } from "./comment-keys.server";
 import { contextFor, readGrantKeys } from "./grant-keys.server";
-import { currentRecoveryEnvelope, recoverySource } from "./owned-sources.server";
+import {
+  currentRecoveryEnvelope,
+  importedThreadEnvelope,
+  importedThreadSource,
+  ownedImportedThreadEnvelope,
+  recoverySource,
+} from "./owned-sources.server";
 import { expireGrantBatch, hasExpiredGrants, liveGrant } from "./grant-expiry.server";
 
 const headers = { "Cache-Control": "no-store" };
@@ -28,11 +34,12 @@ async function nextProvisioning(env: Env, auth: AuthorizedDevice) {
     grantKeyEpoch: number;
     objectId: string | null;
     recovery: ArrayBuffer | null;
+    imported: ArrayBuffer | null;
   };
   const need =
     (await db.get<Need>(sql`
     SELECT s.id AS grantId, d.id AS deviceId, d.transport_public_key AS transport, s.key_epoch AS grantKeyEpoch,
-      NULL AS objectId, NULL AS recovery
+      NULL AS objectId, NULL AS recovery, NULL AS imported
     FROM provisioning_needs n JOIN grants s ON s.id = n.grant_id
     JOIN encryption_devices d ON d.id = n.device_id AND d.account_id = s.recipient_id AND d.state = 'active'
     WHERE n.grant_key_epoch = s.key_epoch AND ${liveGrant()} AND ${rootDeliveryAuthority(auth, "grants")}
@@ -40,14 +47,17 @@ async function nextProvisioning(env: Env, auth: AuthorizedDevice) {
       AND ${privateReadGuard(auth)} ORDER BY s.id, d.id LIMIT 1`)) ??
     (await db.get<Need>(sql`
     SELECT s.id AS grantId, d.id AS deviceId, d.transport_public_key AS transport, s.key_epoch AS grantKeyEpoch,
-      c.object_id AS objectId, k.ciphertext AS recovery
+      c.object_id AS objectId, k.ciphertext AS recovery, i.ciphertext AS imported
     FROM provisioning_needs n JOIN grants s ON s.id = n.grant_id
     JOIN encryption_devices d ON d.id = n.device_id AND d.account_id = s.recipient_id AND d.state = 'active'
     JOIN sharing_comment_capabilities c ON c.object_id IN (SELECT object_id FROM (${requiredGrantComments()}))
     LEFT JOIN key_envelopes k ON ${currentRecoveryEnvelope(sql`c.owner_id`, sql`c.object_id`, sql`c.capability_epoch`)}
+    LEFT JOIN import_comment_envelopes i ON ${importedThreadEnvelope(sql`c.thread_id`, sql`c.capability_id`, sql`c.capability_epoch`)}
+      AND ${ownedImportedThreadEnvelope(sql`c.owner_id`, sql`c.file_id`)}
+      AND i.key_epoch = (SELECT f.capability_epoch FROM files f WHERE f.node_id = c.file_id)
     WHERE n.grant_key_epoch = s.key_epoch AND ${liveGrant()}
       AND NOT (${currentCommentEnvelope(sql`d.id`, sql`c.object_id`, sql`c.capability_id`, sql`c.capability_epoch`)})
-      AND (s.owner_id = ${auth.accountId} AND k.ciphertext IS NOT NULL OR s.recipient_id = ${auth.accountId}
+      AND (s.owner_id = ${auth.accountId} AND (k.ciphertext IS NOT NULL OR i.ciphertext IS NOT NULL) OR s.recipient_id = ${auth.accountId}
         AND ${currentCommentEnvelope(auth.deviceId, sql`c.object_id`, sql`c.capability_id`, sql`c.capability_epoch`)})
       AND NOT ${sharingWriteBlocked(sql`c.file_id`)} AND ${privateReadGuard(auth)}
     ORDER BY s.id, d.id, c.object_id LIMIT 1`));
@@ -57,7 +67,12 @@ async function nextProvisioning(env: Env, auth: AuthorizedDevice) {
     : await contextFor(env, auth, "grants", need.grantId);
   if (!context?.capabilityId || !context.capabilityEpoch || context.grantKeyEpoch !== need.grantKeyEpoch)
     return Response.json({ error: "sharing_changed" }, { status: 409, headers });
-  let source: object = need.objectId && need.recovery ? recoverySource(need.recovery) : { kind: "owned" };
+  let source: object =
+    need.objectId && need.recovery
+      ? recoverySource(need.recovery)
+      : need.objectId && need.imported
+        ? importedThreadSource(need.imported)
+        : { kind: "owned" };
   if (auth.accountId === context.recipientId) {
     const response = need.objectId
       ? await readCommentKey(env, auth, "grants", need.grantId, need.objectId, null)

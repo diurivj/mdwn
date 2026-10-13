@@ -16,12 +16,27 @@ export function currentRecoveryEnvelope(ownerId: string | SQL, objectId: string 
 }
 
 /** Correlated `import_comment_envelopes i`: an imported Historical thread's capability envelope at an exact capability and epoch. */
-export function importedThreadEnvelope(threadId: string | SQL, capabilityId: string, capabilityEpoch: number): SQL {
+export function importedThreadEnvelope(
+  threadId: string | SQL,
+  capabilityId: string | SQL,
+  capabilityEpoch: number | SQL,
+): SQL {
   return sql`i.thread_id = ${threadId} AND i.capability_id = ${capabilityId} AND i.capability_epoch = ${capabilityEpoch}`;
+}
+
+/** Correlated `import_comment_envelopes i`: the row belongs to the named File and its thread to the same Owner. */
+export function ownedImportedThreadEnvelope(ownerId: string | SQL, fileId: string | SQL): SQL {
+  return sql`i.file_id = ${fileId} AND EXISTS (SELECT 1 FROM comment_threads t
+    WHERE t.id = i.thread_id AND t.owner_id = ${ownerId})`;
 }
 
 export function recoverySource(ciphertext: ArrayBuffer) {
   return { kind: "recovery" as const, envelope: encodeTreeBytes(new Uint8Array(ciphertext)) };
+}
+
+/** The Owner-only wire source for an imported Historical thread: its envelope under the File capability key. */
+export function importedThreadSource(ciphertext: ArrayBuffer) {
+  return { kind: "import" as const, envelope: encodeTreeBytes(new Uint8Array(ciphertext)) };
 }
 
 /**
@@ -46,5 +61,5 @@ export async function ownedCommentSource(
     JOIN comment_threads t ON t.id = i.thread_id AND t.owner_id = ${auth.accountId}
     WHERE ${importedThreadEnvelope(comment.objectId, comment.capabilityId, comment.capabilityEpoch)}
       AND ${privateReadGuard(auth)}`);
-  return imported ? { kind: "import" as const, envelope: encodeTreeBytes(new Uint8Array(imported.ciphertext)) } : null;
+  return imported ? importedThreadSource(imported.ciphertext) : null;
 }

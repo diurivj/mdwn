@@ -42,6 +42,16 @@ export function commentBodyContext(vaultId: string, commentId: string, revision:
   return { purpose: "comment-content", vaultId, objectId: commentId, keyId: commentId, keyEpoch: 1, revision };
 }
 
+/** Thread-capability envelope context: an imported thread's key wrapped under its File capability key. */
+export function threadCapabilityContext(
+  vaultId: string,
+  threadId: string,
+  capabilityId: string,
+  keyEpoch: number,
+): EnvelopeContext {
+  return { purpose: "private-comment-thread", vaultId, objectId: threadId, keyId: capabilityId, keyEpoch, revision: 1 };
+}
+
 /** Content-key wrapper context: protected by the current thread capability. */
 export function commentKeyContext(
   vaultId: string,

@@ -39,6 +39,15 @@ export type RotationDirectory = {
   entriesRevision: number;
   listingHead: RotationListingHead | null;
 };
+/** An imported Historical thread whose envelope is wrapped under its File's
+ * capability key. The File replacement re-wraps each one before its own
+ * capability is replaced, so the thread stays readable and can then rotate. */
+export type RotationImportedThread = {
+  threadId: string;
+  capabilityId: string;
+  capabilityEpoch: number;
+  envelope: string;
+};
 export type RotationFile = {
   kind: "file";
   objectId: string;
@@ -52,6 +61,7 @@ export type RotationFile = {
   keyEnvelope: string;
   representationKeyEnvelope: string | null;
   fileHead: (FileHead & { signerDeviceId: string; signerPublicKey: string }) | null;
+  importedThreads: RotationImportedThread[];
 };
 export type RotationComment = ({ kind: "private_comment" } | { kind: "public_history" }) & {
   objectId: string;
@@ -62,6 +72,8 @@ export type RotationComment = ({ kind: "private_comment" } | { kind: "public_his
   threadId: string;
   publicationId: string | null;
   recoveryEnvelope: string | null;
+  /** An imported Historical thread's envelope under the current File capability key; null for owned threads. */
+  importEnvelope: string | null;
 };
 export type RotationSource = RotationDirectory | RotationFile | RotationComment;
 export type RotationNext = {

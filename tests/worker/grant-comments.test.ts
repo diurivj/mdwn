@@ -12,6 +12,7 @@ import {
   addSharingDevice,
   deletePayload,
   grant,
+  importedThread,
   invite,
   opaqueId,
   prepareGrantKeys,
@@ -371,44 +372,6 @@ it("share Comment targets give only the Owner its own current vault-recovery sou
     expect(await denied.text()).not.toContain(encodeTreeBytes(new Uint8Array(48).fill(1)));
   }
 });
-
-/** An imported Historical thread: its key is wrapped under the File capability, with no recovery row. */
-async function importedThread(owner: SharingAccount, fileId: string, threadOwner = owner, threadFileId = fileId) {
-  const threadId = opaqueId(),
-    epochId = opaqueId(),
-    capabilityId = opaqueId(),
-    now = Date.now();
-  await env.DB.batch([
-    env.DB.prepare("PRAGMA defer_foreign_keys = ON"),
-    env.DB.prepare(`INSERT INTO comment_thread_epochs (id, thread_id, audience, key_epoch, ordinal, state, created_at)
-      VALUES (?, ?, NULL, 1, 1, 'active', ?)`).bind(epochId, threadId, now),
-    env.DB.prepare(`INSERT INTO comment_threads (id, owner_id, file_id, purpose, publication_id, current_epoch_id,
-      next_sequence, created_at) VALUES (?, ?, ?, 'private', NULL, ?, 1, ?)`).bind(
-      threadId,
-      threadOwner.accountId,
-      threadFileId,
-      epochId,
-      now,
-    ),
-    env.DB.prepare(`INSERT INTO sharing_comment_capabilities
-      (object_id, owner_id, file_id, thread_id, purpose, publication_id, capability_id, capability_epoch)
-      VALUES (?, ?, ?, ?, 'private-comment-thread', NULL, ?, 1)`).bind(
-      threadId,
-      owner.accountId,
-      fileId,
-      threadId,
-      capabilityId,
-    ),
-    env.DB.prepare(`INSERT INTO import_comment_envelopes
-      (thread_id, file_id, capability_id, capability_epoch, key_epoch, ciphertext) VALUES (?, ?, ?, 1, 1, ?)`).bind(
-      threadId,
-      threadFileId,
-      capabilityId,
-      new Uint8Array(40).fill(9),
-    ),
-  ]);
-  return { objectId: threadId, capabilityId };
-}
 
 it("share Comment targets give the Owner an imported thread's File-capability envelope when no recovery row exists", async () => {
   const owner = await sharingAccount(),
