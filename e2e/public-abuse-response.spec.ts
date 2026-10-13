@@ -11,7 +11,7 @@ test("reports a comment by category and unpublishes while suspended", async ({ p
   await publishToggle(page).click();
   const publishPanel = page.getByRole("region", { name: "Publish", exact: true });
   await publishPanel.getByRole("button", { name: "Publish File" }).click();
-  await expect(publishPanel.getByText(/^Published\./)).toBeVisible();
+  await expect(publishPanel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
 
   // Post a real Comment through the workspace Public panel.
   await page.getByRole("button", { name: "Comments", exact: true }).click();

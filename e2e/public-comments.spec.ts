@@ -20,7 +20,7 @@ test("public readers decrypt public comments, signed-in visitors post, and the a
   const publishPanel = page.getByRole("region", { name: "Publish", exact: true });
   await expect(publishPanel.getByRole("radio", { name: "Public", exact: true })).toBeChecked();
   await publishPanel.getByRole("button", { name: "Publish File" }).click();
-  await expect(publishPanel.getByText(/^Published\./)).toBeVisible();
+  await expect(publishPanel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const link = await publishPanel.getByLabel("Public link").inputValue();
   const fragment = new URL(link).hash.slice(1);
 
@@ -92,7 +92,7 @@ test("pages a long authenticated Public thread past the first bounded page", asy
   await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const thread = await workspace.db
     .prepare(
       "SELECT id AS threadId, current_epoch_id AS epochId FROM comment_threads WHERE file_id = ? AND purpose = 'public'",

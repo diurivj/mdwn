@@ -27,7 +27,7 @@ test("the Owner publishes a File that an anonymous reader decrypts locally, live
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByLabel("Show my Public pseudonym as an author").check();
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText("Published.", { exact: false })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const link = await panel.getByLabel("Public link").inputValue();
   const url = new URL(link);
   const fragment = url.hash.slice(1);
@@ -167,7 +167,7 @@ for (const collapse of [true, false]) {
       }
       release();
       if (collapse) await toggle.click();
-      await expect(panel.getByText(/^Published\./)).toBeVisible();
+      await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
       await expect(panel.getByLabel("Public link")).toBeVisible();
       const link = await panel.getByLabel("Public link").inputValue();
       const context = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -234,7 +234,7 @@ test("reconciles every prepared capability when an earlier request wins a reopen
   await expect(panel).toHaveCount(0);
   await toggle.click();
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   await expect(panel.getByLabel("Public link")).toBeVisible();
   const link = await panel.getByLabel("Public link").inputValue();
   expect(new URL(link).pathname).toBe(`/p/${firstLinkId}`);
@@ -260,7 +260,7 @@ test("saves a within-limit source whose decoded YAML title exceeds the source li
   await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const link = await panel.getByLabel("Public link").inputValue();
   const source = page.getByRole("textbox", { name: "Markdown source", exact: true });
   await source.fill(`---\ntitle: "${"\\L".repeat(100_000)}"\n---\n# Expanded title`);
@@ -302,7 +302,7 @@ for (const scenario of [
       await publishToggle(page).click();
       const panel = page.getByRole("region", { name: "Publish", exact: true });
       await panel.getByRole("button", { name: "Publish File" }).click();
-      await expect(panel.getByText("Published.", { exact: false })).toBeVisible();
+      await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
       const link = await panel.getByLabel("Public link").inputValue();
       const context = await browser.newContext({ ignoreHTTPSErrors: true });
       try {
@@ -326,7 +326,7 @@ test("rotates the Public link, retires the old path, and keeps the Comments", as
   await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const first = await panel.getByLabel("Public link").inputValue();
 
   // A Public Comment exists before rotation and must survive it.
@@ -403,7 +403,7 @@ test("shows the File as published and its complete link on any later visit", asy
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await expect(panel.getByRole("heading", { name: "Publish", exact: true })).toBeVisible();
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const link = await panel.getByLabel("Public link").inputValue();
   await expect(page.getByRole("button", { name: "Published", exact: true })).toBeVisible();
   await expect(files.getByRole("link", { name: "Draft.md, published", exact: true })).toBeVisible();
@@ -437,7 +437,7 @@ test("replaces a link this device can't show with a new one carrying changed set
   await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const first = await panel.getByLabel("Public link").inputValue();
   // A link published before the Owner link copy existed has none, and a link
   // row never changes in place: this browser reads the state without it.
@@ -498,7 +498,7 @@ test("unpublishes with a counted confirmation, shows bounded progress, and publi
   await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const link = await panel.getByLabel("Public link").inputValue();
   const thread = await workspace.db
     .prepare(
@@ -559,7 +559,7 @@ test("unpublishes with a counted confirmation, shows bounded progress, and publi
 
   // A later Publication starts entirely fresh.
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const fresh = await panel.getByLabel("Public link").inputValue();
   expect(fresh).not.toBe(link);
   const readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -579,7 +579,7 @@ async function publishWithComments(page: Page, workspace: Workspace, total: numb
   await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText(/^Published\./)).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   const link = await panel.getByLabel("Public link").inputValue();
   const thread = await workspace.db
     .prepare(

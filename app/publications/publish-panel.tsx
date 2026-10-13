@@ -191,7 +191,7 @@ export function PublishPanel({ lifecycle, fileReady }: { lifecycle: PublicationL
         publication ? (
           <>
             <p role="status" className="text-sm text-ink-soft">
-              Published. Anyone with the complete link can read the latest saved version of this File.
+              Anyone with the complete link can read the latest saved version of this File.
             </p>
             {completeLink ? (
               <div className="space-y-3 border border-line bg-paper p-4">

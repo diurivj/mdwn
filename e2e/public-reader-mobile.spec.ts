@@ -49,7 +49,7 @@ async function publish(page: Page, workspace: Workspace) {
   await publishToggle(page).click();
   const panel = page.getByRole("region", { name: "Publish", exact: true });
   await panel.getByRole("button", { name: "Publish File" }).click();
-  await expect(panel.getByText("Published.", { exact: false })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Published", exact: true })).toBeVisible();
   return panel.getByLabel("Public link").inputValue();
 }
 
