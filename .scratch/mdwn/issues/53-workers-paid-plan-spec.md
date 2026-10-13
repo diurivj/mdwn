@@ -30,12 +30,14 @@ On 2026-10-12 the maintainer approved this decomposition and asked for the first
 | [61](61-autonomous-public-cleanup.md) | Scheduled maintenance finishes an already-authorized Unpublishing teardown | ready-for-agent |
 | [62](62-workers-paid-operating-contract.md) | Paid operating policy, intervention runbook, D1 Paid capacity and Time Travel, ADR supersession | ready-for-agent |
 | [63](63-worker-cpu-ceiling.md) | Explicit Worker CPU ceiling | ready-for-human (subscription and CPU evidence first) |
-| [64](64-import-admission-guard.md) | Scoped Import storage/admission guard | needs-triage |
-| [65](65-larger-import-envelope.md) | Larger practical Import envelope | needs-triage (blocked by 63, 64 and authorized evidence) |
+| [64](64-import-admission-guard.md) | Scoped Import storage/admission guard | wontfix (2026-10-12) |
+| [65](65-larger-import-envelope.md) | Larger practical Import envelope | wontfix (2026-10-12) |
 
 The deferred opportunities in the research stay deferred. No child changes the account, a subscription, alerts or any remote resource.
 
 ## Comments
+
+- 2026-10-12: The maintainer decided the current 100-node Import envelope is fine and closed 64 and 65 as **wontfix**; the 500–1,000-node target is not pursued. The remaining open child is [63](63-worker-cpu-ceiling.md) (`ready-for-human`, subscription and CPU evidence first). The Paid operating policy ([62](62-workers-paid-operating-contract.md)) and scheduled cleanup ([61](61-autonomous-public-cleanup.md)) stand. `docs/workers-paid-plan.md` §3 is dropped.
 
 - 2026-10-12 (orchestrator): Children 61 and 62 are implemented, reviewed and integrated on `issue/53-57-58-remaining-tickets` with tickets 57 and 58, and are awaiting PR/merge. Clean-head `npm run verify` passed at `e38eb71`. 63 stays `ready-for-human`, and 64 and 65 stay `needs-triage`.
 

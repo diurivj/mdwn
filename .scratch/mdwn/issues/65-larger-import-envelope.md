@@ -4,7 +4,7 @@
 
 **Type:** feature
 
-**Status:** needs-triage
+**Status:** wontfix
 
 **Blocked by:** [63](63-worker-cpu-ceiling.md), [64](64-import-admission-guard.md), and authorized, targeted capacity evidence if existing measurements are insufficient.
 
@@ -24,3 +24,4 @@
 ## Comments
 
 - 2026-10-12: Published as an evidence-gated child of 53.
+- 2026-10-12: Closed as **wontfix** with [64](64-import-admission-guard.md): the maintainer decided the current 100-node, 8 MiB compressed, 16 MiB expanded and 20 MiB staging envelope is fine, and larger collections keep being split into multiple Imports. The 500–1,000-node target is not pursued; [53](53-workers-paid-plan-spec.md) records the decision.
