@@ -561,6 +561,19 @@
   }
 }
 
+/*
+ * iOS zooms the page into a text control under 16px when it gains focus, and
+ * stays zoomed. Touch screens get 16px text in every control instead; outside
+ * the layers, this outranks any utility size. Pinch zoom stays available.
+ */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: max(1rem, 16px);
+  }
+}
+
 /* Motion must yield to the person's preference, including utility animations. */
 @media (prefers-reduced-motion: reduce) {
   *,
