@@ -44,8 +44,10 @@ real installed Wrangler export/restore path with no remote resources.
 `biome.json` is the only Biome config. The formatter matches the repo's existing
 style (two-space indent, double quotes, semicolons, trailing commas,
 120-column lines) and parses `app/app.css` with Tailwind directive support. It
-ignores `.scratch`, `drizzle`, `vendor`, and the generated
-`app/shared/namespace-v1/generated.ts` and `data-version.ts`; `.gitignore`
+ignores `.scratch`, `drizzle`, `vendor`, the generated
+`app/shared/namespace-v1/generated.ts` and `data-version.ts`, and the vendored
+`setup-ts-deep-modules` dependency-cruiser config (upstream skill bytes pinned by
+`skills-lock.json`); `.gitignore`
 supplies the rest (build output, generated Worker types). The linter starts
 from the recommended preset: `noNonNullAssertion` is off because the codebase
 uses `!` deliberately, while `useOptionalChain`, `useTemplate`, and

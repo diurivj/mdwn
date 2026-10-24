@@ -12,7 +12,9 @@
       "!drizzle",
       "!vendor",
       "!app/shared/namespace-v1/generated.ts",
-      "!app/shared/namespace-v1/data-version.ts"
+      "!app/shared/namespace-v1/data-version.ts",
+      "!.agents/skills/setup-ts-deep-modules/dependency-cruiser.config.cjs",
+      "!.claude/skills/setup-ts-deep-modules/dependency-cruiser.config.cjs"
     ]
   },
   "formatter": {
