@@ -201,7 +201,10 @@ IndexedDB, and key storage hangs until someone answers
 Playwright 1.64's WebKit does this on a Mac that ran 1.63; expect the same after
 any browser upgrade. Approve it from the desktop of the account that runs the
 tests; do not automate Keychain access, export non-extractable keys, or skip
-WebKit to pass the gate.
+WebKit to pass the gate. CI's WebKit job runs on Linux, so it does not see this
+prompt. It still runs `node scripts/probe-ci-webkit-storage.mjs` after browser
+installation to confirm a headless WebKit can store and restore a nonextractable
+CryptoKey in IndexedDB.
 
 The configured Playwright projects are named `chromium`, `firefox`, and
 `webkit`. To focus on one engine:
@@ -287,19 +290,23 @@ purpose of a test is storage isolation.
 
 ## CI output
 
-The `CI` workflow runs on the bounded `mini-m4pro-ci` ARM64 Mac mini pool. All CI jobs must
-pass at the current PR head before merging (see AGENTS.md). The persistent
-runner keeps npm's cache locally; CI disables `setup-node`'s GitHub cache
-restore/upload, which would otherwise transfer the account's entire npm cache.
+The `CI` workflow runs on GitHub-hosted Ubuntu (`ubuntu-latest`). All CI jobs must
+pass at the current PR head before merging (see AGENTS.md). `actions/setup-node`
+caches npm through the Actions cache (`cache: npm`). Browser jobs install only
+the matrix engine with `npx playwright install --with-deps`, which also installs
+the OS libraries that engine needs on Linux. Wrangler and local D1 run inside
+the job; nothing is preinstalled on the runner. The download-only Node timeout
+preload stays scoped to that browser-install step.
 
 The `browser` CI job runs a non-fail-fast matrix with one job for each engine.
 Each job uses one Playwright worker; the local worker default stays automatic.
 Node Vitest uses at most two workers in CI, and Workers Vitest retains its
-two-worker limit. Verification and all browsers remain independent; the active
-runner listeners cap aggregate jobs across refs and repositories.
+two-worker limit. Verification and all browsers remain independent and GitHub
+schedules them on separate hosted runners.
 A two-worker CI trial was rolled back after it pushed Firefox's heaviest tests
-past their timeouts on the two-vCPU runners. See [the worker-count pilot and rollout record](playwright-workers-benchmark.md)
-for the evidence.
+past their timeouts on the two-vCPU runners used at the time. See [the worker-count pilot and rollout record](playwright-workers-benchmark.md)
+for the evidence. Hosted `ubuntu-latest` runners have more vCPUs; the one-worker
+cap stays until a new trial says otherwise.
 
 The job name and Playwright list reporter identify the failing engine directly.
 Each matrix job uploads `playwright-report/` plus `test-results/`, including
@@ -309,9 +316,10 @@ retention/access policy and never put real credentials in browser fixtures.
 CI also writes `playwright-results.json` and a compact `playwright-summary.json`
 with retry, flaky, failed, skipped, and timeout counts. Artifact names include
 the browser, run ID, and attempt; inspect retry counts even on a green run.
-The early runner diagnostic step verifies absolute writable cache/temp paths,
-native architecture, and tool-cache containment. Service environments and
-capacity qualification are documented in [ci-runner-pool.md](ci-runner-pool.md).
+The Mac mini pool's slot diagnostics, service environment, and capacity
+qualification stay in [ci-runner-pool.md](ci-runner-pool.md) for that optional
+fallback. The current workflow does not run them and does not select
+`mini-m4pro-ci`.
 
 Playwright 1.63 restarts a copied virtual credential's `signCount` at zero, so
 `primeSyncedPasskey` advances the copy once to match its source. Playwright 1.64

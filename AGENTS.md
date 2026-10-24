@@ -42,8 +42,8 @@ After every code review, load `.agents/skills/rr8-post-review/SKILL.md` and run 
 
 The team is just the maintainer and agents, and `main` is a private Free repo with no enforceable branch protection — so the review gate is a convention, not a rule. At ticket completion, commit the reviewed and verified work on its issue branch, push the branch, and open or update a pull request to `main`. Report the commit and PR URL. The `deploy` workflow applies reviewed migrations and releases the Worker on merge.
 
-Merge only after every job in the `CI` workflow passes at the PR's current head; re-check after any push. Queued, skipped, or cancelled jobs are not a pass. CI uses the self-hosted Mac mini pool; keep it awake and its configured services online. For capacity, maintenance, isolation, or recovery work, read [docs/ci-runner-pool.md](docs/ci-runner-pool.md). Deployment stays on GitHub-hosted Linux.
+Merge only after every job in the `CI` workflow passes at the PR's current head; re-check after any push. Queued, skipped, or cancelled jobs are not a pass. CI jobs run on GitHub-hosted Ubuntu (`ubuntu-latest`) and install their own Node, dependencies, and Playwright browsers. They do not use the Mac mini pool. [docs/ci-runner-pool.md](docs/ci-runner-pool.md) documents that pool as an optional fallback, not the current `CI` target. Deployment stays on GitHub-hosted Linux.
 
 Use `npm run verify` for local preflight, not as a replacement for green CI. It refuses a dirty tree or a branch behind `origin/main`. Run `npm ci` first when `package-lock.json` changed.
 
-After pushing the branch or opening/updating the PR, report the commit and PR URL and stop unless the request includes CI monitoring, rollout measurements, or merging. Check CI when requested or immediately before merging. Pool capacity and competing refs affect queue time; use the host controller when changing active listener count.
+After pushing the branch or opening/updating the PR, report the commit and PR URL and stop unless the request includes CI monitoring, rollout measurements, or merging. Check CI when requested or immediately before merging.
