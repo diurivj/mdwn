@@ -2,10 +2,10 @@
 /** Build, scan, and deploy one selected Worker with its runtime secrets. */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { deployedVersionId } from "./lib/deployment-readiness.mjs";
+import { deployScratchRoot } from "./lib/deploy-host.mjs";
 
 /** @param {string} command @param {string[]} args @param {boolean} [capture] */
 function run(command, args, capture = false) {
@@ -55,7 +55,9 @@ try {
   // Secret-named environment variables are scanned before anything is uploaded.
   run("npm", ["run", "check:secrets"]);
 
-  const temporaryDirectory = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "mdwn-deploy-"));
+  // Actions sets RUNNER_TEMP outside the job workspace. Keep the secrets file
+  // in the workspace so the persistent runner does not retain it in its temp dir.
+  const temporaryDirectory = mkdtempSync(join(deployScratchRoot(), "mdwn-deploy-"));
   const secretFile = join(temporaryDirectory, "secrets.json");
   try {
     writeFileSync(
