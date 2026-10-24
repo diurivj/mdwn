@@ -105,6 +105,15 @@ its `spawnWrangler` helper over a fresh `spawnSync` call.
   Wrangler config directory. This switch was verified against Wrangler 4.135.0
   `shouldLogToDisk`; a raw diagnostic file retained by another tool must be
   protected and lifecycle-managed like an export, not just hidden from stdout.
+- Wrangler 4.135.0 resolves that config directory in `getGlobalConfigPath`.
+  There is no `WRANGLER_HOME` variable. A pre-existing
+  `~/.wrangler` (`os.homedir()`) wins over the XDG path. On macOS the XDG
+  fallback is `~/Library/Preferences/.wrangler` unless `XDG_CONFIG_HOME` is
+  set, and the cache fallback is `~/Library/Caches/.wrangler` unless
+  `XDG_CACHE_HOME` is set. Deploy steps that run Wrangler therefore point
+  `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `TMPDIR` at a directory
+  inside the job workspace, so credentials are not written into the runner
+  account's home. See [ci-runner-pool.md](../ci-runner-pool.md).
 
 See [operations.md](../operations.md#operational-script-lifecycle-and-sensitive-artifacts)
 for ownership, retention, failure reporting and artifact disposal.

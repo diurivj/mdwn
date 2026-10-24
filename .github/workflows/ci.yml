@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: read
-  # setup-node saves the npm cache through the Actions cache API.
-  actions: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -17,11 +15,9 @@ concurrency:
 jobs:
   verify:
     name: Typecheck, test, build, migration smoke, secrets
-    # Same-repository changes only. Fork pull requests stay off this workflow:
-    # it can read an optional repository secret, and fork code is not reviewed here.
+    # This persistent runner is for trusted, same-repository changes only.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # GitHub-hosted Linux. Playwright WebKit runs here; a macOS runner is not required.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, mini-m4pro-ci]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -30,7 +26,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          # The persistent runner already keeps npm's cache locally.
+          package-manager-cache: false
+      - name: Runner diagnostics and isolation check
+        run: node scripts/ci-runner-diagnostics.mjs
       - name: Install
         run: npm ci
       - name: Lint and format check
@@ -55,8 +54,7 @@ jobs:
   browser:
     name: Browser E2E (${{ matrix.browser }})
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # Same hosted image as verify. WebKit is Playwright's Linux build, not Safari on macOS.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, mini-m4pro-ci]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -69,15 +67,18 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          # Avoid uploading the runner account's entire npm cache to GitHub.
+          package-manager-cache: false
+      - name: Runner diagnostics and isolation check
+        run: node scripts/ci-runner-diagnostics.mjs
       - name: Install
         run: npm ci
       - name: Install ${{ matrix.browser }}
-        run: npx playwright install --with-deps ${{ matrix.browser }}
+        run: npx playwright install ${{ matrix.browser }}
         env:
           # Scope the Node/Playwright connection-timeout workaround to downloads.
           NODE_OPTIONS: --import="${{ github.workspace }}/scripts/playwright-download-network.mjs"
-      - name: WebKit key-storage check
+      - name: WebKit service key-storage check
         if: matrix.browser == 'webkit'
         run: node scripts/probe-ci-webkit-storage.mjs
       - name: Browser tests (${{ matrix.browser }})

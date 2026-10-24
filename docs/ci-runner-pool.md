@@ -1,19 +1,30 @@
 # Mac mini CI pool
 
-The `CI` workflow does not use this pool. Verify and browser jobs run on
-GitHub-hosted `ubuntu-latest` and install Node 24, npm dependencies, and
-Playwright browsers in the job. See [CI output](testing.md#ci-output) and
-`.github/workflows/ci.yml`. The mini does not need to stay awake for those
-jobs to run.
+`CI` and `Deploy` both select this pool (`self-hosted`, `macOS`, `ARM64`,
+`mini-m4pro-ci`). GitHub-hosted runners are not used, because this private
+Free repository has no Actions minutes.
 
-This document is the operating guide for the optional `mini-m4pro-ci` pool.
-Use it for capacity, maintenance, isolation, or recovery if a workflow is
-pointed back at the mini. Restoring that path means selecting the
-`mini-m4pro-ci` labels, running `node scripts/ci-runner-diagnostics.mjs`
-before install, and leaving npm's cache on the host (`package-manager-cache:
-false`, with no `cache: npm`) so the account's cache is not uploaded.
-`scripts/probe-ci-webkit-storage.mjs` remains the WebKit CryptoKey check; the
-hosted workflow already runs it on Linux.
+The two workflows do not share a concurrency group. `CI` uses `ci-<ref>` and
+cancels an older run of that same ref. `Deploy` uses `deploy-<ref>` and waits
+out an in-progress deployment (`cancel-in-progress: false`). A push to `main`
+can run verification and a deployment at the same time only when two listeners
+are active. One listener runs one job, so they cannot share a checkout. A
+deployment holds its listener for the whole preview-then-production sequence
+and counts against the host-wide `maxActiveSlots` budget. Keep `Deploy` on
+`mini-m4pro-ci`; a broader label such as `self-hosted` alone can match a
+listener outside that budget.
+
+Deploy steps that run Wrangler pass Cloudflare and D1 secrets only in that
+step's environment. They point `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
+and `TMPDIR` at a directory inside the job workspace and set
+`WRANGLER_WRITE_LOGS=false`. Wrangler 4.135 has no separate home variable: an
+existing `~/.wrangler` in the account home takes precedence over XDG, and on
+macOS the fallback is `~/Library/Preferences/.wrangler` (see
+[d1-scripting.md](operations/d1-scripting.md#resource-identities-and-command-output)).
+The secrets file for `wrangler deploy` is created in the workspace and removed
+before the step returns. The job deletes the workspace contents at the start
+and again at the end, including after a failure. `setup-node` does not upload
+this account's npm cache (`package-manager-cache: false`, no `cache: npm`).
 
 The M4 Pro host has 24 GiB RAM and 12 cores. `mini-m4pro-ci` routes trusted
 repository jobs to independent native ARM64 registrations. The original
@@ -79,20 +90,21 @@ an explicit host PATH; HOME remains the account's actual home. They set
 `SessionCreate` to `false`: the bundled template's separate security session
 reproducibly caused WebKit `DataCloneError` when storing nonextractable
 CryptoKeys in IndexedDB on this host. The browser needs the existing GUI
-login security session when jobs run on this host; this changes no keychain password, login, or FileVault
-policy. With this personal-account arrangement, pool jobs must be trusted with that
-session as well as the account's files. After browser installation on this host, run
-`node scripts/probe-ci-webkit-storage.mjs` to check
-the service's nonextractable CryptoKey round trip before the full
+login security session; this changes no keychain password, login, or FileVault
+policy. With this personal-account arrangement, CI must be trusted with that
+session as well as the account's files. The WebKit CI job runs
+`node scripts/probe-ci-webkit-storage.mjs` after browser installation to check
+the actual service's nonextractable CryptoKey round trip before the full
 suite. Test this after any service/template change, not just listener availability. Job diagnostics
 check the effective tool cache under the slot's `_work`, rather than assuming
 a service setting took effect. Independent checkouts and the existing
-download-only Playwright preload remain essential. The hosted `CI` workflow runs the same probe on Linux, where the macOS Keychain prompt does not apply.
+download-only Playwright preload remain essential.
 
 ## Maintenance and recovery
 
-Use a quiet window and prevent new assignments before service changes. `stop`
-removes the common label, checks GitHub busy state and local Runner.Worker
+Use a quiet window and prevent new assignments before service changes. That
+includes deploy jobs: they use these listeners and are not cancelled when `CI`
+starts. `stop` removes the common label, checks GitHub busy state and local Runner.Worker
 processes, persistently disables startup, and stops only that service. Even an
 already-unloaded service is disabled by `stop`; `service` disables before
 publishing its plist. Label removal is not a drain lock:

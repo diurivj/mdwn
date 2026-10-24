@@ -4,12 +4,11 @@ import { parse } from "yaml";
 
 const workflow: {
   env?: Record<string, string>;
-  permissions?: Record<string, string>;
   jobs: Record<
     string,
     {
       env?: Record<string, string>;
-      "runs-on": string | string[];
+      "runs-on": string[];
       needs?: unknown;
       strategy?: { "fail-fast": boolean; "max-parallel"?: number; matrix: { browser: string[] } };
       steps: Array<{
@@ -23,17 +22,18 @@ const workflow: {
   >;
 } = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
 
-test("CI can save its npm cache and still limits contents to read", () => {
-  expect(workflow.permissions).toEqual({ contents: "read", actions: "write" });
-});
-
-test.each(["verify", "browser"])("%s runs independently on a GitHub-hosted Ubuntu runner", (job) => {
-  expect(workflow.jobs[job]["runs-on"]).toBe("ubuntu-latest");
+test.each(["verify", "browser"])("%s routes independent jobs to the bounded ARM64 pool", (job) => {
+  expect(workflow.jobs[job]["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64", "mini-m4pro-ci"]);
   expect(workflow.jobs[job].needs).toBeUndefined();
-  expect(workflow.jobs[job].steps.some((step) => step.run === "node scripts/ci-runner-diagnostics.mjs")).toBe(false);
+  const diagnostics = workflow.jobs[job].steps.findIndex(
+    (step) => step.run === "node scripts/ci-runner-diagnostics.mjs",
+  );
+  const install = workflow.jobs[job].steps.findIndex((step) => step.run === "npm ci");
+  expect(diagnostics).toBeGreaterThan(-1);
+  expect(diagnostics).toBeLessThan(install);
 });
 
-test("WebKit checks CryptoKey storage after installation and before the browser suite", () => {
+test("WebKit checks service CryptoKey storage after installation and before the unchanged browser suite", () => {
   const steps = workflow.jobs.browser.steps;
   const check = steps.findIndex((step) => step.run === "node scripts/probe-ci-webkit-storage.mjs");
   const install = steps.findIndex((step) => step.run?.startsWith("npx playwright install "));
@@ -55,17 +55,12 @@ test("all three browsers remain independent with failure and retry diagnostics o
   expect(artifact?.with?.path).toContain("playwright-summary.json");
 });
 
-test.each(["verify", "browser"])("%s caches npm through setup-node", (job) => {
+test.each(["verify", "browser"])("%s keeps the persistent runner's npm cache local", (job) => {
   const setup = workflow.jobs[job].steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
   expect(setup).toBeDefined();
-  expect(setup?.with?.cache).toBe("npm");
-  expect(setup?.with?.["package-manager-cache"]).not.toBe(false);
-});
-
-test("browser installation includes the Linux libraries for that engine", () => {
-  const install = workflow.jobs.browser.steps.find((step) => step.run?.startsWith("npx playwright install "));
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal GitHub Actions expression inside the workflow-file string.
-  expect(install?.run).toBe("npx playwright install --with-deps ${{ matrix.browser }}");
+  // Disabling automatic caching alone does not override an explicit `cache: npm`.
+  expect(setup?.with?.cache).toBeUndefined();
+  expect(setup?.with?.["package-manager-cache"]).toBe(false);
 });
 
 test("the Playwright network preload is scoped to browser installation", () => {

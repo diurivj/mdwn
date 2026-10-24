@@ -20,6 +20,8 @@ worker-configuration.d.ts
 
 # Sensitive operational outputs (see docs/operations.md)
 /operational-artifacts/
+.deploy-wrangler-home/
+mdwn-deploy-*/
 wrangler.proof*.jsonc
 proof-env.json
 mdwn-proof-env.json

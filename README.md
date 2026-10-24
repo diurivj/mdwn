@@ -49,17 +49,23 @@ export rollback rehearsal are documented in [`docs/operations.md`](docs/operatio
 
 ## CI
 
-CI runs on GitHub-hosted Ubuntu runners (`ubuntu-latest`). Each job installs
-Node 24 and dependencies (`npm ci`, with the Actions npm cache). Browser jobs
-also install the Playwright engine under test, including its Linux libraries
-(`npx playwright install --with-deps`). Verification and the Chromium, Firefox,
-and WebKit jobs run independently. Playwright WebKit runs on Linux, so CI does
-not use a macOS runner. Deployment remains on GitHub-hosted Linux.
+CI and deployment both run on a bounded pool of repository-scoped, native ARM64
+Mac mini runners labelled `mini-m4pro-ci`. GitHub-hosted runners are not used,
+because this private Free repository has no Actions minutes. Keep the mini
+awake and the configured services online; otherwise jobs queue. Each
+independent runner executes one verification, browser, or deploy job; the
+host-wide active-listener budget controls aggregate capacity across
+repositories. See [pool operation and qualification](docs/ci-runner-pool.md).
 
-The Mac mini pool labelled `mini-m4pro-ci` is an optional fallback. The `CI`
-workflow does not select it, and the mini does not need to stay awake for CI
-to run. Trust, capacity, and recovery notes for that pool stay in
-[pool operation](docs/ci-runner-pool.md). See AGENTS.md for the merge gate.
+Prefer a dedicated runner account without personal or deployment credentials.
+The maintainer chose to reuse the existing personal account for this host; this
+explicitly retains CI's access to that account's files and credentials.
+Self-hosted jobs execute repository code with that account's filesystem and
+network access; a separate account is not a sandbox. Deploy steps that talk to
+Cloudflare keep API tokens and Wrangler config inside the job workspace, and
+the job deletes that workspace when it finishes. The workflow skips fork
+pull requests, but workflow edits can change that guard, so only trusted code
+and contributors belong on this runner. See AGENTS.md for the merge gate.
 
 ## Repo layout
 

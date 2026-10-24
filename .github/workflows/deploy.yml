@@ -9,23 +9,68 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Keep bash -e so a failed workspace check stops the step before Wrangler runs.
+    shell: "bash --noprofile --norc -eo pipefail {0}"
+
 # Reviewed main: reviewed migrations are applied and the Worker deployed
 # through this workflow, never by hand (spec §3.5). Note the Cloudflare Vite
 # plugin selects the environment at build time (CLOUDFLARE_ENV), so each
-# environment is built and deployed separately.
+# environment is built and deployed separately. This persistent runner is for
+# trusted, same-repository changes only. Cloudflare credentials stay in the
+# environment of the steps that need them, and Wrangler writes them only under
+# the job workspace (docs/ci-runner-pool.md).
 jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     name: Migrate D1s and deploy Worker (preview, then production)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, mini-m4pro-ci]
+    # Release the pool slot if Wrangler or a smoke probe hangs. Successful
+    # hosted deploys finished in a few minutes.
+    timeout-minutes: 30
     steps:
+      - name: Clean the job workspace
+        run: |
+          case "${GITHUB_WORKSPACE:-}" in
+            ""|"/")
+              echo "Refusing to clean an empty or root workspace" >&2
+              exit 1
+              ;;
+          esac
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          # The persistent runner already keeps npm's cache locally.
+          package-manager-cache: false
+
+      - name: Runner diagnostics and isolation check
+        run: node scripts/ci-runner-diagnostics.mjs
+
       - name: Install
         run: npm ci
+
+      - name: Prepare a workspace-local Wrangler home
+        run: |
+          if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+            echo "Refusing to record an empty or root account home" >&2
+            exit 1
+          fi
+          install -d -m 700 \
+            "$GITHUB_WORKSPACE/.deploy-wrangler-home" \
+            "$GITHUB_WORKSPACE/.deploy-wrangler-home/.config" \
+            "$GITHUB_WORKSPACE/.deploy-wrangler-home/.cache" \
+            "$GITHUB_WORKSPACE/.deploy-wrangler-home/tmp"
+          printf 'MDWN_ACCOUNT_HOME=%s\n' "$HOME" >> "$GITHUB_ENV"
 
       - name: Validate Session and abuse-control secrets before migrations
         env:
@@ -56,22 +101,47 @@ jobs:
       # --- Preview -----------------------------------------------------------
       - name: Apply migrations to preview D1
         env:
+          HOME: ${{ github.workspace }}/.deploy-wrangler-home
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.config
+          XDG_CACHE_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.cache
+          TMPDIR: ${{ github.workspace }}/.deploy-wrangler-home/tmp
+          WRANGLER_LOG_PATH: ${{ github.workspace }}/.deploy-wrangler-home/wrangler.log
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
-        run: npm run db:migrate:preview
+        run: |
+          node scripts/check-deploy-workspace-home.mjs
+          npm run db:migrate:preview
 
       - name: Build and deploy preview Worker
         id: deploy_preview
         env:
+          HOME: ${{ github.workspace }}/.deploy-wrangler-home
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.config
+          XDG_CACHE_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.cache
+          TMPDIR: ${{ github.workspace }}/.deploy-wrangler-home/tmp
+          WRANGLER_LOG_PATH: ${{ github.workspace }}/.deploy-wrangler-home/wrangler.log
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
           SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET_PREVIEW }}
           ABUSE_HMAC_SECRET: ${{ secrets.ABUSE_HMAC_SECRET_PREVIEW }}
           MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}
-        run: npm run deploy:preview
+        run: |
+          node scripts/check-deploy-workspace-home.mjs
+          npm run deploy:preview
 
       - name: Smoke-test preview (schema + healthz + headers)
         env:
+          HOME: ${{ github.workspace }}/.deploy-wrangler-home
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.config
+          XDG_CACHE_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.cache
+          TMPDIR: ${{ github.workspace }}/.deploy-wrangler-home/tmp
+          WRANGLER_LOG_PATH: ${{ github.workspace }}/.deploy-wrangler-home/wrangler.log
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
           # When HEALTHZ_TOKEN_PREVIEW is set, verify the real secret never
@@ -80,30 +150,57 @@ jobs:
           HEALTHZ_TOKEN: ${{ secrets.HEALTHZ_TOKEN_PREVIEW }}
           DEPLOYED_VERSION_ID: ${{ steps.deploy_preview.outputs.version_id }}
         run: |
+          node scripts/check-deploy-workspace-home.mjs
+          mkdir -p operational-artifacts
           npm run db:smoke -- --remote preview
-          npm run db:operations -- --remote preview --output /tmp/mdwn-preview-query-plans.md
+          npm run db:operations -- --remote preview --output operational-artifacts/mdwn-preview-query-plans.md
           npm run check:secrets
           node scripts/check-worker-ready.mjs preview
 
       # --- Production ----------------------------------------------------------
       - name: Apply migrations to production D1
         env:
+          HOME: ${{ github.workspace }}/.deploy-wrangler-home
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.config
+          XDG_CACHE_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.cache
+          TMPDIR: ${{ github.workspace }}/.deploy-wrangler-home/tmp
+          WRANGLER_LOG_PATH: ${{ github.workspace }}/.deploy-wrangler-home/wrangler.log
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
-        run: npm run db:migrate:production
+        run: |
+          node scripts/check-deploy-workspace-home.mjs
+          npm run db:migrate:production
 
       - name: Build and deploy production Worker
         id: deploy_production
         env:
+          HOME: ${{ github.workspace }}/.deploy-wrangler-home
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.config
+          XDG_CACHE_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.cache
+          TMPDIR: ${{ github.workspace }}/.deploy-wrangler-home/tmp
+          WRANGLER_LOG_PATH: ${{ github.workspace }}/.deploy-wrangler-home/wrangler.log
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
           SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET_PRODUCTION }}
           ABUSE_HMAC_SECRET: ${{ secrets.ABUSE_HMAC_SECRET_PRODUCTION }}
           MDWN_CHECK_SECRETS: ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}
-        run: npm run deploy:production
+        run: |
+          node scripts/check-deploy-workspace-home.mjs
+          npm run deploy:production
 
       - name: Smoke-test production (schema + healthz + headers)
         env:
+          HOME: ${{ github.workspace }}/.deploy-wrangler-home
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.config
+          XDG_CACHE_HOME: ${{ github.workspace }}/.deploy-wrangler-home/.cache
+          TMPDIR: ${{ github.workspace }}/.deploy-wrangler-home/tmp
+          WRANGLER_LOG_PATH: ${{ github.workspace }}/.deploy-wrangler-home/wrangler.log
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 82b5863d9c1860c06d7365110eab8366
           # When HEALTHZ_TOKEN_PRODUCTION is set, verify the real secret never
@@ -112,7 +209,20 @@ jobs:
           HEALTHZ_TOKEN: ${{ secrets.HEALTHZ_TOKEN_PRODUCTION }}
           DEPLOYED_VERSION_ID: ${{ steps.deploy_production.outputs.version_id }}
         run: |
+          node scripts/check-deploy-workspace-home.mjs
+          mkdir -p operational-artifacts
           npm run db:smoke -- --remote production
-          npm run db:operations -- --remote production --output /tmp/mdwn-production-query-plans.md
+          npm run db:operations -- --remote production --output operational-artifacts/mdwn-production-query-plans.md
           npm run check:secrets
           node scripts/check-worker-ready.mjs production
+
+      - name: Clean the job workspace
+        if: ${{ always() }}
+        run: |
+          case "${GITHUB_WORKSPACE:-}" in
+            ""|"/")
+              echo "Refusing to clean an empty or root workspace" >&2
+              exit 1
+              ;;
+          esac
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
