@@ -1,5 +1,20 @@
 # Mac mini CI pool
 
+The `CI` workflow does not use this pool. Verify and browser jobs run on
+GitHub-hosted `ubuntu-latest` and install Node 24, npm dependencies, and
+Playwright browsers in the job. See [CI output](testing.md#ci-output) and
+`.github/workflows/ci.yml`. The mini does not need to stay awake for those
+jobs to run.
+
+This document is the operating guide for the optional `mini-m4pro-ci` pool.
+Use it for capacity, maintenance, isolation, or recovery if a workflow is
+pointed back at the mini. Restoring that path means selecting the
+`mini-m4pro-ci` labels, running `node scripts/ci-runner-diagnostics.mjs`
+before install, and leaving npm's cache on the host (`package-manager-cache:
+false`, with no `cache: npm`) so the account's cache is not uploaded.
+`scripts/probe-ci-webkit-storage.mjs` remains the WebKit CryptoKey check; the
+hosted workflow already runs it on Linux.
+
 The M4 Pro host has 24 GiB RAM and 12 cores. `mini-m4pro-ci` routes trusted
 repository jobs to independent native ARM64 registrations. The original
 `Diegos-Mac-mini` (runner 21) stays at `/Users/diurivj/actions-runner` as slot
@@ -64,15 +79,15 @@ an explicit host PATH; HOME remains the account's actual home. They set
 `SessionCreate` to `false`: the bundled template's separate security session
 reproducibly caused WebKit `DataCloneError` when storing nonextractable
 CryptoKeys in IndexedDB on this host. The browser needs the existing GUI
-login security session; this changes no keychain password, login, or FileVault
-policy. With this personal-account arrangement, CI must be trusted with that
-session as well as the account's files. The WebKit CI job runs
-`node scripts/probe-ci-webkit-storage.mjs` after browser installation to check
-the actual service's nonextractable CryptoKey round trip before the full
+login security session when jobs run on this host; this changes no keychain password, login, or FileVault
+policy. With this personal-account arrangement, pool jobs must be trusted with that
+session as well as the account's files. After browser installation on this host, run
+`node scripts/probe-ci-webkit-storage.mjs` to check
+the service's nonextractable CryptoKey round trip before the full
 suite. Test this after any service/template change, not just listener availability. Job diagnostics
 check the effective tool cache under the slot's `_work`, rather than assuming
 a service setting took effect. Independent checkouts and the existing
-download-only Playwright preload remain essential.
+download-only Playwright preload remain essential. The hosted `CI` workflow runs the same probe on Linux, where the macOS Keychain prompt does not apply.
 
 ## Maintenance and recovery
 
